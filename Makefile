@@ -41,7 +41,7 @@ doc: ## 构建 Sphinx 文档
 
 
 tox: ## 多版本测试 (tox)
-	uvx tox run
+	uvx tox -p auto
 
 BUMP_PART := $(filter-out bump,$(MAKECMDGOALS))
 
@@ -50,6 +50,9 @@ bump: ## 版本号 bump (默认 patch，用法: make bump [minor|major])
 
 patch minor major:
 	@:
+
+pub:  ## 推送到pypi
+	uvx twine upload ./dist/**
 
 push: ## 推送代码到远程仓库
 	git push && git push --tags
