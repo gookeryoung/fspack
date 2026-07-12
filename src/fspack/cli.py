@@ -11,6 +11,7 @@ from fspack.commands import clean as clean_cmd
 from fspack.commands import package as package_cmd
 from fspack.commands import run as run_cmd
 from fspack.mirror import MIRRORS
+from fspack.platform import Platform
 
 __all__ = ["build_parser", "main"]
 
@@ -29,6 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_build.add_argument("project", nargs="?", default=".", help="项目目录（默认当前目录）")
     p_build.add_argument("--mirror", default=None, choices=list(MIRRORS), help="镜像源")
     p_build.add_argument("--py-version", default=None, help="embed python 版本，如 3.11.9")
+    p_build.add_argument("--target", default=None, choices=["windows", "linux"], help="目标平台（默认当前平台）")
 
     p_run = sub.add_parser("run", aliases=["r"], help="运行已打包项目")
     p_run.add_argument("project", nargs="?", default=".", help="项目目录")
@@ -56,7 +58,7 @@ def main(argv: list[str] | None = None) -> None:
 
     project = Path(ns.project).resolve()
     if command in ("build", "b"):
-        build_cmd.run(project, mirror=ns.mirror, py_version=ns.py_version)
+        build_cmd.run(project, mirror=ns.mirror, py_version=ns.py_version, target=_parse_target(ns.target))
     elif command in ("run", "r"):
         run_cmd.run(project, rest_args=_drop_separator(ns.rest))
     elif command in ("clean", "c"):
@@ -70,6 +72,15 @@ def _drop_separator(rest: list[str]) -> list[str]:
     if rest and rest[0] == "--":
         return rest[1:]
     return rest
+
+
+def _parse_target(value: str | None) -> Platform | None:
+    """将 CLI 字符串转为 Platform 枚举，None 表示用当前平台。."""
+    if value is None:
+        return None
+    if value == "windows":
+        return Platform.WINDOWS
+    return Platform.LINUX
 
 
 if __name__ == "__main__":

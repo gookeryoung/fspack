@@ -14,7 +14,9 @@ from fspack.config import BuildConfig, MirrorConfig, ProjectInfo
 from fspack.embed import ensure_embed, write_pth
 from fspack.exceptions import DependencyError
 from fspack.loader import compile_loader, generate_loader_source
+from fspack.platform import Platform, detect_platform, wheel_platform_tag
 from fspack.project import DEFAULT_PY_VERSION, parse_project
+from fspack.standalone import STANDALONE_RELEASE_TAG, ensure_standalone
 
 __all__ = ["DEFAULT_PY_VERSION", "build", "copy_source", "download_wheels", "unpack_wheels"]
 
@@ -36,42 +38,59 @@ _EXCLUDE = shutil.ignore_patterns(
 )
 
 
-def build(
+def build(  # noqa: PLR0913
     project_dir: Path,
     mirror: MirrorConfig,
     py_version: str = DEFAULT_PY_VERSION,
     dist_dir: Path | None = None,
     embed_cache: Path | None = None,
+    target: Platform | None = None,
 ) -> ProjectInfo:
     """执行完整构建流水线，返回项目信息。."""
     project_dir = Path(project_dir).resolve()
+    target = target or detect_platform()
     dist = dist_dir or project_dir / "dist"
     cache = embed_cache or Path.home() / ".fspack" / "cache" / "embed"
-    cfg = BuildConfig(project_dir=project_dir, dist_dir=dist, embed_cache_dir=cache, mirror=mirror)
+    cfg = BuildConfig(project_dir=project_dir, dist_dir=dist, embed_cache_dir=cache, mirror=mirror, target=target)
     info = parse_project(project_dir, py_version)
-    _logger.info("项目: %s %s (%s)", info.name, info.version, info.app_type.value)
+    _logger.info("项目: %s %s (%s) 目标: %s", info.name, info.version, info.app_type.value, target.value)
 
     runtime_dir = cfg.dist_dir / "runtime"
-    ensure_embed(info.py_version, cfg.mirror, cfg.embed_cache_dir, runtime_dir)
+    if target is Platform.LINUX:
+        standalone_cache = Path.home() / ".fspack" / "cache" / "standalone"
+        ensure_standalone(info.py_version, STANDALONE_RELEASE_TAG, standalone_cache, runtime_dir)
+        major, minor = info.py_version.split(".")[:2]
+        site_packages = runtime_dir / "python" / "lib" / f"python{major}.{minor}" / "site-packages"
+    else:
+        ensure_embed(info.py_version, cfg.mirror, cfg.embed_cache_dir, runtime_dir)
+        site_packages = runtime_dir / "Lib" / "site-packages"
 
     report = analyze_dependencies(project_dir, info.name, info.dependencies)
     if report.missing:
         _logger.info("AST 发现未声明依赖: %s", ", ".join(report.missing))
     if report.ast_third_party:
         wheelhouse = cfg.dist_dir / "wheelhouse"
-        download_wheels(report.ast_third_party, info.py_version, cfg.mirror.pypi_index, wheelhouse)
-        unpack_wheels(wheelhouse, runtime_dir / "Lib" / "site-packages")
+        download_wheels(
+            report.ast_third_party,
+            info.py_version,
+            cfg.mirror.pypi_index,
+            wheelhouse,
+            platform_tag=wheel_platform_tag(target),
+        )
+        unpack_wheels(wheelhouse, site_packages)
     else:
         _logger.info("无第三方依赖，跳过 wheel 下载")
 
-    write_pth(cfg.dist_dir, info.py_version)
+    if target is Platform.WINDOWS:
+        write_pth(cfg.dist_dir, info.py_version)
     src_dst = cfg.dist_dir / "src"
     copy_source(project_dir, src_dst)
 
     entry_rel = info.entry_file.relative_to(info.src_dir).as_posix()
-    source = generate_loader_source(f"src/{entry_rel}", info.py_xy)
-    exe = cfg.dist_dir / info.exe_name
-    compile_loader(source, exe, info.app_type, cfg.dist_dir / "build")
+    source = generate_loader_source(f"src/{entry_rel}", info.py_xy, target)
+    exe_name = info.exe_name if target is Platform.WINDOWS else info.name
+    exe = cfg.dist_dir / exe_name
+    compile_loader(source, exe, info.app_type, cfg.dist_dir / "build", target)
     _logger.info("构建完成: %s", exe)
     return info
 
@@ -88,8 +107,9 @@ def download_wheels(
     py_version: str,
     pypi_index: str,
     wheelhouse_dir: Path,
+    platform_tag: str = "win_amd64",
 ) -> list[Path]:
-    """用 dev python 的 pip 下载 Windows wheel 到 wheelhouse 目录。."""
+    """用 dev python 的 pip 下载指定平台 wheel 到 wheelhouse 目录。."""
     wheelhouse_dir.mkdir(parents=True, exist_ok=True)
     major, minor = py_version.split(".")[:2]
     cmd: list[str] = [
@@ -100,7 +120,7 @@ def download_wheels(
         "-d",
         str(wheelhouse_dir),
         "--platform",
-        "win_amd64",
+        platform_tag,
         "--python-version",
         f"{major}.{minor}",
         "--abi",

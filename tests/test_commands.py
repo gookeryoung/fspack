@@ -19,27 +19,33 @@ from fspack.project import DEFAULT_PY_VERSION
 def test_build_run_default_mirror_and_py_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
-    def fake_build(project: Path, mirror: object, py_version: str) -> None:
+    def fake_build(project: Path, mirror: object, py_version: str, target: object = None) -> None:
         captured["mirror"] = mirror
         captured["py_version"] = py_version
+        captured["target"] = target
 
     monkeypatch.setattr("fspack.commands.build.build", fake_build)
     build_run(tmp_path, mirror=None, py_version=None)
     assert captured["mirror"] == get_mirror("huawei")
     assert captured["py_version"] == DEFAULT_PY_VERSION
+    assert captured["target"] is None
 
 
 def test_build_run_explicit_options(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from fspack.platform import Platform
+
     captured: dict[str, object] = {}
 
-    def fake_build(project: Path, mirror: object, py_version: str) -> None:
+    def fake_build(project: Path, mirror: object, py_version: str, target: object = None) -> None:
         captured["mirror"] = mirror
         captured["py_version"] = py_version
+        captured["target"] = target
 
     monkeypatch.setattr("fspack.commands.build.build", fake_build)
-    build_run(tmp_path, mirror="aliyun", py_version="3.10.0")
+    build_run(tmp_path, mirror="aliyun", py_version="3.10.0", target=Platform.LINUX)
     assert captured["mirror"] == get_mirror("aliyun")
     assert captured["py_version"] == "3.10.0"
+    assert captured["target"] is Platform.LINUX
 
 
 def test_clean_run_removes_dist(tmp_path: Path) -> None:

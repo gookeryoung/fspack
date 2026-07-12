@@ -13,6 +13,7 @@ import pytest
 from fspack.builder import build, copy_source, download_wheels, unpack_wheels
 from fspack.exceptions import DependencyError
 from fspack.mirror import get_mirror
+from fspack.platform import Platform
 
 _EXAMPLES = Path(__file__).parent / "examples"
 
@@ -135,7 +136,7 @@ def test_build_orchestration_helloworld(tmp_path: Path, monkeypatch: pytest.Monk
     monkeypatch.setattr("fspack.builder.download_wheels", fake_download)
     monkeypatch.setattr("fspack.builder.unpack_wheels", lambda *a, **k: 0)
 
-    def fake_compile(source: str, out_exe: Path, app_type: object, work_dir: Path) -> Path:
+    def fake_compile(source: str, out_exe: Path, app_type: object, work_dir: Path, platform: object) -> Path:
         out_exe.parent.mkdir(parents=True, exist_ok=True)
         out_exe.write_text(source)
         calls["compile_source"] = source
@@ -143,7 +144,7 @@ def test_build_orchestration_helloworld(tmp_path: Path, monkeypatch: pytest.Monk
 
     monkeypatch.setattr("fspack.builder.compile_loader", fake_compile)
 
-    info = build(proj, get_mirror("huawei"), "3.11.9")
+    info = build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
     assert info.name == "helloworld"
     assert (proj / "dist" / "helloworld.exe").is_file()
     assert (proj / "dist" / "python311._pth").is_file()
@@ -173,16 +174,57 @@ def test_build_orchestration_with_deps(tmp_path: Path, monkeypatch: pytest.Monke
     downloaded: dict[str, bool] = {}
     monkeypatch.setattr(
         "fspack.builder.download_wheels",
-        lambda packages, py_version, index, wheelhouse: downloaded.__setitem__("called", True) or [],
+        lambda packages, py_version, index, wheelhouse, platform_tag="win_amd64": (
+            downloaded.__setitem__("called", True) or []
+        ),
     )
     monkeypatch.setattr("fspack.builder.unpack_wheels", lambda *a, **k: 0)
     monkeypatch.setattr(
         "fspack.builder.compile_loader",
-        lambda source, out_exe, app_type, work_dir: (
+        lambda source, out_exe, app_type, work_dir, platform: (
             out_exe.parent.mkdir(parents=True, exist_ok=True),
             out_exe.write_text(source),
         )[-1],
     )
 
-    build(proj, get_mirror("huawei"), "3.11.9")
+    build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
     assert downloaded.get("called") is True
+
+
+def test_build_orchestration_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    proj = tmp_path / "helloworld"
+    shutil.copytree(_EXAMPLES / "helloworld", proj)
+    calls: dict[str, Any] = {}
+
+    def fake_ensure_standalone(version: str, release: str, cache: Path, runtime_dir: Path) -> Path:
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+        major, minor = version.split(".")[:2]
+        pydir = runtime_dir / "python"
+        (pydir / "bin").mkdir(parents=True)
+        (pydir / "bin" / f"python{major}.{minor}").write_text("")
+        (pydir / "lib" / f"python{major}.{minor}" / "site-packages").mkdir(parents=True)
+        calls["standalone"] = version
+        return runtime_dir
+
+    monkeypatch.setattr("fspack.builder.ensure_standalone", fake_ensure_standalone)
+    monkeypatch.setattr("fspack.builder.download_wheels", lambda *a, **k: [])
+    monkeypatch.setattr("fspack.builder.unpack_wheels", lambda *a, **k: 0)
+
+    def fake_compile(source: str, out_exe: Path, app_type: object, work_dir: Path, platform: object) -> Path:
+        out_exe.parent.mkdir(parents=True, exist_ok=True)
+        out_exe.write_text(source)
+        calls["compile_platform"] = platform
+        calls["compile_source"] = source
+        return out_exe
+
+    monkeypatch.setattr("fspack.builder.compile_loader", fake_compile)
+
+    info = build(proj, get_mirror("huawei"), "3.11.9", target=Platform.LINUX)
+    assert info.name == "helloworld"
+    assert (proj / "dist" / "helloworld").is_file()
+    assert not (proj / "dist" / "helloworld.exe").exists()
+    assert not (proj / "dist" / "python311._pth").exists()
+    assert (proj / "dist" / "src" / "helloworld.py").is_file()
+    assert "standalone" in calls
+    assert "dlopen" in calls["compile_source"]
+    assert "libpython3.11.so" in calls["compile_source"]

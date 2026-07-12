@@ -28,7 +28,9 @@ def test_no_command_prints_help(capsys: pytest.CaptureFixture[str]) -> None:
 def test_build_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     called: dict[str, Any] = {}
 
-    def fake_run(project: Path, mirror: str | None = None, py_version: str | None = None) -> None:
+    def fake_run(
+        project: Path, mirror: str | None = None, py_version: str | None = None, target: object = None
+    ) -> None:
         called["project"] = project
         called["mirror"] = mirror
 
@@ -41,7 +43,9 @@ def test_build_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
 def test_build_default_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     called: dict[str, Path] = {}
     monkeypatch.setattr(
-        cli.build_cmd, "run", lambda project, mirror=None, py_version=None: called.__setitem__("p", project)
+        cli.build_cmd,
+        "run",
+        lambda project, mirror=None, py_version=None, target=None: called.__setitem__("p", project),
     )
     monkeypatch.chdir(tmp_path)
     cli.main(["build"])
@@ -51,10 +55,25 @@ def test_build_default_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 def test_build_custom_py_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     called: dict[str, Any] = {}
     monkeypatch.setattr(
-        cli.build_cmd, "run", lambda project, mirror=None, py_version=None: called.__setitem__("pv", py_version)
+        cli.build_cmd,
+        "run",
+        lambda project, mirror=None, py_version=None, target=None: called.__setitem__("pv", py_version),
     )
     cli.main(["b", str(tmp_path), "--py-version", "3.12.3"])
     assert called["pv"] == "3.12.3"
+
+
+def test_build_target_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    called: dict[str, Any] = {}
+
+    def fake_run(
+        project: Path, mirror: str | None = None, py_version: str | None = None, target: object = None
+    ) -> None:
+        called["target"] = target
+
+    monkeypatch.setattr(cli.build_cmd, "run", fake_run)
+    cli.main(["b", str(tmp_path), "--target", "linux"])
+    assert called["target"] is not None
 
 
 def test_run_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

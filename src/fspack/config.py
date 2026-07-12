@@ -7,6 +7,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from fspack.platform import Platform
+
 __all__ = [
     "AppType",
     "BuildConfig",
@@ -87,4 +89,5 @@ class BuildConfig:
     dist_dir: Path
     embed_cache_dir: Path
     mirror: MirrorConfig
+    target: Platform = Platform.WINDOWS
     arch: str = "win_amd64"
