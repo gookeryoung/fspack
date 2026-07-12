@@ -1,0 +1,35 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# 测试与覆盖率
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.tox/
+
+# 工具缓存
+.ruff_cache/
+.pyrefly_cache/
+.mypy_cache/
+.uv-cache/
+
+# IDE
+.idea/
+*_profile.html
+
+# 环境变量与凭证（勿提交）
+.env
+.env.*
+
+# Sphinx 文档构建输出
+docs/_build/
+.trae/refs

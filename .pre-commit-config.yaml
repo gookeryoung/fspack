@@ -1,0 +1,21 @@
+# prek / pre-commit 配置
+# See https://pre-commit.com for more information
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    # Ruff 版本 - 与 pyproject.toml 保持同步
+    rev: v0.15.8
+    hooks:
+      # 运行 linter
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+      # 运行格式化
+      - id: ruff-format
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-merge-conflict
+      - id: debug-statements
+      - id: fix-byte-order-marker
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      - id: end-of-file-fixer

@@ -1,0 +1,15 @@
+# PYTHON
+.coverage
+.pytest_cache/
+.ruff_cache/
+.tox/
+.venv/
+__pycache__/
+
+# NODEJS
+node_modules/
+
+# IDE
+.idea
+.trae
+.vscode
