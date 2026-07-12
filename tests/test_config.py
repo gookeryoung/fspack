@@ -6,6 +6,7 @@ from pathlib import Path
 
 from fspack.config import AppType, BuildConfig, DependencyReport, MirrorConfig, ProjectInfo
 from fspack.mirror import MIRRORS
+from fspack.platform import Platform
 
 
 def test_mirror_config_embed_url() -> None:
@@ -74,7 +75,7 @@ def test_build_config_defaults() -> None:
         embed_cache_dir=Path("/c"),
         mirror=MIRRORS["huawei"],
     )
-    assert cfg.arch == "win_amd64"
+    assert cfg.target == Platform.WINDOWS
 
 
 def test_apptype_values() -> None:

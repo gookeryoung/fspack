@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from fspack.platform import Platform, detect_platform, libpython_so, wheel_platform_tag
 
 
@@ -12,6 +14,16 @@ def test_platform_values() -> None:
 
 def test_detect_platform_returns_platform() -> None:
     assert isinstance(detect_platform(), Platform)
+
+
+def test_detect_platform_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("fspack.platform._platform.system", lambda: "Windows")
+    assert detect_platform() == Platform.WINDOWS
+
+
+def test_detect_platform_linux(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("fspack.platform._platform.system", lambda: "Linux")
+    assert detect_platform() == Platform.LINUX
 
 
 def test_wheel_platform_tag() -> None:

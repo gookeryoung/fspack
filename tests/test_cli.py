@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from fspack import __version__, cli
+from fspack.platform import Platform
 
 
 def test_build_parser_prog() -> None:
@@ -73,7 +74,20 @@ def test_build_target_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
     monkeypatch.setattr(cli.build_cmd, "run", fake_run)
     cli.main(["b", str(tmp_path), "--target", "linux"])
-    assert called["target"] is not None
+    assert called["target"] is Platform.LINUX
+
+
+def test_build_target_windows_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    called: dict[str, Any] = {}
+
+    def fake_run(
+        project: Path, mirror: str | None = None, py_version: str | None = None, target: object = None
+    ) -> None:
+        called["target"] = target
+
+    monkeypatch.setattr(cli.build_cmd, "run", fake_run)
+    cli.main(["b", str(tmp_path), "--target", "windows"])
+    assert called["target"] is Platform.WINDOWS
 
 
 def test_run_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -90,4 +90,3 @@ class BuildConfig:
     embed_cache_dir: Path
     mirror: MirrorConfig
     target: Platform = Platform.WINDOWS
-    arch: str = "win_amd64"

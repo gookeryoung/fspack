@@ -79,11 +79,10 @@ def detect_entry(
 
     seen: set[str] = set()
     for mod, path in candidates:
-        if mod in seen or not path.is_file():
-            continue
-        seen.add(mod)
-        if _has_entry(path):
-            return mod, path, _infer_app_type(path, declared)
+        if mod not in seen and path.is_file():
+            seen.add(mod)
+            if _has_entry(path):
+                return mod, path, _infer_app_type(path, declared)
     raise ProjectError(f"未识别到入口（需 def main() 或 if __name__=='__main__'）: {src_dir}")
 
 

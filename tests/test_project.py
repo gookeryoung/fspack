@@ -110,6 +110,14 @@ def test_detect_entry_skips_syntax_error_file(tmp_path: Path) -> None:
     assert path.name == "other.py"
 
 
+def test_detect_entry_dedup_same_name_no_entry(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text("x = 1\n")
+    (tmp_path / "other.py").write_text("def main():\n    pass\n")
+    mod, path, _ = detect_entry(tmp_path, "app")
+    assert mod == "other"
+    assert path.name == "other.py"
+
+
 def test_detect_entry_cli_with_multiple_non_gui_deps(tmp_path: Path) -> None:
     (tmp_path / "app.py").write_text("def main():\n    pass\n")
     _, _, app = detect_entry(tmp_path, "app", ("requests>=2", "numpy>=1"))
