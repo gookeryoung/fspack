@@ -7,13 +7,13 @@ import pytest
 from fspack.mirror import DEFAULT_MIRROR, MIRRORS, get_mirror
 
 
-def test_default_mirror_is_huawei() -> None:
-    assert DEFAULT_MIRROR == "huawei"
+def test_default_mirror_is_aliyun() -> None:
+    assert DEFAULT_MIRROR == "aliyun"
     assert {"huawei", "aliyun", "tsinghua"} <= set(MIRRORS)
 
 
 def test_get_mirror_default() -> None:
-    assert get_mirror().name == "华为云"
+    assert get_mirror().name == "阿里云"
 
 
 def test_get_mirror_by_name() -> None:

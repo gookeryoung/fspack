@@ -26,7 +26,7 @@ def test_build_run_default_mirror_and_py_version(tmp_path: Path, monkeypatch: py
 
     monkeypatch.setattr("fspack.commands.build.build", fake_build)
     build_run(tmp_path, mirror=None, py_version=None)
-    assert captured["mirror"] == get_mirror("huawei")
+    assert captured["mirror"] == get_mirror("aliyun")
     assert captured["py_version"] == DEFAULT_PY_VERSION
     assert captured["target"] is None
 
@@ -138,7 +138,7 @@ def test_package_run_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 
     monkeypatch.setattr("fspack.commands.package.build_installer", fake_build_installer)
     package_run(tmp_path)
-    assert captured["mirror"] == get_mirror("huawei")
+    assert captured["mirror"] == get_mirror("aliyun")
     assert captured["py_version"] == DEFAULT_PY_VERSION
     assert captured["no_build"] is False
 

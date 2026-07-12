@@ -62,18 +62,20 @@ def extract_embed(zip_path: Path, runtime_dir: Path) -> None:
 
 
 def write_pth(dist_dir: Path, version: str, extra_paths: tuple[str, ...] = ()) -> Path:
-    """在 dist 根目录生成 python3X._pth，控制 sys.path。
+    """在 runtime 目录生成 python3X._pth，控制 sys.path。
 
-    _pth 与 loader.exe 同目录（dist/），路径相对 dist 解析：
-    runtime\\python311.zip 标准库、runtime\\Lib\\site-packages 第三方依赖、src 用户源码。
+    _pth 必须与 python311.dll 同目录（dist/runtime/），路径相对 runtime 解析：
+    python311.zip 标准库、Lib\\site-packages 第三方依赖、..\\src 用户源码。
     """
     pyxy = embed_dirname(version)
-    pth = dist_dir / f"{pyxy}._pth"
+    runtime_dir = dist_dir / "runtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    pth = runtime_dir / f"{pyxy}._pth"
     lines = [
-        f"runtime\\{pyxy}.zip",
-        "runtime",
-        "runtime\\Lib\\site-packages",
-        "src",
+        f"{pyxy}.zip",
+        ".",
+        "Lib\\site-packages",
+        "..\\src",
         *extra_paths,
         "import site",
     ]

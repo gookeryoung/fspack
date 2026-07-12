@@ -1,8 +1,8 @@
 """C loader 源码生成与交叉编译。
 
-Windows：loader.exe 与 python3X._pth 同目录（dist/），动态加载 dist/runtime/python3X.dll，
+Windows：loader.exe 在 dist/，动态加载 dist/runtime/python3X.dll，
 解析 ``Py_Main`` 符号后以 ``[loader.exe, dist/src/<entry>, ...用户参数]`` 调用。
-sys.path 由 _pth 文件控制，loader 不再设置环境变量。
+sys.path 由 dist/runtime/python3X._pth 文件控制（与 DLL 同目录），loader 不再设置环境变量。
 
 Linux：loader 与 runtime/python/ 同目录（dist/），dlopen dist/runtime/python/lib/libpython3.X.so，
 setenv PYTHONHOME 指向 runtime/python，调用 ``Py_Main`` 运行入口脚本。
@@ -152,8 +152,8 @@ def generate_loader_source(
         dotted = f"{py_xy[6]}.{py_xy[7:]}"
         libpython = f"runtime/python/lib/libpython{dotted}.so"
         return _LOADER_C_LINUX.format(entry_file=entry_rel_from_dist, libpython=libpython)
-    entry_win = entry_rel_from_dist.replace("/", "\\")
-    python_dll = f"runtime\\{py_xy}.dll"
+    entry_win = entry_rel_from_dist.replace("/", "\\\\")
+    python_dll = f"runtime\\\\{py_xy}.dll"
     return _LOADER_C_WINDOWS.format(entry_file=entry_win, python_dll=python_dll)
 
 

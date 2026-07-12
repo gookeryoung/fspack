@@ -16,16 +16,16 @@ from fspack.platform import Platform
 
 def test_generate_loader_source_contains_entry_and_dll() -> None:
     src = generate_loader_source("src/helloworld.py", "python311")
-    assert "src\\helloworld.py" in src
-    assert "runtime\\python311.dll" in src
+    assert r"src\\helloworld.py" in src
+    assert r"runtime\\python311.dll" in src
     assert "Py_Main" in src
     assert "wmain" in src
 
 
 def test_generate_loader_source_backslash_conversion() -> None:
     src = generate_loader_source("src/a/b/c.py", "python312")
-    assert "src\\a\\b\\c.py" in src
-    assert "runtime\\python312.dll" in src
+    assert r"src\\a\\b\\c.py" in src
+    assert r"runtime\\python312.dll" in src
 
 
 class _Completed:

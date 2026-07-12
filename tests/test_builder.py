@@ -147,13 +147,13 @@ def test_build_orchestration_helloworld(tmp_path: Path, monkeypatch: pytest.Monk
     info = build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
     assert info.name == "helloworld"
     assert (proj / "dist" / "helloworld.exe").is_file()
-    assert (proj / "dist" / "python311._pth").is_file()
+    assert (proj / "dist" / "runtime" / "python311._pth").is_file()
     assert (proj / "dist" / "src" / "helloworld.py").is_file()
     assert (proj / "dist" / "runtime" / "python311.dll").is_file()
-    pth = (proj / "dist" / "python311._pth").read_text()
-    assert "runtime\\python311.zip" in pth
-    assert "src" in pth
-    assert "src\\helloworld.py" in calls["compile_source"]
+    pth = (proj / "dist" / "runtime" / "python311._pth").read_text()
+    assert "python311.zip" in pth
+    assert "..\\src" in pth
+    assert r"src\\helloworld.py" in calls["compile_source"]
     assert "download" not in calls
 
 
@@ -223,7 +223,7 @@ def test_build_orchestration_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert info.name == "helloworld"
     assert (proj / "dist" / "helloworld").is_file()
     assert not (proj / "dist" / "helloworld.exe").exists()
-    assert not (proj / "dist" / "python311._pth").exists()
+    assert not (proj / "dist" / "runtime" / "python311._pth").exists()
     assert (proj / "dist" / "src" / "helloworld.py").is_file()
     assert "standalone" in calls
     assert "dlopen" in calls["compile_source"]

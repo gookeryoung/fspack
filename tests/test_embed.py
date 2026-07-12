@@ -91,10 +91,11 @@ def test_extract_embed_bad_zip(tmp_path: Path) -> None:
 
 def test_write_pth_content(tmp_path: Path) -> None:
     pth = write_pth(tmp_path, "3.11.9")
+    assert pth == tmp_path / "runtime" / "python311._pth"
     content = pth.read_text(encoding="utf-8")
-    assert "runtime\\python311.zip" in content
-    assert "runtime\\Lib\\site-packages" in content
-    assert "src" in content
+    assert "python311.zip" in content
+    assert "Lib\\site-packages" in content
+    assert "..\\src" in content
     assert "import site" in content
 
 

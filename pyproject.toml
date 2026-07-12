@@ -120,7 +120,7 @@ select = [
 
 [tool.pyrefly]
 preset           = "strict"
-project-excludes = [".venv/**", "template/**"]
+project-excludes = [".venv/**", "template/**", "tests/examples/**"]
 project-includes = ["**/*.ipynb", "**/*.py*"]
 python-version   = "3.8"
 search-path      = ["."]
