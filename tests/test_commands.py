@@ -8,6 +8,7 @@ import pytest
 
 from fspack.commands.build import run as build_run
 from fspack.commands.clean import run as clean_run
+from fspack.commands.package import run as package_run
 from fspack.commands.run import _build_cmd
 from fspack.commands.run import run as run_run
 from fspack.exceptions import FspackError
@@ -118,3 +119,35 @@ def test_build_cmd_non_linux(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Windows")
     cmd = _build_cmd(Path("/tmp/app.exe"))
     assert cmd == ["/tmp/app.exe"]
+
+
+def test_package_run_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_build_installer(project: Path, mirror: object, py_version: str, no_build: bool = False) -> Path:
+        captured["mirror"] = mirror
+        captured["py_version"] = py_version
+        captured["no_build"] = no_build
+        return tmp_path / "app-setup.exe"
+
+    monkeypatch.setattr("fspack.commands.package.build_installer", fake_build_installer)
+    package_run(tmp_path)
+    assert captured["mirror"] == get_mirror("huawei")
+    assert captured["py_version"] == DEFAULT_PY_VERSION
+    assert captured["no_build"] is False
+
+
+def test_package_run_explicit_options(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_build_installer(project: Path, mirror: object, py_version: str, no_build: bool = False) -> Path:
+        captured["mirror"] = mirror
+        captured["py_version"] = py_version
+        captured["no_build"] = no_build
+        return Path("out.exe")
+
+    monkeypatch.setattr("fspack.commands.package.build_installer", fake_build_installer)
+    package_run(tmp_path, mirror="aliyun", py_version="3.10.0", no_build=True)
+    assert captured["mirror"] == get_mirror("aliyun")
+    assert captured["py_version"] == "3.10.0"
+    assert captured["no_build"] is True

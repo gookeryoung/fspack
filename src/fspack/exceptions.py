@@ -6,6 +6,7 @@ __all__ = [
     "DependencyError",
     "EmbedError",
     "FspackError",
+    "InstallerError",
     "LoaderError",
     "ProjectError",
 ]
@@ -29,3 +30,7 @@ class LoaderError(FspackError):
 
 class DependencyError(FspackError):
     """依赖下载或解包错误。."""
+
+
+class InstallerError(FspackError):
+    """NSIS 脚本生成或安装包编译错误。."""

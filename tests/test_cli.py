@@ -76,6 +76,23 @@ def test_clean_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
     assert called["p"] == tmp_path.resolve()
 
 
+def test_package_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    called: dict[str, Any] = {}
+
+    def fake_run(
+        project: Path, mirror: str | None = None, py_version: str | None = None, no_build: bool = False
+    ) -> None:
+        called["project"] = project
+        called["mirror"] = mirror
+        called["no_build"] = no_build
+
+    monkeypatch.setattr(cli.package_cmd, "run", fake_run)
+    cli.main(["p", str(tmp_path), "--mirror", "aliyun", "--no-build"])
+    assert called["project"] == tmp_path.resolve()
+    assert called["mirror"] == "aliyun"
+    assert called["no_build"] is True
+
+
 def test_drop_separator() -> None:
     assert cli._drop_separator(["--", "a", "b"]) == ["a", "b"]
     assert cli._drop_separator(["a", "b"]) == ["a", "b"]

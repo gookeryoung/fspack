@@ -8,6 +8,7 @@ from pathlib import Path
 from fspack import __version__
 from fspack.commands import build as build_cmd
 from fspack.commands import clean as clean_cmd
+from fspack.commands import package as package_cmd
 from fspack.commands import run as run_cmd
 from fspack.mirror import MIRRORS
 
@@ -35,6 +36,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_clean = sub.add_parser("clean", aliases=["c"], help="清理 dist/")
     p_clean.add_argument("project", nargs="?", default=".", help="项目目录")
+
+    p_pkg = sub.add_parser("package", aliases=["p"], help="生成 NSIS 安装包")
+    p_pkg.add_argument("project", nargs="?", default=".", help="项目目录")
+    p_pkg.add_argument("--mirror", default=None, choices=list(MIRRORS), help="镜像源")
+    p_pkg.add_argument("--py-version", default=None, help="embed python 版本，如 3.11.9")
+    p_pkg.add_argument("--no-build", action="store_true", help="跳过重建，直接打包已有 dist")
     return parser
 
 
@@ -54,6 +61,8 @@ def main(argv: list[str] | None = None) -> None:
         run_cmd.run(project, rest_args=_drop_separator(ns.rest))
     elif command in ("clean", "c"):
         clean_cmd.run(project)
+    elif command in ("package", "p"):
+        package_cmd.run(project, mirror=ns.mirror, py_version=ns.py_version, no_build=ns.no_build)
 
 
 def _drop_separator(rest: list[str]) -> list[str]:
