@@ -57,17 +57,18 @@ class StageRecord:
     bytes_downloaded: int = 0
     cache_hit: int = 0
     items: int = 0
+    skipped: int = 0
     detail: str = ""
 
 
 class StageRecorder:
     """阶段上下文，记录阶段内累积指标。
 
-    由 ``BuildTracker.stage()`` 返回，阶段内调用 ``add_bytes``/``hit_cache`` 等方法
+    由 ``BuildTracker.stage()`` 返回，阶段内调用 ``add_bytes``/``hit_cache``/``skip`` 等方法
     累积数据，退出 ``with`` 块时由 ``BuildTracker`` 收集为不可变 ``StageRecord``。
     """
 
-    __slots__ = ("_bytes", "_detail", "_hits", "_items", "_name", "_start")
+    __slots__ = ("_bytes", "_detail", "_hits", "_items", "_name", "_skipped", "_start")
 
     def __init__(self, name: str) -> None:
         """初始化阶段记录器，开始计时。."""
@@ -75,6 +76,7 @@ class StageRecorder:
         self._bytes = 0
         self._hits = 0
         self._items = 0
+        self._skipped = 0
         self._detail = ""
         self._start = time.perf_counter()
 
@@ -98,6 +100,11 @@ class StageRecorder:
         if n > 0:
             self._items += n
 
+    def skip(self, n: int = 1) -> None:
+        """累加跳过项数（dist 已有依赖等场景）。."""
+        if n > 0:
+            self._skipped += n
+
     def set_detail(self, text: str) -> None:
         """设置备注文本，覆盖既有值。."""
         self._detail = text
@@ -110,6 +117,7 @@ class StageRecorder:
             bytes_downloaded=self._bytes,
             cache_hit=self._hits,
             items=self._items,
+            skipped=self._skipped,
             detail=self._detail,
         )
 
@@ -149,16 +157,20 @@ class BuildTracker:
         table.add_column("缓存", justify="right")
         table.add_column("下载", justify="right")
         table.add_column("项数", justify="right")
+        table.add_column("跳过", justify="right")
         table.add_column("备注", style="dim")
 
         total_bytes = 0
+        total_skipped = 0
         for r in self._records:
             total_bytes += r.bytes_downloaded
+            total_skipped += r.skipped
             cache_str = f"命中 {r.cache_hit}" if r.cache_hit else "-"
             bytes_str = _fmt_bytes(r.bytes_downloaded) if r.bytes_downloaded else "-"
             items_str = str(r.items) if r.items else "-"
+            skip_str = str(r.skipped) if r.skipped else "-"
             detail_str = r.detail or "-"
-            table.add_row(r.name, _fmt_seconds(r.elapsed), cache_str, bytes_str, items_str, detail_str)
+            table.add_row(r.name, _fmt_seconds(r.elapsed), cache_str, bytes_str, items_str, skip_str, detail_str)
 
         table.add_row(
             "总计",
@@ -166,6 +178,7 @@ class BuildTracker:
             "",
             _fmt_bytes(total_bytes) if total_bytes else "-",
             "",
+            str(total_skipped) if total_skipped else "-",
             "",
             style="bold",
         )

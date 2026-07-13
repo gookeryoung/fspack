@@ -81,7 +81,7 @@ class TestSlimUnpack:
             },
         )
         dest = tmp_path / "sp"
-        count = slim_unpack(whl.parent, dest, {"PySide2": frozenset({"QtCore", "QtWidgets"})})
+        count = slim_unpack([whl], dest, {"PySide2": frozenset({"QtCore", "QtWidgets"})})
         assert count == 1
         assert (dest / "PySide2" / "__init__.py").is_file()
         assert (dest / "PySide2" / "QtCore.pyd").is_file()
@@ -105,7 +105,7 @@ class TestSlimUnpack:
             },
         )
         dest = tmp_path / "sp"
-        count = slim_unpack(whl.parent, dest)
+        count = slim_unpack([whl], dest)
         assert count == 1
         assert (dest / "PySide2" / "QtGui.pyd").is_file()
         assert (dest / "PySide2" / "Qt5Gui.dll").is_file()
@@ -115,7 +115,7 @@ class TestSlimUnpack:
         whl.parent.mkdir()
         _make_wheel(whl, {"PySide2/QtGui.pyd": b"gui"})
         dest = tmp_path / "sp"
-        count = slim_unpack(whl.parent, dest, {})
+        count = slim_unpack([whl], dest, {})
         assert count == 1
         assert (dest / "PySide2" / "QtGui.pyd").is_file()
 
@@ -135,7 +135,7 @@ class TestSlimUnpack:
         )
         dest = tmp_path / "sp"
         count = slim_unpack(
-            whl.parent,
+            [whl],
             dest,
             {"PySide2": frozenset({"QtCore"})},
             keep_modules={"PySide2.QtGui"},
@@ -153,7 +153,7 @@ class TestSlimUnpack:
         whl.parent.mkdir()
         _make_wheel(whl, {"PySide2/QtGui.pyd": b"gui"})
         dest = tmp_path / "sp"
-        count = slim_unpack(whl.parent, dest, {"PySide2": frozenset({"QtCore"})})
+        count = slim_unpack([whl], dest, {"PySide2": frozenset({"QtCore"})})
         assert count == 1
         assert (dest / "PySide2" / "QtGui.pyd").is_file()
 
@@ -163,7 +163,7 @@ class TestSlimUnpack:
         whl.write_bytes(b"not a zip")
         dest = tmp_path / "sp"
         with pytest.raises(DependencyError, match="wheel 损坏"):
-            slim_unpack(whl.parent, dest, {"PySide2": frozenset({"QtCore"})})
+            slim_unpack([whl], dest, {"PySide2": frozenset({"QtCore"})})
 
     def test_no_matching_pkg_full_unpack(self, tmp_path: Path) -> None:
         """submodule_usage 有 numpy 但 wheel 是 PySide2 → 全量解压。."""
@@ -171,7 +171,7 @@ class TestSlimUnpack:
         whl.parent.mkdir()
         _make_wheel(whl, {"PySide2/QtGui.pyd": b"gui"})
         dest = tmp_path / "sp"
-        count = slim_unpack(whl.parent, dest, {"numpy": frozenset({"core"})})
+        count = slim_unpack([whl], dest, {"numpy": frozenset({"core"})})
         assert count == 1
         assert (dest / "PySide2" / "QtGui.pyd").is_file()
 
@@ -181,7 +181,7 @@ class TestSlimUnpack:
         whl.parent.mkdir()
         whl.write_bytes(b"not a zip")
         with pytest.raises(DependencyError, match="wheel 损坏"):
-            slim_unpack(whl.parent, tmp_path / "sp")
+            slim_unpack([whl], tmp_path / "sp")
 
     def test_slim_extract_with_dir_entries(self, tmp_path: Path) -> None:
         """wheel 含目录条目时正确提取目录与文件。."""
@@ -193,7 +193,7 @@ class TestSlimUnpack:
             zf.writestr("PySide2/plugins/", "")
             zf.writestr("PySide2/plugins/platforms/qwindows.dll", b"plugin")
         dest = tmp_path / "sp"
-        count = slim_unpack(whl.parent, dest, {"PySide2": frozenset({"QtCore"})})
+        count = slim_unpack([whl], dest, {"PySide2": frozenset({"QtCore"})})
         assert count == 1
         assert (dest / "PySide2" / "QtCore.pyd").is_file()
         assert (dest / "PySide2" / "plugins" / "platforms" / "qwindows.dll").is_file()
@@ -204,7 +204,7 @@ class TestSlimUnpack:
         whl.parent.mkdir()
         _make_wheel(whl, {"PySide2/QtCore.pyd": b"core", "PySide2/QtGui.pyd": b"gui"})
         dest = tmp_path / "sp"
-        count = slim_unpack(whl.parent, dest, {"PySide2": frozenset({"QtCore", "QtGui"})})
+        count = slim_unpack([whl], dest, {"PySide2": frozenset({"QtCore", "QtGui"})})
         assert count == 1
         assert (dest / "PySide2" / "QtCore.pyd").is_file()
         assert (dest / "PySide2" / "QtGui.pyd").is_file()
@@ -218,7 +218,7 @@ class TestSlimUnpack:
             zf.writestr("PySide2-5.15.2.1.dist-info/METADATA", b"")
             zf.writestr("PySide2/QtCore.pyd", b"core")
         dest = tmp_path / "sp"
-        count = slim_unpack(whl.parent, dest, {"PySide2": frozenset({"QtCore"})})
+        count = slim_unpack([whl], dest, {"PySide2": frozenset({"QtCore"})})
         assert count == 1
         assert (dest / "PySide2" / "QtCore.pyd").is_file()
 
@@ -228,7 +228,7 @@ class TestSlimUnpack:
         whl.parent.mkdir()
         _make_wheel(whl, {"different_pkg/core.pyd": b"core"})
         dest = tmp_path / "sp"
-        count = slim_unpack(whl.parent, dest, {"numpy": frozenset({"core"})})
+        count = slim_unpack([whl], dest, {"numpy": frozenset({"core"})})
         assert count == 1
         assert (dest / "different_pkg" / "core.pyd").is_file()
 
@@ -238,7 +238,7 @@ class TestSlimUnpack:
         whl.parent.mkdir()
         _make_wheel(whl, {"PySide2/QtGui.pyd": b"gui"})
         dest = tmp_path / "sp"
-        count = slim_unpack(whl.parent, dest, keep_modules={"PySide2"})
+        count = slim_unpack([whl], dest, keep_modules={"PySide2"})
         assert count == 1
         assert (dest / "PySide2" / "QtGui.pyd").is_file()
 
@@ -258,4 +258,4 @@ class TestSlimUnpack:
 
         monkeypatch.setattr("fspack.slim.zipfile.ZipFile", fake_zipfile)
         with pytest.raises(DependencyError, match="wheel 损坏"):
-            slim_unpack(whl.parent, tmp_path / "sp", {"PySide2": frozenset({"QtCore"})})
+            slim_unpack([whl], tmp_path / "sp", {"PySide2": frozenset({"QtCore"})})

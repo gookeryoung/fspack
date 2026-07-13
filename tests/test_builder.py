@@ -11,7 +11,16 @@ from typing import Any
 
 import pytest
 
-from fspack.builder import _PIP_PYTHON_NAMES, _find_pip_python, build, copy_source, download_wheels, unpack_wheels
+from fspack.builder import (
+    _PIP_PYTHON_NAMES,
+    _find_pip_python,
+    _parse_pip_download_wheels,
+    _site_packages_has_deps,
+    build,
+    copy_source,
+    download_wheels,
+    unpack_wheels,
+)
 from fspack.console import console
 from fspack.exceptions import DependencyError
 from fspack.mirror import get_mirror
@@ -63,10 +72,8 @@ def test_download_wheels_cmd_construction(tmp_path: Path, monkeypatch: pytest.Mo
 
     monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
     monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
-    monkeypatch.setattr("fspack.wheel_cache.harvest_external_caches", lambda *a, **kw: 0)
-    wh = tmp_path / "wh"
     cache = tmp_path / "cache"
-    download_wheels(("numpy", "requests"), "3.11.9", "https://idx/simple", wh, wheel_cache_dir=cache)
+    download_wheels(("numpy", "requests"), "3.11.9", "https://idx/simple", cache)
     cmd = captured["cmd"]
     assert cmd[0] == "/py/python"
     assert "download" in cmd
@@ -77,6 +84,7 @@ def test_download_wheels_cmd_construction(tmp_path: Path, monkeypatch: pytest.Mo
     assert "numpy" in cmd and "requests" in cmd
     assert "--find-links" in cmd
     assert str(cache) in cmd
+    assert "-d" in cmd
 
 
 def test_download_wheels_multi_platform(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -89,15 +97,12 @@ def test_download_wheels_multi_platform(tmp_path: Path, monkeypatch: pytest.Monk
 
     monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
     monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
-    monkeypatch.setattr("fspack.wheel_cache.harvest_external_caches", lambda *a, **kw: 0)
-    wh = tmp_path / "wh"
     download_wheels(
         ("PySide6",),
         "3.11.10",
         "https://idx/simple",
-        wh,
+        tmp_path / "cache",
         platform_tags=("manylinux2014_x86_64", "manylinux_2_28_x86_64"),
-        wheel_cache_dir=tmp_path / "cache",
     )
     cmd = captured["cmd"]
     platform_count = cmd.count("--platform")
@@ -112,9 +117,8 @@ def test_download_wheels_pip_missing(tmp_path: Path, monkeypatch: pytest.MonkeyP
         "fspack.builder._find_pip_python",
         lambda: (_ for _ in ()).throw(DependencyError("未找到可用的 pip")),
     )
-    monkeypatch.setattr("fspack.wheel_cache.harvest_external_caches", lambda *a, **kw: 0)
     with pytest.raises(DependencyError, match="未找到可用的 pip"):
-        download_wheels(("numpy",), "3.11.9", "https://idx", tmp_path / "wh", wheel_cache_dir=tmp_path / "cache")
+        download_wheels(("numpy",), "3.11.9", "https://idx", tmp_path / "cache")
 
 
 def test_download_wheels_pip_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -125,47 +129,16 @@ def test_download_wheels_pip_error(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
     monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
-    monkeypatch.setattr("fspack.wheel_cache.harvest_external_caches", lambda *a, **kw: 0)
     with pytest.raises(DependencyError, match="依赖下载失败"):
-        download_wheels(("numpy",), "3.11.9", "https://idx", tmp_path / "wh", wheel_cache_dir=tmp_path / "cache")
+        download_wheels(("numpy",), "3.11.9", "https://idx", tmp_path / "cache")
 
 
 def test_download_wheels_python_disappeared(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """_find_pip_python 验证通过后 download 时 python 消失（FileNotFoundError）。."""
     monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
     monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: (_ for _ in ()).throw(FileNotFoundError()))
-    monkeypatch.setattr("fspack.wheel_cache.harvest_external_caches", lambda *a, **kw: 0)
     with pytest.raises(DependencyError, match="未找到 pip"):
-        download_wheels(("numpy",), "3.11.9", "https://idx", tmp_path / "wh", wheel_cache_dir=tmp_path / "cache")
-
-
-def test_download_wheels_harvests_and_caches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """download_wheels 调用 harvest_external_caches 且下载后回写缓存。."""
-    harvest_calls: list[dict[str, Any]] = []
-
-    def fake_harvest(packages: set[str], py_version: str, platform_tags: Any, dest: Path) -> int:
-        harvest_calls.append({"packages": packages, "dest": dest})
-        return 1
-
-    whl_name = "numpy-1.24.0-cp311-cp311-win_amd64.whl"
-
-    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
-        (tmp_path / "wh" / whl_name).write_bytes(b"numpy-content")
-        return _Completed()
-
-    monkeypatch.setattr("fspack.wheel_cache.harvest_external_caches", fake_harvest)
-    monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
-    monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
-
-    wh = tmp_path / "wh"
-    cache = tmp_path / "cache"
-    result = download_wheels(("numpy",), "3.11.9", "https://idx/simple", wh, wheel_cache_dir=cache)
-
-    assert len(harvest_calls) == 1
-    assert harvest_calls[0]["dest"] == cache
-    assert "numpy" in harvest_calls[0]["packages"]
-    assert len(result) == 1
-    assert (cache / whl_name).read_bytes() == b"numpy-content"
+        download_wheels(("numpy",), "3.11.9", "https://idx", tmp_path / "cache")
 
 
 def test_download_wheels_records_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -173,95 +146,133 @@ def test_download_wheels_records_bytes(tmp_path: Path, monkeypatch: pytest.Monke
     whl_name = "numpy-1.24.0-cp311-cp311-win_amd64.whl"
     whl_content = b"x" * 100
 
-    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
-        (tmp_path / "wh" / whl_name).write_bytes(whl_content)
-        return _Completed()
+    class _Result:
+        returncode = 0
+        stdout = f"Saved {whl_name}\n"
+        stderr = ""
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Result:
+        (tmp_path / "cache" / whl_name).write_bytes(whl_content)
+        return _Result()
 
     monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
     monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
-    monkeypatch.setattr("fspack.wheel_cache.harvest_external_caches", lambda *a, **kw: 0)
 
     stage = StageRecorder("下载依赖")
-    download_wheels(
-        ("numpy",), "3.11.9", "https://idx/simple", tmp_path / "wh", wheel_cache_dir=tmp_path / "cache", stage=stage
-    )
+    download_wheels(("numpy",), "3.11.9", "https://idx/simple", tmp_path / "cache", stage=stage)
     record = stage._finalize()
     assert record.bytes_downloaded == 100
     assert record.items == 1
 
 
-def test_download_wheels_skips_existing_wheel_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """wheelhouse 已存在的 wheel 不计入新增字节数。."""
-    whl_name = "numpy-1.24.0-cp311-cp311-win_amd64.whl"
-    wh = tmp_path / "wh"
-    wh.mkdir()
-    (wh / whl_name).write_bytes(b"old" * 10)
-
-    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
-        return _Completed()
-
-    monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
-    monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
-    monkeypatch.setattr("fspack.wheel_cache.harvest_external_caches", lambda *a, **kw: 0)
-
-    stage = StageRecorder("下载依赖")
-    download_wheels(("numpy",), "3.11.9", "https://idx/simple", wh, wheel_cache_dir=tmp_path / "cache", stage=stage)
-    record = stage._finalize()
-    assert record.bytes_downloaded == 0
-
-
-def test_download_wheels_skips_harvest_when_cache_covers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """fspack cache 已覆盖所有直接依赖时跳过 harvest_external_caches（省数秒 uv/pip 递归搜索）。."""
+def test_download_wheels_cache_hit_no_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """cache_dir 已存在的 wheel 不计入新增字节数，但计入缓存命中。."""
     whl_name = "numpy-1.24.0-cp311-cp311-win_amd64.whl"
     cache = tmp_path / "cache"
     cache.mkdir()
-    (cache / whl_name).write_bytes(b"numpy-content")
+    (cache / whl_name).write_bytes(b"old" * 10)
 
-    harvest_called = False
+    class _Result:
+        returncode = 0
+        stdout = f"File was already downloaded {whl_name}\n"
+        stderr = ""
 
-    def fake_harvest(*a: Any, **kw: Any) -> int:
-        nonlocal harvest_called
-        harvest_called = True
-        return 0
-
-    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
-        return _Completed()
-
-    monkeypatch.setattr("fspack.wheel_cache.harvest_external_caches", fake_harvest)
-    monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _Result())
     monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
 
     stage = StageRecorder("下载依赖")
-    download_wheels(("numpy",), "3.11.9", "https://idx/simple", tmp_path / "wh", wheel_cache_dir=cache, stage=stage)
-    assert not harvest_called
+    download_wheels(("numpy",), "3.11.9", "https://idx/simple", cache, stage=stage)
     record = stage._finalize()
+    assert record.bytes_downloaded == 0
     assert record.cache_hit == 1
 
 
-def test_download_wheels_harvests_when_cache_partial(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """fspack cache 缺少某些直接依赖时仍调 harvest_external_caches。."""
-    whl_name = "numpy-1.24.0-cp311-cp311-win_amd64.whl"
-    cache = tmp_path / "cache"
-    cache.mkdir()
-    (cache / whl_name).write_bytes(b"numpy-content")
+def test_download_wheels_parses_stdout_for_wheels(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """download_wheels 从 pip stdout 解析 wheel 列表（含传递依赖）。."""
+    whl1 = "numpy-1.24.0-cp311-cp311-win_amd64.whl"
+    whl2 = "requests-2.31.0-py3-none-any.whl"
 
-    harvest_calls: list[set[str]] = []
+    class _Result:
+        returncode = 0
+        stdout = f"Collecting numpy\n  Saved {whl1}\nCollecting requests\n  File was already downloaded {whl2}\n"
+        stderr = ""
 
-    def fake_harvest(packages: set[str], *a: Any, **kw: Any) -> int:
-        harvest_calls.append(packages)
-        return 0
+    def fake_run(cmd: list[str], **kw: Any) -> _Result:
+        (tmp_path / "cache" / whl1).write_bytes(b"numpy")
+        (tmp_path / "cache" / whl2).write_bytes(b"requests")
+        return _Result()
 
-    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
-        return _Completed()
-
-    monkeypatch.setattr("fspack.wheel_cache.harvest_external_caches", fake_harvest)
     monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
     monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
 
-    download_wheels(("numpy", "requests"), "3.11.9", "https://idx/simple", tmp_path / "wh", wheel_cache_dir=cache)
-    assert len(harvest_calls) == 1
-    assert "numpy" in harvest_calls[0]
-    assert "requests" in harvest_calls[0]
+    result = download_wheels(("numpy", "requests"), "3.11.9", "https://idx/simple", tmp_path / "cache")
+    names = {p.name for p in result}
+    assert whl1 in names
+    assert whl2 in names
+
+
+def test_download_wheels_fallback_to_dir_scan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """stdout 无匹配行时回退到目录扫描。."""
+    whl_name = "numpy-1.24.0-cp311-cp311-win_amd64.whl"
+
+    class _Result:
+        returncode = 0
+        stdout = "no wheel info here\n"
+        stderr = ""
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Result:
+        (tmp_path / "cache" / whl_name).write_bytes(b"numpy")
+        return _Result()
+
+    monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
+
+    result = download_wheels(("numpy",), "3.11.9", "https://idx/simple", tmp_path / "cache")
+    assert len(result) == 1
+    assert result[0].name == whl_name
+
+
+def test_parse_pip_download_wheels_saved_and_cached() -> None:
+    """解析 Saved 和 File was already downloaded 两种行。."""
+    stdout = (
+        "Collecting numpy\n  Saved /path/to/numpy-1.0-cp311-win_amd64.whl\n"
+        "Collecting requests\n  File was already downloaded /other/requests-2.0-py3-none-any.whl\n"
+    )
+    names = _parse_pip_download_wheels(stdout)
+    assert names == ["numpy-1.0-cp311-win_amd64.whl", "requests-2.0-py3-none-any.whl"]
+
+
+def test_parse_pip_download_wheels_dedup() -> None:
+    """重复 wheel 文件名去重。."""
+    stdout = "Saved a-1.0.whl\nSaved a-1.0.whl\nSaved b-2.0.whl\n"
+    names = _parse_pip_download_wheels(stdout)
+    assert names == ["a-1.0.whl", "b-2.0.whl"]
+
+
+def test_parse_pip_download_wheels_empty() -> None:
+    """无匹配行返回空列表。."""
+    assert _parse_pip_download_wheels("nothing here\n") == []
+    assert _parse_pip_download_wheels("") == []
+
+
+def test_site_packages_has_deps_true(tmp_path: Path) -> None:
+    """site-packages 含 dist-info 目录时返回 True。."""
+    sp = tmp_path / "sp"
+    sp.mkdir()
+    (sp / "numpy-1.0.dist-info").mkdir()
+    assert _site_packages_has_deps(sp) is True
+
+
+def test_site_packages_has_deps_false_empty(tmp_path: Path) -> None:
+    """site-packages 为空目录时返回 False。."""
+    sp = tmp_path / "sp"
+    sp.mkdir()
+    assert _site_packages_has_deps(sp) is False
+
+
+def test_site_packages_has_deps_false_no_dir(tmp_path: Path) -> None:
+    """site-packages 不存在时返回 False。."""
+    assert _site_packages_has_deps(tmp_path / "nonexistent") is False
 
 
 def test_find_pip_python_uses_sys_executable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -414,7 +425,7 @@ def test_unpack_wheels(tmp_path: Path) -> None:
         zf.writestr("numpy/__init__.py", "")
         zf.writestr("numpy-1.0.dist-info/METADATA", "")
     sp = tmp_path / "sp"
-    count = unpack_wheels(wh, sp)
+    count = unpack_wheels([pkg_whl], sp)
     assert count == 1
     assert (sp / "numpy" / "__init__.py").is_file()
 
@@ -422,9 +433,10 @@ def test_unpack_wheels(tmp_path: Path) -> None:
 def test_unpack_wheels_bad_zip(tmp_path: Path) -> None:
     wh = tmp_path / "wh"
     wh.mkdir()
-    (wh / "bad.whl").write_bytes(b"nope")
+    bad_whl = wh / "bad.whl"
+    bad_whl.write_bytes(b"nope")
     with pytest.raises(DependencyError, match="wheel 损坏"):
-        unpack_wheels(wh, tmp_path / "sp")
+        unpack_wheels([bad_whl], tmp_path / "sp")
 
 
 def test_unpack_wheels_with_submodule_usage(tmp_path: Path) -> None:
@@ -442,7 +454,7 @@ def test_unpack_wheels_with_submodule_usage(tmp_path: Path) -> None:
         zf.writestr("PySide2/Qt5Widgets.dll", b"w")
         zf.writestr("PySide2-5.15.2.1.dist-info/METADATA", b"m")
     sp = tmp_path / "sp"
-    count = unpack_wheels(wh, sp, {"PySide2": frozenset({"QtCore", "QtWidgets"})})
+    count = unpack_wheels([whl], sp, {"PySide2": frozenset({"QtCore", "QtWidgets"})})
     assert count == 1
     assert (sp / "PySide2" / "QtCore.pyd").is_file()
     assert (sp / "PySide2" / "QtWidgets.pyd").is_file()
@@ -469,12 +481,12 @@ def test_build_forwards_keep_modules(tmp_path: Path, monkeypatch: pytest.MonkeyP
     )
     monkeypatch.setattr(
         "fspack.builder.download_wheels",
-        lambda packages, py_version, index, wheelhouse, platform_tags=("win_amd64",), **kw: [],
+        lambda packages, py_version, index, cache_dir, platform_tags=("win_amd64",), **kw: [],
     )
 
     captured: dict[str, Any] = {}
 
-    def fake_unpack(wh: object, sp: object, submodule_usage: object, keep_modules: object, **kw: Any) -> int:
+    def fake_unpack(wheels: object, sp: object, submodule_usage: object, keep_modules: object, **kw: Any) -> int:
         captured["submodule_usage"] = submodule_usage
         captured["keep_modules"] = keep_modules
         return 0
@@ -510,7 +522,7 @@ def test_build_orchestration_helloworld(tmp_path: Path, monkeypatch: pytest.Monk
 
     monkeypatch.setattr("fspack.builder.ensure_embed", fake_ensure_embed)
 
-    def fake_download(packages: object, py_version: str, index: str, wheelhouse: Path, **kw: Any) -> list[Path]:
+    def fake_download(packages: object, py_version: str, index: str, cache_dir: Path, **kw: Any) -> list[Path]:
         calls["download"] = True
         return []
 
@@ -532,12 +544,14 @@ def test_build_orchestration_helloworld(tmp_path: Path, monkeypatch: pytest.Monk
     assert (proj / "dist" / "runtime" / "python311._pth").is_file()
     assert (proj / "dist" / "src" / "helloworld.py").is_file()
     assert (proj / "dist" / "runtime" / "python311.dll").is_file()
+    assert (proj / "dist" / ".entry").is_file()
+    assert (proj / "dist" / ".entry").read_text(encoding="utf-8") == "src/helloworld.py"
     pth = (proj / "dist" / "runtime" / "python311._pth").read_text()
     assert "python311.zip" in pth
     assert "..\\src" in pth
-    assert r"src\\helloworld.py" in calls["compile_source"]
+    assert ".entry" in calls["compile_source"]
+    assert "read_entry" in calls["compile_source"]
     assert "download" not in calls
-    # 汇总表格已渲染
     out = capture.get()
     assert "构建阶段汇总" in out
     assert "解析项目" in out
@@ -563,7 +577,7 @@ def test_build_orchestration_with_deps(tmp_path: Path, monkeypatch: pytest.Monke
     downloaded: dict[str, bool] = {}
     monkeypatch.setattr(
         "fspack.builder.download_wheels",
-        lambda packages, py_version, index, wheelhouse, platform_tags=("win_amd64",), **kw: (
+        lambda packages, py_version, index, cache_dir, platform_tags=("win_amd64",), **kw: (
             downloaded.__setitem__("called", True) or []
         ),
     )
@@ -578,6 +592,47 @@ def test_build_orchestration_with_deps(tmp_path: Path, monkeypatch: pytest.Monke
 
     build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
     assert downloaded.get("called") is True
+
+
+def test_build_skips_download_when_site_packages_has_deps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """site-packages 已有 dist-info 时跳过下载解压，记录跳过数。."""
+    proj = tmp_path / "app"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (proj / "app.py").write_text("import requests\ndef main():\n    pass\n")
+
+    def fake_ensure_embed(version: str, mirror: object, cache: Path, runtime_dir: Path, **kw: Any) -> Path:
+        runtime_dir.mkdir(parents=True, exist_ok=True)
+        (runtime_dir / "python311.dll").write_bytes(b"")
+        sp = runtime_dir / "Lib" / "site-packages"
+        sp.mkdir(parents=True)
+        (sp / "requests-2.31.0.dist-info").mkdir()
+        return runtime_dir
+
+    monkeypatch.setattr("fspack.builder.ensure_embed", fake_ensure_embed)
+
+    download_called = False
+
+    def fake_download(*a: Any, **kw: Any) -> list[Path]:
+        nonlocal download_called
+        download_called = True
+        return []
+
+    monkeypatch.setattr("fspack.builder.download_wheels", fake_download)
+    monkeypatch.setattr("fspack.builder.unpack_wheels", lambda *a, **k: 0)
+    monkeypatch.setattr(
+        "fspack.builder.compile_loader",
+        lambda source, out_exe, app_type, work_dir, platform, **kw: (
+            out_exe.parent.mkdir(parents=True, exist_ok=True),
+            out_exe.write_text(source),
+        )[-1],
+    )
+
+    with console.capture() as capture:
+        build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
+    assert not download_called
+    out = capture.get()
+    assert "已存在跳过" in out
 
 
 def test_build_orchestration_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -614,6 +669,8 @@ def test_build_orchestration_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert not (proj / "dist" / "helloworld.exe").exists()
     assert not (proj / "dist" / "runtime" / "python311._pth").exists()
     assert (proj / "dist" / "src" / "helloworld.py").is_file()
+    assert (proj / "dist" / ".entry").is_file()
     assert "standalone" in calls
     assert "dlopen" in calls["compile_source"]
     assert "libpython3.11.so" in calls["compile_source"]
+    assert ".entry" in calls["compile_source"]

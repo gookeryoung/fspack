@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import zipfile
 from pathlib import Path
+from typing import Sequence
 
 from fspack.exceptions import DependencyError
 from fspack.progress import StageRecorder, iter_with_progress
@@ -89,14 +90,14 @@ def _slim_extract(whl: Path, dest: Path, top_pkg: str, keep_subs: set[str]) -> N
 
 
 def slim_unpack(
-    wheelhouse_dir: Path,
+    wheels: Sequence[Path],
     site_packages_dir: Path,
     submodule_usage: dict[str, frozenset[str]] | None = None,
     keep_modules: set[str] | None = None,
     *,
     stage: StageRecorder | None = None,
 ) -> int:
-    """按子模块 import 分析选择性解压 wheelhouse 内所有 wheel。
+    """按子模块 import 分析选择性解压给定 wheel 列表。
 
     - 合并 ``submodule_usage`` 与 ``keep_modules``（``"PySide2.QtGui" → (PySide2, QtGui)``）
       构建每个包的保留集合
@@ -120,9 +121,9 @@ def slim_unpack(
             pkg, sub = spec.split(".", 1)
             merged.setdefault(normalize_name(pkg), set()).add(sub)
 
-    wheels = sorted(wheelhouse_dir.glob("*.whl"))
+    sorted_wheels = sorted(wheels)
     count = 0
-    for whl in iter_with_progress(wheels, "解压 wheel", stage=stage):
+    for whl in iter_with_progress(sorted_wheels, "解压 wheel", stage=stage):
         info = parse_wheel_filename(whl.name)
         if info is None:
             _full_unpack(whl, site_packages_dir)

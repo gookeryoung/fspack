@@ -31,6 +31,7 @@ class TestStageRecorder:
         assert rec._bytes == 0
         assert rec._hits == 0
         assert rec._items == 0
+        assert rec._skipped == 0
         assert rec._detail == ""
 
     def test_add_bytes_accumulates(self) -> None:
@@ -69,6 +70,18 @@ class TestStageRecorder:
         rec.processed(-3)
         assert rec._items == 0
 
+    def test_skip_accumulates(self) -> None:
+        rec = StageRecorder("t")
+        rec.skip()
+        rec.skip(5)
+        assert rec._skipped == 6
+
+    def test_skip_ignores_non_positive(self) -> None:
+        rec = StageRecorder("t")
+        rec.skip(0)
+        rec.skip(-2)
+        assert rec._skipped == 0
+
     def test_set_detail_overwrites(self) -> None:
         rec = StageRecorder("t")
         rec.set_detail("first")
@@ -80,6 +93,7 @@ class TestStageRecorder:
         rec.add_bytes(1024)
         rec.hit_cache(2)
         rec.processed(3)
+        rec.skip(4)
         rec.set_detail("ok")
         time.sleep(0.001)
         record = rec._finalize()
@@ -88,6 +102,7 @@ class TestStageRecorder:
         assert record.bytes_downloaded == 1024
         assert record.cache_hit == 2
         assert record.items == 3
+        assert record.skipped == 4
         assert record.detail == "ok"
         assert record.elapsed > 0
 
@@ -153,6 +168,9 @@ class TestBuildTracker:
             rec.hit_cache(2)
             rec.processed(5)
             rec.set_detail("5 wheels")
+        with tracker.stage("复制源码") as rec:
+            rec.skip(3)
+            rec.set_detail("已存在跳过")
         table = tracker.summary()
         with console.capture() as capture:
             console.print(table)
@@ -160,11 +178,14 @@ class TestBuildTracker:
         assert "解析项目" in out
         assert "准备运行时" in out
         assert "下载依赖" in out
+        assert "复制源码" in out
         assert "总计" in out
         assert "embed python" in out
         assert "5 wheels" in out
         assert "命中 1" in out
         assert "命中 2" in out
+        assert "已存在跳过" in out
+        assert "跳过" in out
 
     def test_summary_table_shows_dashes_for_empty_fields(self) -> None:
         tracker = BuildTracker()

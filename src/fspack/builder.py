@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -21,6 +22,7 @@ from fspack.platform import Platform, detect_platform, wheel_platform_tags
 from fspack.progress import BuildTracker, StageRecorder, spinner
 from fspack.project import DEFAULT_LINUX_PY_VERSION, DEFAULT_PY_VERSION, parse_project, resolve_py_version
 from fspack.standalone import STANDALONE_RELEASE_TAG, ensure_standalone
+from fspack.wheel_cache import fspack_wheel_cache_dir
 
 __all__ = ["DEFAULT_PY_VERSION", "build", "copy_source", "download_wheels", "unpack_wheels"]
 
@@ -98,16 +100,21 @@ def build(  # noqa: PLR0913
 
     if report.ast_third_party:
         with tracker.stage("下载依赖") as st:
-            wheelhouse = cfg.dist_dir / "wheelhouse"
-            download_wheels(
-                report.ast_third_party,
-                info.py_version,
-                cfg.mirror.pypi_index,
-                wheelhouse,
-                platform_tags=wheel_platform_tags(target),
-                stage=st,
-            )
-            unpack_wheels(wheelhouse, site_packages, report.ast_submodules, keep_modules, stage=st)
+            if _site_packages_has_deps(site_packages):
+                _logger.info("site-packages 已有依赖，跳过下载解压")
+                st.skip(len(report.ast_third_party))
+                st.set_detail("已存在跳过")
+            else:
+                wheel_cache = fspack_wheel_cache_dir()
+                wheels = download_wheels(
+                    report.ast_third_party,
+                    info.py_version,
+                    cfg.mirror.pypi_index,
+                    wheel_cache,
+                    platform_tags=wheel_platform_tags(target),
+                    stage=st,
+                )
+                unpack_wheels(wheels, site_packages, report.ast_submodules, keep_modules, stage=st)
     else:
         _logger.info("无第三方依赖，跳过 wheel 下载")
 
@@ -121,7 +128,9 @@ def build(  # noqa: PLR0913
 
     with tracker.stage("生成 C loader") as st:
         entry_rel = info.entry_file.relative_to(info.src_dir).as_posix()
-        source = generate_loader_source(f"src/{entry_rel}", info.py_xy, target)
+        entry_file_in_dist = f"src/{entry_rel}"
+        (cfg.dist_dir / ".entry").write_text(entry_file_in_dist, encoding="utf-8")
+        source = generate_loader_source(info.py_xy, target)
         exe_name = info.exe_name if target is Platform.WINDOWS else info.name
         exe = cfg.dist_dir / exe_name
         compile_loader(source, exe, info.app_type, cfg.dist_dir / "build", target, stage=st)
@@ -136,6 +145,15 @@ def copy_source(project_dir: Path, src_dst: Path) -> None:
     if src_dst.exists():
         shutil.rmtree(src_dst)
     shutil.copytree(project_dir, src_dst, ignore=_EXCLUDE)
+
+
+def _site_packages_has_deps(site_packages: Path) -> bool:
+    """检查 site-packages 是否已有解压的 wheel 依赖。
+
+    通过检查 ``*.dist-info`` 目录是否存在判断：有则认为依赖已解压，
+    可跳过下载+解压阶段（需 ``fspack c`` 清理后才会重新解压）。
+    """
+    return site_packages.is_dir() and any(site_packages.glob("*.dist-info"))
 
 
 def _find_pip_python() -> str:
@@ -179,61 +197,30 @@ def download_wheels(  # noqa: PLR0913
     packages: tuple[str, ...] | list[str],
     py_version: str,
     pypi_index: str,
-    wheelhouse_dir: Path,
+    cache_dir: Path,
     platform_tags: Sequence[str] = ("win_amd64",),
-    wheel_cache_dir: Path | None = None,
     *,
     stage: StageRecorder | None = None,
 ) -> list[Path]:
-    """用 dev python 的 pip 下载指定平台 wheel 到 wheelhouse 目录。
+    """用 dev python 的 pip 下载指定平台 wheel 到 cache_dir，返回本次依赖的 wheel 路径列表。
 
     ``platform_tags`` 为 pip ``--platform`` 标签列表，可重复指定以匹配多个
     平台标签（如 Linux 同时匹配 manylinux2014 与 manylinux_2_28）。
 
-    ``wheel_cache_dir`` 为 fspack wheel 缓存目录，默认 ``~/.fspack/cache/wheels/``。
-    构建前先检查此目录是否已覆盖所有直接依赖：覆盖则跳过 uv/pip 缓存收割
-    （uv cache 递归搜索耗时数秒）；不覆盖才从 uv/pip 缓存收割缺失 wheel。
-    ``pip download`` 追加 ``--find-links`` 让 pip 优先用本地缓存，下载后回写缓存供后续复用。
+    ``cache_dir`` 为 fspack wheel 缓存目录（``~/.fspack/cache/wheels/``），持久化
+    保存已下载的 wheel。``pip download -d cache_dir --find-links cache_dir`` 让 pip
+    跳过已存在的 wheel（"File was already downloaded"），仅下载缺失项（"Saved"）。
+    解析 stdout 获取本次所有 wheel 路径（含传递依赖），供 unpack_wheels 解压。
 
     自动选择能跑 pip 的 python 解释器：优先当前 venv，回退系统 python3
     （uv venv 默认不含 pip）。
 
-    ``stage`` 用于回写缓存命中数与 wheel 数到 BuildTracker。
+    ``stage`` 用于回写缓存命中数、下载字节数与 wheel 数到 BuildTracker。
     """
-    from fspack.wheel_cache import (
-        fspack_wheel_cache_dir,
-        harvest_external_caches,
-        normalize_name,
-        parse_wheel_filename,
-        save_to_cache,
-        search_cache_dir,
-    )
-
-    wheelhouse_dir.mkdir(parents=True, exist_ok=True)
-    cache = wheel_cache_dir or fspack_wheel_cache_dir()
-    cache.mkdir(parents=True, exist_ok=True)
-
-    pkg_set = {normalize_name(p) for p in packages}
-    major, minor = py_version.split(".")[:2]
-    py_tag = f"cp{major}{minor}"
-
-    # 检查 fspack cache 是否已覆盖所有直接依赖；覆盖则跳过昂贵的 uv/pip cache 递归搜索（数秒）
-    cached_wheels = search_cache_dir(cache, pkg_set, py_tag, platform_tags)
-    cached_pkgs = {
-        normalize_name(info.name) for info in (parse_wheel_filename(w.name) for w in cached_wheels) if info is not None
-    }
-    if pkg_set.issubset(cached_pkgs):
-        if stage is not None:
-            stage.hit_cache(len(cached_wheels))
-        _logger.info("fspack cache 已覆盖所有直接依赖，跳过外部缓存收割")
-    else:
-        harvested = harvest_external_caches(pkg_set, py_version, platform_tags, cache)
-        if harvested:
-            _logger.info("从外部缓存收割 %d 个 wheel", harvested)
-            if stage is not None:
-                stage.hit_cache(harvested)
+    cache_dir.mkdir(parents=True, exist_ok=True)
 
     py = _find_pip_python()
+    major, minor = py_version.split(".")[:2]
     platform_args: list[str] = []
     for tag in platform_tags:
         platform_args.extend(["--platform", tag])
@@ -243,9 +230,9 @@ def download_wheels(  # noqa: PLR0913
         "pip",
         "download",
         "-d",
-        str(wheelhouse_dir),
+        str(cache_dir),
         "--find-links",
-        str(cache),
+        str(cache_dir),
         *platform_args,
         "--python-version",
         f"{major}.{minor}",
@@ -259,41 +246,68 @@ def download_wheels(  # noqa: PLR0913
         *packages,
     ]
     _logger.info("下载依赖 wheel: %s", " ".join(packages))
-    existing_sizes = {f.name: f.stat().st_size for f in wheelhouse_dir.glob("*.whl")}
+    before = {f.name for f in cache_dir.glob("*.whl")}
     try:
         with spinner(f"pip download {len(packages)} 个依赖"):
-            subprocess.run(cmd, check=True, capture_output=True, text=True)
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
     except FileNotFoundError as e:
         raise DependencyError(f"未找到 pip: {py}") from e
     except subprocess.CalledProcessError as e:
         raise DependencyError(f"依赖下载失败:\n{e.stderr}") from e
 
-    wheels = sorted(wheelhouse_dir.glob("*.whl"))
-    saved = save_to_cache(wheels, cache)
-    if saved:
-        _logger.info("缓存 %d 个 wheel", saved)
+    wheel_names = _parse_pip_download_wheels(result.stdout)
+    if not wheel_names:
+        _logger.warning("pip download 输出解析失败，回退到目录扫描")
+        wheel_names = sorted(f.name for f in cache_dir.glob("*.whl"))
+
+    wheels = [cache_dir / name for name in wheel_names if (cache_dir / name).is_file()]
     if stage is not None:
-        new_bytes = sum(whl.stat().st_size for whl in wheels if whl.name not in existing_sizes)
-        if new_bytes:
-            stage.add_bytes(new_bytes)
+        new_wheels = [w for w in wheels if w.name not in before]
+        existing_wheels = [w for w in wheels if w.name in before]
+        if new_wheels:
+            stage.add_bytes(sum(w.stat().st_size for w in new_wheels))
+        if existing_wheels:
+            stage.hit_cache(len(existing_wheels))
         stage.processed(len(wheels))
         stage.set_detail(f"{len(wheels)} wheels")
     return wheels
 
 
+# 匹配 pip download stdout 中的 "Saved <path>.whl" 和 "File was already downloaded <path>.whl"
+_PIP_WHEEL_LINE_RE = re.compile(r"(?:Saved|File was already downloaded)\s+(.+\.whl)", re.IGNORECASE)
+
+
+def _parse_pip_download_wheels(stdout: str) -> list[str]:
+    """解析 pip download stdout，提取本次涉及的 wheel 文件名（含传递依赖）。
+
+    匹配 ``Saved <path>.whl``（新下载）和 ``File was already downloaded <path>.whl``（已存在跳过）。
+    返回 wheel 文件名列表（去重保序）。
+    """
+    names: list[str] = []
+    seen: set[str] = set()
+    for line in stdout.splitlines():
+        m = _PIP_WHEEL_LINE_RE.search(line)
+        if m:
+            name = Path(m.group(1).strip()).name
+            if name not in seen:
+                names.append(name)
+                seen.add(name)
+    return names
+
+
 def unpack_wheels(
-    wheelhouse_dir: Path,
+    wheels: Sequence[Path],
     site_packages_dir: Path,
     submodule_usage: dict[str, frozenset[str]] | None = None,
     keep_modules: set[str] | None = None,
     *,
     stage: StageRecorder | None = None,
 ) -> int:
-    """将 wheelhouse 内所有 .whl 解包到 site-packages 目录，返回解包数量。
+    """将给定 wheel 列表解包到 site-packages 目录，返回解包数量。
 
     当提供 ``submodule_usage`` 时按子模块分析选择性解压（精简打包），
     否则全量解压。
     """
     from fspack.slim import slim_unpack
 
-    return slim_unpack(wheelhouse_dir, site_packages_dir, submodule_usage, keep_modules, stage=stage)
+    return slim_unpack(wheels, site_packages_dir, submodule_usage, keep_modules, stage=stage)

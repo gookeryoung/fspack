@@ -5,7 +5,10 @@ Windows：loader.exe 在 dist/，动态加载 dist/runtime/python3X.dll，
 sys.path 由 dist/runtime/python3X._pth 文件控制（与 DLL 同目录），loader 不再设置环境变量。
 
 Linux：loader 与 runtime/python/ 同目录（dist/），dlopen dist/runtime/python/lib/libpython3.X.so，
-setenv PYTHONHOME 指向 runtime/python，调用 ``Py_Main`` 运行入口脚本。
+setenv PYTHONHOME 指向 runtime/python，调用 ``Py_BytesMain`` 运行入口脚本。
+
+入口脚本路径在运行时从 ``<exe_dir>/.entry`` 文件读取（构建时写入），
+使 loader 源码仅依赖 ``py_xy`` 与平台，可按 ``(py_xy, app_type, platform)`` 缓存跨项目复用。
 """
 
 from __future__ import annotations
@@ -44,8 +47,9 @@ def loader_cache_dir() -> Path:
 def _loader_cache_key(source: str, app_type: AppType, platform: Platform) -> str:
     """计算 loader 缓存键：sha256(source + app_type + platform) 前 16 字符 hex。
 
-    源码、应用类型（影响 ``-mwindows``）、目标平台共同决定编译产物，
-    三者组合哈希作为缓存文件名，保证同配置命中、改配置失效。
+    源码仅依赖 ``py_xy`` 与平台（入口路径运行时从 ``.entry`` 读取），
+    应用类型影响 ``-mwindows`` 编译选项，三者组合哈希作为缓存文件名，
+    保证同配置命中、改配置失效。
     """
     h = hashlib.sha256()
     h.update(source.encode("utf-8"))
@@ -54,14 +58,16 @@ def _loader_cache_key(source: str, app_type: AppType, platform: Platform) -> str
     return h.hexdigest()[:16]
 
 
-_LOADER_C_WINDOWS = r"""/* fspack 生成的 C loader —— 加载 embed python 并运行用户入口脚本 */
+_LOADER_C_WINDOWS = r"""/* fspack 生成的 C loader —— 加载 embed python 并运行用户入口脚本
+   入口脚本路径从同目录的 .entry 文件读取，使 loader 可跨项目复用 */
 #include <windows.h>
 #include <stdio.h>
 #include <wchar.h>
 #include <stdlib.h>
 
-#define ENTRY_FILE L"{entry_file}"
 #define PYTHON_DLL L"{python_dll}"
+#define ENTRY_FILENAME L".entry"
+#define MAX_ENTRY 512
 
 typedef int (*Py_Main_t)(int argc, wchar_t **argv);
 
@@ -71,13 +77,42 @@ static void exe_dir(wchar_t *buf, size_t cap) {{
     if (slash) *slash = L'\0';
 }}
 
+static int read_entry(const wchar_t *dir, wchar_t *entry_out, size_t cap) {{
+    wchar_t path[MAX_PATH];
+    _snwprintf(path, MAX_PATH, L"%s\\%s", dir, ENTRY_FILENAME);
+    FILE *f = _wfopen(path, L"rb");
+    if (!f) {{
+        fwprintf(stderr, L"无法读取入口文件: %s\n", path);
+        return 1;
+    }}
+    char buf[MAX_ENTRY];
+    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    buf[n] = '\0';
+    while (n > 0 && (buf[n-1] == '\n' || buf[n-1] == '\r')) {{
+        buf[--n] = '\0';
+    }}
+    if (n == 0 || n >= cap) {{
+        fwprintf(stderr, L"入口路径无效\n");
+        return 1;
+    }}
+    for (size_t i = 0; i <= n; i++) {{
+        entry_out[i] = (wchar_t)(unsigned char)buf[i];
+    }}
+    return 0;
+}}
+
 int wmain(int argc, wchar_t **argv) {{
     wchar_t dir[MAX_PATH];
     exe_dir(dir, MAX_PATH);
 
-    wchar_t dll[MAX_PATH], entry[MAX_PATH];
+    wchar_t dll[MAX_PATH], entry[MAX_ENTRY], entry_full[MAX_PATH + MAX_ENTRY];
     _snwprintf(dll, MAX_PATH, L"%s\\%s", dir, PYTHON_DLL);
-    _snwprintf(entry, MAX_PATH, L"%s\\%s", dir, ENTRY_FILE);
+
+    if (read_entry(dir, entry, MAX_ENTRY) != 0) {{
+        return 1;
+    }}
+    _snwprintf(entry_full, sizeof(entry_full)/sizeof(entry_full[0]), L"%s\\%s", dir, entry);
 
     HMODULE h = LoadLibraryW(dll);
     if (!h) {{
@@ -95,7 +130,7 @@ int wmain(int argc, wchar_t **argv) {{
         return 1;
     }}
     new_argv[0] = argv[0];
-    new_argv[1] = entry;
+    new_argv[1] = entry_full;
     for (int i = 1; i < argc; i++) {{
         new_argv[1 + i] = argv[i];
     }}
@@ -104,7 +139,8 @@ int wmain(int argc, wchar_t **argv) {{
 }}
 """
 
-_LOADER_C_LINUX = r"""/* fspack 生成的 C loader —— 加载 python-build-standalone 并运行用户入口脚本 */
+_LOADER_C_LINUX = r"""/* fspack 生成的 C loader —— 加载 python-build-standalone 并运行用户入口脚本
+   入口脚本路径从同目录的 .entry 文件读取，使 loader 可跨项目复用 */
 #include <dlfcn.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -112,9 +148,9 @@ _LOADER_C_LINUX = r"""/* fspack 生成的 C loader —— 加载 python-build-st
 #include <unistd.h>
 #include <linux/limits.h>
 
-#define ENTRY_FILE "{entry_file}"
 #define LIBPYTHON "{libpython}"
 #define PYTHONHOME "runtime/python"
+#define ENTRY_FILENAME ".entry"
 
 typedef int (*Py_BytesMain_t)(int argc, char **argv);
 
@@ -129,14 +165,43 @@ static void exe_dir(char *buf, size_t cap) {{
     if (slash) *slash = '\0';
 }}
 
+static int read_entry(const char *dir, char *entry_out, size_t cap) {{
+    char path[PATH_MAX];
+    snprintf(path, sizeof(path), "%s/%s", dir, ENTRY_FILENAME);
+    FILE *f = fopen(path, "r");
+    if (!f) {{
+        fprintf(stderr, "无法读取入口文件: %s\n", path);
+        return 1;
+    }}
+    if (!fgets(entry_out, (int)cap, f)) {{
+        fclose(f);
+        fprintf(stderr, "入口文件为空: %s\n", path);
+        return 1;
+    }}
+    fclose(f);
+    size_t n = strlen(entry_out);
+    while (n > 0 && (entry_out[n-1] == '\n' || entry_out[n-1] == '\r')) {{
+        entry_out[--n] = '\0';
+    }}
+    if (n == 0) {{
+        fprintf(stderr, "入口路径无效\n");
+        return 1;
+    }}
+    return 0;
+}}
+
 int main(int argc, char **argv) {{
     char dir[PATH_MAX];
     exe_dir(dir, sizeof(dir));
 
-    char lib[PATH_MAX], entry[PATH_MAX], home[PATH_MAX];
+    char lib[PATH_MAX], entry[PATH_MAX], home[PATH_MAX], entry_full[PATH_MAX * 2];
     snprintf(lib, sizeof(lib), "%s/%s", dir, LIBPYTHON);
-    snprintf(entry, sizeof(entry), "%s/%s", dir, ENTRY_FILE);
     snprintf(home, sizeof(home), "%s/%s", dir, PYTHONHOME);
+
+    if (read_entry(dir, entry, sizeof(entry)) != 0) {{
+        return 1;
+    }}
+    snprintf(entry_full, sizeof(entry_full), "%s/%s", dir, entry);
 
     setenv("PYTHONHOME", home, 1);
 
@@ -154,7 +219,7 @@ int main(int argc, char **argv) {{
     char **new_argv = (char **)malloc(sizeof(char *) * (argc + 2));
     if (!new_argv) return 1;
     new_argv[0] = argv[0];
-    new_argv[1] = entry;
+    new_argv[1] = entry_full;
     for (int i = 1; i < argc; i++) new_argv[1 + i] = argv[i];
     new_argv[argc + 1] = NULL;
     return py_main(argc + 1, new_argv);
@@ -163,23 +228,23 @@ int main(int argc, char **argv) {{
 
 
 def generate_loader_source(
-    entry_rel_from_dist: str,
     py_xy: str,
     platform: Platform = Platform.WINDOWS,
 ) -> str:
     """生成 C loader 源码。
 
-    entry_rel_from_dist: 入口脚本相对 dist 的 posix 路径（如 src/helloworld.py）。
     py_xy: 形如 python311 的版本前缀。
     platform: 目标平台，决定加载 DLL（Windows）或 .so（Linux）。
+
+    入口脚本路径在运行时从 ``<exe_dir>/.entry`` 文件读取（构建时由 build 写入），
+    使 loader 源码仅依赖 ``py_xy`` 与平台，可按 ``(py_xy, app_type, platform)`` 缓存复用。
     """
     if platform is Platform.LINUX:
         dotted = f"{py_xy[6]}.{py_xy[7:]}"
         libpython = f"runtime/python/lib/libpython{dotted}.so"
-        return _LOADER_C_LINUX.format(entry_file=entry_rel_from_dist, libpython=libpython)
-    entry_win = entry_rel_from_dist.replace("/", "\\\\")
+        return _LOADER_C_LINUX.format(libpython=libpython)
     python_dll = f"runtime\\\\{py_xy}.dll"
-    return _LOADER_C_WINDOWS.format(entry_file=entry_win, python_dll=python_dll)
+    return _LOADER_C_WINDOWS.format(python_dll=python_dll)
 
 
 def mingw_available() -> bool:

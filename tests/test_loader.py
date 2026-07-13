@@ -23,18 +23,22 @@ from fspack.platform import Platform
 from fspack.progress import StageRecorder
 
 
-def test_generate_loader_source_contains_entry_and_dll() -> None:
-    src = generate_loader_source("src/helloworld.py", "python311")
-    assert r"src\\helloworld.py" in src
+def test_generate_loader_source_contains_dll_and_entry_reading() -> None:
+    src = generate_loader_source("python311")
     assert r"runtime\\python311.dll" in src
     assert "Py_Main" in src
     assert "wmain" in src
+    assert ".entry" in src
+    assert "read_entry" in src
 
 
-def test_generate_loader_source_backslash_conversion() -> None:
-    src = generate_loader_source("src/a/b/c.py", "python312")
-    assert r"src\\a\\b\\c.py" in src
-    assert r"runtime\\python312.dll" in src
+def test_generate_loader_source_no_entry_hardcoded() -> None:
+    """loader 源码不含硬编码入口路径，可跨项目复用。."""
+    src1 = generate_loader_source("python311")
+    src2 = generate_loader_source("python311")
+    assert src1 == src2
+    assert "helloworld" not in src1
+    assert "app.py" not in src1
 
 
 class _Completed:
@@ -107,19 +111,31 @@ def test_gcc_available_returns_bool() -> None:
 
 
 def test_generate_loader_source_linux() -> None:
-    src = generate_loader_source("src/helloworld.py", "python311", Platform.LINUX)
-    assert "src/helloworld.py" in src
+    src = generate_loader_source("python311", Platform.LINUX)
     assert "runtime/python/lib/libpython3.11.so" in src
     assert "dlopen" in src
     assert "dlsym" in src
     assert "Py_BytesMain" in src
     assert "setenv" in src
     assert "PYTHONHOME" in src
+    assert ".entry" in src
+    assert "read_entry" in src
 
 
 def test_generate_loader_source_linux_310() -> None:
-    src = generate_loader_source("src/app.py", "python310", Platform.LINUX)
+    src = generate_loader_source("python310", Platform.LINUX)
     assert "libpython3.10.so" in src
+
+
+def test_loader_cache_key_same_for_different_entries() -> None:
+    """不同入口路径产生相同缓存键（源码不含入口路径）。."""
+    from fspack.config import AppType
+
+    src1 = generate_loader_source("python311")
+    src2 = generate_loader_source("python311")
+    key1 = _loader_cache_key(src1, AppType.CLI, Platform.WINDOWS)
+    key2 = _loader_cache_key(src2, AppType.CLI, Platform.WINDOWS)
+    assert key1 == key2
 
 
 def test_compile_loader_linux_uses_gcc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
