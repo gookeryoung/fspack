@@ -29,18 +29,18 @@ class GameSettings(NamedTuple):
 
 GS = GameSettings(
     caption="Snake Game v1.0",
-    geometry=dict(width=720, height=480, grid=24, nx=20, ny=20),
+    geometry={"width": 720, "height": 480, "grid": 24, "nx": 20, "ny": 20},
     fps=60,
-    fontsize=dict(large=30, normal=20),
-    colors=dict(
-        snake=0x00CCCC,
-        food=0xFFFF00,
-        bg=0x0,
-        border=0xFFFFFF,
-        info=0x00FF00,
-        warn=0xFF0000,
-        food_border=0xFF00FF,
-    ),
+    fontsize={"large": 30, "normal": 20},
+    colors={
+        "snake": 0x00CCCC,
+        "food": 0xFFFF00,
+        "bg": 0x0,
+        "border": 0xFFFFFF,
+        "info": 0x00FF00,
+        "warn": 0xFF0000,
+        "food_border": 0xFF00FF,
+    },
     snake_init=SnakeProps(
         pos=(8, 5),
         length=3,
@@ -48,14 +48,14 @@ GS = GameSettings(
         speed=4,
     ),
     scores=(150, 300, 500, 750, 1100, 1500, 2000, 2500),
-    motions=dict(right=(1, 0), left=(-1, 0), up=(0, -1), down=(0, 1)),
-    operations=dict(
-        left=pg.K_a,
-        right=pg.K_d,
-        up=pg.K_w,
-        down=pg.K_s,
-        quit=pg.K_ESCAPE,
-    ),
+    motions={"right": (1, 0), "left": (-1, 0), "up": (0, -1), "down": (0, 1)},
+    operations={
+        "left": pg.K_a,
+        "right": pg.K_d,
+        "up": pg.K_w,
+        "down": pg.K_s,
+        "quit": pg.K_ESCAPE,
+    },
 )
 
 
@@ -70,7 +70,7 @@ def pos_to_rect(pos: Tuple[int, int], size: int) -> Tuple[int, int, int, int]:
 
 
 class Snake:
-    __slots__ = ["grids", "speed", "direction"]
+    __slots__ = ["direction", "grids", "speed"]
 
     def __init__(self, pos: Tuple[int, int], length: int, speed: int, direction: str) -> None:
         self.speed: int = speed
@@ -133,8 +133,8 @@ class Game:
     def __init__(self) -> None:
         pg.init()
         pg.display.set_caption(GS.caption)
-        self.ttf_large = pg.font.SysFont("simhei", GS.fontsize["large"])
-        self.ttf = pg.font.SysFont("simhei", GS.fontsize["normal"])
+        self.ttf_large = pg.font.Font(None, GS.fontsize["large"])
+        self.ttf = pg.font.Font(None, GS.fontsize["normal"])
         self.screen = pg.display.set_mode((GS.geometry["width"], GS.geometry["height"]))
         self.snake: Snake = Snake(**GS.snake_init._asdict())
         self.food: Tuple[int, int] = (0, 0)
@@ -153,12 +153,10 @@ class Game:
             for x in range(GS.geometry["nx"])
             for y in range(GS.geometry["ny"])
             if (x, y) not in self.snake.grids
-            and any(
-                [
-                    x not in (0, GS.geometry["nx"] - 1),
-                    y not in (0, GS.geometry["ny"] - 1),
-                ]
-            )
+            and any([
+                x not in (0, GS.geometry["nx"] - 1),
+                y not in (0, GS.geometry["ny"] - 1),
+            ])
         ]
         self.food = choice(foods)
 
@@ -166,7 +164,7 @@ class Game:
         clock = pg.time.Clock()
         start_time = tpc()
         bg, border, food, info, warn, food_border = [
-            convert_color(GS.colors[x]) for x in "bg border food info warn food_border".split()
+            convert_color(GS.colors[x]) for x in ["bg", "border", "food", "info", "warn", "food_border"]
         ]
         boundary_x, boundary_y = (
             GS.geometry["grid"] * GS.geometry["nx"],
@@ -240,7 +238,7 @@ class Game:
         pg.time.wait(1000)
 
     def check_keydown_events(self, event: pg.event.Event) -> None:
-        dirs = dict((v, k) for k, v in GS.operations.items())
+        dirs = {v: k for k, v in GS.operations.items()}
 
         if event.key == GS.operations["quit"]:
             self.alive = False
