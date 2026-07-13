@@ -11,7 +11,7 @@ from fspack.config import AppType, MirrorConfig, ProjectInfo
 from fspack.console import step, success
 from fspack.exceptions import InstallerError
 from fspack.platform import Platform
-from fspack.project import DEFAULT_PY_VERSION, parse_project
+from fspack.project import parse_project
 
 __all__ = ["build_installer", "compile_installer", "generate_nsis_script"]
 
@@ -108,7 +108,7 @@ def compile_installer(nsi_path: Path, out_setup: Path) -> Path:
 def build_installer(
     project_dir: Path,
     mirror: MirrorConfig,
-    py_version: str = DEFAULT_PY_VERSION,
+    py_version: str | None = None,
     no_build: bool = False,
     dist_dir: Path | None = None,
 ) -> Path:

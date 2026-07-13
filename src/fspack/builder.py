@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import zipfile
+from dataclasses import replace
 from pathlib import Path
 from typing import Sequence
 
@@ -18,7 +19,7 @@ from fspack.embed import ensure_embed, write_pth
 from fspack.exceptions import DependencyError
 from fspack.loader import compile_loader, generate_loader_source
 from fspack.platform import Platform, detect_platform, wheel_platform_tags
-from fspack.project import DEFAULT_PY_VERSION, parse_project
+from fspack.project import DEFAULT_LINUX_PY_VERSION, DEFAULT_PY_VERSION, parse_project, resolve_py_version
 from fspack.standalone import STANDALONE_RELEASE_TAG, ensure_standalone
 
 __all__ = ["DEFAULT_PY_VERSION", "build", "copy_source", "download_wheels", "unpack_wheels"]
@@ -48,7 +49,7 @@ _PIP_PYTHON_NAMES: tuple[str, ...] = ("python.exe", "python3.exe") if sys.platfo
 def build(  # noqa: PLR0913
     project_dir: Path,
     mirror: MirrorConfig,
-    py_version: str = DEFAULT_PY_VERSION,
+    py_version: str | None = None,
     dist_dir: Path | None = None,
     embed_cache: Path | None = None,
     target: Platform | None = None,
@@ -60,6 +61,11 @@ def build(  # noqa: PLR0913
     cache = embed_cache or Path.home() / ".fspack" / "cache" / "embed"
     cfg = BuildConfig(project_dir=project_dir, dist_dir=dist, embed_cache_dir=cache, mirror=mirror, target=target)
     info = parse_project(project_dir, py_version)
+    default_ver = DEFAULT_LINUX_PY_VERSION if target is Platform.LINUX else DEFAULT_PY_VERSION
+    resolved = resolve_py_version(project_dir, py_version, info.requires_python, default_ver)
+    if resolved != info.py_version:
+        _logger.info("自动选择 Python 版本: %s", resolved)
+        info = replace(info, py_version=resolved)
     _logger.info("项目: %s %s (%s) 目标: %s", info.name, info.version, info.app_type.value, target.value)
 
     runtime_dir = cfg.dist_dir / "runtime"

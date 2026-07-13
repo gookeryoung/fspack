@@ -50,6 +50,7 @@ class ProjectInfo:
     app_type: AppType
     dependencies: tuple[str, ...]
     py_version: str
+    requires_python: str | None = None
 
     @property
     def exe_name(self) -> str:

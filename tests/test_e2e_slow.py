@@ -130,8 +130,9 @@ def test_build_and_run_webapp(tmp_path: Path) -> None:
 
 @pytest.mark.slow
 def test_build_and_run_pyside2app(tmp_path: Path) -> None:
-    """pyside2app 示例：Python 3.8 + PySide2，验证多版本 + 老库兼容。
+    """pyside2app 示例：版本自动解析 + PySide2，验证 requires-python 约束。
 
+    .python-version=3.9 + requires-python=">=3.8,<3.11" 应解析到 3.9.13。
     PySide2 的 Qt DLL 在 wine 上可能缺系统 DLL，缺时跳过运行断言。
     """
     from fspack.builder import build
@@ -146,12 +147,12 @@ def test_build_and_run_pyside2app(tmp_path: Path) -> None:
 
     proj = tmp_path / "pyside2app"
     shutil.copytree(_EXAMPLES / "pyside2app", proj)
-    build(proj, get_mirror("aliyun"), "3.8.10", target=Platform.WINDOWS)
+    build(proj, get_mirror("aliyun"), None, target=Platform.WINDOWS)
 
     exe = proj / "dist" / "pyside2app.exe"
     assert exe.is_file(), f"未生成 exe: {exe}"
-    assert (proj / "dist" / "runtime" / "python38.dll").is_file(), "未找到 python38.dll"
-    assert (proj / "dist" / "runtime" / "python38._pth").is_file(), "未生成 _pth"
+    assert (proj / "dist" / "runtime" / "python39.dll").is_file(), "未找到 python39.dll（版本自动解析应为 3.9.13）"
+    assert (proj / "dist" / "runtime" / "python39._pth").is_file(), "未生成 _pth"
     assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "PySide2").is_dir(), "PySide2 未解包"
 
     env = {**os.environ, "WINEDEBUG": "-all", "QT_QPA_PLATFORM": "offscreen"}

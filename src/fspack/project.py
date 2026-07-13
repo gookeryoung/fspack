@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import logging
 import re
 from pathlib import Path
 
@@ -18,15 +19,46 @@ except ModuleNotFoundError:  # pragma: no cover
     except ImportError as e:  # pragma: no cover
         raise ProjectError("解析 pyproject.toml 需要 tomli（Python<3.11），请安装 tomli") from e
 
-__all__ = ["DEFAULT_LINUX_PY_VERSION", "DEFAULT_PY_VERSION", "detect_entry", "parse_project"]
+__all__ = [
+    "DEFAULT_LINUX_PY_VERSION",
+    "DEFAULT_PY_VERSION",
+    "KNOWN_EMBED_VERSIONS",
+    "detect_entry",
+    "parse_project",
+    "resolve_py_version",
+]
+
+_logger = logging.getLogger(__name__)
 
 DEFAULT_PY_VERSION = "3.11.9"
 DEFAULT_LINUX_PY_VERSION = "3.11.10"
 
+# 已知 embed python 版本映射：major.minor → 完整版本号
+KNOWN_EMBED_VERSIONS: dict[str, str] = {
+    "3.8": "3.8.10",
+    "3.9": "3.9.13",
+    "3.10": "3.10.11",
+    "3.11": "3.11.9",
+    "3.12": "3.12.0",
+}
+
+# 降序排列的完整版本列表，用于自动选择最高兼容版本
+# 注意：必须按版本元组排序，字符串排序会让 "3.9.13" > "3.10.11"（因 '9' > '1'）
+
+
+def _ver_key(v: str) -> tuple[int, ...]:
+    return tuple(int(x) for x in v.split("."))
+
+
+_KNOWN_FULL_VERSIONS: list[str] = sorted(KNOWN_EMBED_VERSIONS.values(), key=_ver_key, reverse=True)
+
+# PEP 440 版本规范符正则
+_SPEC_RE = re.compile(r"(>=|<=|==|!=|~=|>|<)\s*(\d+(?:\.\d+)*)")
+
 _GUI_HINTS = frozenset({"tkinter", "PySide2", "PySide6", "PyQt5", "PyQt6", "matplotlib", "wx", "win32gui"})
 
 
-def parse_project(project_dir: Path, py_version: str = DEFAULT_PY_VERSION) -> ProjectInfo:
+def parse_project(project_dir: Path, py_version: str | None = None) -> ProjectInfo:
     """解析 pyproject.toml 并识别入口，返回项目元信息。."""
     project_dir = Path(project_dir).resolve()
     pp = project_dir / "pyproject.toml"
@@ -43,6 +75,7 @@ def parse_project(project_dir: Path, py_version: str = DEFAULT_PY_VERSION) -> Pr
     name = str(proj.get("name") or project_dir.name)
     version = str(proj.get("version", "0.0.0"))
     deps = tuple(str(d) for d in proj.get("dependencies", []))
+    requires_python = str(proj.get("requires-python") or "") or None
 
     entry_module, entry_file, app_type = detect_entry(project_dir, name, deps)
     return ProjectInfo(
@@ -53,8 +86,73 @@ def parse_project(project_dir: Path, py_version: str = DEFAULT_PY_VERSION) -> Pr
         entry_file=entry_file,
         app_type=app_type,
         dependencies=deps,
-        py_version=py_version,
+        py_version=py_version or DEFAULT_PY_VERSION,
+        requires_python=requires_python,
     )
+
+
+def resolve_py_version(
+    project_dir: Path,
+    explicit: str | None,
+    requires_python: str | None,
+    default: str = DEFAULT_PY_VERSION,
+) -> str:
+    """解析最终使用的 Python 版本。
+
+    优先级：
+    1. ``explicit``（``--py-version`` CLI 标志）—— 不满足 ``requires-python`` 时告警但仍使用
+    2. ``.python-version`` 文件 —— 不满足 ``requires-python`` 时告警并回退到自动选择
+    3. ``requires-python`` 约束 —— 自动选择最高兼容已知版本
+    4. ``default``
+    """
+    if explicit:
+        if requires_python and not _satisfies(explicit, requires_python):
+            _logger.warning("Python %s 不满足 requires-python: %s", explicit, requires_python)
+        return explicit
+
+    pv_file = project_dir / ".python-version"
+    if pv_file.is_file():
+        pv = pv_file.read_text(encoding="utf-8").strip()
+        full = KNOWN_EMBED_VERSIONS.get(pv, pv)
+        if requires_python and not _satisfies(full, requires_python):
+            _logger.warning(".python-version %s 不满足 requires-python: %s，自动选择兼容版本", full, requires_python)
+        else:
+            return full
+
+    if requires_python:
+        for ver in _KNOWN_FULL_VERSIONS:
+            if _satisfies(ver, requires_python):
+                return ver
+        raise ProjectError(f"requires-python: {requires_python}，无已知兼容 embed python 版本")
+
+    return default
+
+
+def _satisfies(version: str, specifiers: str) -> bool:
+    """检查版本是否满足 PEP 440 ``requires-python`` 规范符。."""
+    ver_parts = tuple(int(x) for x in version.split("."))
+    for op, spec_ver in _SPEC_RE.findall(specifiers):
+        spec_parts = tuple(int(x) for x in spec_ver.split("."))
+        length = max(len(ver_parts), len(spec_parts))
+        ver = ver_parts + (0,) * (length - len(ver_parts))
+        spec = spec_parts + (0,) * (length - len(spec_parts))
+        if op == ">=":
+            ok = ver >= spec
+        elif op == "<=":
+            ok = ver <= spec
+        elif op == ">":
+            ok = ver > spec
+        elif op == "<":
+            ok = ver < spec
+        elif op == "==":
+            ok = ver == spec
+        elif op == "!=":
+            ok = ver != spec
+        else:
+            continue
+        if not ok:
+            return False
+    return True
 
 
 def detect_entry(

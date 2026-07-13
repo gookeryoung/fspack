@@ -12,7 +12,7 @@ from fspack.config import MirrorConfig, ProjectInfo
 from fspack.console import step, success
 from fspack.exceptions import InstallerError
 from fspack.platform import Platform
-from fspack.project import DEFAULT_LINUX_PY_VERSION, parse_project
+from fspack.project import parse_project
 
 __all__ = ["build_deb", "build_linux_installer", "build_tarball"]
 
@@ -91,7 +91,7 @@ def build_deb(dist_dir: Path, info: ProjectInfo, release_dir: Path) -> Path:
 def build_linux_installer(
     project_dir: Path,
     mirror: MirrorConfig,
-    py_version: str = DEFAULT_LINUX_PY_VERSION,
+    py_version: str | None = None,
     no_build: bool = False,
     dist_dir: Path | None = None,
 ) -> Path:
