@@ -89,7 +89,7 @@ testpaths                          = ["tests"]
 
 # Ruff 配置 - 与 .pre-commit-config.yaml 保持一致
 [tool.ruff]
-extend-exclude = ["template"]
+extend-exclude = ["examples", "template"]
 line-length    = 120
 target-version = "py38"
 
@@ -125,7 +125,7 @@ select = [
 
 [tool.pyrefly]
 preset           = "strict"
-project-excludes = [".venv/**", "template/**", "tests/examples/**"]
+project-excludes = [".venv/**", "template/**", "examples/**", "tests/examples/**"]
 project-includes = ["**/*.ipynb", "**/*.py*"]
 python-version   = "3.8"
 search-path      = ["."]
@@ -133,7 +133,7 @@ search-path      = ["."]
 [tool.bumpversion]
 current_version = "0.1.0"
 commit = true
-exclude = ["template/*"]
+exclude = ["template/*", "examples/*"]
 message = "chore: 更新版本 {current_version} → {new_version}"
 tag = true
 tag_name = "v{new_version}"
