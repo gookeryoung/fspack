@@ -1,7 +1,8 @@
 """端到端慢测试：真实下载 embed python + mingw 编译 + wine 运行。
 
-需 mingw-w64 与 wine，标 slow，默认门禁不执行。
+需 mingw-w64 与 wine（Windows 目标）或 gcc（Linux 目标），标 slow，默认门禁不执行。
 覆盖 5 类典型项目：无库 CLI、有库 CLI、有库 GUI、有库 pygame、有库 web。
+另含 Linux 平台端到端测试（python-build-standalone + gcc 编译 + 原生运行）。
 """
 
 from __future__ import annotations
@@ -125,3 +126,55 @@ def test_build_and_run_webapp(tmp_path: Path) -> None:
     _build_and_run("webapp", "hello from flask", tmp_path)
     proj = tmp_path / "webapp"
     assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "flask").is_dir()
+
+
+@pytest.mark.slow
+def test_build_and_run_linux_helloworld(tmp_path: Path) -> None:
+    """Linux 平台端到端：gcc 编译 + python-build-standalone 运行 helloworld。
+
+    python-build-standalone 的 20241016 release 只提供 3.11.10（非 3.11.9），
+    故 Linux 目标使用 3.11.10。
+    """
+    from fspack.builder import build
+    from fspack.loader import gcc_available
+    from fspack.mirror import get_mirror
+    from fspack.platform import Platform
+
+    if not gcc_available():
+        pytest.skip("gcc 未安装")
+
+    proj = tmp_path / "helloworld"
+    shutil.copytree(_EXAMPLES / "helloworld", proj)
+    build(proj, get_mirror("aliyun"), "3.11.10", target=Platform.LINUX)
+
+    exe = proj / "dist" / "helloworld"
+    assert exe.is_file(), f"未生成 exe: {exe}"
+    assert (proj / "dist" / "runtime" / "python" / "lib" / "libpython3.11.so").is_file(), "未找到 libpython3.11.so"
+
+    result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=60, check=False)
+    combined = result.stdout + result.stderr
+    assert "hello, world" in combined, f"未在输出中发现 'hello, world': {combined!r}"
+
+
+@pytest.mark.slow
+def test_build_and_run_linux_clitool(tmp_path: Path) -> None:
+    """Linux 平台端到端：有库 CLI（requests），验证依赖打包与运行。."""
+    from fspack.builder import build
+    from fspack.loader import gcc_available
+    from fspack.mirror import get_mirror
+    from fspack.platform import Platform
+
+    if not gcc_available():
+        pytest.skip("gcc 未安装")
+
+    proj = tmp_path / "clitool"
+    shutil.copytree(_EXAMPLES / "clitool", proj)
+    build(proj, get_mirror("aliyun"), "3.11.10", target=Platform.LINUX)
+
+    exe = proj / "dist" / "clitool"
+    assert exe.is_file(), f"未生成 exe: {exe}"
+    assert (proj / "dist" / "runtime" / "python" / "lib" / "python3.11" / "site-packages" / "requests").is_dir()
+
+    result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=60, check=False)
+    combined = result.stdout + result.stderr
+    assert "requests " in combined, f"未在输出中发现 'requests ': {combined!r}"
