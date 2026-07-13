@@ -144,7 +144,13 @@ def test_build_installer_with_build(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     dist = tmp_path / "dist"
     out_setup = dist / "release" / "app-setup.exe"
 
-    def fake_build(project_dir: Path, mirror: object, py_version: str, dist_dir: Path | None = None) -> object:
+    def fake_build(
+        project_dir: Path,
+        mirror: object,
+        py_version: str,
+        dist_dir: Path | None = None,
+        target: object = None,
+    ) -> object:
         d = dist_dir or project_dir / "dist"
         d.mkdir(parents=True, exist_ok=True)
         (d / "app.exe").write_bytes(b"")
