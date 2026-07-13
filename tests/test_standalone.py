@@ -60,7 +60,7 @@ class _FakeResp:
 def test_download_standalone_fetches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, str] = {}
 
-    def fake_urlopen(req: object, timeout: int) -> _FakeResp:
+    def fake_urlopen(req: object, timeout: int, **kwargs: object) -> _FakeResp:
         captured["url"] = req.full_url  # type: ignore[union-attr]
         return _FakeResp(b"TARDATA")
 
@@ -71,7 +71,7 @@ def test_download_standalone_fetches(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
 
 def test_download_standalone_network_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_urlopen(req: object, timeout: int) -> object:
+    def fake_urlopen(req: object, timeout: int, **kwargs: object) -> object:
         raise OSError("boom")
 
     monkeypatch.setattr("fspack.standalone.urllib.request.urlopen", fake_urlopen)

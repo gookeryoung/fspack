@@ -9,6 +9,7 @@ from pathlib import Path
 
 from fspack.config import MirrorConfig
 from fspack.exceptions import EmbedError
+from fspack.net import create_ssl_context
 
 __all__ = [
     "download_embed",
@@ -44,7 +45,7 @@ def download_embed(version: str, mirror: MirrorConfig, cache_dir: Path) -> Path:
     _logger.info("下载 embed python: %s", url)
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "fspack"})
-        with urllib.request.urlopen(req, timeout=180) as resp, zip_path.open("wb") as f:
+        with urllib.request.urlopen(req, timeout=180, context=create_ssl_context()) as resp, zip_path.open("wb") as f:
             f.write(resp.read())
     except OSError as e:
         raise EmbedError(f"下载 embed python 失败: {url} -> {e}") from e

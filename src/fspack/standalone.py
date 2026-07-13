@@ -8,6 +8,7 @@ import urllib.request
 from pathlib import Path
 
 from fspack.exceptions import EmbedError
+from fspack.net import create_ssl_context
 
 __all__ = [
     "STANDALONE_BASE_URL",
@@ -45,7 +46,7 @@ def download_standalone(version: str, release_tag: str, cache_dir: Path) -> Path
     _logger.info("下载 python-build-standalone: %s", url)
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "fspack"})
-        with urllib.request.urlopen(req, timeout=300) as resp, tar_path.open("wb") as f:
+        with urllib.request.urlopen(req, timeout=300, context=create_ssl_context()) as resp, tar_path.open("wb") as f:
             f.write(resp.read())
     except OSError as e:
         raise EmbedError(f"下载 python-build-standalone 失败: {url} -> {e}") from e

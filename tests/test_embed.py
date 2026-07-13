@@ -52,7 +52,7 @@ class _FakeResp:
 def test_download_embed_fetches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, str] = {}
 
-    def fake_urlopen(req: object, timeout: int) -> _FakeResp:
+    def fake_urlopen(req: object, timeout: int, **kwargs: object) -> _FakeResp:
         captured["url"] = req.full_url  # type: ignore[union-attr]
         return _FakeResp(b"ZIPDATA")
 
@@ -63,7 +63,7 @@ def test_download_embed_fetches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
 
 
 def test_download_embed_network_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_urlopen(req: object, timeout: int) -> object:
+    def fake_urlopen(req: object, timeout: int, **kwargs: object) -> object:
         raise OSError("boom")
 
     monkeypatch.setattr("fspack.embed.urllib.request.urlopen", fake_urlopen)
