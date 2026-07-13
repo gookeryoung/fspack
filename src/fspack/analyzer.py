@@ -263,10 +263,39 @@ def _local_packages(src_dir: Path, project_name: str) -> set[str]:
     return local
 
 
+_EXCLUDED_DIRS = frozenset(
+    {
+        "dist",
+        "build",
+        ".git",
+        "__pycache__",
+        ".venv",
+        ".tox",
+        ".fspack",
+        ".trae",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".mypy_cache",
+    }
+)
+
+
+def _is_excluded(path: Path, src_dir: Path) -> bool:
+    """判断 .py 文件是否位于构建产物或缓存目录下，应跳过扫描。."""
+    parts = path.relative_to(src_dir).parts[:-1]
+    return any(part in _EXCLUDED_DIRS or part.endswith(".egg-info") for part in parts)
+
+
 def analyze_dependencies(src_dir: Path, project_name: str, declared: tuple[str, ...]) -> DependencyReport:
-    """扫描 src_dir 下所有 .py，分类 import 为标准库/本地/第三方。."""
+    """扫描 src_dir 下所有 .py，分类 import 为标准库/本地/第三方。
+
+    自动排除 dist/build/.venv 等构建产物与缓存目录，避免扫描到已解包的
+    embed python 或 python-build-standalone 标准库源码导致误报依赖。
+    """
     all_imports: list[str] = []
     for py in src_dir.rglob("*.py"):
+        if _is_excluded(py, src_dir):
+            continue
         try:
             tree = ast.parse(py.read_text(encoding="utf-8"))
         except (SyntaxError, OSError):

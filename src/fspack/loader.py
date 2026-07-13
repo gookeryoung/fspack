@@ -67,7 +67,7 @@ int wmain(int argc, wchar_t **argv) {{
         return 1;
     }}
 
-    wchar_t **new_argv = (wchar_t **)malloc(sizeof(wchar_t *) * (argc + 1));
+    wchar_t **new_argv = (wchar_t **)malloc(sizeof(wchar_t *) * (argc + 2));
     if (!new_argv) {{
         return 1;
     }}
@@ -76,6 +76,7 @@ int wmain(int argc, wchar_t **argv) {{
     for (int i = 1; i < argc; i++) {{
         new_argv[1 + i] = argv[i];
     }}
+    new_argv[argc + 1] = NULL;
     return py_main(argc + 1, new_argv);
 }}
 """
@@ -92,7 +93,7 @@ _LOADER_C_LINUX = r"""/* fspack 生成的 C loader —— 加载 python-build-st
 #define LIBPYTHON "{libpython}"
 #define PYTHONHOME "runtime/python"
 
-typedef int (*Py_Main_t)(int argc, char **argv);
+typedef int (*Py_BytesMain_t)(int argc, char **argv);
 
 static void exe_dir(char *buf, size_t cap) {{
     ssize_t n = readlink("/proc/self/exe", buf, cap - 1);
@@ -121,17 +122,18 @@ int main(int argc, char **argv) {{
         fprintf(stderr, "加载 libpython 失败: %s\n%s\n", lib, dlerror());
         return 1;
     }}
-    Py_Main_t py_main = (Py_Main_t)dlsym(h, "Py_Main");
+    Py_BytesMain_t py_main = (Py_BytesMain_t)dlsym(h, "Py_BytesMain");
     if (!py_main) {{
-        fprintf(stderr, "未找到 Py_Main 符号\n");
+        fprintf(stderr, "未找到 Py_BytesMain 符号\n");
         return 1;
     }}
 
-    char **new_argv = (char **)malloc(sizeof(char *) * (argc + 1));
+    char **new_argv = (char **)malloc(sizeof(char *) * (argc + 2));
     if (!new_argv) return 1;
     new_argv[0] = argv[0];
     new_argv[1] = entry;
     for (int i = 1; i < argc; i++) new_argv[1 + i] = argv[i];
+    new_argv[argc + 1] = NULL;
     return py_main(argc + 1, new_argv);
 }}
 """

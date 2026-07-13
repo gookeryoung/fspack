@@ -58,3 +58,21 @@ def test_stdlib_fallback_contents() -> None:
     assert "os" in STDLIB_FALLBACK
     assert "json" in STDLIB_FALLBACK
     assert "numpy" not in STDLIB_FALLBACK
+
+
+def test_analyze_dependencies_excludes_build_artifacts(tmp_path: Path) -> None:
+    """dist/build/.venv 等目录下的 .py 不应被扫描，避免误报标准库内部模块为第三方依赖。."""
+    (tmp_path / "main.py").write_text("import os\n")
+    # 模拟构建产物：dist/runtime/python/lib/ 下有 Python 标准库源码
+    stdlib_dir = tmp_path / "dist" / "runtime" / "python" / "lib" / "python3.11"
+    stdlib_dir.mkdir(parents=True)
+    (stdlib_dir / "_weakref.py").write_text("import _weakrefset\n")
+    # 模拟 .venv 下的第三方包
+    venv_dir = tmp_path / ".venv" / "lib" / "site-packages" / "tornado"
+    venv_dir.mkdir(parents=True)
+    (venv_dir / "__init__.py").write_text("import cryptography\n")
+    r = analyze_dependencies(tmp_path, "main", ())
+    assert "os" in r.ast_stdlib
+    assert "_weakrefset" not in r.ast_third_party
+    assert "cryptography" not in r.ast_third_party
+    assert r.ast_third_party == ()

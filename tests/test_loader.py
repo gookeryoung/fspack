@@ -103,7 +103,7 @@ def test_generate_loader_source_linux() -> None:
     assert "runtime/python/lib/libpython3.11.so" in src
     assert "dlopen" in src
     assert "dlsym" in src
-    assert "Py_Main" in src
+    assert "Py_BytesMain" in src
     assert "setenv" in src
     assert "PYTHONHOME" in src
 
