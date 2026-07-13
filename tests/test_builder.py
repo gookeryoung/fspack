@@ -61,8 +61,10 @@ def test_download_wheels_cmd_construction(tmp_path: Path, monkeypatch: pytest.Mo
 
     monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
     monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
+    monkeypatch.setattr("fspack.wheel_cache.harvest_external_caches", lambda *a, **kw: 0)
     wh = tmp_path / "wh"
-    download_wheels(("numpy", "requests"), "3.11.9", "https://idx/simple", wh)
+    cache = tmp_path / "cache"
+    download_wheels(("numpy", "requests"), "3.11.9", "https://idx/simple", wh, wheel_cache_dir=cache)
     cmd = captured["cmd"]
     assert cmd[0] == "/py/python"
     assert "download" in cmd
@@ -71,6 +73,8 @@ def test_download_wheels_cmd_construction(tmp_path: Path, monkeypatch: pytest.Mo
     assert "cp311" in cmd
     assert "https://idx/simple" in cmd
     assert "numpy" in cmd and "requests" in cmd
+    assert "--find-links" in cmd
+    assert str(cache) in cmd
 
 
 def test_download_wheels_multi_platform(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -83,6 +87,7 @@ def test_download_wheels_multi_platform(tmp_path: Path, monkeypatch: pytest.Monk
 
     monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
     monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
+    monkeypatch.setattr("fspack.wheel_cache.harvest_external_caches", lambda *a, **kw: 0)
     wh = tmp_path / "wh"
     download_wheels(
         ("PySide6",),
@@ -90,6 +95,7 @@ def test_download_wheels_multi_platform(tmp_path: Path, monkeypatch: pytest.Monk
         "https://idx/simple",
         wh,
         platform_tags=("manylinux2014_x86_64", "manylinux_2_28_x86_64"),
+        wheel_cache_dir=tmp_path / "cache",
     )
     cmd = captured["cmd"]
     platform_count = cmd.count("--platform")
@@ -104,8 +110,9 @@ def test_download_wheels_pip_missing(tmp_path: Path, monkeypatch: pytest.MonkeyP
         "fspack.builder._find_pip_python",
         lambda: (_ for _ in ()).throw(DependencyError("未找到可用的 pip")),
     )
+    monkeypatch.setattr("fspack.wheel_cache.harvest_external_caches", lambda *a, **kw: 0)
     with pytest.raises(DependencyError, match="未找到可用的 pip"):
-        download_wheels(("numpy",), "3.11.9", "https://idx", tmp_path / "wh")
+        download_wheels(("numpy",), "3.11.9", "https://idx", tmp_path / "wh", wheel_cache_dir=tmp_path / "cache")
 
 
 def test_download_wheels_pip_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -116,16 +123,47 @@ def test_download_wheels_pip_error(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
     monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
+    monkeypatch.setattr("fspack.wheel_cache.harvest_external_caches", lambda *a, **kw: 0)
     with pytest.raises(DependencyError, match="依赖下载失败"):
-        download_wheels(("numpy",), "3.11.9", "https://idx", tmp_path / "wh")
+        download_wheels(("numpy",), "3.11.9", "https://idx", tmp_path / "wh", wheel_cache_dir=tmp_path / "cache")
 
 
 def test_download_wheels_python_disappeared(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """_find_pip_python 验证通过后 download 时 python 消失（FileNotFoundError）。."""
     monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
     monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: (_ for _ in ()).throw(FileNotFoundError()))
+    monkeypatch.setattr("fspack.wheel_cache.harvest_external_caches", lambda *a, **kw: 0)
     with pytest.raises(DependencyError, match="未找到 pip"):
-        download_wheels(("numpy",), "3.11.9", "https://idx", tmp_path / "wh")
+        download_wheels(("numpy",), "3.11.9", "https://idx", tmp_path / "wh", wheel_cache_dir=tmp_path / "cache")
+
+
+def test_download_wheels_harvests_and_caches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """download_wheels 调用 harvest_external_caches 且下载后回写缓存。."""
+    harvest_calls: list[dict[str, Any]] = []
+
+    def fake_harvest(packages: set[str], py_version: str, platform_tags: Any, dest: Path) -> int:
+        harvest_calls.append({"packages": packages, "dest": dest})
+        return 1
+
+    whl_name = "numpy-1.24.0-cp311-cp311-win_amd64.whl"
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        (tmp_path / "wh" / whl_name).write_bytes(b"numpy-content")
+        return _Completed()
+
+    monkeypatch.setattr("fspack.wheel_cache.harvest_external_caches", fake_harvest)
+    monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
+
+    wh = tmp_path / "wh"
+    cache = tmp_path / "cache"
+    result = download_wheels(("numpy",), "3.11.9", "https://idx/simple", wh, wheel_cache_dir=cache)
+
+    assert len(harvest_calls) == 1
+    assert harvest_calls[0]["dest"] == cache
+    assert "numpy" in harvest_calls[0]["packages"]
+    assert len(result) == 1
+    assert (cache / whl_name).read_bytes() == b"numpy-content"
 
 
 def test_find_pip_python_uses_sys_executable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

@@ -156,22 +156,37 @@ def _find_pip_python() -> str:
     raise DependencyError("未找到可用的 pip，请在当前 venv 执行 `uv pip install pip`，或在系统安装 python3-pip 包")
 
 
-def download_wheels(
+def download_wheels(  # noqa: PLR0913
     packages: tuple[str, ...] | list[str],
     py_version: str,
     pypi_index: str,
     wheelhouse_dir: Path,
     platform_tags: Sequence[str] = ("win_amd64",),
+    wheel_cache_dir: Path | None = None,
 ) -> list[Path]:
     """用 dev python 的 pip 下载指定平台 wheel 到 wheelhouse 目录。
 
     ``platform_tags`` 为 pip ``--platform`` 标签列表，可重复指定以匹配多个
     平台标签（如 Linux 同时匹配 manylinux2014 与 manylinux_2_28）。
 
+    ``wheel_cache_dir`` 为 fspack wheel 缓存目录，默认 ``~/.fspack/cache/wheels/``。
+    构建前从 uv/pip 缓存收割匹配 wheel 到此目录，``pip download`` 追加
+    ``--find-links`` 让 pip 优先用本地缓存，下载后回写缓存供后续复用。
+
     自动选择能跑 pip 的 python 解释器：优先当前 venv，回退系统 python3
     （uv venv 默认不含 pip）。
     """
+    from fspack.wheel_cache import fspack_wheel_cache_dir, harvest_external_caches, normalize_name, save_to_cache
+
     wheelhouse_dir.mkdir(parents=True, exist_ok=True)
+    cache = wheel_cache_dir or fspack_wheel_cache_dir()
+    cache.mkdir(parents=True, exist_ok=True)
+
+    pkg_set = {normalize_name(p) for p in packages}
+    harvested = harvest_external_caches(pkg_set, py_version, platform_tags, cache)
+    if harvested:
+        _logger.info("从外部缓存收割 %d 个 wheel", harvested)
+
     py = _find_pip_python()
     major, minor = py_version.split(".")[:2]
     platform_args: list[str] = []
@@ -184,6 +199,8 @@ def download_wheels(
         "download",
         "-d",
         str(wheelhouse_dir),
+        "--find-links",
+        str(cache),
         *platform_args,
         "--python-version",
         f"{major}.{minor}",
@@ -203,6 +220,10 @@ def download_wheels(
         raise DependencyError(f"未找到 pip: {py}") from e
     except subprocess.CalledProcessError as e:
         raise DependencyError(f"依赖下载失败:\n{e.stderr}") from e
+
+    saved = save_to_cache(wheelhouse_dir.glob("*.whl"), cache)
+    if saved:
+        _logger.info("缓存 %d 个 wheel", saved)
     return sorted(wheelhouse_dir.glob("*.whl"))
 
 
