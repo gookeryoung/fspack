@@ -8,13 +8,14 @@ import subprocess
 import sys
 import zipfile
 from pathlib import Path
+from typing import Sequence
 
 from fspack.analyzer import analyze_dependencies
 from fspack.config import BuildConfig, MirrorConfig, ProjectInfo
 from fspack.embed import ensure_embed, write_pth
 from fspack.exceptions import DependencyError
 from fspack.loader import compile_loader, generate_loader_source
-from fspack.platform import Platform, detect_platform, wheel_platform_tag
+from fspack.platform import Platform, detect_platform, wheel_platform_tags
 from fspack.project import DEFAULT_PY_VERSION, parse_project
 from fspack.standalone import STANDALONE_RELEASE_TAG, ensure_standalone
 
@@ -75,7 +76,7 @@ def build(  # noqa: PLR0913
             info.py_version,
             cfg.mirror.pypi_index,
             wheelhouse,
-            platform_tag=wheel_platform_tag(target),
+            platform_tags=wheel_platform_tags(target),
         )
         unpack_wheels(wheelhouse, site_packages)
     else:
@@ -107,11 +108,18 @@ def download_wheels(
     py_version: str,
     pypi_index: str,
     wheelhouse_dir: Path,
-    platform_tag: str = "win_amd64",
+    platform_tags: Sequence[str] = ("win_amd64",),
 ) -> list[Path]:
-    """用 dev python 的 pip 下载指定平台 wheel 到 wheelhouse 目录。."""
+    """用 dev python 的 pip 下载指定平台 wheel 到 wheelhouse 目录。
+
+    ``platform_tags`` 为 pip ``--platform`` 标签列表，可重复指定以匹配多个
+    平台标签（如 Linux 同时匹配 manylinux2014 与 manylinux_2_28）。
+    """
     wheelhouse_dir.mkdir(parents=True, exist_ok=True)
     major, minor = py_version.split(".")[:2]
+    platform_args: list[str] = []
+    for tag in platform_tags:
+        platform_args.extend(["--platform", tag])
     cmd: list[str] = [
         sys.executable,
         "-m",
@@ -119,8 +127,7 @@ def download_wheels(
         "download",
         "-d",
         str(wheelhouse_dir),
-        "--platform",
-        platform_tag,
+        *platform_args,
         "--python-version",
         f"{major}.{minor}",
         "--abi",

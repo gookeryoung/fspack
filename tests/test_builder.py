@@ -72,6 +72,30 @@ def test_download_wheels_cmd_construction(tmp_path: Path, monkeypatch: pytest.Mo
     assert "numpy" in cmd and "requests" in cmd
 
 
+def test_download_wheels_multi_platform(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """多个 platform_tags 展开为多个 --platform 参数。."""
+    captured: dict[str, list[str]] = {}
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        captured["cmd"] = cmd
+        return _Completed()
+
+    monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
+    wh = tmp_path / "wh"
+    download_wheels(
+        ("PySide6",),
+        "3.11.10",
+        "https://idx/simple",
+        wh,
+        platform_tags=("manylinux2014_x86_64", "manylinux_2_28_x86_64"),
+    )
+    cmd = captured["cmd"]
+    platform_count = cmd.count("--platform")
+    assert platform_count == 2, f"应有 2 个 --platform，实际 {platform_count}"
+    assert "manylinux2014_x86_64" in cmd
+    assert "manylinux_2_28_x86_64" in cmd
+
+
 def test_download_wheels_pip_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_run(cmd: list[str], **kw: Any) -> object:
         raise FileNotFoundError()
@@ -174,7 +198,7 @@ def test_build_orchestration_with_deps(tmp_path: Path, monkeypatch: pytest.Monke
     downloaded: dict[str, bool] = {}
     monkeypatch.setattr(
         "fspack.builder.download_wheels",
-        lambda packages, py_version, index, wheelhouse, platform_tag="win_amd64": (
+        lambda packages, py_version, index, wheelhouse, platform_tags=("win_amd64",): (
             downloaded.__setitem__("called", True) or []
         ),
     )

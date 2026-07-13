@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from fspack.platform import Platform, detect_platform, libpython_so, wheel_platform_tag
+from fspack.platform import Platform, detect_platform, libpython_so, wheel_platform_tags
 
 
 def test_platform_values() -> None:
@@ -26,9 +26,9 @@ def test_detect_platform_linux(monkeypatch: pytest.MonkeyPatch) -> None:
     assert detect_platform() == Platform.LINUX
 
 
-def test_wheel_platform_tag() -> None:
-    assert wheel_platform_tag(Platform.WINDOWS) == "win_amd64"
-    assert wheel_platform_tag(Platform.LINUX) == "manylinux2014_x86_64"
+def test_wheel_platform_tags() -> None:
+    assert wheel_platform_tags(Platform.WINDOWS) == ("win_amd64",)
+    assert wheel_platform_tags(Platform.LINUX) == ("manylinux2014_x86_64", "manylinux_2_28_x86_64")
 
 
 def test_libpython_so_windows() -> None:
