@@ -8,7 +8,7 @@ from pathlib import Path
 
 from fspack.config import DependencyReport
 
-__all__ = ["STDLIB_FALLBACK", "analyze_dependencies", "collect_imports"]
+__all__ = ["STDLIB_FALLBACK", "analyze_dependencies", "collect_imports", "collect_submodule_imports"]
 
 # Python 3.8/3.9 没有 sys.stdlib_module_names，用 curate 的集合回退
 STDLIB_FALLBACK: frozenset[str] = frozenset(
@@ -252,6 +252,35 @@ def _push(top: str, result: list[str], seen: set[str]) -> None:
         result.append(top)
 
 
+def collect_submodule_imports(tree: ast.AST) -> dict[str, frozenset[str]]:
+    """收集 AST 中子模块级 import，返回 {顶层包: frozenset[子模块名]}。
+
+    处理三种形式：
+    - ``import X.Y`` → ``{X: {Y}}``
+    - ``from X.Y import Z`` → ``{X: {Y}}``
+    - ``from X import Y`` → ``{X: {Y}}``（Y 可能是类/函数名，保留在集合中无害——
+      不匹配任何 wheel 文件时自然忽略）
+
+    相对导入（``level > 0``）与星号导入（``*``）跳过。
+    """
+    result: dict[str, set[str]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                parts = alias.name.split(".")
+                if len(parts) >= 2:
+                    result.setdefault(parts[0], set()).add(parts[1])
+        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            parts = node.module.split(".")
+            if len(parts) >= 2:
+                result.setdefault(parts[0], set()).add(parts[1])
+            elif len(parts) == 1:
+                for alias in node.names:
+                    if alias.name != "*":
+                        result.setdefault(parts[0], set()).add(alias.name)
+    return {pkg: frozenset(subs) for pkg, subs in result.items()}
+
+
 def _local_packages(src_dir: Path, project_name: str) -> set[str]:
     """识别项目本地包/模块名（顶层 .py 与含 __init__.py 的目录）。."""
     local: set[str] = {project_name}
@@ -293,6 +322,7 @@ def analyze_dependencies(src_dir: Path, project_name: str, declared: tuple[str, 
     embed python 或 python-build-standalone 标准库源码导致误报依赖。
     """
     all_imports: list[str] = []
+    all_submodules: dict[str, set[str]] = {}
     for py in src_dir.rglob("*.py"):
         if _is_excluded(py, src_dir):
             continue
@@ -301,6 +331,8 @@ def analyze_dependencies(src_dir: Path, project_name: str, declared: tuple[str, 
         except (SyntaxError, OSError):
             continue
         all_imports.extend(collect_imports(tree))
+        for pkg, subs in collect_submodule_imports(tree).items():
+            all_submodules.setdefault(pkg, set()).update(subs)
 
     local = _local_packages(src_dir, project_name)
     stdlib: list[str] = []
@@ -317,9 +349,13 @@ def analyze_dependencies(src_dir: Path, project_name: str, declared: tuple[str, 
             stdlib.append(imp)
         else:
             third.append(imp)
+    ast_submodules = {
+        pkg: frozenset(subs) for pkg, subs in all_submodules.items() if pkg not in local and pkg not in _STDLIB
+    }
     return DependencyReport(
         declared=declared,
         ast_third_party=tuple(third),
         ast_stdlib=tuple(stdlib),
         ast_local=tuple(local_imports),
+        ast_submodules=ast_submodules,
     )

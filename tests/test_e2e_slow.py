@@ -91,7 +91,9 @@ def test_build_and_run_guicalc(tmp_path: Path) -> None:
 
     proj = tmp_path / "guicalc"
     shutil.copytree(_EXAMPLES / "guicalc", proj)
-    build(proj, get_mirror("aliyun"), "3.11.9", target=Platform.WINDOWS)
+    build(
+        proj, get_mirror("aliyun"), "3.11.9", target=Platform.WINDOWS, keep_modules={"PySide6.QtCore", "PySide6.QtGui"}
+    )
 
     exe = proj / "dist" / "guicalc.exe"
     assert exe.is_file(), f"未生成 exe: {exe}"
@@ -147,7 +149,7 @@ def test_build_and_run_pyside2app(tmp_path: Path) -> None:
 
     proj = tmp_path / "pyside2app"
     shutil.copytree(_EXAMPLES / "pyside2app", proj)
-    build(proj, get_mirror("aliyun"), None, target=Platform.WINDOWS)
+    build(proj, get_mirror("aliyun"), None, target=Platform.WINDOWS, keep_modules={"PySide2.QtGui"})
 
     exe = proj / "dist" / "pyside2app.exe"
     assert exe.is_file(), f"未生成 exe: {exe}"
@@ -181,7 +183,7 @@ def test_build_and_run_pyqt5app(tmp_path: Path) -> None:
 
     proj = tmp_path / "pyqt5app"
     shutil.copytree(_EXAMPLES / "pyqt5app", proj)
-    build(proj, get_mirror("aliyun"), "3.12.0", target=Platform.WINDOWS)
+    build(proj, get_mirror("aliyun"), "3.12.0", target=Platform.WINDOWS, keep_modules={"PyQt5.QtCore", "PyQt5.QtGui"})
 
     exe = proj / "dist" / "pyqt5app.exe"
     assert exe.is_file(), f"未生成 exe: {exe}"

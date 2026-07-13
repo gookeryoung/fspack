@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import enum
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from fspack.platform import Platform
@@ -72,6 +72,7 @@ class DependencyReport:
     ast_third_party: tuple[str, ...]
     ast_stdlib: tuple[str, ...]
     ast_local: tuple[str, ...]
+    ast_submodules: dict[str, frozenset[str]] = field(default_factory=dict)
 
     @property
     def missing(self) -> tuple[str, ...]:

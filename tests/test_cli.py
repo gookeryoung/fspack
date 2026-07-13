@@ -30,7 +30,11 @@ def test_build_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
     called: dict[str, Any] = {}
 
     def fake_run(
-        project: Path, mirror: str | None = None, py_version: str | None = None, target: object = None
+        project: Path,
+        mirror: str | None = None,
+        py_version: str | None = None,
+        target: object = None,
+        keep_modules: set[str] | None = None,
     ) -> None:
         called["project"] = project
         called["mirror"] = mirror
@@ -46,7 +50,7 @@ def test_build_default_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(
         cli.build_cmd,
         "run",
-        lambda project, mirror=None, py_version=None, target=None: called.__setitem__("p", project),
+        lambda project, mirror=None, py_version=None, target=None, keep_modules=None: called.__setitem__("p", project),
     )
     monkeypatch.chdir(tmp_path)
     cli.main(["build"])
@@ -58,7 +62,9 @@ def test_build_custom_py_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(
         cli.build_cmd,
         "run",
-        lambda project, mirror=None, py_version=None, target=None: called.__setitem__("pv", py_version),
+        lambda project, mirror=None, py_version=None, target=None, keep_modules=None: called.__setitem__(
+            "pv", py_version
+        ),
     )
     cli.main(["b", str(tmp_path), "--py-version", "3.12.3"])
     assert called["pv"] == "3.12.3"
@@ -68,7 +74,11 @@ def test_build_target_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     called: dict[str, Any] = {}
 
     def fake_run(
-        project: Path, mirror: str | None = None, py_version: str | None = None, target: object = None
+        project: Path,
+        mirror: str | None = None,
+        py_version: str | None = None,
+        target: object = None,
+        keep_modules: set[str] | None = None,
     ) -> None:
         called["target"] = target
 
@@ -81,13 +91,34 @@ def test_build_target_windows_dispatch(tmp_path: Path, monkeypatch: pytest.Monke
     called: dict[str, Any] = {}
 
     def fake_run(
-        project: Path, mirror: str | None = None, py_version: str | None = None, target: object = None
+        project: Path,
+        mirror: str | None = None,
+        py_version: str | None = None,
+        target: object = None,
+        keep_modules: set[str] | None = None,
     ) -> None:
         called["target"] = target
 
     monkeypatch.setattr(cli.build_cmd, "run", fake_run)
     cli.main(["b", str(tmp_path), "--target", "windows"])
     assert called["target"] is Platform.WINDOWS
+
+
+def test_build_keep_module_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    called: dict[str, Any] = {}
+
+    def fake_run(
+        project: Path,
+        mirror: str | None = None,
+        py_version: str | None = None,
+        target: object = None,
+        keep_modules: set[str] | None = None,
+    ) -> None:
+        called["keep_modules"] = keep_modules
+
+    monkeypatch.setattr(cli.build_cmd, "run", fake_run)
+    cli.main(["b", str(tmp_path), "--keep-module", "PySide2.QtGui", "--keep-module", "PySide2.QtNetwork"])
+    assert called["keep_modules"] == {"PySide2.QtGui", "PySide2.QtNetwork"}
 
 
 def test_run_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

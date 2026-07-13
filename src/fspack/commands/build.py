@@ -19,8 +19,9 @@ def run(
     mirror: str | None = None,
     py_version: str | None = None,
     target: Platform | None = None,
+    keep_modules: set[str] | None = None,
 ) -> None:
     """执行项目构建。."""
     mirror_cfg = get_mirror(mirror)
     resolved_target = target or detect_platform()
-    build(project, mirror_cfg, py_version, target=resolved_target)
+    build(project, mirror_cfg, py_version, target=resolved_target, keep_modules=keep_modules)

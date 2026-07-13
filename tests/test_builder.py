@@ -329,6 +329,73 @@ def test_unpack_wheels_bad_zip(tmp_path: Path) -> None:
         unpack_wheels(wh, tmp_path / "sp")
 
 
+def test_unpack_wheels_with_submodule_usage(tmp_path: Path) -> None:
+    """提供 submodule_usage 时按需解压，跳过未用子模块。."""
+    wh = tmp_path / "wh"
+    wh.mkdir()
+    whl = wh / "PySide2-5.15.2.1-cp39-none-win_amd64.whl"
+    with zipfile.ZipFile(whl, "w") as zf:
+        zf.writestr("PySide2/__init__.py", "")
+        zf.writestr("PySide2/QtCore.pyd", b"core")
+        zf.writestr("PySide2/QtGui.pyd", b"gui")
+        zf.writestr("PySide2/QtWidgets.pyd", b"widgets")
+        zf.writestr("PySide2/Qt5Core.dll", b"c")
+        zf.writestr("PySide2/Qt5Gui.dll", b"g")
+        zf.writestr("PySide2/Qt5Widgets.dll", b"w")
+        zf.writestr("PySide2-5.15.2.1.dist-info/METADATA", b"m")
+    sp = tmp_path / "sp"
+    count = unpack_wheels(wh, sp, {"PySide2": frozenset({"QtCore", "QtWidgets"})})
+    assert count == 1
+    assert (sp / "PySide2" / "QtCore.pyd").is_file()
+    assert (sp / "PySide2" / "QtWidgets.pyd").is_file()
+    assert (sp / "PySide2" / "Qt5Core.dll").is_file()
+    assert (sp / "PySide2" / "Qt5Widgets.dll").is_file()
+    assert not (sp / "PySide2" / "QtGui.pyd").exists()
+    assert (sp / "PySide2" / "Qt5Gui.dll").is_file()
+
+
+def test_build_forwards_keep_modules(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """build() 将 keep_modules 和 ast_submodules 透传给 unpack_wheels。."""
+    proj = tmp_path / "app"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (proj / "app.py").write_text("import requests\nfrom requests import get\ndef main():\n    pass\n")
+
+    monkeypatch.setattr(
+        "fspack.builder.ensure_embed",
+        lambda v, m, c, r: (
+            r.mkdir(parents=True, exist_ok=True),
+            (r / "python311.dll").write_bytes(b""),
+            (r / "Lib" / "site-packages").mkdir(parents=True, exist_ok=True),
+        )[-1],
+    )
+    monkeypatch.setattr(
+        "fspack.builder.download_wheels",
+        lambda packages, py_version, index, wheelhouse, platform_tags=("win_amd64",): [],
+    )
+
+    captured: dict[str, Any] = {}
+
+    def fake_unpack(wh: object, sp: object, submodule_usage: object, keep_modules: object) -> int:
+        captured["submodule_usage"] = submodule_usage
+        captured["keep_modules"] = keep_modules
+        return 0
+
+    monkeypatch.setattr("fspack.builder.unpack_wheels", fake_unpack)
+    monkeypatch.setattr(
+        "fspack.builder.compile_loader",
+        lambda source, out_exe, app_type, work_dir, platform: (
+            out_exe.parent.mkdir(parents=True, exist_ok=True),
+            out_exe.write_text(source),
+        )[-1],
+    )
+
+    build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, keep_modules={"requests.adapters"})
+    assert captured["keep_modules"] == {"requests.adapters"}
+    assert isinstance(captured["submodule_usage"], dict)
+    assert "requests" in captured["submodule_usage"]
+
+
 def test_build_orchestration_helloworld(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     proj = tmp_path / "helloworld"
     shutil.copytree(_EXAMPLES / "helloworld", proj)

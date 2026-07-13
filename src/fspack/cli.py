@@ -33,6 +33,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_build.add_argument("--mirror", default=None, choices=list(MIRRORS), help="镜像源")
     p_build.add_argument("--py-version", default=None, help="embed python 版本，如 3.11.9")
     p_build.add_argument("--target", default=None, choices=["windows", "linux"], help="目标平台（默认当前平台）")
+    p_build.add_argument(
+        "--keep-module",
+        action="append",
+        default=[],
+        dest="keep_modules",
+        help="显式保留子模块（如 PySide2.QtGui），可重复指定",
+    )
 
     p_run = sub.add_parser("run", aliases=["r"], help="运行已打包项目")
     p_run.add_argument("project", nargs="?", default=".", help="项目目录")
@@ -64,7 +71,13 @@ def main(argv: list[str] | None = None) -> None:
 
     project = Path(ns.project).resolve()
     if command in ("build", "b"):
-        build_cmd.run(project, mirror=ns.mirror, py_version=ns.py_version, target=_parse_target(ns.target))
+        build_cmd.run(
+            project,
+            mirror=ns.mirror,
+            py_version=ns.py_version,
+            target=_parse_target(ns.target),
+            keep_modules=set(ns.keep_modules) if ns.keep_modules else None,
+        )
     elif command in ("run", "r"):
         run_cmd.run(project, rest_args=_drop_separator(ns.rest), debug=ns.debug)
     elif command in ("clean", "c"):

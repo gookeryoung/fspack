@@ -7,7 +7,6 @@ import os
 import shutil
 import subprocess
 import sys
-import zipfile
 from dataclasses import replace
 from pathlib import Path
 from typing import Sequence
@@ -53,6 +52,7 @@ def build(  # noqa: PLR0913
     dist_dir: Path | None = None,
     embed_cache: Path | None = None,
     target: Platform | None = None,
+    keep_modules: set[str] | None = None,
 ) -> ProjectInfo:
     """执行完整构建流水线，返回项目信息。."""
     project_dir = Path(project_dir).resolve()
@@ -92,7 +92,7 @@ def build(  # noqa: PLR0913
             wheelhouse,
             platform_tags=wheel_platform_tags(target),
         )
-        unpack_wheels(wheelhouse, site_packages)
+        unpack_wheels(wheelhouse, site_packages, report.ast_submodules, keep_modules)
     else:
         _logger.info("无第三方依赖，跳过 wheel 下载")
 
@@ -227,15 +227,17 @@ def download_wheels(  # noqa: PLR0913
     return sorted(wheelhouse_dir.glob("*.whl"))
 
 
-def unpack_wheels(wheelhouse_dir: Path, site_packages_dir: Path) -> int:
-    """将 wheelhouse 内所有 .whl 解包到 site-packages 目录，返回解包数量。."""
-    site_packages_dir.mkdir(parents=True, exist_ok=True)
-    count = 0
-    for whl in wheelhouse_dir.glob("*.whl"):
-        try:
-            with zipfile.ZipFile(whl) as zf:
-                zf.extractall(site_packages_dir)
-        except zipfile.BadZipFile as e:
-            raise DependencyError(f"wheel 损坏: {whl}") from e
-        count += 1
-    return count
+def unpack_wheels(
+    wheelhouse_dir: Path,
+    site_packages_dir: Path,
+    submodule_usage: dict[str, frozenset[str]] | None = None,
+    keep_modules: set[str] | None = None,
+) -> int:
+    """将 wheelhouse 内所有 .whl 解包到 site-packages 目录，返回解包数量。
+
+    当提供 ``submodule_usage`` 时按子模块分析选择性解压（精简打包），
+    否则全量解压。
+    """
+    from fspack.slim import slim_unpack
+
+    return slim_unpack(wheelhouse_dir, site_packages_dir, submodule_usage, keep_modules)

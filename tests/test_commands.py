@@ -19,7 +19,13 @@ from fspack.platform import Platform, detect_platform
 def test_build_run_default_mirror_and_py_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
-    def fake_build(project: Path, mirror: object, py_version: str | None, target: object = None) -> None:
+    def fake_build(
+        project: Path,
+        mirror: object,
+        py_version: str | None,
+        target: object = None,
+        keep_modules: set[str] | None = None,
+    ) -> None:
         captured["mirror"] = mirror
         captured["py_version"] = py_version
         captured["target"] = target
@@ -34,7 +40,13 @@ def test_build_run_default_mirror_and_py_version(tmp_path: Path, monkeypatch: py
 def test_build_run_explicit_options(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
-    def fake_build(project: Path, mirror: object, py_version: str, target: object = None) -> None:
+    def fake_build(
+        project: Path,
+        mirror: object,
+        py_version: str,
+        target: object = None,
+        keep_modules: set[str] | None = None,
+    ) -> None:
         captured["mirror"] = mirror
         captured["py_version"] = py_version
         captured["target"] = target
@@ -44,6 +56,23 @@ def test_build_run_explicit_options(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert captured["mirror"] == get_mirror("aliyun")
     assert captured["py_version"] == "3.10.0"
     assert captured["target"] is Platform.LINUX
+
+
+def test_build_run_keep_modules(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_build(
+        project: Path,
+        mirror: object,
+        py_version: str | None,
+        target: object = None,
+        keep_modules: set[str] | None = None,
+    ) -> None:
+        captured["keep_modules"] = keep_modules
+
+    monkeypatch.setattr("fspack.commands.build.build", fake_build)
+    build_run(tmp_path, keep_modules={"PySide2.QtGui"})
+    assert captured["keep_modules"] == {"PySide2.QtGui"}
 
 
 def test_clean_run_removes_dist(tmp_path: Path) -> None:
