@@ -93,9 +93,10 @@ def test_build_target_windows_dispatch(tmp_path: Path, monkeypatch: pytest.Monke
 def test_run_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     called: dict[str, Any] = {}
 
-    def fake_run(project: Path, rest_args: list[str] | None = None) -> None:
+    def fake_run(project: Path, rest_args: list[str] | None = None, debug: bool = False) -> None:
         called["project"] = project
         called["rest"] = rest_args
+        called["debug"] = debug
 
     monkeypatch.setattr(cli.run_cmd, "run", fake_run)
     cli.main(["r", str(tmp_path), "--", "--foo", "bar"])

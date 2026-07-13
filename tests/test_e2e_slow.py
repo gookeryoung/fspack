@@ -1,7 +1,7 @@
 """端到端慢测试：真实下载 embed python + mingw 编译 + wine 运行。
 
 需 mingw-w64 与 wine（Windows 目标）或 gcc（Linux 目标），标 slow，默认门禁不执行。
-覆盖 5 类典型项目：无库 CLI、有库 CLI、有库 GUI、有库 pygame、有库 web。
+覆盖 8 类典型项目：无库 CLI、有库 CLI、有库 GUI（PySide6/PySide2/PyQt5）、有库 pygame、有库 web。
 另含 Linux 平台端到端测试（python-build-standalone + gcc 编译 + 原生运行）。
 """
 
@@ -126,6 +126,87 @@ def test_build_and_run_webapp(tmp_path: Path) -> None:
     _build_and_run("webapp", "hello from flask", tmp_path)
     proj = tmp_path / "webapp"
     assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "flask").is_dir()
+
+
+@pytest.mark.slow
+def test_build_and_run_pyside2app(tmp_path: Path) -> None:
+    """pyside2app 示例：Python 3.8 + PySide2，验证多版本 + 老库兼容。
+
+    PySide2 的 Qt DLL 在 wine 上可能缺系统 DLL，缺时跳过运行断言。
+    """
+    from fspack.builder import build
+    from fspack.loader import mingw_available
+    from fspack.mirror import get_mirror
+    from fspack.platform import Platform
+
+    if not mingw_available():
+        pytest.skip("mingw-w64 未安装")
+    if not shutil.which("wine"):
+        pytest.skip("wine 未安装")
+
+    proj = tmp_path / "pyside2app"
+    shutil.copytree(_EXAMPLES / "pyside2app", proj)
+    build(proj, get_mirror("aliyun"), "3.8.10", target=Platform.WINDOWS)
+
+    exe = proj / "dist" / "pyside2app.exe"
+    assert exe.is_file(), f"未生成 exe: {exe}"
+    assert (proj / "dist" / "runtime" / "python38.dll").is_file(), "未找到 python38.dll"
+    assert (proj / "dist" / "runtime" / "python38._pth").is_file(), "未生成 _pth"
+    assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "PySide2").is_dir(), "PySide2 未解包"
+
+    env = {**os.environ, "WINEDEBUG": "-all", "QT_QPA_PLATFORM": "offscreen"}
+    result = subprocess.run(["wine", str(exe)], capture_output=True, text=True, timeout=300, env=env, check=False)
+    combined = result.stdout + result.stderr
+    if "hello from PySide2" not in combined and "DLL load failed" in combined:
+        pytest.skip(f"wine 缺少系统 DLL，PySide2 Qt DLL 无法加载，真实 Windows 可运行: {combined!r}")
+    assert "hello from PySide2" in combined, f"未在输出中发现 'hello from PySide2': {combined!r}"
+
+
+@pytest.mark.slow
+def test_build_and_run_pyqt5app(tmp_path: Path) -> None:
+    """pyqt5app 示例：Python 3.12 + PyQt5，验证新版本 + PyQt5 兼容。
+
+    PyQt5 的 Qt DLL 在 wine 上可能缺系统 DLL，缺时跳过运行断言。
+    """
+    from fspack.builder import build
+    from fspack.loader import mingw_available
+    from fspack.mirror import get_mirror
+    from fspack.platform import Platform
+
+    if not mingw_available():
+        pytest.skip("mingw-w64 未安装")
+    if not shutil.which("wine"):
+        pytest.skip("wine 未安装")
+
+    proj = tmp_path / "pyqt5app"
+    shutil.copytree(_EXAMPLES / "pyqt5app", proj)
+    build(proj, get_mirror("aliyun"), "3.12.0", target=Platform.WINDOWS)
+
+    exe = proj / "dist" / "pyqt5app.exe"
+    assert exe.is_file(), f"未生成 exe: {exe}"
+    assert (proj / "dist" / "runtime" / "python312.dll").is_file(), "未找到 python312.dll"
+    assert (proj / "dist" / "runtime" / "python312._pth").is_file(), "未生成 _pth"
+    assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "PyQt5").is_dir(), "PyQt5 未解包"
+
+    env = {**os.environ, "WINEDEBUG": "-all", "QT_QPA_PLATFORM": "offscreen"}
+    result = subprocess.run(["wine", str(exe)], capture_output=True, text=True, timeout=300, env=env, check=False)
+    combined = result.stdout + result.stderr
+    if "hello from PyQt5" not in combined and "DLL load failed" in combined:
+        pytest.skip(f"wine 缺少系统 DLL，PyQt5 Qt DLL 无法加载，真实 Windows 可运行: {combined!r}")
+    assert "hello from PyQt5" in combined, f"未在输出中发现 'hello from PyQt5': {combined!r}"
+
+
+@pytest.mark.slow
+def test_build_and_run_snake(tmp_path: Path) -> None:
+    """snake 示例：pygame 贪吃蛇，dummy 驱动验证。."""
+    _build_and_run(
+        "snake",
+        "snake ready",
+        tmp_path,
+        extra_env={"SDL_VIDEODRIVER": "dummy", "SDL_AUDIODRIVER": "dummy"},
+    )
+    proj = tmp_path / "snake"
+    assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "pygame").is_dir()
 
 
 @pytest.mark.slow

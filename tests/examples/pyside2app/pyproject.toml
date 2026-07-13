@@ -1,0 +1,4 @@
+[project]
+name = "pyside2app"
+version = "0.1.0"
+dependencies = ["PySide2"]

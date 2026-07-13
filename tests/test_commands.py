@@ -79,16 +79,16 @@ def test_run_run_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     class _Completed:
         returncode = 0
 
-    def fake_run(cmd: list[str], check: bool) -> _Completed:
+    def fake_run(cmd: list[str], **kw: object) -> _Completed:
         captured["cmd"] = cmd
-        captured["check"] = check
+        captured["env"] = kw.get("env")
         return _Completed()
 
     monkeypatch.setattr("fspack.commands.run.subprocess.run", fake_run)
     monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Windows")
     run_run(tmp_path, rest_args=["--foo", "bar"])
     assert captured["cmd"] == [str(exe), "--foo", "bar"]
-    assert captured["check"] is False
+    assert captured["env"] is None
 
 
 def test_run_run_nonzero_exit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -101,10 +101,118 @@ def test_run_run_nonzero_exit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     class _Completed:
         returncode = 2
 
-    monkeypatch.setattr("fspack.commands.run.subprocess.run", lambda cmd, check: _Completed())
+    monkeypatch.setattr("fspack.commands.run.subprocess.run", lambda cmd, **kw: _Completed())
     monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Windows")
     with pytest.raises(FspackError, match="程序退出码非零"):
         run_run(tmp_path)
+
+
+def test_run_run_debug_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """debug 模式 Windows 用 embed python.exe 直跑入口脚本。."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\n')
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    dist = tmp_path / "dist"
+    (dist / "runtime").mkdir(parents=True)
+    (dist / "src").mkdir(parents=True)
+    (dist / "runtime" / "python.exe").write_bytes(b"")
+    (dist / "src" / "app.py").write_text("")
+
+    captured: dict[str, object] = {}
+
+    class _Completed:
+        returncode = 0
+
+    def fake_run(cmd: list[str], **kw: object) -> _Completed:
+        captured["cmd"] = cmd
+        captured["env"] = kw.get("env")
+        return _Completed()
+
+    monkeypatch.setattr("fspack.commands.run.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Windows")
+    run_run(tmp_path, debug=True, rest_args=["--foo"])
+    py = dist / "runtime" / "python.exe"
+    entry = dist / "src" / "app.py"
+    assert captured["cmd"] == [str(py), str(entry), "--foo"]
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert env["PYTHONUNBUFFERED"] == "1"
+
+
+def test_run_run_debug_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """debug 模式 Linux 用 standalone python + PYTHONHOME。."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\n')
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    dist = tmp_path / "dist"
+    bin_dir = dist / "runtime" / "python" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "python3.11").write_bytes(b"")
+    (dist / "src").mkdir(parents=True)
+    (dist / "src" / "app.py").write_text("")
+
+    captured: dict[str, object] = {}
+
+    class _Completed:
+        returncode = 0
+
+    def fake_run(cmd: list[str], **kw: object) -> _Completed:
+        captured["cmd"] = cmd
+        captured["env"] = kw.get("env")
+        return _Completed()
+
+    monkeypatch.setattr("fspack.commands.run.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Linux")
+    run_run(tmp_path, debug=True)
+    py = bin_dir / "python3.11"
+    entry = dist / "src" / "app.py"
+    assert captured["cmd"] == [str(py), str(entry)]
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert env["PYTHONHOME"] == str(dist / "runtime" / "python")
+    assert env["PYTHONUNBUFFERED"] == "1"
+
+
+def test_run_run_debug_missing_python(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """debug 模式 embed python 不存在时报错。."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\n')
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    dist = tmp_path / "dist"
+    (dist / "src").mkdir(parents=True)
+    (dist / "src" / "app.py").write_text("")
+    monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Windows")
+    with pytest.raises(FspackError, match="未找到 embed python"):
+        run_run(tmp_path, debug=True)
+
+
+def test_run_run_debug_missing_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """debug 模式入口脚本不存在时报错。."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\n')
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    dist = tmp_path / "dist"
+    (dist / "runtime").mkdir(parents=True)
+    (dist / "runtime" / "python.exe").write_bytes(b"")
+    monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Windows")
+    with pytest.raises(FspackError, match="未找到入口脚本"):
+        run_run(tmp_path, debug=True)
+
+
+def test_run_run_gui_nonzero_hints_debug(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """GUI 应用非零退出码时提示用 --debug。."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\ndependencies = ["PySide6"]\n')
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    exe = tmp_path / "dist" / "app.exe"
+    exe.parent.mkdir()
+    exe.write_bytes(b"")
+
+    class _Completed:
+        returncode = 1
+
+    monkeypatch.setattr("fspack.commands.run.subprocess.run", lambda cmd, **kw: _Completed())
+    monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Windows")
+    with caplog.at_level("WARNING", logger="fspack.commands.run"), pytest.raises(FspackError, match="程序退出码非零"):
+        run_run(tmp_path)
+    assert "fspack r --debug" in caplog.text
 
 
 def test_build_cmd_linux_with_wine(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -186,7 +294,7 @@ def test_run_run_linux_native(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     class _Completed:
         returncode = 0
 
-    def fake_run(cmd: list[str], check: bool) -> _Completed:
+    def fake_run(cmd: list[str], **kw: object) -> _Completed:
         captured["cmd"] = cmd
         return _Completed()
 
