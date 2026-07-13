@@ -210,6 +210,60 @@ def test_download_wheels_skips_existing_wheel_bytes(tmp_path: Path, monkeypatch:
     assert record.bytes_downloaded == 0
 
 
+def test_download_wheels_skips_harvest_when_cache_covers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """fspack cache 已覆盖所有直接依赖时跳过 harvest_external_caches（省数秒 uv/pip 递归搜索）。."""
+    whl_name = "numpy-1.24.0-cp311-cp311-win_amd64.whl"
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / whl_name).write_bytes(b"numpy-content")
+
+    harvest_called = False
+
+    def fake_harvest(*a: Any, **kw: Any) -> int:
+        nonlocal harvest_called
+        harvest_called = True
+        return 0
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        return _Completed()
+
+    monkeypatch.setattr("fspack.wheel_cache.harvest_external_caches", fake_harvest)
+    monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
+
+    stage = StageRecorder("下载依赖")
+    download_wheels(("numpy",), "3.11.9", "https://idx/simple", tmp_path / "wh", wheel_cache_dir=cache, stage=stage)
+    assert not harvest_called
+    record = stage._finalize()
+    assert record.cache_hit == 1
+
+
+def test_download_wheels_harvests_when_cache_partial(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """fspack cache 缺少某些直接依赖时仍调 harvest_external_caches。."""
+    whl_name = "numpy-1.24.0-cp311-cp311-win_amd64.whl"
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / whl_name).write_bytes(b"numpy-content")
+
+    harvest_calls: list[set[str]] = []
+
+    def fake_harvest(packages: set[str], *a: Any, **kw: Any) -> int:
+        harvest_calls.append(packages)
+        return 0
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        return _Completed()
+
+    monkeypatch.setattr("fspack.wheel_cache.harvest_external_caches", fake_harvest)
+    monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
+
+    download_wheels(("numpy", "requests"), "3.11.9", "https://idx/simple", tmp_path / "wh", wheel_cache_dir=cache)
+    assert len(harvest_calls) == 1
+    assert "numpy" in harvest_calls[0]
+    assert "requests" in harvest_calls[0]
+
+
 def test_find_pip_python_uses_sys_executable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """sys.executable 能跑 pip 时优先用它。."""
     venv_py = tmp_path / "venv" / "python"

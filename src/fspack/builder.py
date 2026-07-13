@@ -191,29 +191,49 @@ def download_wheels(  # noqa: PLR0913
     平台标签（如 Linux 同时匹配 manylinux2014 与 manylinux_2_28）。
 
     ``wheel_cache_dir`` 为 fspack wheel 缓存目录，默认 ``~/.fspack/cache/wheels/``。
-    构建前从 uv/pip 缓存收割匹配 wheel 到此目录，``pip download`` 追加
-    ``--find-links`` 让 pip 优先用本地缓存，下载后回写缓存供后续复用。
+    构建前先检查此目录是否已覆盖所有直接依赖：覆盖则跳过 uv/pip 缓存收割
+    （uv cache 递归搜索耗时数秒）；不覆盖才从 uv/pip 缓存收割缺失 wheel。
+    ``pip download`` 追加 ``--find-links`` 让 pip 优先用本地缓存，下载后回写缓存供后续复用。
 
     自动选择能跑 pip 的 python 解释器：优先当前 venv，回退系统 python3
     （uv venv 默认不含 pip）。
 
     ``stage`` 用于回写缓存命中数与 wheel 数到 BuildTracker。
     """
-    from fspack.wheel_cache import fspack_wheel_cache_dir, harvest_external_caches, normalize_name, save_to_cache
+    from fspack.wheel_cache import (
+        fspack_wheel_cache_dir,
+        harvest_external_caches,
+        normalize_name,
+        parse_wheel_filename,
+        save_to_cache,
+        search_cache_dir,
+    )
 
     wheelhouse_dir.mkdir(parents=True, exist_ok=True)
     cache = wheel_cache_dir or fspack_wheel_cache_dir()
     cache.mkdir(parents=True, exist_ok=True)
 
     pkg_set = {normalize_name(p) for p in packages}
-    harvested = harvest_external_caches(pkg_set, py_version, platform_tags, cache)
-    if harvested:
-        _logger.info("从外部缓存收割 %d 个 wheel", harvested)
+    major, minor = py_version.split(".")[:2]
+    py_tag = f"cp{major}{minor}"
+
+    # 检查 fspack cache 是否已覆盖所有直接依赖；覆盖则跳过昂贵的 uv/pip cache 递归搜索（数秒）
+    cached_wheels = search_cache_dir(cache, pkg_set, py_tag, platform_tags)
+    cached_pkgs = {
+        normalize_name(info.name) for info in (parse_wheel_filename(w.name) for w in cached_wheels) if info is not None
+    }
+    if pkg_set.issubset(cached_pkgs):
         if stage is not None:
-            stage.hit_cache(harvested)
+            stage.hit_cache(len(cached_wheels))
+        _logger.info("fspack cache 已覆盖所有直接依赖，跳过外部缓存收割")
+    else:
+        harvested = harvest_external_caches(pkg_set, py_version, platform_tags, cache)
+        if harvested:
+            _logger.info("从外部缓存收割 %d 个 wheel", harvested)
+            if stage is not None:
+                stage.hit_cache(harvested)
 
     py = _find_pip_python()
-    major, minor = py_version.split(".")[:2]
     platform_args: list[str] = []
     for tag in platform_tags:
         platform_args.extend(["--platform", tag])
