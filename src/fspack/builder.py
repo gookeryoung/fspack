@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 import sys
@@ -108,6 +109,41 @@ def copy_source(project_dir: Path, src_dst: Path) -> None:
     shutil.copytree(project_dir, src_dst, ignore=_EXCLUDE)
 
 
+def _find_pip_python() -> str:
+    """找一个能跑 ``python -m pip`` 的解释器。
+
+    优先当前 venv（``sys.executable``），无 pip 时遍历 ``PATH`` 找系统 ``python3``
+    （跳过 venv 所在目录，因为 ``shutil.which`` 在 venv 激活时只返回 venv python）。
+    ``pip download`` 的 ``--python-version``/``--abi``/``--implementation`` 参数
+    支持跨版本下载，跑 pip 的 python 版本无需匹配目标版本。
+
+    uv 管理的 venv 默认不含 pip（用 Rust 实现的 ``uv pip``），需回退系统 python。
+    """
+    candidates: list[str] = [sys.executable]
+    venv_bin = Path(sys.executable).parent.resolve()
+    seen: set[str] = {sys.executable}
+    for path_dir in os.environ.get("PATH", "").split(os.pathsep):
+        if not path_dir:
+            continue
+        try:
+            resolved_dir = Path(path_dir).resolve()
+        except OSError:
+            continue
+        if resolved_dir == venv_bin:
+            continue
+        candidate = resolved_dir / "python3"
+        if candidate.is_file() and str(candidate) not in seen:
+            candidates.append(str(candidate))
+            seen.add(str(candidate))
+    for py in candidates:
+        try:
+            subprocess.run([py, "-m", "pip", "--version"], check=True, capture_output=True, text=True)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            continue
+        return py
+    raise DependencyError("未找到可用的 pip，请在当前 venv 执行 `uv pip install pip`，或在系统安装 python3-pip 包")
+
+
 def download_wheels(
     packages: tuple[str, ...] | list[str],
     py_version: str,
@@ -119,14 +155,18 @@ def download_wheels(
 
     ``platform_tags`` 为 pip ``--platform`` 标签列表，可重复指定以匹配多个
     平台标签（如 Linux 同时匹配 manylinux2014 与 manylinux_2_28）。
+
+    自动选择能跑 pip 的 python 解释器：优先当前 venv，回退系统 python3
+    （uv venv 默认不含 pip）。
     """
     wheelhouse_dir.mkdir(parents=True, exist_ok=True)
+    py = _find_pip_python()
     major, minor = py_version.split(".")[:2]
     platform_args: list[str] = []
     for tag in platform_tags:
         platform_args.extend(["--platform", tag])
     cmd: list[str] = [
-        sys.executable,
+        py,
         "-m",
         "pip",
         "download",
@@ -148,7 +188,7 @@ def download_wheels(
     try:
         subprocess.run(cmd, check=True, capture_output=True, text=True)
     except FileNotFoundError as e:
-        raise DependencyError(f"未找到 pip: {sys.executable}") from e
+        raise DependencyError(f"未找到 pip: {py}") from e
     except subprocess.CalledProcessError as e:
         raise DependencyError(f"依赖下载失败:\n{e.stderr}") from e
     return sorted(wheelhouse_dir.glob("*.whl"))
