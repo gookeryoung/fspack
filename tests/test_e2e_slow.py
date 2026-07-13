@@ -178,3 +178,38 @@ def test_build_and_run_linux_clitool(tmp_path: Path) -> None:
     result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=60, check=False)
     combined = result.stdout + result.stderr
     assert "requests " in combined, f"未在输出中发现 'requests ': {combined!r}"
+
+
+@pytest.mark.slow
+def test_build_installer_helloworld_slow(tmp_path: Path) -> None:
+    """NSIS 端到端：build helloworld → makensis 编译 → 验证安装包产出。
+
+    需 mingw-w64（Windows loader 编译）与 makensis（NSIS 安装包编译）。
+    验证 dist/installer.nsi 生成正确、dist/release/helloworld-setup.exe 产出为合法 PE 文件且非空。
+    """
+    from fspack.installer import build_installer
+    from fspack.loader import mingw_available
+    from fspack.mirror import get_mirror
+
+    if not mingw_available():
+        pytest.skip("mingw-w64 未安装")
+    if not shutil.which("makensis"):
+        pytest.skip("makensis 未安装（sudo apt install -y nsis）")
+
+    proj = tmp_path / "helloworld"
+    shutil.copytree(_EXAMPLES / "helloworld", proj)
+
+    out = build_installer(proj, get_mirror("aliyun"), "3.11.9", no_build=False)
+    expected = proj / "dist" / "release" / "helloworld-setup.exe"
+    assert out == expected
+    assert expected.is_file(), f"未生成安装包: {expected}"
+    assert expected.stat().st_size > 1024 * 1024, f"安装包过小: {expected.stat().st_size} bytes"
+
+    with expected.open("rb") as f:
+        assert f.read(2) == b"MZ", "安装包非合法 PE 文件"
+
+    nsi = proj / "dist" / "installer.nsi"
+    assert nsi.is_file(), "未生成 installer.nsi"
+    content = nsi.read_text(encoding="utf-8")
+    assert 'Name "helloworld 0.1.0"' in content
+    assert 'OutFile "release\\helloworld-setup.exe"' in content
