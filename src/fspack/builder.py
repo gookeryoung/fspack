@@ -239,6 +239,7 @@ def download_wheels(  # noqa: PLR0913
         *packages,
     ]
     _logger.info("下载依赖 wheel: %s", " ".join(packages))
+    existing_sizes = {f.name: f.stat().st_size for f in wheelhouse_dir.glob("*.whl")}
     try:
         with spinner(f"pip download {len(packages)} 个依赖"):
             subprocess.run(cmd, check=True, capture_output=True, text=True)
@@ -252,6 +253,9 @@ def download_wheels(  # noqa: PLR0913
     if saved:
         _logger.info("缓存 %d 个 wheel", saved)
     if stage is not None:
+        new_bytes = sum(whl.stat().st_size for whl in wheels if whl.name not in existing_sizes)
+        if new_bytes:
+            stage.add_bytes(new_bytes)
         stage.processed(len(wheels))
         stage.set_detail(f"{len(wheels)} wheels")
     return wheels

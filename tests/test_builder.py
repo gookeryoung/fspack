@@ -16,6 +16,7 @@ from fspack.console import console
 from fspack.exceptions import DependencyError
 from fspack.mirror import get_mirror
 from fspack.platform import Platform
+from fspack.progress import StageRecorder
 
 _EXAMPLES = Path(__file__).parent / "examples"
 
@@ -165,6 +166,48 @@ def test_download_wheels_harvests_and_caches(tmp_path: Path, monkeypatch: pytest
     assert "numpy" in harvest_calls[0]["packages"]
     assert len(result) == 1
     assert (cache / whl_name).read_bytes() == b"numpy-content"
+
+
+def test_download_wheels_records_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """download_wheels 回写新增 wheel 字节数到 stage。."""
+    whl_name = "numpy-1.24.0-cp311-cp311-win_amd64.whl"
+    whl_content = b"x" * 100
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        (tmp_path / "wh" / whl_name).write_bytes(whl_content)
+        return _Completed()
+
+    monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
+    monkeypatch.setattr("fspack.wheel_cache.harvest_external_caches", lambda *a, **kw: 0)
+
+    stage = StageRecorder("下载依赖")
+    download_wheels(
+        ("numpy",), "3.11.9", "https://idx/simple", tmp_path / "wh", wheel_cache_dir=tmp_path / "cache", stage=stage
+    )
+    record = stage._finalize()
+    assert record.bytes_downloaded == 100
+    assert record.items == 1
+
+
+def test_download_wheels_skips_existing_wheel_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """wheelhouse 已存在的 wheel 不计入新增字节数。."""
+    whl_name = "numpy-1.24.0-cp311-cp311-win_amd64.whl"
+    wh = tmp_path / "wh"
+    wh.mkdir()
+    (wh / whl_name).write_bytes(b"old" * 10)
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        return _Completed()
+
+    monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
+    monkeypatch.setattr("fspack.wheel_cache.harvest_external_caches", lambda *a, **kw: 0)
+
+    stage = StageRecorder("下载依赖")
+    download_wheels(("numpy",), "3.11.9", "https://idx/simple", wh, wheel_cache_dir=tmp_path / "cache", stage=stage)
+    record = stage._finalize()
+    assert record.bytes_downloaded == 0
 
 
 def test_find_pip_python_uses_sys_executable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

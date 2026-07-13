@@ -52,6 +52,11 @@ required-version = ">=0.5.0"
 default = true
 url     = "https://mirrors.aliyun.com/pypi/simple/"
 
+[tool.uv.workspace]
+members = [
+    "examples/cli_office",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/fspack"]
 
