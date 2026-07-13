@@ -9,7 +9,7 @@ import pytest
 from fspack.commands.build import run as build_run
 from fspack.commands.clean import run as clean_run
 from fspack.commands.package import run as package_run
-from fspack.commands.run import _build_cmd
+from fspack.commands.run import _build_cmd, _find_exe
 from fspack.commands.run import run as run_run
 from fspack.exceptions import FspackError
 from fspack.mirror import get_mirror
@@ -125,6 +125,71 @@ def test_build_cmd_non_linux(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Windows")
     cmd = _build_cmd(Path("/tmp/app.exe"))
     assert cmd == ["/tmp/app.exe"]
+
+
+def test_build_cmd_linux_native(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Linux 原生可执行文件（无后缀）直接运行，不用 wine。."""
+    monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Linux")
+    cmd = _build_cmd(Path("/tmp/app"))
+    assert cmd == ["/tmp/app"]
+
+
+def test_find_exe_linux_native(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Linux 优先找原生无后缀可执行文件。."""
+    monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Linux")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "app").write_bytes(b"")
+    (dist / "app.exe").write_bytes(b"")
+    assert _find_exe(tmp_path, "app") == dist / "app"
+
+
+def test_find_exe_linux_fallback_exe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Linux 无原生可执行文件时回退 .exe（wine 运行）。."""
+    monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Linux")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "app.exe").write_bytes(b"")
+    assert _find_exe(tmp_path, "app") == dist / "app.exe"
+
+
+def test_find_exe_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows 只找 .exe。."""
+    monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Windows")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "app.exe").write_bytes(b"")
+    assert _find_exe(tmp_path, "app") == dist / "app.exe"
+
+
+def test_find_exe_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """无任何可执行文件返回 None。."""
+    monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Linux")
+    (tmp_path / "dist").mkdir()
+    assert _find_exe(tmp_path, "app") is None
+
+
+def test_run_run_linux_native(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Linux 原生可执行文件直接运行（不调 wine）。."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\n')
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    exe = tmp_path / "dist" / "app"
+    exe.parent.mkdir()
+    exe.write_bytes(b"")
+
+    captured: dict[str, object] = {}
+
+    class _Completed:
+        returncode = 0
+
+    def fake_run(cmd: list[str], check: bool) -> _Completed:
+        captured["cmd"] = cmd
+        return _Completed()
+
+    monkeypatch.setattr("fspack.commands.run.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Linux")
+    run_run(tmp_path)
+    assert captured["cmd"] == [str(exe)]
 
 
 def test_package_run_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

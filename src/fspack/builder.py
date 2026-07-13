@@ -12,6 +12,7 @@ from typing import Sequence
 
 from fspack.analyzer import analyze_dependencies
 from fspack.config import BuildConfig, MirrorConfig, ProjectInfo
+from fspack.console import step, success
 from fspack.embed import ensure_embed, write_pth
 from fspack.exceptions import DependencyError
 from fspack.loader import compile_loader, generate_loader_source
@@ -57,6 +58,7 @@ def build(  # noqa: PLR0913
     _logger.info("项目: %s %s (%s) 目标: %s", info.name, info.version, info.app_type.value, target.value)
 
     runtime_dir = cfg.dist_dir / "runtime"
+    step("准备运行时")
     if target is Platform.LINUX:
         standalone_cache = Path.home() / ".fspack" / "cache" / "standalone"
         ensure_standalone(info.py_version, STANDALONE_RELEASE_TAG, standalone_cache, runtime_dir)
@@ -66,6 +68,7 @@ def build(  # noqa: PLR0913
         ensure_embed(info.py_version, cfg.mirror, cfg.embed_cache_dir, runtime_dir)
         site_packages = runtime_dir / "Lib" / "site-packages"
 
+    step("分析依赖")
     report = analyze_dependencies(project_dir, info.name, info.dependencies)
     if report.missing:
         _logger.info("AST 发现未声明依赖: %s", ", ".join(report.missing))
@@ -84,15 +87,17 @@ def build(  # noqa: PLR0913
 
     if target is Platform.WINDOWS:
         write_pth(cfg.dist_dir, info.py_version)
+    step("复制源码")
     src_dst = cfg.dist_dir / "src"
     copy_source(project_dir, src_dst)
 
+    step("生成 C loader")
     entry_rel = info.entry_file.relative_to(info.src_dir).as_posix()
     source = generate_loader_source(f"src/{entry_rel}", info.py_xy, target)
     exe_name = info.exe_name if target is Platform.WINDOWS else info.name
     exe = cfg.dist_dir / exe_name
     compile_loader(source, exe, info.app_type, cfg.dist_dir / "build", target)
-    _logger.info("构建完成: %s", exe)
+    success(f"构建完成: {exe}")
     return info
 
 

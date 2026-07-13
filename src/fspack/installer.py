@@ -8,6 +8,7 @@ from pathlib import Path
 
 from fspack.builder import build
 from fspack.config import AppType, MirrorConfig, ProjectInfo
+from fspack.console import step, success
 from fspack.exceptions import InstallerError
 from fspack.platform import Platform
 from fspack.project import DEFAULT_PY_VERSION, parse_project
@@ -124,6 +125,10 @@ def build_installer(
     if not exe.is_file():
         raise InstallerError(f"未找到已构建的可执行文件: {exe}（请先执行 fsp b）")
     release = dist / "release"
+    step("生成 NSIS 脚本")
     nsi = generate_nsis_script(info, dist, release)
     out_setup = release / f"{info.name}-setup.exe"
-    return compile_installer(nsi, out_setup)
+    step("编译 NSIS 安装包")
+    result = compile_installer(nsi, out_setup)
+    success(f"安装包已生成: {result}")
+    return result

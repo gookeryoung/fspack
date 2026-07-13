@@ -10,6 +10,7 @@ from fspack.commands import build as build_cmd
 from fspack.commands import clean as clean_cmd
 from fspack.commands import package as package_cmd
 from fspack.commands import run as run_cmd
+from fspack.console import setup_logging
 from fspack.mirror import MIRRORS
 from fspack.platform import Platform
 
@@ -23,6 +24,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="极速 Python 打包器（cargo 风格短命令）。",
     )
     parser.add_argument("-V", "--version", action="version", version=f"%(prog)s {__version__}")
+    parser.add_argument("-v", "--verbose", action="store_true", help="显示 DEBUG 级别日志")
 
     sub = parser.add_subparsers(dest="command", metavar="<command>")
 
@@ -56,6 +58,8 @@ def main(argv: list[str] | None = None) -> None:
     if command is None:
         parser.print_help()
         return
+
+    setup_logging(verbose=ns.verbose)
 
     project = Path(ns.project).resolve()
     if command in ("build", "b"):

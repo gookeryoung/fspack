@@ -9,6 +9,7 @@ from pathlib import Path
 
 from fspack.builder import build
 from fspack.config import MirrorConfig, ProjectInfo
+from fspack.console import step, success
 from fspack.exceptions import InstallerError
 from fspack.platform import Platform
 from fspack.project import DEFAULT_LINUX_PY_VERSION, parse_project
@@ -107,5 +108,9 @@ def build_linux_installer(
     if not exe.is_file():
         raise InstallerError(f"未找到已构建的可执行文件: {exe}（请先执行 fsp b）")
     release = dist / "release"
+    step("生成 tar.gz 便携包")
     build_tarball(dist, info.name, info.version, release)
-    return build_deb(dist, info, release)
+    step("构造 .deb 安装包")
+    result = build_deb(dist, info, release)
+    success(f"安装包已生成: {result}")
+    return result

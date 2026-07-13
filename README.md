@@ -19,6 +19,7 @@ fspack 将 Python 项目打包为可执行文件与跨平台安装包：用 embe
 - **跨平台安装包**：`fsp p` 按目标平台生成 Windows NSIS 安装包（含开始菜单/桌面快捷方式、卸载器、中英文双语）或 Linux .deb + tar.gz 便携包
 - **双平台支持**：Windows（embed + mingw 交叉编译）、Linux（python-build-standalone + gcc）
 - **国内镜像**：默认阿里云 PyPI 与 embed python 镜像，`--mirror` 切换
+- **彩色进度显示**：rich 驱动的步骤进度（▶ 准备运行时 / ✓ 构建完成），错误/警告/一般消息颜色区分，`-v` 开启 DEBUG 日志
 
 ## 安装
 
@@ -58,10 +59,12 @@ fsp b /path/to/project --mirror aliyun --py-version 3.11.9 --target windows
 
 ## 命令参考
 
+全局选项：`-V/--version` 显示版本，`-v/--verbose` 开启 DEBUG 级别日志。
+
 | 命令 | 别名 | 说明 |
 |------|------|------|
 | `fsp build` | `fsp b` | 打包项目，生成 dist/ 下可执行文件与运行时 |
-| `fsp run` | `fsp r` | 运行已打包项目（Linux 自动用 wine） |
+| `fsp run` | `fsp r` | 运行已打包项目（Linux 原生直跑，`.exe` 自动用 wine） |
 | `fsp clean` | `fsp c` | 清理 dist/ 目录 |
 | `fsp package` | `fsp p` | 生成安装包（Windows NSIS / Linux .deb + tar.gz） |
 
