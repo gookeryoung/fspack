@@ -1,4 +1,4 @@
-"""wheel_cache 模块测试：wheel 文件名解析与匹配。."""
+"""wheel_cache 模块测试：wheel 文件名解析与缓存目录。."""
 
 from __future__ import annotations
 
@@ -7,11 +7,9 @@ from pathlib import Path
 import pytest
 
 from fspack.wheel_cache import (
-    WheelInfo,
     fspack_wheel_cache_dir,
     normalize_name,
     parse_wheel_filename,
-    wheel_matches,
 )
 
 
@@ -57,43 +55,6 @@ class TestNormalizeName:
     def test_separators(self) -> None:
         assert normalize_name("my_pkg.name") == "my-pkg-name"
         assert normalize_name("multi__sep") == "multi-sep"
-
-
-class TestWheelMatches:
-    """wheel 匹配逻辑。."""
-
-    def test_exact_match(self) -> None:
-        info = WheelInfo("PySide2", "5.15.2.1", ("cp39",), "none", ("win_amd64",))
-        assert wheel_matches(info, {"pyside2"}, "cp39", ("win_amd64",))
-
-    def test_name_mismatch(self) -> None:
-        info = WheelInfo("PySide2", "5.15.2.1", ("cp39",), "none", ("win_amd64",))
-        assert not wheel_matches(info, {"flask"}, "cp39", ("win_amd64",))
-
-    def test_python_tag_mismatch(self) -> None:
-        info = WheelInfo("PySide2", "5.15.2.1", ("cp38",), "none", ("win_amd64",))
-        assert not wheel_matches(info, {"pyside2"}, "cp39", ("win_amd64",))
-
-    def test_python_tag_py3_compatible(self) -> None:
-        info = WheelInfo("requests", "2.31.0", ("py3",), "none", ("any",))
-        assert wheel_matches(info, {"requests"}, "cp39", ("win_amd64",))
-
-    def test_python_tag_py39_compatible(self) -> None:
-        info = WheelInfo("requests", "2.31.0", ("py39",), "none", ("any",))
-        assert wheel_matches(info, {"requests"}, "cp39", ("win_amd64",))
-
-    def test_platform_any_matches_all(self) -> None:
-        info = WheelInfo("requests", "2.31.0", ("py3",), "none", ("any",))
-        assert wheel_matches(info, {"requests"}, "cp39", ("win_amd64",))
-        assert wheel_matches(info, {"requests"}, "cp39", ("manylinux2014_x86_64",))
-
-    def test_platform_mismatch(self) -> None:
-        info = WheelInfo("numpy", "1.24.0", ("cp39",), "cp39", ("linux_x86_64",))
-        assert not wheel_matches(info, {"numpy"}, "cp39", ("win_amd64",))
-
-    def test_multi_platform_tag_match(self) -> None:
-        info = WheelInfo("numpy", "1.24.0", ("cp39",), "cp39", ("manylinux2014_x86_64", "manylinux_2_28_x86_64"))
-        assert wheel_matches(info, {"numpy"}, "cp39", ("manylinux_2_28_x86_64",))
 
 
 class TestFspackWheelCacheDir:

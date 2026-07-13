@@ -1,22 +1,17 @@
-"""Wheel 缓存：fspack 自有缓存目录的 wheel 文件名解析与匹配工具。."""
+"""Wheel 缓存：fspack 自有缓存目录的 wheel 文件名解析工具。."""
 
 from __future__ import annotations
 
-import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
 
 __all__ = [
     "WheelInfo",
     "fspack_wheel_cache_dir",
     "normalize_name",
     "parse_wheel_filename",
-    "wheel_matches",
 ]
-
-_logger = logging.getLogger(__name__)
 
 # PEP 427 wheel 文件名正则：name-version(-build)?-py-abi-plat.whl
 _WHEEL_RE = re.compile(
@@ -54,27 +49,6 @@ def parse_wheel_filename(filename: str) -> WheelInfo | None:
         abi_tag=m.group("abi"),
         platform_tags=tuple(m.group("plat").split(".")),
     )
-
-
-def wheel_matches(
-    wheel: WheelInfo,
-    packages: set[str],
-    py_tag: str,
-    platform_tags: Sequence[str],
-) -> bool:
-    """检查 wheel 是否匹配目标包名、Python 标签与平台标签。
-
-    ``py_tag`` 形如 ``cp39``；兼容的通用标签 ``py3``/``py3{minor}`` 也算命中。
-    平台标签取 wheel 与目标的交集，或 wheel 含 ``any``。
-    """
-    if normalize_name(wheel.name) not in packages:
-        return False
-    compatible = {py_tag, f"py{py_tag[2:]}", "py3"}
-    if not (set(wheel.python_tags) & compatible):
-        return False
-    target = set(platform_tags)
-    wheel_plats = set(wheel.platform_tags)
-    return bool(wheel_plats & target) or "any" in wheel_plats
 
 
 def fspack_wheel_cache_dir() -> Path:
