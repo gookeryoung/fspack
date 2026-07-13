@@ -18,9 +18,10 @@ except ModuleNotFoundError:  # pragma: no cover
     except ImportError as e:  # pragma: no cover
         raise ProjectError("解析 pyproject.toml 需要 tomli（Python<3.11），请安装 tomli") from e
 
-__all__ = ["DEFAULT_PY_VERSION", "detect_entry", "parse_project"]
+__all__ = ["DEFAULT_LINUX_PY_VERSION", "DEFAULT_PY_VERSION", "detect_entry", "parse_project"]
 
 DEFAULT_PY_VERSION = "3.11.9"
+DEFAULT_LINUX_PY_VERSION = "3.11.10"
 
 _GUI_HINTS = frozenset({"tkinter", "PySide2", "PySide6", "PyQt5", "PyQt6", "matplotlib", "wx", "win32gui"})
 

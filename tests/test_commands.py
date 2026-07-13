@@ -13,7 +13,8 @@ from fspack.commands.run import _build_cmd
 from fspack.commands.run import run as run_run
 from fspack.exceptions import FspackError
 from fspack.mirror import get_mirror
-from fspack.project import DEFAULT_PY_VERSION
+from fspack.platform import Platform, detect_platform
+from fspack.project import DEFAULT_LINUX_PY_VERSION, DEFAULT_PY_VERSION
 
 
 def test_build_run_default_mirror_and_py_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -27,13 +28,12 @@ def test_build_run_default_mirror_and_py_version(tmp_path: Path, monkeypatch: py
     monkeypatch.setattr("fspack.commands.build.build", fake_build)
     build_run(tmp_path, mirror=None, py_version=None)
     assert captured["mirror"] == get_mirror("aliyun")
-    assert captured["py_version"] == DEFAULT_PY_VERSION
+    expected_version = DEFAULT_LINUX_PY_VERSION if detect_platform() is Platform.LINUX else DEFAULT_PY_VERSION
+    assert captured["py_version"] == expected_version
     assert captured["target"] is None
 
 
 def test_build_run_explicit_options(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from fspack.platform import Platform
-
     captured: dict[str, object] = {}
 
     def fake_build(project: Path, mirror: object, py_version: str, target: object = None) -> None:
