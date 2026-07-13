@@ -213,3 +213,41 @@ def test_build_installer_helloworld_slow(tmp_path: Path) -> None:
     content = nsi.read_text(encoding="utf-8")
     assert 'Name "helloworld 0.1.0"' in content
     assert 'OutFile "release\\helloworld-setup.exe"' in content
+
+
+@pytest.mark.slow
+def test_build_linux_installer_helloworld_slow(tmp_path: Path) -> None:
+    """Linux 安装包端到端：build helloworld → tar.gz + .deb 真实产出。
+
+    需 gcc（Linux loader 编译）与 dpkg-deb（.deb 构建）。
+    验证 dist/release/helloworld_0.1.0_amd64.deb 为合法 ar 归档，
+    dist/release/helloworld-0.1.0-linux.tar.gz 为合法 gzip。
+    """
+    from fspack.linux_installer import build_linux_installer
+    from fspack.loader import gcc_available
+    from fspack.mirror import get_mirror
+
+    if not gcc_available():
+        pytest.skip("gcc 未安装")
+    if not shutil.which("dpkg-deb"):
+        pytest.skip("dpkg-deb 未安装")
+
+    proj = tmp_path / "helloworld"
+    shutil.copytree(_EXAMPLES / "helloworld", proj)
+
+    out = build_linux_installer(proj, get_mirror("aliyun"), "3.11.10", no_build=False)
+    expected_deb = proj / "dist" / "release" / "helloworld_0.1.0_amd64.deb"
+    assert out == expected_deb
+    assert expected_deb.is_file(), f"未生成 .deb: {expected_deb}"
+    assert expected_deb.stat().st_size > 1024 * 1024, f".deb 过小: {expected_deb.stat().st_size} bytes"
+
+    tarball = proj / "dist" / "release" / "helloworld-0.1.0-linux.tar.gz"
+    assert tarball.is_file(), f"未生成 tar.gz: {tarball}"
+    assert tarball.stat().st_size > 1024 * 1024, f"tar.gz 过小: {tarball.stat().st_size} bytes"
+
+    with expected_deb.open("rb") as f:
+        magic = f.read(8)
+    assert magic == b"!<arch>\n", f".deb 非 ar 归档: {magic!r}"
+
+    with tarball.open("rb") as f:
+        assert f.read(2) == b"\x1f\x8b", "tar.gz 非 gzip 格式"

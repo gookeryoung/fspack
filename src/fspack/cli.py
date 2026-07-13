@@ -39,10 +39,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_clean = sub.add_parser("clean", aliases=["c"], help="清理 dist/")
     p_clean.add_argument("project", nargs="?", default=".", help="项目目录")
 
-    p_pkg = sub.add_parser("package", aliases=["p"], help="生成 NSIS 安装包")
+    p_pkg = sub.add_parser("package", aliases=["p"], help="生成安装包")
     p_pkg.add_argument("project", nargs="?", default=".", help="项目目录")
     p_pkg.add_argument("--mirror", default=None, choices=list(MIRRORS), help="镜像源")
     p_pkg.add_argument("--py-version", default=None, help="embed python 版本，如 3.11.9")
+    p_pkg.add_argument("--target", default=None, choices=["windows", "linux"], help="目标平台（默认当前平台）")
     p_pkg.add_argument("--no-build", action="store_true", help="跳过重建，直接打包已有 dist")
     return parser
 
@@ -64,7 +65,9 @@ def main(argv: list[str] | None = None) -> None:
     elif command in ("clean", "c"):
         clean_cmd.run(project)
     elif command in ("package", "p"):
-        package_cmd.run(project, mirror=ns.mirror, py_version=ns.py_version, no_build=ns.no_build)
+        package_cmd.run(
+            project, mirror=ns.mirror, py_version=ns.py_version, no_build=ns.no_build, target=_parse_target(ns.target)
+        )
 
 
 def _drop_separator(rest: list[str]) -> list[str]:

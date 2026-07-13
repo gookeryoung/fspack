@@ -1,4 +1,4 @@
-"""fsp p —— 生成 NSIS 安装包。."""
+"""fsp p —— 生成安装包（Windows NSIS / Linux .deb + tar.gz）。."""
 
 from __future__ import annotations
 
@@ -6,8 +6,10 @@ import logging
 from pathlib import Path
 
 from fspack.installer import build_installer
+from fspack.linux_installer import build_linux_installer
 from fspack.mirror import get_mirror
-from fspack.project import DEFAULT_PY_VERSION
+from fspack.platform import Platform, detect_platform
+from fspack.project import DEFAULT_LINUX_PY_VERSION, DEFAULT_PY_VERSION
 
 __all__ = ["run"]
 
@@ -19,8 +21,15 @@ def run(
     mirror: str | None = None,
     py_version: str | None = None,
     no_build: bool = False,
+    target: Platform | None = None,
 ) -> None:
-    """生成 Windows 安装包到 dist/release/。."""
+    """生成安装包到 dist/release/。."""
     mirror_cfg = get_mirror(mirror)
-    out = build_installer(project, mirror_cfg, py_version or DEFAULT_PY_VERSION, no_build=no_build)
+    resolved_target = target or detect_platform()
+    if py_version is None:
+        py_version = DEFAULT_LINUX_PY_VERSION if resolved_target is Platform.LINUX else DEFAULT_PY_VERSION
+    if resolved_target is Platform.LINUX:
+        out = build_linux_installer(project, mirror_cfg, py_version, no_build=no_build)
+    else:
+        out = build_installer(project, mirror_cfg, py_version, no_build=no_build)
     _logger.info("安装包已生成: %s", out)

@@ -113,7 +113,11 @@ def test_package_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     called: dict[str, Any] = {}
 
     def fake_run(
-        project: Path, mirror: str | None = None, py_version: str | None = None, no_build: bool = False
+        project: Path,
+        mirror: str | None = None,
+        py_version: str | None = None,
+        no_build: bool = False,
+        target: object = None,
     ) -> None:
         called["project"] = project
         called["mirror"] = mirror
