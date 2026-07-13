@@ -110,28 +110,32 @@ def test_run_run_nonzero_exit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
 def test_build_cmd_linux_with_wine(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Linux")
     monkeypatch.setattr("fspack.commands.run.shutil.which", lambda x: "/usr/bin/wine")
-    cmd = _build_cmd(Path("/tmp/app.exe"))
-    assert cmd == ["/usr/bin/wine", "/tmp/app.exe"]
+    exe = Path("/tmp/app.exe")
+    cmd = _build_cmd(exe)
+    assert cmd == ["/usr/bin/wine", str(exe)]
 
 
 def test_build_cmd_linux_wine_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Linux")
     monkeypatch.setattr("fspack.commands.run.shutil.which", lambda x: None)
-    cmd = _build_cmd(Path("/tmp/app.exe"))
-    assert cmd == ["wine", "/tmp/app.exe"]
+    exe = Path("/tmp/app.exe")
+    cmd = _build_cmd(exe)
+    assert cmd == ["wine", str(exe)]
 
 
 def test_build_cmd_non_linux(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Windows")
-    cmd = _build_cmd(Path("/tmp/app.exe"))
-    assert cmd == ["/tmp/app.exe"]
+    exe = Path("/tmp/app.exe")
+    cmd = _build_cmd(exe)
+    assert cmd == [str(exe)]
 
 
 def test_build_cmd_linux_native(monkeypatch: pytest.MonkeyPatch) -> None:
     """Linux 原生可执行文件（无后缀）直接运行，不用 wine。."""
     monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Linux")
-    cmd = _build_cmd(Path("/tmp/app"))
-    assert cmd == ["/tmp/app"]
+    exe = Path("/tmp/app")
+    cmd = _build_cmd(exe)
+    assert cmd == [str(exe)]
 
 
 def test_find_exe_linux_native(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

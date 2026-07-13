@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from fspack.builder import _find_pip_python, build, copy_source, download_wheels, unpack_wheels
+from fspack.builder import _PIP_PYTHON_NAMES, _find_pip_python, build, copy_source, download_wheels, unpack_wheels
 from fspack.exceptions import DependencyError
 from fspack.mirror import get_mirror
 from fspack.platform import Platform
@@ -146,13 +146,13 @@ def test_find_pip_python_uses_sys_executable(monkeypatch: pytest.MonkeyPatch, tm
 
 
 def test_find_pip_python_falls_back_to_system(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """sys.executable 无 pip 时遍历 PATH 找系统 python3。."""
+    """sys.executable 无 pip 时遍历 PATH 找系统 python。."""
     venv_py = tmp_path / "venv" / "python"
     venv_py.parent.mkdir(parents=True)
     venv_py.write_text("")
     sys_bin = tmp_path / "sysbin"
     sys_bin.mkdir()
-    sys_py = sys_bin / "python3"
+    sys_py = sys_bin / _PIP_PYTHON_NAMES[0]
     sys_py.write_text("")
     monkeypatch.setattr("fspack.builder.sys.executable", str(venv_py))
     monkeypatch.setattr("fspack.builder.os.environ", {"PATH": str(sys_bin)})
@@ -167,10 +167,10 @@ def test_find_pip_python_falls_back_to_system(monkeypatch: pytest.MonkeyPatch, t
 
 
 def test_find_pip_python_skips_venv_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """PATH 中 venv 所在目录的 python3 被跳过。."""
+    """PATH 中 venv 所在目录的系统 python 被跳过。."""
     venv_bin = tmp_path / "venv"
     venv_bin.mkdir()
-    venv_py = venv_bin / "python3"
+    venv_py = venv_bin / _PIP_PYTHON_NAMES[0]
     venv_py.write_text("")
     monkeypatch.setattr("fspack.builder.sys.executable", str(venv_py))
     monkeypatch.setattr("fspack.builder.os.environ", {"PATH": str(venv_bin)})
@@ -189,7 +189,7 @@ def test_find_pip_python_all_fail(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
     venv_py.write_text("")
     sys_bin = tmp_path / "sysbin"
     sys_bin.mkdir()
-    (sys_bin / "python3").write_text("")
+    (sys_bin / _PIP_PYTHON_NAMES[0]).write_text("")
     monkeypatch.setattr("fspack.builder.sys.executable", str(venv_py))
     monkeypatch.setattr("fspack.builder.os.environ", {"PATH": str(sys_bin)})
 
@@ -217,7 +217,7 @@ def test_find_pip_python_empty_path(monkeypatch: pytest.MonkeyPatch, tmp_path: P
 
 
 def test_find_pip_python_skips_dir_without_python3(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """PATH 中无 python3 的目录被跳过，继续找下一个。."""
+    """PATH 中无系统 python 的目录被跳过，继续找下一个。."""
     venv_py = tmp_path / "venv" / "python"
     venv_py.parent.mkdir(parents=True)
     venv_py.write_text("")
@@ -225,7 +225,7 @@ def test_find_pip_python_skips_dir_without_python3(monkeypatch: pytest.MonkeyPat
     empty_bin.mkdir()
     sys_bin = tmp_path / "sysbin"
     sys_bin.mkdir()
-    sys_py = sys_bin / "python3"
+    sys_py = sys_bin / _PIP_PYTHON_NAMES[0]
     sys_py.write_text("")
     monkeypatch.setattr("fspack.builder.sys.executable", str(venv_py))
     monkeypatch.setattr("fspack.builder.os.environ", {"PATH": f"{empty_bin}{os.pathsep}{sys_bin}"})
@@ -248,7 +248,7 @@ def test_find_pip_python_skips_unresolvable_dir(monkeypatch: pytest.MonkeyPatch,
     bad_dir.mkdir()
     sys_bin = tmp_path / "sysbin"
     sys_bin.mkdir()
-    sys_py = sys_bin / "python3"
+    sys_py = sys_bin / _PIP_PYTHON_NAMES[0]
     sys_py.write_text("")
     monkeypatch.setattr("fspack.builder.sys.executable", str(venv_py))
     monkeypatch.setattr("fspack.builder.os.environ", {"PATH": f"{bad_dir}{os.pathsep}{sys_bin}"})

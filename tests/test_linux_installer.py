@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import tarfile
 from pathlib import Path
@@ -111,7 +112,9 @@ def test_build_deb_creates_deb(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
         wrapper = staging / "usr" / "bin" / "app"
         assert wrapper.is_file()
-        assert wrapper.stat().st_mode & 0o111, "wrapper 无可执行位"
+        # Windows 的 chmod 不设置 Unix 可执行位，仅 posix 平台校验
+        if os.name == "posix":
+            assert wrapper.stat().st_mode & 0o111, "wrapper 无可执行位"
         wrapper_content = wrapper.read_text(encoding="utf-8")
         assert "/usr/lib/app/app" in wrapper_content
         assert '"$@"' in wrapper_content

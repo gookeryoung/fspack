@@ -40,6 +40,10 @@ _EXCLUDE = shutil.ignore_patterns(
     ".mypy_cache",
 )
 
+# Windows 系统标准命名为 python.exe；Microsoft Store 版本另提供 python3.exe stub。
+# Linux/macOS 用 python3，回退 python。
+_PIP_PYTHON_NAMES: tuple[str, ...] = ("python.exe", "python3.exe") if sys.platform == "win32" else ("python3", "python")
+
 
 def build(  # noqa: PLR0913
     project_dir: Path,
@@ -112,8 +116,9 @@ def copy_source(project_dir: Path, src_dst: Path) -> None:
 def _find_pip_python() -> str:
     """找一个能跑 ``python -m pip`` 的解释器。
 
-    优先当前 venv（``sys.executable``），无 pip 时遍历 ``PATH`` 找系统 ``python3``
+    优先当前 venv（``sys.executable``），无 pip 时遍历 ``PATH`` 找系统 python
     （跳过 venv 所在目录，因为 ``shutil.which`` 在 venv 激活时只返回 venv python）。
+    候选名按平台：Windows 为 ``python.exe``/``python3.exe``，其他为 ``python3``/``python``。
     ``pip download`` 的 ``--python-version``/``--abi``/``--implementation`` 参数
     支持跨版本下载，跑 pip 的 python 版本无需匹配目标版本。
 
@@ -131,10 +136,11 @@ def _find_pip_python() -> str:
             continue
         if resolved_dir == venv_bin:
             continue
-        candidate = resolved_dir / "python3"
-        if candidate.is_file() and str(candidate) not in seen:
-            candidates.append(str(candidate))
-            seen.add(str(candidate))
+        for name in _PIP_PYTHON_NAMES:
+            candidate = resolved_dir / name
+            if candidate.is_file() and str(candidate) not in seen:
+                candidates.append(str(candidate))
+                seen.add(str(candidate))
     for py in candidates:
         try:
             subprocess.run([py, "-m", "pip", "--version"], check=True, capture_output=True, text=True)
