@@ -18,6 +18,7 @@ from fspack.embed import (
     write_pth,
 )
 from fspack.exceptions import EmbedError
+from fspack.progress import StageRecorder
 
 _MIRROR = MirrorConfig(name="t", python_base="https://x/py", pypi_index="https://x/s")
 
@@ -36,11 +37,17 @@ def test_download_embed_cache_hit(tmp_path: Path) -> None:
 
 
 class _FakeResp:
-    def __init__(self, data: bytes) -> None:
-        self._buf = io.BytesIO(data)
+    """支持分块 read(n) 的 urlopen 响应 mock。."""
 
-    def read(self) -> bytes:
-        return self._buf.read()
+    def __init__(self, data: bytes, block_size: int = 64) -> None:
+        self._buf = io.BytesIO(data)
+        self._block_size = block_size
+        self.headers = {"Content-Length": str(len(data))}
+
+    def read(self, n: int = -1) -> bytes:
+        if n < 0:
+            return self._buf.read(self._block_size)
+        return self._buf.read(min(n, self._block_size))
 
     def __enter__(self) -> _FakeResp:
         return self
@@ -56,7 +63,7 @@ def test_download_embed_fetches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
         captured["url"] = req.full_url  # type: ignore[union-attr]
         return _FakeResp(b"ZIPDATA")
 
-    monkeypatch.setattr("fspack.embed.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("fspack.progress.urllib.request.urlopen", fake_urlopen)
     path = download_embed("3.11.9", _MIRROR, tmp_path / "cache")
     assert path.read_bytes() == b"ZIPDATA"
     assert captured["url"].endswith("python-3.11.9-embed-amd64.zip")
@@ -66,9 +73,34 @@ def test_download_embed_network_error(tmp_path: Path, monkeypatch: pytest.Monkey
     def fake_urlopen(req: object, timeout: int, **kwargs: object) -> object:
         raise OSError("boom")
 
-    monkeypatch.setattr("fspack.embed.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("fspack.progress.urllib.request.urlopen", fake_urlopen)
     with pytest.raises(EmbedError, match="下载 embed python 失败"):
         download_embed("3.11.9", _MIRROR, tmp_path / "cache")
+
+
+def test_download_embed_cache_hit_calls_stage(tmp_path: Path) -> None:
+    """缓存命中时调 stage.hit_cache()。."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / "python-3.11.9-embed-amd64.zip").write_bytes(b"old")
+    rec = StageRecorder("test")
+    download_embed("3.11.9", _MIRROR, cache, stage=rec)
+    record = rec._finalize()
+    assert record.cache_hit == 1
+    assert record.bytes_downloaded == 0
+
+
+def test_download_embed_fetches_records_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """下载成功时 stage.add_bytes 被调用。."""
+    monkeypatch.setattr(
+        "fspack.progress.urllib.request.urlopen",
+        lambda req, timeout, **kw: _FakeResp(b"ZIPDATA"),
+    )
+    rec = StageRecorder("test")
+    download_embed("3.11.9", _MIRROR, tmp_path / "cache", stage=rec)
+    record = rec._finalize()
+    assert record.bytes_downloaded == 7  # len("ZIPDATA")
+    assert record.cache_hit == 0
 
 
 def test_extract_embed(tmp_path: Path) -> None:

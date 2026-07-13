@@ -7,6 +7,7 @@ import zipfile
 from pathlib import Path
 
 from fspack.exceptions import DependencyError
+from fspack.progress import StageRecorder, iter_with_progress
 from fspack.wheel_cache import normalize_name, parse_wheel_filename
 
 __all__ = ["classify_entry", "slim_unpack"]
@@ -92,6 +93,8 @@ def slim_unpack(
     site_packages_dir: Path,
     submodule_usage: dict[str, frozenset[str]] | None = None,
     keep_modules: set[str] | None = None,
+    *,
+    stage: StageRecorder | None = None,
 ) -> int:
     """按子模块 import 分析选择性解压 wheelhouse 内所有 wheel。
 
@@ -101,6 +104,8 @@ def slim_unpack(
       原生库如 ``Qt5*.dll`` 始终保留）
     - 无保留集合的 wheel 全量解压（向后兼容：纯顶层 import 或无子模块分析时）
     - 返回解包 wheel 数量
+
+    ``stage`` 用于通过 ``iter_with_progress`` 显示解压进度并回写处理项数到 BuildTracker。
     """
     site_packages_dir.mkdir(parents=True, exist_ok=True)
 
@@ -115,8 +120,9 @@ def slim_unpack(
             pkg, sub = spec.split(".", 1)
             merged.setdefault(normalize_name(pkg), set()).add(sub)
 
+    wheels = sorted(wheelhouse_dir.glob("*.whl"))
     count = 0
-    for whl in sorted(wheelhouse_dir.glob("*.whl")):
+    for whl in iter_with_progress(wheels, "解压 wheel", stage=stage):
         info = parse_wheel_filename(whl.name)
         if info is None:
             _full_unpack(whl, site_packages_dir)
@@ -136,4 +142,6 @@ def slim_unpack(
         _logger.info("精简解压 %s: 保留子模块 %s", whl.name, ", ".join(sorted(keep_subs)))
         _slim_extract(whl, site_packages_dir, top_pkg, keep_subs)
         count += 1
+    if stage is not None and count:
+        stage.set_detail(f"{count} wheels 解压")
     return count

@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import logging
 import tarfile
-import urllib.request
 from pathlib import Path
 
 from fspack.exceptions import EmbedError
 from fspack.net import create_ssl_context
+from fspack.progress import StageRecorder, download_with_progress
 
 __all__ = [
     "STANDALONE_BASE_URL",
@@ -35,19 +35,36 @@ def standalone_url(version: str, release_tag: str) -> str:
     return f"{STANDALONE_BASE_URL}/{release_tag}/{standalone_tarball_name(version, release_tag)}"
 
 
-def download_standalone(version: str, release_tag: str, cache_dir: Path) -> Path:
-    """下载 python-build-standalone tar.gz 到缓存目录，已存在则复用。."""
+def download_standalone(
+    version: str,
+    release_tag: str,
+    cache_dir: Path,
+    *,
+    stage: StageRecorder | None = None,
+) -> Path:
+    """下载 python-build-standalone tar.gz 到缓存目录，已存在则复用。
+
+    缓存命中时调 ``stage.hit_cache()``；下载时用 ``download_with_progress`` 显示
+    实时进度条，并通过 ``stage.add_bytes`` 回写字节数。
+    """
     cache_dir.mkdir(parents=True, exist_ok=True)
     tar_path = cache_dir / standalone_tarball_name(version, release_tag)
     if tar_path.is_file():
         _logger.info("python-build-standalone 已缓存: %s", tar_path)
+        if stage is not None:
+            stage.hit_cache()
         return tar_path
     url = standalone_url(version, release_tag)
     _logger.info("下载 python-build-standalone: %s", url)
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "fspack"})
-        with urllib.request.urlopen(req, timeout=300, context=create_ssl_context()) as resp, tar_path.open("wb") as f:
-            f.write(resp.read())
+        download_with_progress(
+            url,
+            tar_path,
+            ssl_ctx=create_ssl_context(),
+            stage=stage,
+            timeout=300,
+            label=f"python-build-standalone {version}",
+        )
     except OSError as e:
         raise EmbedError(f"下载 python-build-standalone 失败: {url} -> {e}") from e
     return tar_path
@@ -68,6 +85,8 @@ def ensure_standalone(
     release_tag: str,
     cache_dir: Path,
     runtime_dir: Path,
+    *,
+    stage: StageRecorder | None = None,
 ) -> Path:
     """确保 runtime_dir 内有可用 python-build-standalone，返回 runtime_dir。
 
@@ -77,7 +96,9 @@ def ensure_standalone(
     python_bin = runtime_dir / "python" / "bin" / f"python{major}.{minor}"
     if python_bin.is_file():
         _logger.info("python-build-standalone 已就绪: %s", runtime_dir)
+        if stage is not None:
+            stage.hit_cache()
         return runtime_dir
-    tar_path = download_standalone(version, release_tag, cache_dir)
+    tar_path = download_standalone(version, release_tag, cache_dir, stage=stage)
     extract_standalone(tar_path, runtime_dir)
     return runtime_dir

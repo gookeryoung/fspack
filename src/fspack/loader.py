@@ -17,6 +17,7 @@ from pathlib import Path
 from fspack.config import AppType
 from fspack.exceptions import LoaderError
 from fspack.platform import Platform
+from fspack.progress import StageRecorder, spinner
 
 __all__ = [
     "LINUX_GCC",
@@ -173,12 +174,14 @@ def gcc_available() -> bool:
     return shutil.which(LINUX_GCC) is not None
 
 
-def compile_loader(
+def compile_loader(  # noqa: PLR0913
     source: str,
     out_exe: Path,
     app_type: AppType,
     work_dir: Path,
     platform: Platform = Platform.WINDOWS,
+    *,
+    stage: StageRecorder | None = None,
 ) -> Path:
     """编译 loader 源码为可执行文件，返回路径。
 
@@ -201,9 +204,12 @@ def compile_loader(
         install_hint = "mingw-w64"
     _logger.info("编译 loader: %s", " ".join(cmd))
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        with spinner(f"编译 loader ({compiler})"):
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
     except FileNotFoundError as e:
         raise LoaderError(f"未找到编译器 {compiler}，请安装 {install_hint}") from e
     except subprocess.CalledProcessError as e:
         raise LoaderError(f"loader 编译失败:\n{e.stderr}") from e
+    if stage is not None:
+        stage.set_detail(compiler)
     return out_exe

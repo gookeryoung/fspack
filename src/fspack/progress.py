@@ -1,0 +1,280 @@
+"""构建进度跟踪与 rich 可视化展示。
+
+提供 ``BuildTracker``/``StageRecorder`` 数据类用于记录各阶段耗时与指标，
+``download_with_progress``/``spinner``/``iter_with_progress`` 三个辅助函数
+封装 rich.progress/Live 的实时展示。数据与渲染分离，便于测试。
+"""
+
+from __future__ import annotations
+
+import logging
+import ssl
+import time
+import urllib.request
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING, Iterator, Sequence, TypeVar
+
+from rich.progress import (
+    BarColumn,
+    DownloadColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeRemainingColumn,
+    TransferSpeedColumn,
+)
+from rich.table import Table
+
+from fspack.console import console
+
+if TYPE_CHECKING:
+    from rich.status import Status
+
+__all__ = [
+    "BuildTracker",
+    "StageRecord",
+    "StageRecorder",
+    "download_with_progress",
+    "iter_with_progress",
+    "spinner",
+]
+
+_logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
+
+_BLOCK_SIZE = 64 * 1024
+
+
+@dataclass
+class StageRecord:
+    """单阶段执行结果记录。."""
+
+    name: str
+    elapsed: float
+    bytes_downloaded: int = 0
+    cache_hit: int = 0
+    items: int = 0
+    detail: str = ""
+
+
+class StageRecorder:
+    """阶段上下文，记录阶段内累积指标。
+
+    由 ``BuildTracker.stage()`` 返回，阶段内调用 ``add_bytes``/``hit_cache`` 等方法
+    累积数据，退出 ``with`` 块时由 ``BuildTracker`` 收集为不可变 ``StageRecord``。
+    """
+
+    __slots__ = ("_bytes", "_detail", "_hits", "_items", "_name", "_start")
+
+    def __init__(self, name: str) -> None:
+        """初始化阶段记录器，开始计时。."""
+        self._name = name
+        self._bytes = 0
+        self._hits = 0
+        self._items = 0
+        self._detail = ""
+        self._start = time.perf_counter()
+
+    @property
+    def name(self) -> str:
+        """阶段名称。."""
+        return self._name
+
+    def add_bytes(self, n: int) -> None:
+        """累加下载字节数。."""
+        if n > 0:
+            self._bytes += n
+
+    def hit_cache(self, n: int = 1) -> None:
+        """累加缓存命中次数。."""
+        if n > 0:
+            self._hits += n
+
+    def processed(self, n: int = 1) -> None:
+        """累加处理项数。."""
+        if n > 0:
+            self._items += n
+
+    def set_detail(self, text: str) -> None:
+        """设置备注文本，覆盖既有值。."""
+        self._detail = text
+
+    def _finalize(self) -> StageRecord:
+        """结束计时并返回不可变记录。."""
+        return StageRecord(
+            name=self._name,
+            elapsed=time.perf_counter() - self._start,
+            bytes_downloaded=self._bytes,
+            cache_hit=self._hits,
+            items=self._items,
+            detail=self._detail,
+        )
+
+
+class BuildTracker:
+    """构建全流程进度跟踪器。."""
+
+    def __init__(self) -> None:
+        """初始化空跟踪器，开始总计时。."""
+        self._records: list[StageRecord] = []
+        self._start = time.perf_counter()
+
+    @contextmanager
+    def stage(self, name: str) -> Iterator[StageRecorder]:
+        """进入一个构建阶段，返回 ``StageRecorder`` 上下文。."""
+        rec = StageRecorder(name)
+        try:
+            yield rec
+        finally:
+            self._records.append(rec._finalize())
+
+    @property
+    def total_elapsed(self) -> float:
+        """自创建以来的总耗时（秒）。."""
+        return time.perf_counter() - self._start
+
+    @property
+    def records(self) -> list[StageRecord]:
+        """已完成阶段记录列表（拷贝）。."""
+        return list(self._records)
+
+    def summary(self) -> Table:
+        """渲染汇总表格。."""
+        table = Table(title="构建阶段汇总", show_lines=False, title_style="bold blue")
+        table.add_column("阶段", style="bold cyan", no_wrap=True)
+        table.add_column("耗时", justify="right")
+        table.add_column("缓存", justify="right")
+        table.add_column("下载", justify="right")
+        table.add_column("项数", justify="right")
+        table.add_column("备注", style="dim")
+
+        total_bytes = 0
+        for r in self._records:
+            total_bytes += r.bytes_downloaded
+            cache_str = f"命中 {r.cache_hit}" if r.cache_hit else "-"
+            bytes_str = _fmt_bytes(r.bytes_downloaded) if r.bytes_downloaded else "-"
+            items_str = str(r.items) if r.items else "-"
+            detail_str = r.detail or "-"
+            table.add_row(r.name, _fmt_seconds(r.elapsed), cache_str, bytes_str, items_str, detail_str)
+
+        table.add_row(
+            "总计",
+            _fmt_seconds(self.total_elapsed),
+            "",
+            _fmt_bytes(total_bytes) if total_bytes else "-",
+            "",
+            "",
+            style="bold",
+        )
+        return table
+
+
+def _fmt_seconds(s: float) -> str:
+    """格式化耗时为人类可读字符串。."""
+    if s < 1:
+        return f"{s * 1000:.0f}ms"
+    if s < 60:
+        return f"{s:.2f}s"
+    return f"{int(s // 60)}m{s % 60:.1f}s"
+
+
+def _fmt_bytes(n: int) -> str:
+    """格式化字节数为人类可读字符串（KB/MB/GB）。."""
+    if n < 1024:
+        return f"{n}B"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.1f}KB"
+    if n < 1024 * 1024 * 1024:
+        return f"{n / 1024 / 1024:.1f}MB"
+    return f"{n / 1024 / 1024 / 1024:.2f}GB"
+
+
+def download_with_progress(  # noqa: PLR0913
+    url: str,
+    dest: Path,
+    *,
+    ssl_ctx: ssl.SSLContext,
+    stage: StageRecorder | None = None,
+    timeout: int = 180,
+    label: str = "",
+) -> int:
+    """从 ``url`` 下载到 ``dest``，显示实时进度条，返回字节数。
+
+    使用 ``urllib.request.urlopen`` + 分块读写 + ``rich.progress.Progress`` 显示下载进度。
+    下载完成后若提供 ``stage``，调 ``stage.add_bytes`` 累加。
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    req = urllib.request.Request(url, headers={"User-Agent": "fspack"})
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(),
+        DownloadColumn(),
+        TransferSpeedColumn(),
+        TimeRemainingColumn(),
+        console=console,
+        transient=True,
+    )
+    with progress, urllib.request.urlopen(req, timeout=timeout, context=ssl_ctx) as resp:
+        total = int(resp.headers.get("Content-Length") or 0)
+        task_id = progress.add_task(label or url.rsplit("/", 1)[-1], total=total or None)
+        written = 0
+        with dest.open("wb") as f:
+            while True:
+                chunk = resp.read(_BLOCK_SIZE)
+                if not chunk:
+                    break
+                f.write(chunk)
+                written += len(chunk)
+                progress.update(task_id, advance=len(chunk))
+    if stage:
+        stage.add_bytes(written)
+    return written
+
+
+@contextmanager
+def spinner(label: str) -> Iterator[None]:
+    """显示旋转符 ``label`` 直到 ``with`` 块退出。
+
+    不封装子进程：调用方在 ``with`` 块内自行调 ``subprocess.run``。
+    异常会正常传播，不会吞噬。
+    """
+    status: Status = console.status(label, spinner="dots")
+    status.start()
+    try:
+        yield
+    finally:
+        status.stop()
+
+
+def iter_with_progress(
+    items: Sequence[T],
+    description: str,
+    *,
+    stage: StageRecorder | None = None,
+) -> Iterator[T]:
+    """遍历 ``items``，显示进度条，每个 item 处理完后调 ``stage.processed()``。
+
+    生成器函数：``with progress:`` 块在生成器迭代过程中保持活跃，
+    在 ``StopIteration`` 或异常时通过 ``with`` 的 ``__exit__`` 正确停止进度条。
+    """
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(),
+        TextColumn("{task.completed}/{task.total}"),
+        TimeRemainingColumn(),
+        console=console,
+        transient=True,
+    )
+    total = len(items)
+    with progress:
+        task_id = progress.add_task(description, total=total)
+        for item in items:
+            yield item
+            progress.advance(task_id)
+            if stage:
+                stage.processed()

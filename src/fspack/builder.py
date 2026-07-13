@@ -13,11 +13,12 @@ from typing import Sequence
 
 from fspack.analyzer import analyze_dependencies
 from fspack.config import BuildConfig, MirrorConfig, ProjectInfo
-from fspack.console import step, success
+from fspack.console import success
 from fspack.embed import ensure_embed, write_pth
 from fspack.exceptions import DependencyError
 from fspack.loader import compile_loader, generate_loader_source
 from fspack.platform import Platform, detect_platform, wheel_platform_tags
+from fspack.progress import BuildTracker, StageRecorder, spinner
 from fspack.project import DEFAULT_LINUX_PY_VERSION, DEFAULT_PY_VERSION, parse_project, resolve_py_version
 from fspack.standalone import STANDALONE_RELEASE_TAG, ensure_standalone
 
@@ -55,59 +56,77 @@ def build(  # noqa: PLR0913
     keep_modules: set[str] | None = None,
 ) -> ProjectInfo:
     """执行完整构建流水线，返回项目信息。."""
+    from fspack.console import console as rich_console
+
+    tracker = BuildTracker()
     project_dir = Path(project_dir).resolve()
     target = target or detect_platform()
     dist = dist_dir or project_dir / "dist"
     cache = embed_cache or Path.home() / ".fspack" / "cache" / "embed"
     cfg = BuildConfig(project_dir=project_dir, dist_dir=dist, embed_cache_dir=cache, mirror=mirror, target=target)
-    info = parse_project(project_dir, py_version)
-    default_ver = DEFAULT_LINUX_PY_VERSION if target is Platform.LINUX else DEFAULT_PY_VERSION
-    resolved = resolve_py_version(project_dir, py_version, info.requires_python, default_ver)
-    if resolved != info.py_version:
-        _logger.info("自动选择 Python 版本: %s", resolved)
-        info = replace(info, py_version=resolved)
-    _logger.info("项目: %s %s (%s) 目标: %s", info.name, info.version, info.app_type.value, target.value)
+
+    with tracker.stage("解析项目") as st:
+        info = parse_project(project_dir, py_version)
+        default_ver = DEFAULT_LINUX_PY_VERSION if target is Platform.LINUX else DEFAULT_PY_VERSION
+        resolved = resolve_py_version(project_dir, py_version, info.requires_python, default_ver)
+        if resolved != info.py_version:
+            _logger.info("自动选择 Python 版本: %s", resolved)
+            info = replace(info, py_version=resolved)
+        _logger.info("项目: %s %s (%s) 目标: %s", info.name, info.version, info.app_type.value, target.value)
+        st.set_detail(f"{info.name} {info.version} ({info.app_type.value})")
 
     runtime_dir = cfg.dist_dir / "runtime"
-    step("准备运行时")
-    if target is Platform.LINUX:
-        standalone_cache = Path.home() / ".fspack" / "cache" / "standalone"
-        ensure_standalone(info.py_version, STANDALONE_RELEASE_TAG, standalone_cache, runtime_dir)
-        major, minor = info.py_version.split(".")[:2]
-        site_packages = runtime_dir / "python" / "lib" / f"python{major}.{minor}" / "site-packages"
-    else:
-        ensure_embed(info.py_version, cfg.mirror, cfg.embed_cache_dir, runtime_dir)
-        site_packages = runtime_dir / "Lib" / "site-packages"
+    with tracker.stage("准备运行时") as st:
+        if target is Platform.LINUX:
+            standalone_cache = Path.home() / ".fspack" / "cache" / "standalone"
+            ensure_standalone(info.py_version, STANDALONE_RELEASE_TAG, standalone_cache, runtime_dir, stage=st)
+            major, minor = info.py_version.split(".")[:2]
+            site_packages = runtime_dir / "python" / "lib" / f"python{major}.{minor}" / "site-packages"
+            st.set_detail("python-build-standalone")
+        else:
+            ensure_embed(info.py_version, cfg.mirror, cfg.embed_cache_dir, runtime_dir, stage=st)
+            site_packages = runtime_dir / "Lib" / "site-packages"
+            st.set_detail("embed python")
 
-    step("分析依赖")
-    report = analyze_dependencies(project_dir, info.name, info.dependencies)
-    if report.missing:
-        _logger.info("AST 发现未声明依赖: %s", ", ".join(report.missing))
+    with tracker.stage("分析依赖") as st:
+        report = analyze_dependencies(project_dir, info.name, info.dependencies)
+        if report.missing:
+            _logger.info("AST 发现未声明依赖: %s", ", ".join(report.missing))
+        ast_count = len(report.ast_third_party)
+        st.processed(ast_count)
+        st.set_detail(f"AST {ast_count} 个第三方")
+
     if report.ast_third_party:
-        wheelhouse = cfg.dist_dir / "wheelhouse"
-        download_wheels(
-            report.ast_third_party,
-            info.py_version,
-            cfg.mirror.pypi_index,
-            wheelhouse,
-            platform_tags=wheel_platform_tags(target),
-        )
-        unpack_wheels(wheelhouse, site_packages, report.ast_submodules, keep_modules)
+        with tracker.stage("下载依赖") as st:
+            wheelhouse = cfg.dist_dir / "wheelhouse"
+            download_wheels(
+                report.ast_third_party,
+                info.py_version,
+                cfg.mirror.pypi_index,
+                wheelhouse,
+                platform_tags=wheel_platform_tags(target),
+                stage=st,
+            )
+            unpack_wheels(wheelhouse, site_packages, report.ast_submodules, keep_modules, stage=st)
     else:
         _logger.info("无第三方依赖，跳过 wheel 下载")
 
     if target is Platform.WINDOWS:
         write_pth(cfg.dist_dir, info.py_version)
-    step("复制源码")
-    src_dst = cfg.dist_dir / "src"
-    copy_source(project_dir, src_dst)
 
-    step("生成 C loader")
-    entry_rel = info.entry_file.relative_to(info.src_dir).as_posix()
-    source = generate_loader_source(f"src/{entry_rel}", info.py_xy, target)
-    exe_name = info.exe_name if target is Platform.WINDOWS else info.name
-    exe = cfg.dist_dir / exe_name
-    compile_loader(source, exe, info.app_type, cfg.dist_dir / "build", target)
+    with tracker.stage("复制源码") as st:
+        src_dst = cfg.dist_dir / "src"
+        with spinner(f"复制 {info.name} 源码"):
+            copy_source(project_dir, src_dst)
+
+    with tracker.stage("生成 C loader") as st:
+        entry_rel = info.entry_file.relative_to(info.src_dir).as_posix()
+        source = generate_loader_source(f"src/{entry_rel}", info.py_xy, target)
+        exe_name = info.exe_name if target is Platform.WINDOWS else info.name
+        exe = cfg.dist_dir / exe_name
+        compile_loader(source, exe, info.app_type, cfg.dist_dir / "build", target, stage=st)
+
+    rich_console.print(tracker.summary())
     success(f"构建完成: {exe}")
     return info
 
@@ -163,6 +182,8 @@ def download_wheels(  # noqa: PLR0913
     wheelhouse_dir: Path,
     platform_tags: Sequence[str] = ("win_amd64",),
     wheel_cache_dir: Path | None = None,
+    *,
+    stage: StageRecorder | None = None,
 ) -> list[Path]:
     """用 dev python 的 pip 下载指定平台 wheel 到 wheelhouse 目录。
 
@@ -175,6 +196,8 @@ def download_wheels(  # noqa: PLR0913
 
     自动选择能跑 pip 的 python 解释器：优先当前 venv，回退系统 python3
     （uv venv 默认不含 pip）。
+
+    ``stage`` 用于回写缓存命中数与 wheel 数到 BuildTracker。
     """
     from fspack.wheel_cache import fspack_wheel_cache_dir, harvest_external_caches, normalize_name, save_to_cache
 
@@ -186,6 +209,8 @@ def download_wheels(  # noqa: PLR0913
     harvested = harvest_external_caches(pkg_set, py_version, platform_tags, cache)
     if harvested:
         _logger.info("从外部缓存收割 %d 个 wheel", harvested)
+        if stage is not None:
+            stage.hit_cache(harvested)
 
     py = _find_pip_python()
     major, minor = py_version.split(".")[:2]
@@ -215,16 +240,21 @@ def download_wheels(  # noqa: PLR0913
     ]
     _logger.info("下载依赖 wheel: %s", " ".join(packages))
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        with spinner(f"pip download {len(packages)} 个依赖"):
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
     except FileNotFoundError as e:
         raise DependencyError(f"未找到 pip: {py}") from e
     except subprocess.CalledProcessError as e:
         raise DependencyError(f"依赖下载失败:\n{e.stderr}") from e
 
-    saved = save_to_cache(wheelhouse_dir.glob("*.whl"), cache)
+    wheels = sorted(wheelhouse_dir.glob("*.whl"))
+    saved = save_to_cache(wheels, cache)
     if saved:
         _logger.info("缓存 %d 个 wheel", saved)
-    return sorted(wheelhouse_dir.glob("*.whl"))
+    if stage is not None:
+        stage.processed(len(wheels))
+        stage.set_detail(f"{len(wheels)} wheels")
+    return wheels
 
 
 def unpack_wheels(
@@ -232,6 +262,8 @@ def unpack_wheels(
     site_packages_dir: Path,
     submodule_usage: dict[str, frozenset[str]] | None = None,
     keep_modules: set[str] | None = None,
+    *,
+    stage: StageRecorder | None = None,
 ) -> int:
     """将 wheelhouse 内所有 .whl 解包到 site-packages 目录，返回解包数量。
 
@@ -240,4 +272,4 @@ def unpack_wheels(
     """
     from fspack.slim import slim_unpack
 
-    return slim_unpack(wheelhouse_dir, site_packages_dir, submodule_usage, keep_modules)
+    return slim_unpack(wheelhouse_dir, site_packages_dir, submodule_usage, keep_modules, stage=stage)

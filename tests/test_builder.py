@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 
 from fspack.builder import _PIP_PYTHON_NAMES, _find_pip_python, build, copy_source, download_wheels, unpack_wheels
+from fspack.console import console
 from fspack.exceptions import DependencyError
 from fspack.mirror import get_mirror
 from fspack.platform import Platform
@@ -363,7 +364,7 @@ def test_build_forwards_keep_modules(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(
         "fspack.builder.ensure_embed",
-        lambda v, m, c, r: (
+        lambda v, m, c, r, **kw: (
             r.mkdir(parents=True, exist_ok=True),
             (r / "python311.dll").write_bytes(b""),
             (r / "Lib" / "site-packages").mkdir(parents=True, exist_ok=True),
@@ -371,12 +372,12 @@ def test_build_forwards_keep_modules(tmp_path: Path, monkeypatch: pytest.MonkeyP
     )
     monkeypatch.setattr(
         "fspack.builder.download_wheels",
-        lambda packages, py_version, index, wheelhouse, platform_tags=("win_amd64",): [],
+        lambda packages, py_version, index, wheelhouse, platform_tags=("win_amd64",), **kw: [],
     )
 
     captured: dict[str, Any] = {}
 
-    def fake_unpack(wh: object, sp: object, submodule_usage: object, keep_modules: object) -> int:
+    def fake_unpack(wh: object, sp: object, submodule_usage: object, keep_modules: object, **kw: Any) -> int:
         captured["submodule_usage"] = submodule_usage
         captured["keep_modules"] = keep_modules
         return 0
@@ -384,7 +385,7 @@ def test_build_forwards_keep_modules(tmp_path: Path, monkeypatch: pytest.MonkeyP
     monkeypatch.setattr("fspack.builder.unpack_wheels", fake_unpack)
     monkeypatch.setattr(
         "fspack.builder.compile_loader",
-        lambda source, out_exe, app_type, work_dir, platform: (
+        lambda source, out_exe, app_type, work_dir, platform, **kw: (
             out_exe.parent.mkdir(parents=True, exist_ok=True),
             out_exe.write_text(source),
         )[-1],
@@ -402,7 +403,7 @@ def test_build_orchestration_helloworld(tmp_path: Path, monkeypatch: pytest.Monk
 
     calls: dict[str, Any] = {}
 
-    def fake_ensure_embed(version: str, mirror: object, cache: Path, runtime_dir: Path) -> Path:
+    def fake_ensure_embed(version: str, mirror: object, cache: Path, runtime_dir: Path, **kw: Any) -> Path:
         runtime_dir.mkdir(parents=True, exist_ok=True)
         major, minor = version.split(".")[:2]
         (runtime_dir / f"python{major}{minor}.dll").write_bytes(b"")
@@ -412,14 +413,14 @@ def test_build_orchestration_helloworld(tmp_path: Path, monkeypatch: pytest.Monk
 
     monkeypatch.setattr("fspack.builder.ensure_embed", fake_ensure_embed)
 
-    def fake_download(packages: object, py_version: str, index: str, wheelhouse: Path) -> list[Path]:
+    def fake_download(packages: object, py_version: str, index: str, wheelhouse: Path, **kw: Any) -> list[Path]:
         calls["download"] = True
         return []
 
     monkeypatch.setattr("fspack.builder.download_wheels", fake_download)
     monkeypatch.setattr("fspack.builder.unpack_wheels", lambda *a, **k: 0)
 
-    def fake_compile(source: str, out_exe: Path, app_type: object, work_dir: Path, platform: object) -> Path:
+    def fake_compile(source: str, out_exe: Path, app_type: object, work_dir: Path, platform: object, **kw: Any) -> Path:
         out_exe.parent.mkdir(parents=True, exist_ok=True)
         out_exe.write_text(source)
         calls["compile_source"] = source
@@ -427,7 +428,8 @@ def test_build_orchestration_helloworld(tmp_path: Path, monkeypatch: pytest.Monk
 
     monkeypatch.setattr("fspack.builder.compile_loader", fake_compile)
 
-    info = build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
+    with console.capture() as capture:
+        info = build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
     assert info.name == "helloworld"
     assert (proj / "dist" / "helloworld.exe").is_file()
     assert (proj / "dist" / "runtime" / "python311._pth").is_file()
@@ -438,6 +440,13 @@ def test_build_orchestration_helloworld(tmp_path: Path, monkeypatch: pytest.Monk
     assert "..\\src" in pth
     assert r"src\\helloworld.py" in calls["compile_source"]
     assert "download" not in calls
+    # 汇总表格已渲染
+    out = capture.get()
+    assert "构建阶段汇总" in out
+    assert "解析项目" in out
+    assert "准备运行时" in out
+    assert "生成 C loader" in out
+    assert "总计" in out
 
 
 def test_build_orchestration_with_deps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -448,7 +457,7 @@ def test_build_orchestration_with_deps(tmp_path: Path, monkeypatch: pytest.Monke
 
     monkeypatch.setattr(
         "fspack.builder.ensure_embed",
-        lambda v, m, c, r: (
+        lambda v, m, c, r, **kw: (
             r.mkdir(parents=True, exist_ok=True),
             (r / "python311.dll").write_bytes(b""),
             (r / "Lib" / "site-packages").mkdir(parents=True, exist_ok=True),
@@ -457,14 +466,14 @@ def test_build_orchestration_with_deps(tmp_path: Path, monkeypatch: pytest.Monke
     downloaded: dict[str, bool] = {}
     monkeypatch.setattr(
         "fspack.builder.download_wheels",
-        lambda packages, py_version, index, wheelhouse, platform_tags=("win_amd64",): (
+        lambda packages, py_version, index, wheelhouse, platform_tags=("win_amd64",), **kw: (
             downloaded.__setitem__("called", True) or []
         ),
     )
     monkeypatch.setattr("fspack.builder.unpack_wheels", lambda *a, **k: 0)
     monkeypatch.setattr(
         "fspack.builder.compile_loader",
-        lambda source, out_exe, app_type, work_dir, platform: (
+        lambda source, out_exe, app_type, work_dir, platform, **kw: (
             out_exe.parent.mkdir(parents=True, exist_ok=True),
             out_exe.write_text(source),
         )[-1],
@@ -479,7 +488,7 @@ def test_build_orchestration_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     shutil.copytree(_EXAMPLES / "helloworld", proj)
     calls: dict[str, Any] = {}
 
-    def fake_ensure_standalone(version: str, release: str, cache: Path, runtime_dir: Path) -> Path:
+    def fake_ensure_standalone(version: str, release: str, cache: Path, runtime_dir: Path, **kw: Any) -> Path:
         runtime_dir.mkdir(parents=True, exist_ok=True)
         major, minor = version.split(".")[:2]
         pydir = runtime_dir / "python"
@@ -493,7 +502,7 @@ def test_build_orchestration_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr("fspack.builder.download_wheels", lambda *a, **k: [])
     monkeypatch.setattr("fspack.builder.unpack_wheels", lambda *a, **k: 0)
 
-    def fake_compile(source: str, out_exe: Path, app_type: object, work_dir: Path, platform: object) -> Path:
+    def fake_compile(source: str, out_exe: Path, app_type: object, work_dir: Path, platform: object, **kw: Any) -> Path:
         out_exe.parent.mkdir(parents=True, exist_ok=True)
         out_exe.write_text(source)
         calls["compile_platform"] = platform
