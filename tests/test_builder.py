@@ -64,6 +64,7 @@ class _Completed:
 
 
 def test_download_wheels_cmd_construction(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """--no-index 成功路径：命令含 --no-index，不含 -i index。."""
     captured: dict[str, list[str]] = {}
 
     def fake_run(cmd: list[str], **kw: Any) -> _Completed:
@@ -80,11 +81,47 @@ def test_download_wheels_cmd_construction(tmp_path: Path, monkeypatch: pytest.Mo
     assert "win_amd64" in cmd
     assert "3.11" in cmd
     assert "cp311" in cmd
-    assert "https://idx/simple" in cmd
+    assert "--no-index" in cmd
+    assert "https://idx/simple" not in cmd
     assert "numpy" in cmd and "requests" in cmd
     assert "--find-links" in cmd
     assert str(cache) in cmd
     assert "-d" in cmd
+
+
+def test_download_wheels_fallback_cmd_has_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """--no-index 失败时回退到带 -i index 的命令。."""
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        calls.append(cmd)
+        if "--no-index" in cmd:
+            raise subprocess.CalledProcessError(1, "pip", stderr="not in cache")
+        return _Completed()
+
+    monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
+    download_wheels(("numpy",), "3.11.9", "https://idx/simple", tmp_path / "cache")
+    assert len(calls) == 2
+    assert "--no-index" in calls[0]
+    assert "https://idx/simple" in calls[1]
+    assert "--no-index" not in calls[1]
+
+
+def test_download_wheels_no_index_skips_network(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """--no-index 成功时只调用 pip 一次，不查询网络 index。."""
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        calls.append(cmd)
+        return _Completed()
+
+    monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
+    download_wheels(("numpy",), "3.11.9", "https://idx/simple", tmp_path / "cache")
+    assert len(calls) == 1
+    assert "--no-index" in calls[0]
+    assert "https://idx/simple" not in calls[0]
 
 
 def test_download_wheels_multi_platform(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

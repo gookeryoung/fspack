@@ -99,13 +99,14 @@ def build(  # noqa: PLR0913
         st.set_detail(f"AST {ast_count} 个第三方")
 
     if report.ast_third_party:
-        with tracker.stage("下载依赖") as st:
-            if _site_packages_has_deps(site_packages):
+        if _site_packages_has_deps(site_packages):
+            with tracker.stage("下载依赖") as st:
                 _logger.info("site-packages 已有依赖，跳过下载解压")
                 st.skip(len(report.ast_third_party))
                 st.set_detail("已存在跳过")
-            else:
-                wheel_cache = fspack_wheel_cache_dir()
+        else:
+            wheel_cache = fspack_wheel_cache_dir()
+            with tracker.stage("下载依赖") as st:
                 wheels = download_wheels(
                     report.ast_third_party,
                     info.py_version,
@@ -114,6 +115,7 @@ def build(  # noqa: PLR0913
                     platform_tags=wheel_platform_tags(target),
                     stage=st,
                 )
+            with tracker.stage("解压 wheel") as st:
                 unpack_wheels(wheels, site_packages, report.ast_submodules, keep_modules, stage=st)
     else:
         _logger.info("无第三方依赖，跳过 wheel 下载")
@@ -204,13 +206,17 @@ def download_wheels(  # noqa: PLR0913
 ) -> list[Path]:
     """用 dev python 的 pip 下载指定平台 wheel 到 cache_dir，返回本次依赖的 wheel 路径列表。
 
+    优先用 ``--no-index --find-links cache_dir`` 从本地缓存解析依赖，命中则完全跳过
+    网络查询；缓存不完整或条件依赖未满足（如 pypdf 的 ``typing_extensions`` marker）
+    时回退到带 ``-i index`` 的完整下载。
+
     ``platform_tags`` 为 pip ``--platform`` 标签列表，可重复指定以匹配多个
     平台标签（如 Linux 同时匹配 manylinux2014 与 manylinux_2_28）。
 
     ``cache_dir`` 为 fspack wheel 缓存目录（``~/.fspack/cache/wheels/``），持久化
-    保存已下载的 wheel。``pip download -d cache_dir --find-links cache_dir`` 让 pip
-    跳过已存在的 wheel（"File was already downloaded"），仅下载缺失项（"Saved"）。
-    解析 stdout 获取本次所有 wheel 路径（含传递依赖），供 unpack_wheels 解压。
+    保存已下载的 wheel。pip 自动跳过已存在的 wheel（"File was already downloaded"），
+    仅下载缺失项（"Saved"）。解析 stdout 获取本次所有 wheel 路径（含传递依赖），
+    供 unpack_wheels 解压。
 
     自动选择能跑 pip 的 python 解释器：优先当前 venv，回退系统 python3
     （uv venv 默认不含 pip）。
@@ -224,7 +230,7 @@ def download_wheels(  # noqa: PLR0913
     platform_args: list[str] = []
     for tag in platform_tags:
         platform_args.extend(["--platform", tag])
-    cmd: list[str] = [
+    common_args: list[str] = [
         py,
         "-m",
         "pip",
@@ -241,19 +247,21 @@ def download_wheels(  # noqa: PLR0913
         "--implementation",
         "cp",
         "--only-binary=:all:",
-        "-i",
-        pypi_index,
         *packages,
     ]
+
     _logger.info("下载依赖 wheel: %s", " ".join(packages))
     before = {f.name for f in cache_dir.glob("*.whl")}
-    try:
-        with spinner(f"pip download {len(packages)} 个依赖"):
-            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-    except FileNotFoundError as e:
-        raise DependencyError(f"未找到 pip: {py}") from e
-    except subprocess.CalledProcessError as e:
-        raise DependencyError(f"依赖下载失败:\n{e.stderr}") from e
+
+    # 先用 --no-index 从本地缓存解析，命中则跳过网络查询；
+    # 缓存不完整或条件依赖未满足时回退到带 index 的完整下载
+    result = _run_pip([*common_args, "--no-index"], f"检查缓存 {len(packages)} 个依赖", suppress_error=True)
+    if result is None:
+        _logger.info("缓存解析失败，回退到索引下载")
+        result = _run_pip([*common_args, "-i", pypi_index], f"pip download {len(packages)} 个依赖")
+    else:
+        _logger.info("缓存解析成功，跳过网络查询")
+    assert result is not None  # 回退路径 suppress_error=False，要么返回结果要么抛异常
 
     wheel_names = _parse_pip_download_wheels(result.stdout)
     if not wheel_names:
@@ -269,8 +277,34 @@ def download_wheels(  # noqa: PLR0913
         if existing_wheels:
             stage.hit_cache(len(existing_wheels))
         stage.processed(len(wheels))
-        stage.set_detail(f"{len(wheels)} wheels")
+        cache_status = "缓存命中" if not new_wheels else f"新增 {len(new_wheels)}"
+        stage.set_detail(f"{len(wheels)} wheels, {cache_status}")
     return wheels
+
+
+def _run_pip(
+    cmd: list[str],
+    label: str,
+    *,
+    suppress_error: bool = False,
+) -> subprocess.CompletedProcess[str] | None:
+    """运行 pip download 命令，返回执行结果。
+
+    ``suppress_error=True`` 时 ``CalledProcessError`` 返回 None（用于 ``--no-index``
+    回退路径，调用方据 None 回退到带 index 命令）；``suppress_error=False`` 时转为
+    ``DependencyError`` 抛出（含 stderr）。``FileNotFoundError`` 总是转为
+    ``DependencyError``（pip 消失）。
+    """
+    try:
+        with spinner(label):
+            return subprocess.run(cmd, check=True, capture_output=True, text=True)
+    except FileNotFoundError as e:
+        raise DependencyError(f"未找到 pip: {cmd[0]}") from e
+    except subprocess.CalledProcessError as e:
+        if suppress_error:
+            _logger.info("pip 命令失败（将回退）: %s", (e.stderr or "").strip())
+            return None
+        raise DependencyError(f"依赖下载失败:\n{e.stderr}") from e
 
 
 # 匹配 pip download stdout 中的 "Saved <path>.whl" 和 "File was already downloaded <path>.whl"
