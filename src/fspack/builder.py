@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 import re
@@ -15,13 +17,13 @@ from typing import Sequence
 from fspack.analyzer import analyze_dependencies
 from fspack.config import BuildConfig, MirrorConfig, ProjectInfo
 from fspack.console import success
-from fspack.embed import ensure_embed, write_pth
+from fspack.embed import download_embed, embed_dirname, extract_embed, write_pth
 from fspack.exceptions import DependencyError
 from fspack.loader import compile_loader, generate_loader_source
 from fspack.platform import Platform, detect_platform, wheel_platform_tags
 from fspack.progress import BuildTracker, StageRecorder, spinner
 from fspack.project import DEFAULT_LINUX_PY_VERSION, DEFAULT_PY_VERSION, parse_project, resolve_py_version
-from fspack.standalone import STANDALONE_RELEASE_TAG, ensure_standalone
+from fspack.standalone import STANDALONE_RELEASE_TAG, download_standalone, extract_standalone
 from fspack.wheel_cache import fspack_wheel_cache_dir
 
 __all__ = ["DEFAULT_PY_VERSION", "build", "copy_source", "download_wheels", "unpack_wheels"]
@@ -48,7 +50,7 @@ _EXCLUDE = shutil.ignore_patterns(
 _PIP_PYTHON_NAMES: tuple[str, ...] = ("python.exe", "python3.exe") if sys.platform == "win32" else ("python3", "python")
 
 
-def build(  # noqa: PLR0913
+def build(  # noqa: PLR0912, PLR0913
     project_dir: Path,
     mirror: MirrorConfig,
     py_version: str | None = None,
@@ -78,17 +80,51 @@ def build(  # noqa: PLR0913
         st.set_detail(f"{info.name} {info.version} ({info.app_type.value})")
 
     runtime_dir = cfg.dist_dir / "runtime"
-    with tracker.stage("准备运行时") as st:
-        if target is Platform.LINUX:
-            standalone_cache = Path.home() / ".fspack" / "cache" / "standalone"
-            ensure_standalone(info.py_version, STANDALONE_RELEASE_TAG, standalone_cache, runtime_dir, stage=st)
-            major, minor = info.py_version.split(".")[:2]
-            site_packages = runtime_dir / "python" / "lib" / f"python{major}.{minor}" / "site-packages"
-            st.set_detail("python-build-standalone")
-        else:
-            ensure_embed(info.py_version, cfg.mirror, cfg.embed_cache_dir, runtime_dir, stage=st)
-            site_packages = runtime_dir / "Lib" / "site-packages"
-            st.set_detail("embed python")
+    if target is Platform.LINUX:
+        major, minor = info.py_version.split(".")[:2]
+        python_bin = runtime_dir / "python" / "bin" / f"python{major}.{minor}"
+        runtime_ready = python_bin.is_file()
+        standalone_cache = Path.home() / ".fspack" / "cache" / "standalone"
+        tar_path: Path | None = None
+        with tracker.stage("下载运行时") as st:
+            if runtime_ready:
+                st.hit_cache()
+                st.set_detail("runtime 已就绪")
+            else:
+                tar_path = download_standalone(info.py_version, STANDALONE_RELEASE_TAG, standalone_cache, stage=st)
+                st.set_detail("python-build-standalone")
+        with tracker.stage("解压运行时") as st:
+            if runtime_ready:
+                st.hit_cache()
+                st.set_detail("runtime 已就绪")
+            else:
+                assert tar_path is not None
+                extract_standalone(tar_path, runtime_dir)
+                st.processed(1)
+                st.set_detail("python-build-standalone")
+        site_packages = runtime_dir / "python" / "lib" / f"python{major}.{minor}" / "site-packages"
+    else:
+        dll_marker = runtime_dir / f"{embed_dirname(info.py_version)}.dll"
+        runtime_ready = dll_marker.is_file()
+        zip_path: Path | None = None
+        with tracker.stage("下载运行时") as st:
+            if runtime_ready:
+                st.hit_cache()
+                st.set_detail("runtime 已就绪")
+            else:
+                zip_path = download_embed(info.py_version, cfg.mirror, cfg.embed_cache_dir, stage=st)
+                st.set_detail("embed python")
+        with tracker.stage("解压运行时") as st:
+            if runtime_ready:
+                st.hit_cache()
+                st.set_detail("runtime 已就绪")
+            else:
+                assert zip_path is not None
+                extract_embed(zip_path, runtime_dir)
+                st.processed(1)
+                st.set_detail("embed python")
+        site_packages = runtime_dir / "Lib" / "site-packages"
+    site_packages.mkdir(parents=True, exist_ok=True)
 
     with tracker.stage("分析依赖") as st:
         report = analyze_dependencies(project_dir, info.name, info.dependencies)
@@ -225,6 +261,17 @@ def download_wheels(  # noqa: PLR0913
     """
     cache_dir.mkdir(parents=True, exist_ok=True)
 
+    # 尝试读取依赖解析缓存，命中则跳过 pip 调用
+    deps_key = _deps_cache_key(packages, py_version, platform_tags)
+    cached_wheels = _load_deps_cache(cache_dir, deps_key)
+    if cached_wheels is not None:
+        _logger.info("依赖解析缓存命中，跳过 pip 调用")
+        if stage is not None:
+            stage.hit_cache(len(cached_wheels))
+            stage.processed(len(cached_wheels))
+            stage.set_detail(f"{len(cached_wheels)} wheels, 解析缓存命中")
+        return cached_wheels
+
     py = _find_pip_python()
     major, minor = py_version.split(".")[:2]
     platform_args: list[str] = []
@@ -269,6 +316,8 @@ def download_wheels(  # noqa: PLR0913
         wheel_names = sorted(f.name for f in cache_dir.glob("*.whl"))
 
     wheels = [cache_dir / name for name in wheel_names if (cache_dir / name).is_file()]
+    if wheels:
+        _save_deps_cache(cache_dir, deps_key, wheels)
     if stage is not None:
         new_wheels = [w for w in wheels if w.name not in before]
         existing_wheels = [w for w in wheels if w.name in before]
@@ -280,6 +329,56 @@ def download_wheels(  # noqa: PLR0913
         cache_status = "缓存命中" if not new_wheels else f"新增 {len(new_wheels)}"
         stage.set_detail(f"{len(wheels)} wheels, {cache_status}")
     return wheels
+
+
+def _deps_cache_key(
+    packages: tuple[str, ...] | list[str],
+    py_version: str,
+    platform_tags: Sequence[str],
+) -> str:
+    """根据依赖列表、Python 版本与平台标签计算缓存键。
+
+    不同组合产生不同键，确保跨项目/跨版本/跨平台不会误命中。
+    返回 16 位 hex 摘要，用于 ``.deps-<key>.json`` 文件名。
+    """
+    data = f"{sorted(packages)}|{py_version}|{list(platform_tags)}"
+    return hashlib.sha256(data.encode("utf-8")).hexdigest()[:16]
+
+
+def _load_deps_cache(cache_dir: Path, key: str) -> list[Path] | None:
+    """读取依赖解析缓存，返回 wheel 路径列表；未命中或文件丢失返回 None。
+
+    缓存文件 ``.deps-<key>.json`` 记录上次 pip 解析出的 wheel 文件名列表。
+    命中后逐个校验 wheel 文件仍存在于 cache_dir，任一缺失则视为未命中
+    （避免 wheel 被手动删除后仍跳过 pip）。
+    """
+    cache_file = cache_dir / f".deps-{key}.json"
+    if not cache_file.is_file():
+        return None
+    try:
+        data = json.loads(cache_file.read_text(encoding="utf-8"))
+        names: list[str] = data.get("wheels", [])
+        wheels = [cache_dir / name for name in names]
+        if wheels and all(w.is_file() for w in wheels):
+            return wheels
+    except (OSError, json.JSONDecodeError, ValueError):
+        _logger.warning("依赖解析缓存损坏，将重新解析: %s", cache_file)
+    return None
+
+
+def _save_deps_cache(cache_dir: Path, key: str, wheels: Sequence[Path]) -> None:
+    """写入依赖解析缓存，记录 wheel 文件名列表。
+
+    best-effort：写入失败仅 warning 不影响构建（缓存只是优化，缺失会回退到 pip）。
+    """
+    cache_file = cache_dir / f".deps-{key}.json"
+    try:
+        cache_file.write_text(
+            json.dumps({"wheels": [w.name for w in wheels]}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    except OSError as e:
+        _logger.warning("写入依赖解析缓存失败: %s", e)
 
 
 def _run_pip(

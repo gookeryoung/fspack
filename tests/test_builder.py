@@ -13,8 +13,11 @@ import pytest
 
 from fspack.builder import (
     _PIP_PYTHON_NAMES,
+    _deps_cache_key,
     _find_pip_python,
+    _load_deps_cache,
     _parse_pip_download_wheels,
+    _save_deps_cache,
     _site_packages_has_deps,
     build,
     copy_source,
@@ -269,6 +272,250 @@ def test_download_wheels_fallback_to_dir_scan(tmp_path: Path, monkeypatch: pytes
     assert result[0].name == whl_name
 
 
+def test_deps_cache_key_stable_and_distinct() -> None:
+    """相同输入产生相同键；不同输入产生不同键。."""
+    k1 = _deps_cache_key(("numpy", "requests"), "3.11.9", ("win_amd64",))
+    k2 = _deps_cache_key(("numpy", "requests"), "3.11.9", ("win_amd64",))
+    k3 = _deps_cache_key(("numpy",), "3.11.9", ("win_amd64",))
+    k4 = _deps_cache_key(("numpy", "requests"), "3.10.11", ("win_amd64",))
+    k5 = _deps_cache_key(("numpy", "requests"), "3.11.9", ("manylinux2014_x86_64",))
+    assert k1 == k2
+    assert k1 != k3
+    assert k1 != k4
+    assert k1 != k5
+
+
+def test_deps_cache_key_order_independent() -> None:
+    """包顺序不影响键（sorted 后哈希）。."""
+    k1 = _deps_cache_key(("numpy", "requests"), "3.11.9", ("win_amd64",))
+    k2 = _deps_cache_key(("requests", "numpy"), "3.11.9", ("win_amd64",))
+    assert k1 == k2
+
+
+def test_load_deps_cache_miss_when_no_file(tmp_path: Path) -> None:
+    """缓存文件不存在时返回 None。."""
+    assert _load_deps_cache(tmp_path / "cache", "abc123") is None
+
+
+def test_load_deps_cache_hit_when_wheels_exist(tmp_path: Path) -> None:
+    """缓存文件存在且 wheel 文件齐全时返回路径列表。."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / "numpy-1.0.whl").write_bytes(b"x")
+    (cache / "requests-2.0.whl").write_bytes(b"y")
+    _save_deps_cache(cache, "abc123", [cache / "numpy-1.0.whl", cache / "requests-2.0.whl"])
+    loaded = _load_deps_cache(cache, "abc123")
+    assert loaded is not None
+    names = {p.name for p in loaded}
+    assert names == {"numpy-1.0.whl", "requests-2.0.whl"}
+
+
+def test_load_deps_cache_miss_when_wheel_deleted(tmp_path: Path) -> None:
+    """缓存文件存在但 wheel 文件被删时返回 None（需重新解析）。."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    _save_deps_cache(cache, "abc123", [cache / "numpy-1.0.whl"])
+    # 不创建 wheel 文件
+    assert _load_deps_cache(cache, "abc123") is None
+
+
+def test_load_deps_cache_handles_corrupt_json(tmp_path: Path) -> None:
+    """缓存文件 JSON 损坏时返回 None 不抛异常。."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / ".deps-corrupt.json").write_text("{bad json", encoding="utf-8")
+    assert _load_deps_cache(cache, "corrupt") is None
+
+
+def test_save_deps_cache_best_effort(tmp_path: Path) -> None:
+    """写入失败仅 warning 不抛异常（best-effort）。."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    _save_deps_cache(cache, "abc123", [cache / "numpy-1.0.whl"])
+    cache_file = cache / ".deps-abc123.json"
+    assert cache_file.is_file()
+    import json as _json
+
+    data = _json.loads(cache_file.read_text(encoding="utf-8"))
+    assert data == {"wheels": ["numpy-1.0.whl"]}
+
+
+def test_download_wheels_deps_cache_hit_skips_pip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """依赖解析缓存命中时完全跳过 pip 调用。."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    whl_name = "numpy-1.24.0-cp311-cp311-win_amd64.whl"
+    (cache / whl_name).write_bytes(b"numpy")
+
+    # 预写依赖解析缓存
+    key = _deps_cache_key(("numpy",), "3.11.9", ("win_amd64",))
+    _save_deps_cache(cache, key, [cache / whl_name])
+
+    pip_called = False
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        nonlocal pip_called
+        pip_called = True
+        return _Completed()
+
+    monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
+
+    stage = StageRecorder("下载依赖")
+    result = download_wheels(("numpy",), "3.11.9", "https://idx/simple", cache, stage=stage)
+    record = stage._finalize()
+    assert not pip_called
+    assert len(result) == 1
+    assert result[0].name == whl_name
+    assert record.cache_hit == 1
+    assert record.bytes_downloaded == 0
+
+
+def test_download_wheels_writes_deps_cache_after_pip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """pip 解析成功后写入依赖解析缓存，下次调用命中。."""
+    cache = tmp_path / "cache"
+    whl_name = "numpy-1.24.0-cp311-cp311-win_amd64.whl"
+
+    class _Result:
+        returncode = 0
+        stdout = f"Saved {whl_name}\n"
+        stderr = ""
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Result:
+        (cache / whl_name).write_bytes(b"numpy")
+        return _Result()
+
+    monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
+
+    # 第一次调用：cache miss，走 pip，写缓存
+    download_wheels(("numpy",), "3.11.9", "https://idx/simple", cache)
+    key = _deps_cache_key(("numpy",), "3.11.9", ("win_amd64",))
+    cache_file = cache / f".deps-{key}.json"
+    assert cache_file.is_file()
+    import json as _json
+
+    data = _json.loads(cache_file.read_text(encoding="utf-8"))
+    assert whl_name in data["wheels"]
+
+
+def test_download_wheels_deps_cache_hit_no_stage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """依赖解析缓存命中且 stage=None 时不报错。."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    whl_name = "numpy-1.24.0-cp311-cp311-win_amd64.whl"
+    (cache / whl_name).write_bytes(b"numpy")
+    key = _deps_cache_key(("numpy",), "3.11.9", ("win_amd64",))
+    _save_deps_cache(cache, key, [cache / whl_name])
+
+    pip_called = False
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        nonlocal pip_called
+        pip_called = True
+        return _Completed()
+
+    monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
+
+    result = download_wheels(("numpy",), "3.11.9", "https://idx/simple", cache)
+    assert not pip_called
+    assert len(result) == 1
+
+
+def test_save_deps_cache_oserror_warning(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """write_text 抛 OSError 时仅 warning 不抛异常。."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+
+    def fake_write_text(self: Path, *a: object, **kw: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr("pathlib.Path.write_text", fake_write_text)
+    _save_deps_cache(cache, "abc123", [cache / "numpy-1.0.whl"])
+
+
+def test_build_skips_runtime_when_already_prepared_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """runtime 已就绪（dll 存在）时跳过下载和解压，两 stage 均 hit_cache。."""
+    proj = tmp_path / "app"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (proj / "app.py").write_text("def main():\n    pass\n")
+
+    # 预创建 runtime 目录与 dll 标记
+    runtime_dir = proj / "dist" / "runtime"
+    runtime_dir.mkdir(parents=True)
+    (runtime_dir / "python311.dll").write_bytes(b"")
+    (runtime_dir / "Lib" / "site-packages").mkdir(parents=True)
+
+    download_called = False
+    extract_called = False
+
+    def fake_download_embed(*a: Any, **kw: Any) -> Path:
+        nonlocal download_called
+        download_called = True
+        return tmp_path / "fake.zip"
+
+    def fake_extract_embed(*a: Any, **kw: Any) -> None:
+        nonlocal extract_called
+        extract_called = True
+
+    monkeypatch.setattr("fspack.builder.download_embed", fake_download_embed)
+    monkeypatch.setattr("fspack.builder.extract_embed", fake_extract_embed)
+    monkeypatch.setattr(
+        "fspack.builder.compile_loader",
+        lambda source, out_exe, app_type, work_dir, platform, **kw: (
+            out_exe.parent.mkdir(parents=True, exist_ok=True),
+            out_exe.write_text(source),
+        )[-1],
+    )
+
+    build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
+    assert not download_called
+    assert not extract_called
+
+
+def test_build_skips_runtime_when_already_prepared_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """runtime 已就绪（python bin 存在）时跳过下载和解压。."""
+    proj = tmp_path / "app"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (proj / "app.py").write_text("def main():\n    pass\n")
+
+    # 预创建 runtime 目录与 python bin 标记
+    runtime_dir = proj / "dist" / "runtime"
+    pybin = runtime_dir / "python" / "bin"
+    pybin.mkdir(parents=True)
+    (pybin / "python3.11").write_text("")
+    (runtime_dir / "python" / "lib" / "python3.11" / "site-packages").mkdir(parents=True)
+
+    download_called = False
+    extract_called = False
+
+    def fake_download_standalone(*a: Any, **kw: Any) -> Path:
+        nonlocal download_called
+        download_called = True
+        return tmp_path / "fake.tar.gz"
+
+    def fake_extract_standalone(*a: Any, **kw: Any) -> None:
+        nonlocal extract_called
+        extract_called = True
+
+    monkeypatch.setattr("fspack.builder.download_standalone", fake_download_standalone)
+    monkeypatch.setattr("fspack.builder.extract_standalone", fake_extract_standalone)
+    monkeypatch.setattr(
+        "fspack.builder.compile_loader",
+        lambda source, out_exe, app_type, work_dir, platform, **kw: (
+            out_exe.parent.mkdir(parents=True, exist_ok=True),
+            out_exe.write_text(source),
+        )[-1],
+    )
+
+    build(proj, get_mirror("huawei"), "3.11.9", target=Platform.LINUX)
+    assert not download_called
+    assert not extract_called
+
+
 def test_parse_pip_download_wheels_saved_and_cached() -> None:
     """解析 Saved 和 File was already downloaded 两种行。."""
     stdout = (
@@ -509,11 +756,15 @@ def test_build_forwards_keep_modules(tmp_path: Path, monkeypatch: pytest.MonkeyP
     (proj / "app.py").write_text("import requests\nfrom requests import get\ndef main():\n    pass\n")
 
     monkeypatch.setattr(
-        "fspack.builder.ensure_embed",
-        lambda v, m, c, r, **kw: (
-            r.mkdir(parents=True, exist_ok=True),
-            (r / "python311.dll").write_bytes(b""),
-            (r / "Lib" / "site-packages").mkdir(parents=True, exist_ok=True),
+        "fspack.builder.download_embed",
+        lambda v, m, c, **kw: tmp_path / "fake.zip",
+    )
+    monkeypatch.setattr(
+        "fspack.builder.extract_embed",
+        lambda zip_path, runtime_dir: (
+            runtime_dir.mkdir(parents=True, exist_ok=True),
+            (runtime_dir / "python311.dll").write_bytes(b""),
+            (runtime_dir / "Lib" / "site-packages").mkdir(parents=True, exist_ok=True),
         )[-1],
     )
     monkeypatch.setattr(
@@ -549,15 +800,14 @@ def test_build_orchestration_helloworld(tmp_path: Path, monkeypatch: pytest.Monk
 
     calls: dict[str, Any] = {}
 
-    def fake_ensure_embed(version: str, mirror: object, cache: Path, runtime_dir: Path, **kw: Any) -> Path:
+    def fake_extract_embed(zip_path: object, runtime_dir: Path) -> None:
         runtime_dir.mkdir(parents=True, exist_ok=True)
-        major, minor = version.split(".")[:2]
-        (runtime_dir / f"python{major}{minor}.dll").write_bytes(b"")
+        (runtime_dir / "python311.dll").write_bytes(b"")
         (runtime_dir / "Lib" / "site-packages").mkdir(parents=True, exist_ok=True)
-        calls["ensure"] = version
-        return runtime_dir
+        calls["extract"] = True
 
-    monkeypatch.setattr("fspack.builder.ensure_embed", fake_ensure_embed)
+    monkeypatch.setattr("fspack.builder.download_embed", lambda v, m, c, **kw: tmp_path / "fake.zip")
+    monkeypatch.setattr("fspack.builder.extract_embed", fake_extract_embed)
 
     def fake_download(packages: object, py_version: str, index: str, cache_dir: Path, **kw: Any) -> list[Path]:
         calls["download"] = True
@@ -592,7 +842,8 @@ def test_build_orchestration_helloworld(tmp_path: Path, monkeypatch: pytest.Monk
     out = capture.get()
     assert "构建阶段汇总" in out
     assert "解析项目" in out
-    assert "准备运行时" in out
+    assert "下载运行时" in out
+    assert "解压运行时" in out
     assert "生成 C loader" in out
     assert "总计" in out
 
@@ -604,11 +855,15 @@ def test_build_orchestration_with_deps(tmp_path: Path, monkeypatch: pytest.Monke
     (proj / "app.py").write_text("import requests\ndef main():\n    pass\n")
 
     monkeypatch.setattr(
-        "fspack.builder.ensure_embed",
-        lambda v, m, c, r, **kw: (
-            r.mkdir(parents=True, exist_ok=True),
-            (r / "python311.dll").write_bytes(b""),
-            (r / "Lib" / "site-packages").mkdir(parents=True, exist_ok=True),
+        "fspack.builder.download_embed",
+        lambda v, m, c, **kw: tmp_path / "fake.zip",
+    )
+    monkeypatch.setattr(
+        "fspack.builder.extract_embed",
+        lambda zip_path, runtime_dir: (
+            runtime_dir.mkdir(parents=True, exist_ok=True),
+            (runtime_dir / "python311.dll").write_bytes(b""),
+            (runtime_dir / "Lib" / "site-packages").mkdir(parents=True, exist_ok=True),
         )[-1],
     )
     downloaded: dict[str, bool] = {}
@@ -638,15 +893,15 @@ def test_build_skips_download_when_site_packages_has_deps(tmp_path: Path, monkey
     (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
     (proj / "app.py").write_text("import requests\ndef main():\n    pass\n")
 
-    def fake_ensure_embed(version: str, mirror: object, cache: Path, runtime_dir: Path, **kw: Any) -> Path:
+    def fake_extract_embed(zip_path: object, runtime_dir: Path) -> None:
         runtime_dir.mkdir(parents=True, exist_ok=True)
         (runtime_dir / "python311.dll").write_bytes(b"")
         sp = runtime_dir / "Lib" / "site-packages"
         sp.mkdir(parents=True)
         (sp / "requests-2.31.0.dist-info").mkdir()
-        return runtime_dir
 
-    monkeypatch.setattr("fspack.builder.ensure_embed", fake_ensure_embed)
+    monkeypatch.setattr("fspack.builder.download_embed", lambda v, m, c, **kw: tmp_path / "fake.zip")
+    monkeypatch.setattr("fspack.builder.extract_embed", fake_extract_embed)
 
     download_called = False
 
@@ -677,17 +932,17 @@ def test_build_orchestration_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     shutil.copytree(_EXAMPLES / "helloworld", proj)
     calls: dict[str, Any] = {}
 
-    def fake_ensure_standalone(version: str, release: str, cache: Path, runtime_dir: Path, **kw: Any) -> Path:
+    def fake_extract_standalone(tar_path: object, runtime_dir: Path) -> None:
         runtime_dir.mkdir(parents=True, exist_ok=True)
-        major, minor = version.split(".")[:2]
+        major, minor = "3", "11"
         pydir = runtime_dir / "python"
         (pydir / "bin").mkdir(parents=True)
         (pydir / "bin" / f"python{major}.{minor}").write_text("")
         (pydir / "lib" / f"python{major}.{minor}" / "site-packages").mkdir(parents=True)
-        calls["standalone"] = version
-        return runtime_dir
+        calls["standalone"] = "3.11.9"
 
-    monkeypatch.setattr("fspack.builder.ensure_standalone", fake_ensure_standalone)
+    monkeypatch.setattr("fspack.builder.download_standalone", lambda v, r, c, **kw: tmp_path / "fake.tar.gz")
+    monkeypatch.setattr("fspack.builder.extract_standalone", fake_extract_standalone)
     monkeypatch.setattr("fspack.builder.download_wheels", lambda *a, **k: [])
     monkeypatch.setattr("fspack.builder.unpack_wheels", lambda *a, **k: 0)
 
