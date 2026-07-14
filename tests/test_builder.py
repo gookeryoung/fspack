@@ -30,7 +30,7 @@ from fspack.mirror import get_mirror
 from fspack.platform import Platform
 from fspack.progress import StageRecorder
 
-_EXAMPLES = Path(__file__).parent / "examples"
+_EXAMPLES = Path(__file__).parent.parent / "examples"
 
 
 def test_copy_source_excludes_dist(tmp_path: Path) -> None:
@@ -795,8 +795,8 @@ def test_build_forwards_keep_modules(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
 
 def test_build_orchestration_helloworld(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    proj = tmp_path / "helloworld"
-    shutil.copytree(_EXAMPLES / "helloworld", proj)
+    proj = tmp_path / "cli_helloworld"
+    shutil.copytree(_EXAMPLES / "cli_helloworld", proj)
 
     calls: dict[str, Any] = {}
 
@@ -826,8 +826,8 @@ def test_build_orchestration_helloworld(tmp_path: Path, monkeypatch: pytest.Monk
 
     with console.capture() as capture:
         info = build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
-    assert info.name == "helloworld"
-    assert (proj / "dist" / "helloworld.exe").is_file()
+    assert info.name == "cli_helloworld"
+    assert (proj / "dist" / "cli_helloworld.exe").is_file()
     assert (proj / "dist" / "runtime" / "python311._pth").is_file()
     assert (proj / "dist" / "src" / "helloworld.py").is_file()
     assert (proj / "dist" / "runtime" / "python311.dll").is_file()
@@ -928,8 +928,8 @@ def test_build_skips_download_when_site_packages_has_deps(tmp_path: Path, monkey
 
 
 def test_build_orchestration_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    proj = tmp_path / "helloworld"
-    shutil.copytree(_EXAMPLES / "helloworld", proj)
+    proj = tmp_path / "cli_helloworld"
+    shutil.copytree(_EXAMPLES / "cli_helloworld", proj)
     calls: dict[str, Any] = {}
 
     def fake_extract_standalone(tar_path: object, runtime_dir: Path) -> None:
@@ -956,9 +956,9 @@ def test_build_orchestration_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr("fspack.builder.compile_loader", fake_compile)
 
     info = build(proj, get_mirror("huawei"), "3.11.9", target=Platform.LINUX)
-    assert info.name == "helloworld"
-    assert (proj / "dist" / "helloworld").is_file()
-    assert not (proj / "dist" / "helloworld.exe").exists()
+    assert info.name == "cli_helloworld"
+    assert (proj / "dist" / "cli_helloworld").is_file()
+    assert not (proj / "dist" / "cli_helloworld.exe").exists()
     assert not (proj / "dist" / "runtime" / "python311._pth").exists()
     assert (proj / "dist" / "src" / "helloworld.py").is_file()
     assert (proj / "dist" / ".entry").is_file()

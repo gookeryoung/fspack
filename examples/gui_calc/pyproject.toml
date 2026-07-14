@@ -1,4 +1,4 @@
 [project]
-name = "guicalc"
+name = "gui_calc"
 version = "0.1.0"
 dependencies = ["PySide6"]

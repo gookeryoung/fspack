@@ -1,4 +1,4 @@
 [project]
-name = "webapp"
+name = "web_app"
 version = "0.1.0"
 dependencies = ["flask"]

@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-_EXAMPLES = Path(__file__).parent / "examples"
+_EXAMPLES = Path(__file__).parent.parent / "examples"
 
 
 def _build_and_run(
@@ -26,7 +26,7 @@ def _build_and_run(
 ) -> None:
     """构建示例并在 wine 下运行，断言输出含预期字符串。
 
-    proj_name: tests/examples 下的示例目录名。
+    proj_name: examples/ 下的示例目录名。
     expect_substr: 运行输出中应包含的子串。
     extra_env: wine 运行时额外环境变量（如 GUI/pygame 的 offscreen 驱动）。
     """
@@ -59,22 +59,22 @@ def _build_and_run(
 
 @pytest.mark.slow
 def test_build_and_run_helloworld(tmp_path: Path) -> None:
-    """helloworld 示例真实构建并在 wine 下运行。."""
-    _build_and_run("helloworld", "hello, world", tmp_path)
+    """cli_helloworld 示例真实构建并在 wine 下运行。."""
+    _build_and_run("cli_helloworld", "hello, world", tmp_path)
 
 
 @pytest.mark.slow
 def test_build_and_run_clitool(tmp_path: Path) -> None:
-    """clitool 示例：有库 CLI（requests），验证依赖打包与运行。."""
-    _build_and_run("clitool", "requests ", tmp_path)
+    """cli_tool 示例：有库 CLI（requests），验证依赖打包与运行。."""
+    _build_and_run("cli_tool", "requests ", tmp_path)
     # 验证 requests 包确实解包到 site-packages
-    proj = tmp_path / "clitool"
+    proj = tmp_path / "cli_tool"
     assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "requests").is_dir()
 
 
 @pytest.mark.slow
 def test_build_and_run_guicalc(tmp_path: Path) -> None:
-    """guicalc 示例：有库 GUI（PySide6），验证构建与打包。
+    """gui_calc 示例：有库 GUI（PySide6），验证构建与打包。
 
     PySide6 的 Qt6Core 依赖 icuuc.dll（Windows 10+ 系统 DLL），wine 默认不提供。
     缺 ICU 时仅验证构建（下载/解包/_pth/exe），跳过运行断言。
@@ -89,13 +89,13 @@ def test_build_and_run_guicalc(tmp_path: Path) -> None:
     if not shutil.which("wine"):
         pytest.skip("wine 未安装")
 
-    proj = tmp_path / "guicalc"
-    shutil.copytree(_EXAMPLES / "guicalc", proj)
+    proj = tmp_path / "gui_calc"
+    shutil.copytree(_EXAMPLES / "gui_calc", proj)
     build(
         proj, get_mirror("aliyun"), "3.11.9", target=Platform.WINDOWS, keep_modules={"PySide6.QtCore", "PySide6.QtGui"}
     )
 
-    exe = proj / "dist" / "guicalc.exe"
+    exe = proj / "dist" / "gui_calc.exe"
     assert exe.is_file(), f"未生成 exe: {exe}"
     assert (proj / "dist" / "runtime" / "python311.dll").is_file(), "未找到 python311.dll"
     assert (proj / "dist" / "runtime" / "python311._pth").is_file(), "未生成 _pth"
@@ -111,28 +111,28 @@ def test_build_and_run_guicalc(tmp_path: Path) -> None:
 
 @pytest.mark.slow
 def test_build_and_run_pygamedemo(tmp_path: Path) -> None:
-    """pygamedemo 示例：有库 pygame，dummy 驱动验证。."""
+    """pygame_demo 示例：有库 pygame，dummy 驱动验证。."""
     _build_and_run(
-        "pygamedemo",
+        "pygame_demo",
         "pygame ",
         tmp_path,
         extra_env={"SDL_VIDEODRIVER": "dummy", "SDL_AUDIODRIVER": "dummy"},
     )
-    proj = tmp_path / "pygamedemo"
+    proj = tmp_path / "pygame_demo"
     assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "pygame").is_dir()
 
 
 @pytest.mark.slow
 def test_build_and_run_webapp(tmp_path: Path) -> None:
-    """webapp 示例：有库 web（flask），test_client 验证路由。."""
-    _build_and_run("webapp", "hello from flask", tmp_path)
-    proj = tmp_path / "webapp"
+    """web_app 示例：有库 web（flask），test_client 验证路由。."""
+    _build_and_run("web_app", "hello from flask", tmp_path)
+    proj = tmp_path / "web_app"
     assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "flask").is_dir()
 
 
 @pytest.mark.slow
 def test_build_and_run_pyside2app(tmp_path: Path) -> None:
-    """pyside2app 示例：版本自动解析 + PySide2，验证 requires-python 约束。
+    """pyside2_app 示例：版本自动解析 + PySide2，验证 requires-python 约束。
 
     .python-version=3.9 + requires-python=">=3.8,<3.11" 应解析到 3.9.13。
     PySide2 的 Qt DLL 在 wine 上可能缺系统 DLL，缺时跳过运行断言。
@@ -147,11 +147,11 @@ def test_build_and_run_pyside2app(tmp_path: Path) -> None:
     if not shutil.which("wine"):
         pytest.skip("wine 未安装")
 
-    proj = tmp_path / "pyside2app"
-    shutil.copytree(_EXAMPLES / "pyside2app", proj)
+    proj = tmp_path / "pyside2_app"
+    shutil.copytree(_EXAMPLES / "pyside2_app", proj)
     build(proj, get_mirror("aliyun"), None, target=Platform.WINDOWS, keep_modules={"PySide2.QtGui"})
 
-    exe = proj / "dist" / "pyside2app.exe"
+    exe = proj / "dist" / "pyside2_app.exe"
     assert exe.is_file(), f"未生成 exe: {exe}"
     assert (proj / "dist" / "runtime" / "python39.dll").is_file(), "未找到 python39.dll（版本自动解析应为 3.9.13）"
     assert (proj / "dist" / "runtime" / "python39._pth").is_file(), "未生成 _pth"
@@ -167,7 +167,7 @@ def test_build_and_run_pyside2app(tmp_path: Path) -> None:
 
 @pytest.mark.slow
 def test_build_and_run_pyqt5app(tmp_path: Path) -> None:
-    """pyqt5app 示例：Python 3.12 + PyQt5，验证新版本 + PyQt5 兼容。
+    """pyqt5_app 示例：Python 3.12 + PyQt5，验证新版本 + PyQt5 兼容。
 
     PyQt5 的 Qt DLL 在 wine 上可能缺系统 DLL，缺时跳过运行断言。
     """
@@ -181,11 +181,11 @@ def test_build_and_run_pyqt5app(tmp_path: Path) -> None:
     if not shutil.which("wine"):
         pytest.skip("wine 未安装")
 
-    proj = tmp_path / "pyqt5app"
-    shutil.copytree(_EXAMPLES / "pyqt5app", proj)
+    proj = tmp_path / "pyqt5_app"
+    shutil.copytree(_EXAMPLES / "pyqt5_app", proj)
     build(proj, get_mirror("aliyun"), "3.12.0", target=Platform.WINDOWS, keep_modules={"PyQt5.QtCore", "PyQt5.QtGui"})
 
-    exe = proj / "dist" / "pyqt5app.exe"
+    exe = proj / "dist" / "pyqt5_app.exe"
     assert exe.is_file(), f"未生成 exe: {exe}"
     assert (proj / "dist" / "runtime" / "python312.dll").is_file(), "未找到 python312.dll"
     assert (proj / "dist" / "runtime" / "python312._pth").is_file(), "未生成 _pth"
@@ -201,20 +201,20 @@ def test_build_and_run_pyqt5app(tmp_path: Path) -> None:
 
 @pytest.mark.slow
 def test_build_and_run_snake(tmp_path: Path) -> None:
-    """snake 示例：pygame 贪吃蛇，dummy 驱动验证。."""
+    """pygame_snake 示例：pygame 贪吃蛇，dummy 驱动验证。."""
     _build_and_run(
-        "snake",
+        "pygame_snake",
         "snake ready",
         tmp_path,
         extra_env={"SDL_VIDEODRIVER": "dummy", "SDL_AUDIODRIVER": "dummy"},
     )
-    proj = tmp_path / "snake"
+    proj = tmp_path / "pygame_snake"
     assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "pygame").is_dir()
 
 
 @pytest.mark.slow
 def test_build_and_run_linux_helloworld(tmp_path: Path) -> None:
-    """Linux 平台端到端：gcc 编译 + python-build-standalone 运行 helloworld。
+    """Linux 平台端到端：gcc 编译 + python-build-standalone 运行 cli_helloworld。
 
     python-build-standalone 的 20241016 release 只提供 3.11.10（非 3.11.9），
     故 Linux 目标使用 3.11.10。
@@ -227,11 +227,11 @@ def test_build_and_run_linux_helloworld(tmp_path: Path) -> None:
     if not gcc_available():
         pytest.skip("gcc 未安装")
 
-    proj = tmp_path / "helloworld"
-    shutil.copytree(_EXAMPLES / "helloworld", proj)
+    proj = tmp_path / "cli_helloworld"
+    shutil.copytree(_EXAMPLES / "cli_helloworld", proj)
     build(proj, get_mirror("aliyun"), "3.11.10", target=Platform.LINUX)
 
-    exe = proj / "dist" / "helloworld"
+    exe = proj / "dist" / "cli_helloworld"
     assert exe.is_file(), f"未生成 exe: {exe}"
     assert (proj / "dist" / "runtime" / "python" / "lib" / "libpython3.11.so").is_file(), "未找到 libpython3.11.so"
 
@@ -251,11 +251,11 @@ def test_build_and_run_linux_clitool(tmp_path: Path) -> None:
     if not gcc_available():
         pytest.skip("gcc 未安装")
 
-    proj = tmp_path / "clitool"
-    shutil.copytree(_EXAMPLES / "clitool", proj)
+    proj = tmp_path / "cli_tool"
+    shutil.copytree(_EXAMPLES / "cli_tool", proj)
     build(proj, get_mirror("aliyun"), "3.11.10", target=Platform.LINUX)
 
-    exe = proj / "dist" / "clitool"
+    exe = proj / "dist" / "cli_tool"
     assert exe.is_file(), f"未生成 exe: {exe}"
     assert (proj / "dist" / "runtime" / "python" / "lib" / "python3.11" / "site-packages" / "requests").is_dir()
 
@@ -266,10 +266,10 @@ def test_build_and_run_linux_clitool(tmp_path: Path) -> None:
 
 @pytest.mark.slow
 def test_build_installer_helloworld_slow(tmp_path: Path) -> None:
-    """NSIS 端到端：build helloworld → makensis 编译 → 验证安装包产出。
+    """NSIS 端到端：build cli_helloworld → makensis 编译 → 验证安装包产出。
 
     需 mingw-w64（Windows loader 编译）与 makensis（NSIS 安装包编译）。
-    验证 dist/installer.nsi 生成正确、dist/release/helloworld-setup.exe 产出为合法 PE 文件且非空。
+    验证 dist/installer.nsi 生成正确、dist/release/cli_helloworld-setup.exe 产出为合法 PE 文件且非空。
     """
     from fspack.installer import build_installer
     from fspack.loader import mingw_available
@@ -280,11 +280,11 @@ def test_build_installer_helloworld_slow(tmp_path: Path) -> None:
     if not shutil.which("makensis"):
         pytest.skip("makensis 未安装（sudo apt install -y nsis）")
 
-    proj = tmp_path / "helloworld"
-    shutil.copytree(_EXAMPLES / "helloworld", proj)
+    proj = tmp_path / "cli_helloworld"
+    shutil.copytree(_EXAMPLES / "cli_helloworld", proj)
 
     out = build_installer(proj, get_mirror("aliyun"), "3.11.9", no_build=False)
-    expected = proj / "dist" / "release" / "helloworld-setup.exe"
+    expected = proj / "dist" / "release" / "cli_helloworld-setup.exe"
     assert out == expected
     assert expected.is_file(), f"未生成安装包: {expected}"
     assert expected.stat().st_size > 1024 * 1024, f"安装包过小: {expected.stat().st_size} bytes"
@@ -295,17 +295,17 @@ def test_build_installer_helloworld_slow(tmp_path: Path) -> None:
     nsi = proj / "dist" / "installer.nsi"
     assert nsi.is_file(), "未生成 installer.nsi"
     content = nsi.read_text(encoding="utf-8")
-    assert 'Name "helloworld 0.1.0"' in content
-    assert 'OutFile "release\\helloworld-setup.exe"' in content
+    assert 'Name "cli_helloworld 0.1.0"' in content
+    assert 'OutFile "release\\cli_helloworld-setup.exe"' in content
 
 
 @pytest.mark.slow
 def test_build_linux_installer_helloworld_slow(tmp_path: Path) -> None:
-    """Linux 安装包端到端：build helloworld → tar.gz + .deb 真实产出。
+    """Linux 安装包端到端：build cli_helloworld → tar.gz + .deb 真实产出。
 
     需 gcc（Linux loader 编译）与 dpkg-deb（.deb 构建）。
-    验证 dist/release/helloworld_0.1.0_amd64.deb 为合法 ar 归档，
-    dist/release/helloworld-0.1.0-linux.tar.gz 为合法 gzip。
+    验证 dist/release/cli_helloworld_0.1.0_amd64.deb 为合法 ar 归档，
+    dist/release/cli_helloworld-0.1.0-linux.tar.gz 为合法 gzip。
     """
     from fspack.linux_installer import build_linux_installer
     from fspack.loader import gcc_available
@@ -316,16 +316,16 @@ def test_build_linux_installer_helloworld_slow(tmp_path: Path) -> None:
     if not shutil.which("dpkg-deb"):
         pytest.skip("dpkg-deb 未安装")
 
-    proj = tmp_path / "helloworld"
-    shutil.copytree(_EXAMPLES / "helloworld", proj)
+    proj = tmp_path / "cli_helloworld"
+    shutil.copytree(_EXAMPLES / "cli_helloworld", proj)
 
     out = build_linux_installer(proj, get_mirror("aliyun"), "3.11.10", no_build=False)
-    expected_deb = proj / "dist" / "release" / "helloworld_0.1.0_amd64.deb"
+    expected_deb = proj / "dist" / "release" / "cli_helloworld_0.1.0_amd64.deb"
     assert out == expected_deb
     assert expected_deb.is_file(), f"未生成 .deb: {expected_deb}"
     assert expected_deb.stat().st_size > 1024 * 1024, f".deb 过小: {expected_deb.stat().st_size} bytes"
 
-    tarball = proj / "dist" / "release" / "helloworld-0.1.0-linux.tar.gz"
+    tarball = proj / "dist" / "release" / "cli_helloworld-0.1.0-linux.tar.gz"
     assert tarball.is_file(), f"未生成 tar.gz: {tarball}"
     assert tarball.stat().st_size > 1024 * 1024, f"tar.gz 过小: {tarball.stat().st_size} bytes"
 

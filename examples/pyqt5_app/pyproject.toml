@@ -1,4 +1,4 @@
 [project]
-name = "pyqt5app"
+name = "pyqt5_app"
 version = "0.1.0"
 dependencies = ["PyQt5"]

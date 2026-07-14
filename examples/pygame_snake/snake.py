@@ -1,256 +1,104 @@
-import bisect
-from collections import deque
-from pathlib import Path
-from random import choice
-from time import perf_counter as tpc
-from typing import Dict, NamedTuple, Tuple
+"""pygame 贪吃蛇示例：真实窗口 + 网格 + 键盘控制。
 
-import pygame as pg
+验证 pygame 在 embed python 下打包可用。测试时设置 SDL_VIDEODRIVER=dummy 可在无显示环境运行。
+"""
 
+from __future__ import annotations
 
-class SnakeProps(NamedTuple):
-    pos: Tuple[int, int]
-    length: int
-    direction: str
-    speed: int
+import os
+import random
 
+CELL = 20
+COLS = 30
+ROWS = 20
+WIDTH = CELL * COLS
+HEIGHT = CELL * ROWS
+FPS = 10
+DUMMY_MAX_FRAMES = 30
 
-class GameSettings(NamedTuple):
-    caption: str
-    geometry: dict
-    fps: int
-    fontsize: Dict[str, int]
-    colors: Dict[str, int]
-    snake_init: SnakeProps
-    scores: Tuple[int, ...]
-    motions: Dict[str, Tuple[int, int]]
-    operations: Dict[str, int]
+_BG = (0, 0, 0)
+_BORDER = (64, 64, 64)
+_FOOD = (255, 0, 0)
+_SNAKE_HEAD = (0, 255, 0)
+_SNAKE_BODY = (0, 180, 0)
+_TEXT = (255, 255, 255)
 
 
-GS = GameSettings(
-    caption="Snake Game v1.0",
-    geometry={"width": 720, "height": 480, "grid": 24, "nx": 20, "ny": 20},
-    fps=60,
-    fontsize={"large": 30, "normal": 20},
-    colors={
-        "snake": 0x00CCCC,
-        "food": 0xFFFF00,
-        "bg": 0x0,
-        "border": 0xFFFFFF,
-        "info": 0x00FF00,
-        "warn": 0xFF0000,
-        "food_border": 0xFF00FF,
-    },
-    snake_init=SnakeProps(
-        pos=(8, 5),
-        length=3,
-        direction=choice(["up", "down", "left", "right"]),
-        speed=4,
-    ),
-    scores=(150, 300, 500, 750, 1100, 1500, 2000, 2500),
-    motions={"right": (1, 0), "left": (-1, 0), "up": (0, -1), "down": (0, 1)},
-    operations={
-        "left": pg.K_a,
-        "right": pg.K_d,
-        "up": pg.K_w,
-        "down": pg.K_s,
-        "quit": pg.K_ESCAPE,
-    },
-)
+def main() -> None:
+    """运行贪吃蛇游戏：方向键控制，吃食物增长，撞墙或自身结束。."""
+    import pygame
 
+    is_dummy = os.environ.get("SDL_VIDEODRIVER") == "dummy"
 
-def convert_color(x: int) -> Tuple[int, int, int]:
-    """转化 hex 格式为 tuple 格式."""
-    return (x & 0xFF0000) >> 16, (x & 0xFF00) >> 8, (x & 0xFF)
+    pygame.init()
+    screen = pygame.display.set_mode((WIDTH, HEIGHT))
+    pygame.display.set_caption("Snake")
+    clock = pygame.time.Clock()
+    font = pygame.font.Font(None, 24)
 
+    key_dirs = {
+        pygame.K_UP: (0, -1),
+        pygame.K_DOWN: (0, 1),
+        pygame.K_LEFT: (-1, 0),
+        pygame.K_RIGHT: (1, 0),
+    }
 
-def pos_to_rect(pos: Tuple[int, int], size: int) -> Tuple[int, int, int, int]:
-    """转化x, y位置为矩形格式."""
-    return pos[0] * size, pos[1] * size, size, size
+    snake: list[tuple[int, int]] = [(COLS // 2, ROWS // 2)]
+    direction = (1, 0)
+    food = _spawn_food(snake)
+    score = 0
+    frame = 0
 
+    print("snake ready")
 
-class Snake:
-    __slots__ = ["direction", "grids", "speed"]
+    while True:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                return
+            if event.type == pygame.KEYDOWN:
+                new_dir = key_dirs.get(event.key)
+                if new_dir and new_dir != (-direction[0], -direction[1]):
+                    direction = new_dir
 
-    def __init__(self, pos: Tuple[int, int], length: int, speed: int, direction: str) -> None:
-        self.speed: int = speed
-        self.direction: str = direction
+        head = snake[0]
+        new_head = (head[0] + direction[0], head[1] + direction[1])
+        if new_head[0] < 0 or new_head[0] >= COLS or new_head[1] < 0 or new_head[1] >= ROWS or new_head in snake:
+            print(f"game over, score: {score}")
+            pygame.quit()
+            return
 
-        motion = GS.motions[direction]
-        if direction in ("left", "right"):
-            self.grids = deque([(x, pos[1]) for x in range(pos[0], pos[0] - length * motion[0], -motion[0])])
+        snake.insert(0, new_head)
+        if new_head == food:
+            score += 1
+            food = _spawn_food(snake)
         else:
-            self.grids = deque([(pos[0], y) for y in range(pos[1], pos[1] - length * motion[1], -motion[1])])
+            snake.pop()
 
-    def draw(self, screen: pg.surface.Surface) -> None:
-        for grid in self.grids:
-            pg.draw.rect(
-                screen,
-                GS.colors["snake"],
-                pos_to_rect(grid, size=GS.geometry["grid"]),
-            )
-            pg.draw.rect(
-                screen,
-                GS.colors["border"],
-                pos_to_rect(grid, size=GS.geometry["grid"]),
-                width=2,
-            )
+        screen.fill(_BG)
+        pygame.draw.rect(screen, _FOOD, (food[0] * CELL, food[1] * CELL, CELL, CELL))
+        for i, (x, y) in enumerate(snake):
+            color = _SNAKE_HEAD if i == 0 else _SNAKE_BODY
+            pygame.draw.rect(screen, color, (x * CELL, y * CELL, CELL, CELL))
+        pygame.draw.rect(screen, _BORDER, (0, 0, WIDTH, HEIGHT), 1)
+        text = font.render(f"Score: {score}", True, _TEXT)
+        screen.blit(text, (4, 4))
+        pygame.display.flip()
 
-        if not self.alive:
-            pg.draw.rect(
-                screen,
-                GS.colors["warn"],
-                pos_to_rect(self.grids[0], size=GS.geometry["grid"]),
-            )
+        frame += 1
+        if is_dummy and frame >= DUMMY_MAX_FRAMES:
+            pygame.quit()
+            return
 
-    def move(self) -> None:
-        x, y = self.target
-        if 0 <= x < GS.geometry["nx"] and 0 <= y < GS.geometry["ny"]:
-            self.grids.appendleft((x, y))
-            self.grids.pop()
-        else:
-            self.grids.appendleft(self.grids[0])
-
-    @property
-    def target(self) -> Tuple[int, int]:
-        motion = GS.motions[self.direction]
-        return self.grids[0][0] + motion[0], self.grids[0][1] + motion[1]
-
-    def eat(self) -> None:
-        self.grids.appendleft(self.target)
-
-    def set_direction(self, direction: str) -> None:
-        neck_direction = [self.grids[0][i] - self.grids[1][i] for i in range(2)]
-        if any(neck_direction[i] + GS.motions[direction][i] for i in range(2)):
-            self.direction = direction
-
-    @property
-    def alive(self) -> bool:
-        return len(set(self.grids)) == len(self.grids)
+        clock.tick(FPS)
 
 
-class Game:
-    def __init__(self) -> None:
-        pg.init()
-        pg.display.set_caption(GS.caption)
-        self.ttf_large = pg.font.Font(None, GS.fontsize["large"])
-        self.ttf = pg.font.Font(None, GS.fontsize["normal"])
-        self.screen = pg.display.set_mode((GS.geometry["width"], GS.geometry["height"]))
-        self.snake: Snake = Snake(**GS.snake_init._asdict())
-        self.food: Tuple[int, int] = (0, 0)
-        self.score: int = 0
-        self.alive: bool = True
-        self.reset()
-
-    def reset(self) -> None:
-        self.snake, self.score = Snake(**GS.snake_init._asdict()), 0
-        self.alive = True
-        self.generate_food()
-
-    def generate_food(self) -> None:
-        foods = [
-            (x, y)
-            for x in range(GS.geometry["nx"])
-            for y in range(GS.geometry["ny"])
-            if (x, y) not in self.snake.grids
-            and any([
-                x not in (0, GS.geometry["nx"] - 1),
-                y not in (0, GS.geometry["ny"] - 1),
-            ])
-        ]
-        self.food = choice(foods)
-
-    def run(self) -> None:
-        clock = pg.time.Clock()
-        start_time = tpc()
-        bg, border, food, info, warn, food_border = [
-            convert_color(GS.colors[x]) for x in ["bg", "border", "food", "info", "warn", "food_border"]
-        ]
-        boundary_x, boundary_y = (
-            GS.geometry["grid"] * GS.geometry["nx"],
-            GS.geometry["height"],
-        )
-
-        if pg.mixer:
-            music = Path(__file__).parent / "assets" / "music" / "snake.wav"
-            pg.mixer.music.load(str(music))
-            pg.mixer.music.play(-1)
-
-        while self.alive:
-            for event in pg.event.get():
-                if event.type == pg.QUIT:
-                    return
-                elif event.type == pg.KEYDOWN:
-                    self.check_keydown_events(event)
-
-            self.screen.fill(bg)
-            pg.draw.line(self.screen, border, (boundary_x, 0), (boundary_x, boundary_y))
-            pg.draw.line(
-                self.screen,
-                border,
-                (boundary_x, 110),
-                (GS.geometry["width"], 110),
-            )
-            self.snake.draw(self.screen)
-            pg.draw.rect(self.screen, food, pos_to_rect(self.food, GS.geometry["grid"]))
-            pg.draw.rect(
-                self.screen,
-                food_border,
-                pos_to_rect(self.food, GS.geometry["grid"]),
-                width=2,
-            )
-
-            if self.snake.alive:
-                if tpc() - start_time > 1.0 / self.snake.speed:
-                    self.snake.move()
-                    start_time = tpc()
-            else:
-                self.screen.blit(self.ttf_large.render("游戏结束!", True, warn), (180, 150))
-                self.screen.blit(
-                    self.ttf_large.render("输入 '回车' 继续", True, warn),
-                    (140, 200),
-                )
-
-            self.screen.blit(
-                self.ttf.render(f"当前得分: {self.score}", True, info),
-                (535, 20),
-            )
-            self.screen.blit(
-                self.ttf.render(f"速度等级: {self.snake.speed}", True, info),
-                (535, 60),
-            )
-
-            self.screen.blit(self.ttf_large.render("操作提示", True, border), (535, 140))
-            self.screen.blit(self.ttf.render("方向: W/A/S/D", True, info), (535, 200))
-            self.screen.blit(self.ttf.render("退出: ESC", True, info), (535, 240))
-
-            if self.snake.grids[0] == self.food:
-                self.snake.eat()
-                self.score += 50
-                self.snake.speed = bisect.bisect(GS.scores, self.score) + GS.snake_init.speed
-                self.generate_food()
-
-            pg.display.flip()
-            clock.tick(GS.fps)
-
-        if pg.mixer:
-            pg.mixer.music.fadeout(1000)
-        pg.time.wait(1000)
-
-    def check_keydown_events(self, event: pg.event.Event) -> None:
-        dirs = {v: k for k, v in GS.operations.items()}
-
-        if event.key == GS.operations["quit"]:
-            self.alive = False
-        elif event.key in GS.operations.values():
-            self.snake.set_direction(dirs[event.key])
-        elif event.key == pg.K_RETURN and not self.snake.alive:
-            self.reset()
-
-
-def main():
-    Game().run()
-    pg.quit()
+def _spawn_food(snake: list[tuple[int, int]]) -> tuple[int, int]:
+    """在非蛇身格子随机生成食物。."""
+    while True:
+        pos = (random.randint(0, COLS - 1), random.randint(0, ROWS - 1))
+        if pos not in snake:
+            return pos
 
 
 if __name__ == "__main__":

@@ -10,16 +10,16 @@ from fspack.config import AppType
 from fspack.exceptions import ProjectError
 from fspack.project import DEFAULT_PY_VERSION, detect_entry, parse_project, resolve_py_version
 
-_EXAMPLES = Path(__file__).parent / "examples"
+_EXAMPLES = Path(__file__).parent.parent / "examples"
 
 
 def test_parse_project_helloworld() -> None:
-    info = parse_project(_EXAMPLES / "helloworld")
-    assert info.name == "helloworld"
+    info = parse_project(_EXAMPLES / "cli_helloworld")
+    assert info.name == "cli_helloworld"
     assert info.entry_module == "helloworld"
     assert info.entry_file.name == "helloworld.py"
     assert info.app_type is AppType.CLI
-    assert info.exe_name == "helloworld.exe"
+    assert info.exe_name == "cli_helloworld.exe"
     assert info.py_xy == "python311"
     assert info.py_version == DEFAULT_PY_VERSION
     assert info.requires_python is None
@@ -27,15 +27,15 @@ def test_parse_project_helloworld() -> None:
 
 def test_parse_project_pyside2app_requires_python() -> None:
     """pyside2app 示例的 requires-python 约束正确解析。."""
-    info = parse_project(_EXAMPLES / "pyside2app")
+    info = parse_project(_EXAMPLES / "pyside2_app")
     assert info.requires_python == ">=3.8,<3.11"
     assert info.app_type is AppType.GUI
 
 
 def test_resolve_py_version_pyside2app_example() -> None:
     """pyside2app 示例：.python-version=3.9 + requires-python 解析到 3.9.13。."""
-    info = parse_project(_EXAMPLES / "pyside2app")
-    resolved = resolve_py_version(_EXAMPLES / "pyside2app", None, info.requires_python)
+    info = parse_project(_EXAMPLES / "pyside2_app")
+    resolved = resolve_py_version(_EXAMPLES / "pyside2_app", None, info.requires_python)
     assert resolved == "3.9.13"
 
 

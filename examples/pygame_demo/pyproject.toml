@@ -1,4 +1,4 @@
 [project]
-name = "snake"
+name = "pygame_demo"
 version = "0.1.0"
 dependencies = ["pygame"]

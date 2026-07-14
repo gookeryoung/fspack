@@ -135,15 +135,21 @@ dist/
 
 ## 示例
 
-`tests/examples/` 下提供 5 类典型项目验证打包效果：
+`examples/` 下提供多类典型项目验证打包效果（下划线命名者由 slow 端到端测试覆盖）：
 
 | 示例 | 类型 | 说明 |
 |------|------|------|
-| helloworld | 无库 CLI | 最小示例，验证基础流水线 |
-| clitool | 有库 CLI | requests 依赖，验证 wheel 下载与解包 |
-| guicalc | 有库 GUI | PySide6 依赖，验证 GUI 快捷方式与 DLL 搜索 |
-| pygamedemo | 有库 pygame | pygame 依赖，验证多媒体库打包 |
-| webapp | 有库 web | flask 依赖，验证 web 框架打包 |
+| cli_helloworld | 无库 CLI | 最小示例，验证基础流水线 |
+| cli_tool | 有库 CLI | requests 依赖，验证 wheel 下载与解包 |
+| cli_complex | 无库 CLI | 展示型，多文件结构 |
+| cli_office | 有库 CLI | pypdf 依赖，uv workspace 成员 |
+| gui_calc | 有库 GUI | PySide6 依赖，验证 GUI 快捷方式与 DLL 搜索 |
+| pyside2_app | 有库 GUI | PySide2 依赖，验证 requires-python 版本自动解析 |
+| pyqt5_app | 有库 GUI | PyQt5 依赖，验证 Python 3.12 兼容 |
+| tk_basic | 无库 GUI | tkinter 标准库，验证内置 GUI |
+| pygame_demo | 有库 pygame | pygame 依赖，验证多媒体库打包 |
+| pygame_snake | 有库 pygame | pygame 贪吃蛇，验证 dummy 驱动运行 |
+| web_app | 有库 web | flask 依赖，验证 web 框架打包 |
 
 ## 平台支持
 
