@@ -13,6 +13,7 @@ __all__ = [
     "AppType",
     "BuildConfig",
     "DependencyReport",
+    "EntryPoint",
     "MirrorConfig",
     "ProjectInfo",
 ]
@@ -39,6 +40,39 @@ class MirrorConfig:
 
 
 @dataclass(frozen=True)
+class EntryPoint:
+    """单个打包入口：用于多入口项目生成多个可执行文件。."""
+
+    name: str
+    module: str
+    file: Path
+    app_type: AppType
+
+    @classmethod
+    def from_script(cls, name: str, script_path: Path) -> EntryPoint:
+        """从入口名与脚本路径构造实例。
+
+        ``module`` 取脚本文件名 stem；``app_type`` 惰性导入
+        :func:`fspack.project.infer_app_type` 仅按脚本自身 import 推断
+        （多入口项目共享 declared，不能据项目级依赖判断单个入口类型）。
+
+        惰性导入打破 config ↔ project 循环依赖。
+        """
+        from fspack.project import infer_app_type
+
+        return cls(
+            name=name,
+            module=script_path.stem,
+            file=script_path,
+            app_type=infer_app_type(script_path, ()),
+        )
+
+    def entry_rel(self, src_dir: Path) -> str:
+        """入口脚本相对源码目录的 POSIX 路径（用于写入 .entry 文件）。."""
+        return self.file.relative_to(src_dir).as_posix()
+
+
+@dataclass(frozen=True)
 class ProjectInfo:
     """解析后的项目元信息。."""
 
@@ -51,6 +85,7 @@ class ProjectInfo:
     dependencies: tuple[str, ...]
     py_version: str
     requires_python: str | None = None
+    entries: tuple[EntryPoint, ...] = ()
 
     @classmethod
     def from_dir(cls, project_dir: Path, py_version: str | None = None) -> ProjectInfo:
@@ -64,7 +99,7 @@ class ProjectInfo:
 
     @property
     def exe_name(self) -> str:
-        """生成的可执行文件名。."""
+        """生成的可执行文件名（单入口模式）。."""
         return f"{self.name}.exe"
 
     @property
@@ -72,6 +107,13 @@ class ProjectInfo:
         """形如 python311 的版本前缀。."""
         major, minor = self.py_version.split(".")[:2]
         return f"python{major}{minor}"
+
+    @property
+    def all_entries(self) -> tuple[EntryPoint, ...]:
+        """所有入口：多入口模式返回 entries，单入口模式构造单一入口。."""
+        if self.entries:
+            return self.entries
+        return (EntryPoint(name=self.name, module=self.entry_module, file=self.entry_file, app_type=self.app_type),)
 
 
 @dataclass(frozen=True)

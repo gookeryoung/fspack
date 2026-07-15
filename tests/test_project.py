@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from fspack.config import AppType
+from fspack.config import AppType, EntryPoint
 from fspack.exceptions import ProjectError
-from fspack.project import DEFAULT_PY_VERSION, detect_entry, parse_project, resolve_py_version
+from fspack.project import DEFAULT_PY_VERSION, detect_entry, infer_app_type, parse_project, resolve_py_version
 
 _EXAMPLES = Path(__file__).parent.parent / "examples"
 
@@ -212,3 +212,87 @@ def test_resolve_py_version_unsatisfiable_requires_python(tmp_path: Path) -> Non
 def test_resolve_py_version_complex_specifier(tmp_path: Path) -> None:
     """复杂规范符 >=3.9,<3.12 选 3.11.9。."""
     assert resolve_py_version(tmp_path, None, ">=3.9,<3.12") == "3.11.9"
+
+
+# --- 多入口解析测试 ---
+
+
+def test_parse_project_multi_entry_example() -> None:
+    """multi_entry 示例：[tool.fspack.entries] 解析为三个入口。."""
+    info = parse_project(_EXAMPLES / "multi_entry")
+    assert len(info.entries) == 3
+    assert [ep.name for ep in info.entries] == ["cli", "gui", "web"]
+    # 首个入口作为主入口（向后兼容）
+    assert info.entry_module == "cli"
+    assert info.entry_file.name == "cli.py"
+    assert info.app_type is AppType.CLI
+    # 每个入口按自身 import 推断类型（不看项目级 declared PySide2）
+    assert info.entries[0].app_type is AppType.CLI
+    assert info.entries[1].app_type is AppType.GUI
+    assert info.entries[2].app_type is AppType.CLI
+
+
+def test_parse_project_multi_entry_single_declared_compat(tmp_path: Path) -> None:
+    """无 [tool.fspack.entries] 时走单入口 detect_entry 路径，entries 为空。."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    info = parse_project(tmp_path)
+    assert info.entries == ()
+    assert info.entry_module == "app"
+
+
+def test_parse_project_multi_entry_missing_script(tmp_path: Path) -> None:
+    """[tool.fspack.entries] 中脚本不存在时报错。."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack.entries]\nmain = "missing.py"\n'
+    )
+    with pytest.raises(ProjectError, match="脚本不存在"):
+        parse_project(tmp_path)
+
+
+def test_parse_project_multi_entry_empty_path(tmp_path: Path) -> None:
+    """[tool.fspack.entries] 中脚本路径为空时报错。."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack.entries]\nmain = ""\n'
+    )
+    with pytest.raises(ProjectError, match="脚本路径为空"):
+        parse_project(tmp_path)
+
+
+def test_infer_app_type_by_import(tmp_path: Path) -> None:
+    """infer_app_type 按脚本 import 推断类型。."""
+    gui = tmp_path / "gui.py"
+    gui.write_text("import PySide2\ndef main():\n    pass\n")
+    assert infer_app_type(gui, ()) is AppType.GUI
+
+    cli = tmp_path / "cli.py"
+    cli.write_text("import sys\ndef main():\n    pass\n")
+    assert infer_app_type(cli, ()) is AppType.CLI
+
+
+def test_infer_app_type_by_declared(tmp_path: Path) -> None:
+    """infer_app_type 按声明依赖推断类型（单入口模式）。."""
+    cli = tmp_path / "cli.py"
+    cli.write_text("def main():\n    pass\n")
+    assert infer_app_type(cli, ("PyQt5>=5",)) is AppType.GUI
+
+
+def test_entry_point_from_script(tmp_path: Path) -> None:
+    """EntryPoint.from_script 按 import 推断 app_type（多入口模式不看 declared）。."""
+    script = tmp_path / "gui.py"
+    script.write_text("import PySide2\ndef main():\n    pass\n")
+    ep = EntryPoint.from_script("gui", script)
+    assert ep.name == "gui"
+    assert ep.module == "gui"
+    assert ep.file == script
+    assert ep.app_type is AppType.GUI
+
+
+def test_entry_point_entry_rel(tmp_path: Path) -> None:
+    """EntryPoint.entry_rel 返回相对源码目录的 POSIX 路径。."""
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    script = sub / "app.py"
+    script.write_text("def main():\n    pass\n")
+    ep = EntryPoint.from_script("app", script)
+    assert ep.entry_rel(tmp_path) == "sub/app.py"

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fspack.config import AppType, BuildConfig, DependencyReport, MirrorConfig, ProjectInfo
+from fspack.config import AppType, BuildConfig, DependencyReport, EntryPoint, MirrorConfig, ProjectInfo
 from fspack.mirror import MIRRORS
 from fspack.platform import Platform
 
@@ -128,3 +128,51 @@ def test_build_config_defaults() -> None:
 def test_apptype_values() -> None:
     assert AppType.CLI.value == "cli"
     assert AppType.GUI.value == "gui"
+
+
+# --- 多入口 all_entries 测试 ---
+
+
+def test_project_info_all_entries_single() -> None:
+    """单入口模式（entries 空）all_entries 构造单一入口。."""
+    info = ProjectInfo(
+        name="app",
+        version="0.1",
+        src_dir=Path(),
+        entry_module="app",
+        entry_file=Path("app.py"),
+        app_type=AppType.CLI,
+        dependencies=(),
+        py_version="3.11.9",
+    )
+    entries = info.all_entries
+    assert len(entries) == 1
+    assert entries[0].name == "app"
+    assert entries[0].module == "app"
+    assert entries[0].app_type is AppType.CLI
+
+
+def test_project_info_all_entries_multi() -> None:
+    """多入口模式 all_entries 返回 entries 字段。."""
+    ep1 = EntryPoint(name="cli", module="cli", file=Path("cli.py"), app_type=AppType.CLI)
+    ep2 = EntryPoint(name="gui", module="gui", file=Path("gui.py"), app_type=AppType.GUI)
+    info = ProjectInfo(
+        name="multi",
+        version="0.1",
+        src_dir=Path(),
+        entry_module="cli",
+        entry_file=Path("cli.py"),
+        app_type=AppType.CLI,
+        dependencies=(),
+        py_version="3.10.11",
+        entries=(ep1, ep2),
+    )
+    assert info.all_entries == (ep1, ep2)
+
+
+def test_project_info_from_dir_multi_entry() -> None:
+    """from_dir 解析 multi_entry 示例返回多个入口。."""
+    info = ProjectInfo.from_dir(_EXAMPLES / "multi_entry")
+    assert len(info.entries) == 3
+    assert info.all_entries == info.entries
+    assert info.all_entries[0].name == "cli"

@@ -124,10 +124,16 @@ def test_build_keep_module_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 def test_run_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     called: dict[str, Any] = {}
 
-    def fake_run(project: Path, rest_args: list[str] | None = None, debug: bool = False) -> None:
+    def fake_run(
+        project: Path,
+        rest_args: list[str] | None = None,
+        debug: bool = False,
+        entry: str | None = None,
+    ) -> None:
         called["project"] = project
         called["rest"] = rest_args
         called["debug"] = debug
+        called["entry"] = entry
 
     monkeypatch.setattr(cli.run_cmd, "run", fake_run)
     cli.main(["r", str(tmp_path), "--", "--foo", "bar"])
@@ -142,15 +148,38 @@ def test_run_debug_flag_after_project(tmp_path: Path, monkeypatch: pytest.Monkey
     """
     called: dict[str, Any] = {}
 
-    def fake_run(project: Path, rest_args: list[str] | None = None, debug: bool = False) -> None:
+    def fake_run(
+        project: Path,
+        rest_args: list[str] | None = None,
+        debug: bool = False,
+        entry: str | None = None,
+    ) -> None:
         called["project"] = project
         called["rest"] = rest_args
         called["debug"] = debug
+        called["entry"] = entry
 
     monkeypatch.setattr(cli.run_cmd, "run", fake_run)
     cli.main(["r", str(tmp_path), "--debug"])
     assert called["debug"] is True
     assert called["rest"] == []
+
+
+def test_run_entry_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`fspack r <project> --entry cli` 解析 entry 参数。."""
+    called: dict[str, Any] = {}
+
+    def fake_run(
+        project: Path,
+        rest_args: list[str] | None = None,
+        debug: bool = False,
+        entry: str | None = None,
+    ) -> None:
+        called["entry"] = entry
+
+    monkeypatch.setattr(cli.run_cmd, "run", fake_run)
+    cli.main(["r", str(tmp_path), "--entry", "cli"])
+    assert called["entry"] == "cli"
 
 
 def test_clean_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

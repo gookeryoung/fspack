@@ -6,9 +6,10 @@ import ast
 import logging
 import re
 from pathlib import Path
+from typing import Any
 
 from fspack.analyzer import collect_imports
-from fspack.config import AppType, ProjectInfo
+from fspack.config import AppType, EntryPoint, ProjectInfo
 from fspack.exceptions import ProjectError
 
 try:
@@ -24,6 +25,7 @@ __all__ = [
     "DEFAULT_PY_VERSION",
     "KNOWN_EMBED_VERSIONS",
     "detect_entry",
+    "infer_app_type",
     "parse_project",
     "resolve_py_version",
 ]
@@ -59,7 +61,13 @@ _GUI_HINTS = frozenset({"tkinter", "PySide2", "PySide6", "PyQt5", "PyQt6", "matp
 
 
 def parse_project(project_dir: Path, py_version: str | None = None) -> ProjectInfo:
-    """解析 pyproject.toml 并识别入口，返回项目元信息。."""
+    """解析 pyproject.toml 并识别入口，返回项目元信息。
+
+    支持多入口声明 ``[tool.fspack.entries]``：键为入口名（用作 exe 名），
+    值为入口脚本相对项目目录的路径（POSIX 风格）。声明多入口时，
+    ``ProjectInfo.entries`` 非空，``entry_module``/``entry_file``/``app_type``
+    取首个入口（保持向后兼容）。
+    """
     project_dir = Path(project_dir).resolve()
     pp = project_dir / "pyproject.toml"
     if not pp.is_file():
@@ -77,6 +85,26 @@ def parse_project(project_dir: Path, py_version: str | None = None) -> ProjectIn
     deps = tuple(str(d) for d in proj.get("dependencies", []))
     requires_python = str(proj.get("requires-python") or "") or None
 
+    tool: dict[str, Any] = data.get("tool", {}) if isinstance(data.get("tool"), dict) else {}
+    fspack_cfg: dict[str, Any] = tool.get("fspack", {}) if isinstance(tool.get("fspack"), dict) else {}
+    entries_tbl: dict[str, Any] = fspack_cfg.get("entries", {}) if isinstance(fspack_cfg.get("entries"), dict) else {}
+
+    if entries_tbl:
+        entries = _parse_entries(project_dir, entries_tbl, deps)
+        first = entries[0]
+        return ProjectInfo(
+            name=name,
+            version=version,
+            src_dir=project_dir,
+            entry_module=first.module,
+            entry_file=first.file,
+            app_type=first.app_type,
+            dependencies=deps,
+            py_version=py_version or DEFAULT_PY_VERSION,
+            requires_python=requires_python,
+            entries=entries,
+        )
+
     entry_module, entry_file, app_type = detect_entry(project_dir, name, deps)
     return ProjectInfo(
         name=name,
@@ -89,6 +117,37 @@ def parse_project(project_dir: Path, py_version: str | None = None) -> ProjectIn
         py_version=py_version or DEFAULT_PY_VERSION,
         requires_python=requires_python,
     )
+
+
+def _parse_entries(
+    project_dir: Path,
+    entries_tbl: dict[str, Any],
+    deps: tuple[str, ...],
+) -> tuple[EntryPoint, ...]:
+    """解析 ``[tool.fspack.entries]`` 表为 EntryPoint 元组。
+
+    键为入口名（用作 exe 名，须为合法标识符风格），值为入口脚本相对
+    项目目录的路径。脚本路径不存在或为空时报错。Python 字典保持插入序，
+    首个入口作为主入口（保持向后兼容）。
+
+    ``deps`` 仅用于校验（保留参数兼容签名），多入口模式下每个入口的
+    ``app_type`` 按脚本自身 import 推断，不看项目级 declared（不同入口
+    可能是不同类型，如 cli/gui/web 混合）。
+    """
+    _ = deps  # 保留签名兼容，多入口模式不用 declared 推断 app_type
+    if not entries_tbl:
+        raise ProjectError("[tool.fspack.entries] 为空，请删除该表或至少声明一个入口")
+    entries: list[EntryPoint] = []
+    for entry_name, script_rel in entries_tbl.items():
+        if not isinstance(entry_name, str) or not entry_name:
+            raise ProjectError(f"[tool.fspack.entries] 入口名无效: {entry_name!r}")
+        if not isinstance(script_rel, str) or not script_rel.strip():
+            raise ProjectError(f"[tool.fspack.entries] {entry_name} 的脚本路径为空")
+        script_path = (project_dir / script_rel).resolve()
+        if not script_path.is_file():
+            raise ProjectError(f"[tool.fspack.entries] {entry_name} 的脚本不存在: {script_rel}")
+        entries.append(EntryPoint.from_script(entry_name, script_path))
+    return tuple(entries)
 
 
 def resolve_py_version(
@@ -181,7 +240,7 @@ def detect_entry(
         if mod not in seen and path.is_file():
             seen.add(mod)
             if _has_entry(path):
-                return mod, path, _infer_app_type(path, declared)
+                return mod, path, infer_app_type(path, declared)
     raise ProjectError(f"未识别到入口（需 def main() 或 if __name__=='__main__'）: {src_dir}")
 
 
@@ -211,7 +270,7 @@ def _is_main_check(node: ast.AST) -> bool:
     )
 
 
-def _infer_app_type(path: Path, declared: tuple[str, ...]) -> AppType:
+def infer_app_type(path: Path, declared: tuple[str, ...]) -> AppType:
     """根据 import 与声明依赖推断 CLI/GUI 类型。."""
     tree = ast.parse(path.read_text(encoding="utf-8"))
     for top in collect_imports(tree):

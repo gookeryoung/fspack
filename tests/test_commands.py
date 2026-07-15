@@ -9,8 +9,9 @@ import pytest
 from fspack.commands.build import run as build_run
 from fspack.commands.clean import run as clean_run
 from fspack.commands.package import run as package_run
-from fspack.commands.run import _build_cmd, _find_exe
+from fspack.commands.run import _build_cmd, _find_exe, _select_entry
 from fspack.commands.run import run as run_run
+from fspack.config import AppType, EntryPoint, ProjectInfo
 from fspack.exceptions import FspackError
 from fspack.mirror import get_mirror
 from fspack.platform import Platform, detect_platform
@@ -400,3 +401,93 @@ def test_package_run_explicit_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert captured["py_version"] == "3.11.10"
     assert captured["no_build"] is True
     assert captured["branch"] == "linux"
+
+
+# --- 多入口 _select_entry 测试 ---
+
+
+def _make_multi_entry_info() -> ProjectInfo:
+    """构造多入口 ProjectInfo 用于 _select_entry 测试。."""
+    ep1 = EntryPoint(name="cli", module="cli", file=Path("cli.py"), app_type=AppType.CLI)
+    ep2 = EntryPoint(name="gui", module="gui", file=Path("gui.py"), app_type=AppType.GUI)
+    ep3 = EntryPoint(name="web", module="web", file=Path("web.py"), app_type=AppType.CLI)
+    return ProjectInfo(
+        name="multi",
+        version="0.1",
+        src_dir=Path(),
+        entry_module="cli",
+        entry_file=Path("cli.py"),
+        app_type=AppType.CLI,
+        dependencies=(),
+        py_version="3.10.11",
+        entries=(ep1, ep2, ep3),
+    )
+
+
+def test_select_entry_default_returns_first(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """多入口未指定 --entry 时返回首个入口并日志提示。."""
+    info = _make_multi_entry_info()
+    with caplog.at_level("INFO", logger="fspack.commands.run"):
+        ep = _select_entry(info, None)
+    assert ep.name == "cli"
+    assert "未指定 --entry" in caplog.text
+
+
+def test_select_entry_by_name() -> None:
+    """--entry 按名匹配返回对应入口。."""
+    info = _make_multi_entry_info()
+    assert _select_entry(info, "gui").name == "gui"
+    assert _select_entry(info, "web").name == "web"
+
+
+def test_select_entry_not_found() -> None:
+    """--entry 未匹配时报错列出可用入口。."""
+    info = _make_multi_entry_info()
+    with pytest.raises(FspackError, match="未找到入口: missing"):
+        _select_entry(info, "missing")
+
+
+def test_select_entry_single_project_no_warn(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """单入口项目未指定 --entry 时不输出多入口提示日志。."""
+    info = ProjectInfo(
+        name="app",
+        version="0.1",
+        src_dir=Path(),
+        entry_module="app",
+        entry_file=Path("app.py"),
+        app_type=AppType.CLI,
+        dependencies=(),
+        py_version="3.11.9",
+    )
+    with caplog.at_level("INFO", logger="fspack.commands.run"):
+        ep = _select_entry(info, None)
+    assert ep.name == "app"
+    assert "未指定 --entry" not in caplog.text
+
+
+def test_run_run_multi_entry_select(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """fspack r --entry gui 运行对应入口的 exe。."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "multi"\nversion = "0.1"\n\n[tool.fspack.entries]\ncli = "cli.py"\ngui = "gui.py"\n'
+    )
+    (tmp_path / "cli.py").write_text("def main():\n    pass\n")
+    (tmp_path / "gui.py").write_text("def main():\n    pass\n")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "cli.exe").write_bytes(b"")
+    gui_exe = dist / "gui.exe"
+    gui_exe.write_bytes(b"")
+
+    captured: dict[str, object] = {}
+
+    class _Completed:
+        returncode = 0
+
+    def fake_run(cmd: list[str], **kw: object) -> _Completed:
+        captured["cmd"] = cmd
+        return _Completed()
+
+    monkeypatch.setattr("fspack.commands.run.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Windows")
+    run_run(tmp_path, entry="gui")
+    assert captured["cmd"] == [str(gui_exe)]

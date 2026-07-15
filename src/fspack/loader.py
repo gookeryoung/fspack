@@ -7,8 +7,10 @@ sys.path 由 dist/runtime/python3X._pth 文件控制（与 DLL 同目录），lo
 Linux：loader 与 runtime/python/ 同目录（dist/），dlopen dist/runtime/python/lib/libpython3.X.so，
 setenv PYTHONHOME 指向 runtime/python，调用 ``Py_BytesMain`` 运行入口脚本。
 
-入口脚本路径在运行时从 ``<exe_dir>/.entry`` 文件读取（构建时写入），
-使 loader 源码仅依赖 ``py_xy`` 与平台，可按 ``(py_xy, app_type, platform)`` 缓存跨项目复用。
+入口脚本路径在运行时从 ``<exe_dir>/<exe_basename>.entry`` 文件读取（多入口模式），
+回退到 ``<exe_dir>/.entry``（单入口模式，向后兼容）。构建时为每个入口写对应
+``<name>.entry`` 文件，使 loader 源码仅依赖 ``py_xy`` 与平台，可按
+``(py_xy, app_type, platform)`` 缓存跨项目复用。
 """
 
 from __future__ import annotations
@@ -47,9 +49,9 @@ def loader_cache_dir() -> Path:
 def _loader_cache_key(source: str, app_type: AppType, platform: Platform) -> str:
     """计算 loader 缓存键：sha256(source + app_type + platform) 前 16 字符 hex。
 
-    源码仅依赖 ``py_xy`` 与平台（入口路径运行时从 ``.entry`` 读取），
-    应用类型影响 ``-mwindows`` 编译选项，三者组合哈希作为缓存文件名，
-    保证同配置命中、改配置失效。
+    源码仅依赖 ``py_xy`` 与平台（入口路径运行时从 ``<exe_basename>.entry``
+    或回退 ``.entry`` 读取），应用类型影响 ``-mwindows`` 编译选项，三者组合哈希
+    作为缓存文件名，保证同配置命中、改配置失效。
     """
     h = hashlib.sha256()
     h.update(source.encode("utf-8"))
@@ -59,31 +61,49 @@ def _loader_cache_key(source: str, app_type: AppType, platform: Platform) -> str
 
 
 _LOADER_C_WINDOWS = r"""/* fspack 生成的 C loader —— 加载 embed python 并运行用户入口脚本
-   入口脚本路径从同目录的 .entry 文件读取，使 loader 可跨项目复用 */
+   入口脚本路径从 <exe_basename>.entry 文件读取，回退 .entry（单入口兼容） */
 #include <windows.h>
 #include <stdio.h>
 #include <wchar.h>
 #include <stdlib.h>
 
 #define PYTHON_DLL L"{python_dll}"
-#define ENTRY_FILENAME L".entry"
 #define MAX_ENTRY 512
 
 typedef int (*Py_Main_t)(int argc, wchar_t **argv);
 
-static void exe_dir(wchar_t *buf, size_t cap) {{
-    GetModuleFileNameW(NULL, buf, (DWORD)cap);
-    wchar_t *slash = wcsrchr(buf, L'\\');
-    if (slash) *slash = L'\0';
+static void split_exe(const wchar_t *exe_path, wchar_t *dir, size_t dir_cap, wchar_t *base, size_t base_cap) {{
+    wchar_t tmp[MAX_PATH];
+    wcscpy_s(tmp, MAX_PATH, exe_path);
+    wchar_t *slash = wcsrchr(tmp, L'\\');
+    if (slash) {{
+        wcscpy_s(base, base_cap, slash + 1);
+        *slash = L'\0';
+        wcscpy_s(dir, dir_cap, tmp);
+    }} else {{
+        dir[0] = L'\0';
+        wcscpy_s(base, base_cap, tmp);
+    }}
+    /* 去除 .exe 后缀 */
+    wchar_t *dot = wcsrchr(base, L'.');
+    if (dot && wcscmp(dot, L".exe") == 0) *dot = L'\0';
 }}
 
-static int read_entry(const wchar_t *dir, wchar_t *entry_out, size_t cap) {{
-    wchar_t path[MAX_PATH];
-    _snwprintf(path, MAX_PATH, L"%s\\%s", dir, ENTRY_FILENAME);
+static int read_entry(const wchar_t *exe_path, wchar_t *entry_out, size_t cap) {{
+    wchar_t dir[MAX_PATH], base[MAX_PATH], path[MAX_PATH];
+    split_exe(exe_path, dir, MAX_PATH, base, MAX_PATH);
+
+    /* 多入口模式：<dir>\<base>.entry */
+    _snwprintf(path, MAX_PATH, L"%s\\%s.entry", dir, base);
     FILE *f = _wfopen(path, L"rb");
     if (!f) {{
-        fwprintf(stderr, L"无法读取入口文件: %s\n", path);
-        return 1;
+        /* 单入口模式回退：<dir>\.entry */
+        _snwprintf(path, MAX_PATH, L"%s\\.entry", dir);
+        f = _wfopen(path, L"rb");
+        if (!f) {{
+            fwprintf(stderr, L"无法读取入口文件: %s\\%s.entry 或 %s\\.entry\n", dir, base, dir);
+            return 1;
+        }}
     }}
     char buf[MAX_ENTRY];
     size_t n = fread(buf, 1, sizeof(buf) - 1, f);
@@ -103,13 +123,16 @@ static int read_entry(const wchar_t *dir, wchar_t *entry_out, size_t cap) {{
 }}
 
 int wmain(int argc, wchar_t **argv) {{
-    wchar_t dir[MAX_PATH];
-    exe_dir(dir, MAX_PATH);
+    wchar_t exe_path[MAX_PATH], dir[MAX_PATH];
+    GetModuleFileNameW(NULL, exe_path, MAX_PATH);
+    wcscpy_s(dir, MAX_PATH, exe_path);
+    wchar_t *slash = wcsrchr(dir, L'\\');
+    if (slash) *slash = L'\0';
 
     wchar_t dll[MAX_PATH], entry[MAX_ENTRY], entry_full[MAX_PATH + MAX_ENTRY];
     _snwprintf(dll, MAX_PATH, L"%s\\%s", dir, PYTHON_DLL);
 
-    if (read_entry(dir, entry, MAX_ENTRY) != 0) {{
+    if (read_entry(exe_path, entry, MAX_ENTRY) != 0) {{
         return 1;
     }}
     _snwprintf(entry_full, sizeof(entry_full)/sizeof(entry_full[0]), L"%s\\%s", dir, entry);
@@ -140,7 +163,7 @@ int wmain(int argc, wchar_t **argv) {{
 """
 
 _LOADER_C_LINUX = r"""/* fspack 生成的 C loader —— 加载 python-build-standalone 并运行用户入口脚本
-   入口脚本路径从同目录的 .entry 文件读取，使 loader 可跨项目复用 */
+   入口脚本路径从 <exe_basename>.entry 文件读取，回退 .entry（单入口兼容） */
 #include <dlfcn.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -150,28 +173,42 @@ _LOADER_C_LINUX = r"""/* fspack 生成的 C loader —— 加载 python-build-st
 
 #define LIBPYTHON "{libpython}"
 #define PYTHONHOME "runtime/python"
-#define ENTRY_FILENAME ".entry"
 
 typedef int (*Py_BytesMain_t)(int argc, char **argv);
 
-static void exe_dir(char *buf, size_t cap) {{
-    ssize_t n = readlink("/proc/self/exe", buf, cap - 1);
-    if (n < 0) {{
-        buf[0] = '\0';
-        return;
+static void split_exe(const char *exe_path, char *dir, size_t dir_cap, char *base, size_t base_cap) {{
+    char tmp[PATH_MAX];
+    strncpy(tmp, exe_path, sizeof(tmp) - 1);
+    tmp[sizeof(tmp) - 1] = '\0';
+    char *slash = strrchr(tmp, '/');
+    if (slash) {{
+        strncpy(base, slash + 1, base_cap - 1);
+        base[base_cap - 1] = '\0';
+        *slash = '\0';
+        strncpy(dir, tmp, dir_cap - 1);
+        dir[dir_cap - 1] = '\0';
+    }} else {{
+        dir[0] = '\0';
+        strncpy(base, tmp, base_cap - 1);
+        base[base_cap - 1] = '\0';
     }}
-    buf[n] = '\0';
-    char *slash = strrchr(buf, '/');
-    if (slash) *slash = '\0';
 }}
 
-static int read_entry(const char *dir, char *entry_out, size_t cap) {{
-    char path[PATH_MAX];
-    snprintf(path, sizeof(path), "%s/%s", dir, ENTRY_FILENAME);
+static int read_entry(const char *exe_path, char *entry_out, size_t cap) {{
+    char dir[PATH_MAX], base[PATH_MAX], path[PATH_MAX];
+    split_exe(exe_path, dir, sizeof(dir), base, sizeof(base));
+
+    /* 多入口模式：<dir>/<base>.entry */
+    snprintf(path, sizeof(path), "%s/%s.entry", dir, base);
     FILE *f = fopen(path, "r");
     if (!f) {{
-        fprintf(stderr, "无法读取入口文件: %s\n", path);
-        return 1;
+        /* 单入口模式回退：<dir>/.entry */
+        snprintf(path, sizeof(path), "%s/.entry", dir);
+        f = fopen(path, "r");
+        if (!f) {{
+            fprintf(stderr, "无法读取入口文件: %s/%s.entry 或 %s/.entry\n", dir, base, dir);
+            return 1;
+        }}
     }}
     if (!fgets(entry_out, (int)cap, f)) {{
         fclose(f);
@@ -191,14 +228,23 @@ static int read_entry(const char *dir, char *entry_out, size_t cap) {{
 }}
 
 int main(int argc, char **argv) {{
-    char dir[PATH_MAX];
-    exe_dir(dir, sizeof(dir));
+    char exe_path[PATH_MAX], dir[PATH_MAX];
+    ssize_t n = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
+    if (n < 0) {{
+        fprintf(stderr, "无法读取 /proc/self/exe\n");
+        return 1;
+    }}
+    exe_path[n] = '\0';
+    strncpy(dir, exe_path, sizeof(dir) - 1);
+    dir[sizeof(dir) - 1] = '\0';
+    char *slash = strrchr(dir, '/');
+    if (slash) *slash = '\0';
 
     char lib[PATH_MAX], entry[PATH_MAX], home[PATH_MAX], entry_full[PATH_MAX * 2];
     snprintf(lib, sizeof(lib), "%s/%s", dir, LIBPYTHON);
     snprintf(home, sizeof(home), "%s/%s", dir, PYTHONHOME);
 
-    if (read_entry(dir, entry, sizeof(entry)) != 0) {{
+    if (read_entry(exe_path, entry, sizeof(entry)) != 0) {{
         return 1;
     }}
     snprintf(entry_full, sizeof(entry_full), "%s/%s", dir, entry);
@@ -236,8 +282,9 @@ def generate_loader_source(
     py_xy: 形如 python311 的版本前缀。
     platform: 目标平台，决定加载 DLL（Windows）或 .so（Linux）。
 
-    入口脚本路径在运行时从 ``<exe_dir>/.entry`` 文件读取（构建时由 build 写入），
-    使 loader 源码仅依赖 ``py_xy`` 与平台，可按 ``(py_xy, app_type, platform)`` 缓存复用。
+    入口脚本路径在运行时从 ``<exe_dir>/<exe_basename>.entry`` 读取（多入口），
+    回退 ``<exe_dir>/.entry``（单入口）；构建时由 build 写入对应入口文件。
+    loader 源码仅依赖 ``py_xy`` 与平台，可按 ``(py_xy, app_type, platform)`` 缓存复用。
     """
     if platform is Platform.LINUX:
         dotted = f"{py_xy[6]}.{py_xy[7:]}"

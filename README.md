@@ -18,6 +18,7 @@ fspack 将 Python 项目打包为可执行文件与跨平台安装包：用 embe
 - **C loader 启动器**：动态加载 libpython，烧入入口路径，mingw/gcc 编译为原生可执行文件
 - **跨平台安装包**：`fsp p` 按目标平台生成 Windows NSIS 安装包（含开始菜单/桌面快捷方式、卸载器、中英文双语）或 Linux .deb + tar.gz 便携包
 - **双平台支持**：Windows（embed + mingw 交叉编译）、Linux（python-build-standalone + gcc）
+- **多入口打包**：`[tool.fspack.entries]` 声明多个入口，单个项目生成多个 exe 共享 runtime/依赖/源码，支持 cli/gui/web 混合类型
 - **国内镜像**：默认阿里云 PyPI 与 embed python 镜像，`--mirror` 切换
 - **彩色进度显示**：rich 驱动的步骤进度（> 准备运行时 / √ 构建完成），错误/警告/一般消息颜色区分，`-v` 开启 DEBUG 日志
 
@@ -82,10 +83,12 @@ fsp b [project] [--mirror <name>] [--py-version <ver>] [--target <platform>]
 ### fsp run
 
 ```text
-fsp r [project] [-- <args>...]
+fsp r [project] [--entry <name>] [--debug] [-- <args>...]
 ```
 
 - `project`：项目目录，默认当前目录
+- `--entry <name>`：多入口项目指定要运行的入口名（与 `[tool.fspack.entries]` 键匹配），单入口项目可省略
+- `--debug`：用 embed python 直跑入口脚本（绕过 GUI loader，输出可见）
 - `-- <args>`：透传给目标程序的参数（`--` 分隔）
 
 ### fsp clean
@@ -133,6 +136,35 @@ dist/
     └── <name>-<ver>-linux.tar.gz  # Linux 便携包
 ```
 
+## 多入口打包
+
+单个项目可通过 `[tool.fspack.entries]` 声明多个入口，每个入口生成独立 exe，
+共享 runtime/依赖/源码。每个入口按自身脚本 import 推断 CLI/GUI 类型，支持
+cli/gui/web 混合。
+
+```toml
+[project]
+name = "my_app"
+version = "0.1.0"
+dependencies = ["PySide2>=5.15.2", "flask"]
+
+[tool.fspack.entries]
+cli = "cli.py"        # 生成 cli.exe（CLI 类型）
+gui = "gui.py"        # 生成 gui.exe（GUI 类型，加 -mwindows）
+web = "web.py"        # 生成 web.exe（CLI 类型）
+```
+
+```bash
+fsp b                 # 构建：生成 cli.exe/gui.exe/web.exe 三个入口
+fsp r --entry cli     # 运行 cli 入口
+fsp r --entry gui     # 运行 gui 入口
+fsp r --entry web     # 运行 web 入口
+```
+
+多入口模式下每个入口写入 `<name>.entry` 文件，C loader 运行时按
+`<exe_basename>.entry` 查找入口脚本。单入口项目（无 `[tool.fspack.entries]`）
+仍写 `.entry` 文件，向后兼容。
+
 ## 示例
 
 `examples/` 下提供多类典型项目验证打包效果（下划线命名者由 slow 端到端测试覆盖）：
@@ -149,6 +181,7 @@ dist/
 | pygame_cli | 有库 pygame | pygame 依赖，验证多媒体库打包 |
 | pygame_snake | 有库 pygame | pygame 贪吃蛇，验证 dummy 驱动运行 |
 | web_app | 有库 web | flask 依赖，验证 web 框架打包 |
+| multi_entry | 多入口混合 | cli+gui+web 三入口共享 runtime/依赖，验证 `[tool.fspack.entries]` 多入口打包 |
 
 ## 平台支持
 

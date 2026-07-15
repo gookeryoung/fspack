@@ -169,17 +169,32 @@ def build(  # noqa: PLR0912, PLR0913
         with spinner(f"复制 {info.name} 源码"):
             copy_source(project_dir, src_dst)
 
+    exes: list[Path] = []
     with tracker.stage("生成 C loader") as st:
-        entry_rel = info.entry_file.relative_to(info.src_dir).as_posix()
-        entry_file_in_dist = f"src/{entry_rel}"
-        (cfg.dist_dir / ".entry").write_text(entry_file_in_dist, encoding="utf-8")
         source = generate_loader_source(info.py_xy, target)
-        exe_name = info.exe_name if target is Platform.WINDOWS else info.name
-        exe = cfg.dist_dir / exe_name
-        compile_loader(source, exe, info.app_type, cfg.dist_dir / "build", target, stage=st)
+        build_dir = cfg.dist_dir / "build"
+        for ep in info.all_entries:
+            entry_rel = ep.entry_rel(info.src_dir)
+            entry_file_in_dist = f"src/{entry_rel}"
+            if info.entries:
+                # 多入口模式：每个入口写 <name>.entry
+                (cfg.dist_dir / f"{ep.name}.entry").write_text(entry_file_in_dist, encoding="utf-8")
+            else:
+                # 单入口模式：写 .entry（向后兼容）
+                (cfg.dist_dir / ".entry").write_text(entry_file_in_dist, encoding="utf-8")
+            exe_name = f"{ep.name}.exe" if target is Platform.WINDOWS else ep.name
+            exe = cfg.dist_dir / exe_name
+            compile_loader(source, exe, ep.app_type, build_dir, target, stage=st)
+            exes.append(exe)
+        st.processed(len(exes))
 
     rich_console.print(tracker.summary())
-    success(f"构建完成: {exe}")
+    if len(exes) == 1:
+        success(f"构建完成: {exes[0]}")
+    else:
+        success(f"构建完成: {len(exes)} 个入口")
+        for exe in exes:
+            rich_console.print(f"  - {exe}")
     return info
 
 

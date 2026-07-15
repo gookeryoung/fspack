@@ -45,6 +45,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("project", nargs="?", default=".", help="项目目录")
     p_run.add_argument("rest", nargs="*", default=[], help="透传给目标程序的参数（以 -- 分隔）")
     p_run.add_argument("--debug", action="store_true", help="用 embed python 直跑入口脚本（绕过 GUI loader，输出可见）")
+    p_run.add_argument(
+        "--entry",
+        default=None,
+        help="多入口项目指定要运行的入口名（与 [tool.fspack.entries] 键匹配）",
+    )
 
     p_clean = sub.add_parser("clean", aliases=["c"], help="清理 dist/")
     p_clean.add_argument("project", nargs="?", default=".", help="项目目录")
@@ -79,7 +84,7 @@ def main(argv: list[str] | None = None) -> None:
             keep_modules=set(ns.keep_modules) if ns.keep_modules else None,
         )
     elif command in ("run", "r"):
-        run_cmd.run(project, rest_args=_drop_separator(ns.rest), debug=ns.debug)
+        run_cmd.run(project, rest_args=_drop_separator(ns.rest), debug=ns.debug, entry=ns.entry)
     elif command in ("clean", "c"):
         clean_cmd.run(project)
     elif command in ("package", "p"):
