@@ -1,0 +1,5 @@
+preset           = "strict"
+project-excludes = [".venv/**", "template/**"]
+project-includes = ["**/*.ipynb", "**/*.py*"]
+python-version   = "3.8"
+search-path      = ["."]

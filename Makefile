@@ -54,5 +54,6 @@ patch minor major:
 pub:  ## 推送到pypi
 	uvx twine upload ./dist/**
 
-push: ## 推送代码到远程仓库
-	git push && git push --tags
+push: ## 推送代码到所有远程仓库
+	@uv run python -c "import subprocess as sp; [print(f'\u63a8\u9001 {r}...',flush=True) or (sp.run(['git','push',r],check=True) and sp.run(['git','push',r,'--tags'],check=True)) for r in sp.check_output(['git','remote'],text=True).split()]"
+

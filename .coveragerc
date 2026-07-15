@@ -1,0 +1,14 @@
+[run]
+branch = true
+concurrency = thread
+omit = tests/*
+source = fspack
+
+[report]
+fail_under = 95
+exclude_lines =
+    if TYPE_CHECKING:
+    if __name__ == .__main__.:
+    pragma: no cover
+    raise NotImplementedError
+show_missing = true

@@ -1,0 +1,36 @@
+extend-exclude = ["template", "docs"]
+line-length    = 120
+target-version = "py38"
+
+[lint]
+ignore = [
+    "E501",    # line too long (handled by formatter)
+    "PLC0415", # import should be at top-level (intentional for lazy imports)
+    "PLR0915", # too many statements (intentional for complex methods)
+    "PLR2004", # magic value comparison
+    "RUF001",  # ambiguous unicode characters in string
+    "RUF002",  # ambiguous unicode characters in docstring
+    "RUF003",  # ambiguous unicode characters in comment
+    "RUF012",  # mutable class attributes (intentional for config)
+    "SIM108",  # use ternary operator
+    # UP045 建议 Optional[X] -> X | None（PEP 604），但 typer 运行时用 typing.get_type_hints()
+    # 求值注解，X | None 在 Python 3.8/3.9 会抛 TypeError。typer 命令函数须保留 Optional[X]。
+    "UP045",
+]
+select = [
+    "ARG", # flake8-unused-arguments
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "E",   # pycodestyle errors
+    "F",   # Pyflakes
+    "I",   # isort
+    "PL",  # Pylint
+    "PTH", # flake8-use-pathlib
+    "RUF", # Ruff-specific rules
+    "SIM", # flake8-simplify
+    "UP",  # pyupgrade
+    "W",   # pycodestyle warnings
+]
+
+[lint.per-file-ignores]
+"**/tests/**" = ["ARG001", "ARG002"]

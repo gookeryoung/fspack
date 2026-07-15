@@ -1,0 +1,5 @@
+required-version = ">=0.5.0"
+[[index]]
+default = true
+url     = "https://mirrors.aliyun.com/pypi/simple/"
+

@@ -1,14 +1,21 @@
+---
+name: "rule-11-python-standards"
+glob: "*.{py,pyi}"
+---
+
 # Python 开发规范
 
-## 工具链（以 pyproject.toml 为准）
+## 工具链（独立配置文件，pyproject.toml 仅含项目元数据）
 
-| 工具 | 配置要点 |
-|------|---------|
-| ruff | `line-length=120`，`target-version="py38"` |
-| pyrefly | `preset="strict"`，`python-version="3.8"` |
-| pytest | `asyncio_default_fixture_loop_scope="function"`，marker `slow` |
-| coverage | `branch=true`，`fail_under=95`，`concurrency=["thread"]` |
-| pre-commit | ruff `--fix` + trailing-whitespace + end-of-file-fixer |
+| 工具 | 配置文件 | 配置要点 |
+|------|---------|---------|
+| ruff | `ruff.toml` | `line-length=120`，`target-version="py38"` |
+| pyrefly | `pyrefly.toml` | `preset="strict"`，`python-version="3.8"` |
+| pytest | `pytest.ini` | `asyncio_default_fixture_loop_scope="function"`，marker `slow` |
+| coverage | `.coveragerc` | `branch=true`，`fail_under=95`，`concurrency=thread` |
+| bump-my-version | `.bumpversion.toml` | `current_version` 同步 `pyproject.toml` 与 `__init__.py` |
+| uv | `uv.toml` | `required-version`，国内镜像源（可选） |
+| pre-commit | `.pre-commit-config.yaml` | ruff `--fix` + trailing-whitespace + end-of-file-fixer |
 
 验证（每次修改后）：
 
@@ -104,5 +111,5 @@ uv run pytest -m "not slow" --cov=fspack --cov-fail-under=95
 ## Git 与提交
 
 - 任务完成后自动 `git add`（按文件名）+ `git commit`（遵循 `rule-09-git提交规则.md` 风格）+ `git push`（分支已跟踪远程时；新分支跳过并在总结说明）。
-- 不修改 git config；不运行破坏性命令（`push --force`/`reset --hard`/`clean -f`）除非用户明确要求。
+- 破坏性命令的暂停边界遵循 `rule-01-开发流程.md` 暂停条件：`force-push`、工作区有改动时的 `reset --hard`、`git clean -f`/`-fd`/`-fx` 需暂停；`git clean -fX`、`git stash`/`stash pop`、`git revert`、工作区干净时的 `reset --hard` 可自主执行。
 - staging 按文件名添加，不用 `git add -A`/`git add .`。

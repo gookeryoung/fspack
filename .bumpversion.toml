@@ -1,0 +1,24 @@
+[tool.bumpversion]
+current_version = "0.1.0"
+commit = true
+exclude = ["template/*"]
+message = "chore: 更新版本 {current_version} → {new_version}"
+tag = true
+tag_name = "v{new_version}"
+
+[[tool.bumpversion.files]]
+filename = "pyproject.toml"
+regex = true
+search = '(version\s+=\s+)"{current_version}"'
+replace = '\1"{new_version}"'
+
+[[tool.bumpversion.files]]
+filename = "src/fspack/__init__.py"
+search = '__version__ = "{current_version}"'
+replace = '__version__ = "{new_version}"'
+
+[[tool.bumpversion.files]]
+filename = ".copier-answers.yml"
+regex = true
+search = '_commit: v{current_version}'
+replace = '_commit: v{new_version}'
