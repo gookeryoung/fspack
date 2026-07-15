@@ -1,5 +1,4 @@
 import core
-from core import module_g
 
 
 def function_d():

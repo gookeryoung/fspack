@@ -15,8 +15,8 @@ def main() -> None:
     pyside_dir = str(Path(PySide2.__file__).parent)
     with contextlib.suppress(OSError):
         os.add_dll_directory(pyside_dir)
-    from PySide2.QtCore import QTimer
     import PySide2.QtGui  # QtWidgets 在 C 层依赖 QtGui,显式导入以保留 .pyd
+    from PySide2.QtCore import QTimer
     from PySide2.QtWidgets import QApplication, QLabel
 
     app = QApplication([])

@@ -156,7 +156,8 @@ class LineClearAnimation(BaseAnimation, ABC):
         self.anim_type: str = anim_type
         self.board: list[list[str | None]] | None = board
         self.params: dict[str, Any] = self.ANIM_PARAMS.get(
-            anim_type, self.ANIM_PARAMS["SINGLE"],
+            anim_type,
+            self.ANIM_PARAMS["SINGLE"],
         )
         self.duration: float = self.params["dur"]
 
@@ -194,7 +195,12 @@ class LineClearAnimation(BaseAnimation, ABC):
         pygame.draw.line(surface, (dr, dg, db), (x + w, y), (x + w, y + h), 2)
 
     def _draw_flash(
-        self, surface: pg.Surface, bx: int, by: int, progress: float, flash_end: float,
+        self,
+        surface: pg.Surface,
+        bx: int,
+        by: int,
+        progress: float,
+        flash_end: float,
     ) -> None:
         import pygame
 
@@ -226,7 +232,13 @@ class ShrinkLineClear(LineClearAnimation):
                         h: int = max(1, int(CELL_SIZE * shrink))
                         colors = PIECE_COLORS.get(cell, ((200, 200, 200),) * 4)
                         self._draw_cell(
-                            surface, cx - w // 2, cy - h // 2, colors, 0.7, w, h,
+                            surface,
+                            cx - w // 2,
+                            cy - h // 2,
+                            colors,
+                            0.7,
+                            w,
+                            h,
                         )
         if self.params["wave"]:
             self._draw_wave(surface, bx, by, progress)
@@ -234,7 +246,11 @@ class ShrinkLineClear(LineClearAnimation):
             self._draw_glow(surface, bx, by, progress)
 
     def _draw_wave(
-        self, surface: pg.Surface, bx: int, by: int, progress: float,
+        self,
+        surface: pg.Surface,
+        bx: int,
+        by: int,
+        progress: float,
     ) -> None:
         import pygame
 
@@ -257,7 +273,11 @@ class ShrinkLineClear(LineClearAnimation):
                     )
 
     def _draw_glow(
-        self, surface: pg.Surface, bx: int, by: int, progress: float,
+        self,
+        surface: pg.Surface,
+        bx: int,
+        by: int,
+        progress: float,
     ) -> None:
         import pygame
 
@@ -265,7 +285,8 @@ class ShrinkLineClear(LineClearAnimation):
         for row in self.rows:
             ry = by + row * CELL_SIZE
             glow_surf = pygame.Surface(
-                (BOARD_WIDTH + 20, CELL_SIZE + 20), pygame.SRCALPHA,
+                (BOARD_WIDTH + 20, CELL_SIZE + 20),
+                pygame.SRCALPHA,
             )
             glow_surf.fill((*self.params["flash_col"], int(100 * glow_intensity)))
             surface.blit(glow_surf, (bx - 10, ry - 10))
@@ -310,7 +331,11 @@ class DissolveLineClear(LineClearAnimation):
             self._draw_glow(surface, bx, by, progress)
 
     def _draw_wave(
-        self, surface: pg.Surface, bx: int, by: int, progress: float,
+        self,
+        surface: pg.Surface,
+        bx: int,
+        by: int,
+        progress: float,
     ) -> None:
         import pygame
 
@@ -333,7 +358,11 @@ class DissolveLineClear(LineClearAnimation):
                     )
 
     def _draw_glow(
-        self, surface: pg.Surface, bx: int, by: int, progress: float,
+        self,
+        surface: pg.Surface,
+        bx: int,
+        by: int,
+        progress: float,
     ) -> None:
         import pygame
 
@@ -341,7 +370,8 @@ class DissolveLineClear(LineClearAnimation):
         for row in self.rows:
             ry = by + row * CELL_SIZE
             glow_surf = pygame.Surface(
-                (BOARD_WIDTH + 20, CELL_SIZE + 20), pygame.SRCALPHA,
+                (BOARD_WIDTH + 20, CELL_SIZE + 20),
+                pygame.SRCALPHA,
             )
             glow_surf.fill((*self.params["flash_col"], int(100 * glow_intensity)))
             surface.blit(glow_surf, (bx - 10, ry - 10))
@@ -353,7 +383,8 @@ def create_line_clear_animation(
     board: list[list[str | None]] | None = None,
 ) -> LineClearAnimation:
     params: dict[str, Any] = LineClearAnimation.ANIM_PARAMS.get(
-        anim_type, LineClearAnimation.ANIM_PARAMS["SINGLE"],
+        anim_type,
+        LineClearAnimation.ANIM_PARAMS["SINGLE"],
     )
     if params["shrink"]:
         return ShrinkLineClear(rows, anim_type, board)
@@ -363,7 +394,9 @@ def create_line_clear_animation(
 
 class ShockwaveAnimation(BaseAnimation):
     def __init__(
-        self, center_y: float, color: tuple[int, int, int] = (255, 200, 50),
+        self,
+        center_y: float,
+        color: tuple[int, int, int] = (255, 200, 50),
     ) -> None:
         super().__init__()
         self.center_y: float = center_y
@@ -460,9 +493,7 @@ class ScreenFlashAnimation(BaseAnimation):
             return
         t: float = self.timer / self.duration
         alpha: int = (
-            int(255 * self.intensity * (t / 0.3))
-            if t < 0.3
-            else int(255 * self.intensity * (1 - (t - 0.3) / 0.7))
+            int(255 * self.intensity * (t / 0.3)) if t < 0.3 else int(255 * self.intensity * (1 - (t - 0.3) / 0.7))
         )
         if alpha <= 0:
             return

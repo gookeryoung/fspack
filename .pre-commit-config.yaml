@@ -3,7 +3,7 @@
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     # Ruff 版本 - 与 pyproject.toml 保持同步
-    rev: v0.15.8
+    rev: v0.15.21
     hooks:
       # 运行 linter
       - id: ruff

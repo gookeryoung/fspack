@@ -241,10 +241,7 @@ class TetrisGame:
         rotation: int | None = None,
     ) -> bool:
         if rotation is not None:
-            cells = [
-                (piece.x + dx + x_off, piece.y + dy + y_off)
-                for dx, dy in SHAPES[piece.type][rotation]
-            ]
+            cells = [(piece.x + dx + x_off, piece.y + dy + y_off) for dx, dy in SHAPES[piece.type][rotation]]
         else:
             cells = piece.get_cells_with_offset(x_off, y_off)
         for x, y in cells:
@@ -306,9 +303,7 @@ class TetrisGame:
 
     def _skill_shockwave(self) -> None:
         shock_row = self.current_piece.y if self.current_piece else ROWS // 2
-        self.skill_sweep_rows = [
-            r for r in range(shock_row - 1, shock_row + 2) if 0 <= r < ROWS
-        ]
+        self.skill_sweep_rows = [r for r in range(shock_row - 1, shock_row + 2) if 0 <= r < ROWS]
         for row in self.skill_sweep_rows:
             for col in range(COLS):
                 if self.board[row][col] is not None:
@@ -377,9 +372,7 @@ class TetrisGame:
         ]
         filled = 0
         for x, y in corners:
-            if y < 0 or (
-                0 <= y < ROWS and 0 <= x < COLS and self.board[y][x] is not None
-            ):
+            if y < 0 or (0 <= y < ROWS and 0 <= x < COLS and self.board[y][x] is not None):
                 filled += 1
         if filled >= 3:
             return "TSPIN" if self.tspin_trace["was_kick"] else "TSPIN_MINI"
@@ -393,9 +386,7 @@ class TetrisGame:
         assert self.current_piece is not None
         old_rotation = self.current_piece.rotation
         new_rotation = (old_rotation + direction) % 4
-        kick_table = (
-            WALL_KICKS["I"] if self.current_piece.type == "I" else WALL_KICKS["default"]
-        )
+        kick_table = WALL_KICKS["I"] if self.current_piece.type == "I" else WALL_KICKS["default"]
         kicks = kick_table.get((old_rotation, new_rotation), [(0, 0)])
 
         self.last_move_was_rotate = True
@@ -474,11 +465,7 @@ class TetrisGame:
             if 0 <= y < ROWS and 0 <= x < COLS:
                 self.board[y][x] = self.current_piece.type
 
-        full_rows = [
-            r
-            for r in range(ROWS)
-            if all(self.board[r][c] is not None for c in range(COLS))
-        ]
+        full_rows = [r for r in range(ROWS) if all(self.board[r][c] is not None for c in range(COLS))]
         n = len(full_rows)
         spin_type = self._check_tspin()
         is_perfect = n == 4
@@ -592,11 +579,7 @@ class TetrisGame:
         self.color_burst = None
         self.screen_flash = None
 
-        full_rows = [
-            r
-            for r in range(ROWS)
-            if all(self.board[r][c] is not None for c in range(COLS))
-        ]
+        full_rows = [r for r in range(ROWS) if all(self.board[r][c] is not None for c in range(COLS))]
         n = len(full_rows)
 
         if n > 0:
@@ -1094,11 +1077,7 @@ class TetrisGame:
         pygame.draw.rect(surface, (15, 15, 30), (queue_x, queue_y, queue_w, queue_h))
         pygame.draw.rect(surface, BORDER_COLOR, (queue_x, queue_y, queue_w, queue_h), 1)
         for i in range(3):
-            ty = (
-                self.piece_generator.peek(i)
-                if hasattr(self, "piece_generator")
-                else "I"
-            )
+            ty = self.piece_generator.peek(i) if hasattr(self, "piece_generator") else "I"
             self._draw_mini_piece(
                 surface,
                 ty,
@@ -1441,10 +1420,9 @@ class TetrisGame:
                 if self._move_piece(0, 1):
                     if self.down_pressed:
                         self.score += 1
-                else:
-                    if not self.is_locking:
-                        self.is_locking = True
-                        self.lock_timer = 0
+                elif not self.is_locking:
+                    self.is_locking = True
+                    self.lock_timer = 0
 
             if self.is_locking:
                 self.lock_timer += delta_time
