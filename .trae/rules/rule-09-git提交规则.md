@@ -34,3 +34,22 @@ alwaysApply: true
 - `update`：缺少类型前缀，描述模糊，无法判断变更性质
 - `修复了一些问题`：缺少类型前缀，未说明修复了什么问题
 - `feat: add sidebar collapse feature and fix thread leak and update docs`：单条提交混合多个无关变更，且中英文混用
+
+## 命令行传递
+
+- **PowerShell 不支持 heredoc**：`cat <<'EOF' ... EOF`、`<<EOF` 等 heredoc 语法在 PowerShell 中无效，多行提交信息须用多个 `-m` 参数传递，每个 `-m` 作为一段落，段落间自动以空行分隔。
+- 多段萾示例（PowerShell 兼容）：
+  ```powershell
+  git commit -m "feat: 新增侧边栏折叠功能" -m "支持快捷键 Ctrl+B 切换，状态持久化到 settings.json (refs #42)"
+  ```
+- 禁止在 PowerShell 中使用以下 heredoc 形式（会原样作为字面量传入，导致提交信息错乱）：
+  ```powershell
+  git commit -m "$(cat <<'EOF'
+  feat: 新增侧边栏折叠功能
+
+  支持快捷键 Ctrl+B 切换
+  EOF
+  )"
+  ```
+- 单段落提交可直接用单个 `-m`；仅当需要标题+正文结构时才用多个 `-m`。
+- bash/zsh 环境下 heredoc 可正常使用，本约束仅针对 PowerShell。
