@@ -9,6 +9,7 @@ import math
 import os
 import random
 import sys
+from pathlib import Path
 
 import pygame
 
@@ -162,12 +163,12 @@ class TetrisGame:
         # Windows 常见中文字体
         win_candidates = ["msyh.ttc", "msyhbd.ttc", "simhei.ttf", "simsun.ttc"]
         windir = os.environ.get("WINDIR", r"C:\Windows")
-        fonts_dir = os.path.join(windir, "Fonts")
-        if os.path.isdir(fonts_dir):
+        fonts_dir = Path(windir) / "Fonts"
+        if fonts_dir.is_dir():
             for name in win_candidates:
-                path = os.path.join(fonts_dir, name)
-                if os.path.isfile(path):
-                    return path
+                path = fonts_dir / name
+                if path.is_file():
+                    return str(path)
 
         # Linux / macOS 常见中文字体路径
         unix_candidates = [
@@ -180,7 +181,7 @@ class TetrisGame:
             "/Library/Fonts/Arial Unicode.ttf",
         ]
         for path in unix_candidates:
-            if os.path.isfile(path):
+            if Path(path).is_file():
                 return path
 
         return None
@@ -704,12 +705,15 @@ class TetrisGame:
 
         for i, (r, g, b) in enumerate(gradient_lines):
             if alpha < 1.0:
-                r = min(255, max(0, int(r * alpha)))
-                g = min(255, max(0, int(g * alpha)))
-                b = min(255, max(0, int(b * alpha)))
+                ar = min(255, max(0, int(r * alpha)))
+                ag = min(255, max(0, int(g * alpha)))
+                ab = min(255, max(0, int(b * alpha)))
+                color = (ar, ag, ab)
+            else:
+                color = (r, g, b)
             pygame.draw.line(
                 surface,
-                (r, g, b),
+                color,
                 (x + 1, y + 1 + i),
                 (x + CELL_SIZE - 2, y + 1 + i),
             )

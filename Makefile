@@ -28,8 +28,8 @@ cov: ## 运行测试并检查覆盖率
 	uv run pytest -m "not slow" --cov=$(PACKAGE) --cov-fail-under=$(COV_THRESHOLD)
 
 lint: ## 代码风格检查 (ruff)
-	uv run ruff check src tests
-	uv run ruff format --check src tests
+	uv run ruff check .
+	uv run ruff format --check .
 
 typecheck: ## 类型检查 (pyrefly)
 	uv run pyrefly check

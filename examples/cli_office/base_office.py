@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pypdf
 
 
@@ -8,7 +10,7 @@ def main():
     pdf.add_page(page)
     pdf.add_outline_item("示例 - 书签", 1, parent=None)
 
-    with open("example.pdf", "wb") as file:
+    with Path("example.pdf").open("wb") as file:
         pdf.write(file)
 
 

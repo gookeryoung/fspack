@@ -55,7 +55,7 @@ class ParticleSystem:
         board_offset_x: int,
         board_offset_y: int,
         board: list[list[str | None]],
-        rows_count: int = 20,
+        _rows_count: int = 20,
     ) -> None:
         for col in range(COLS):
             cell = board[row][col]

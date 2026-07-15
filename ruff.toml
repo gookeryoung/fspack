@@ -34,3 +34,5 @@ select = [
 
 [lint.per-file-ignores]
 "**/tests/**" = ["ARG001", "ARG002", "ARG005"]
+# examples 为示例代码，复杂 GUI/游戏逻辑允许较多分支与参数
+"**/examples/**" = ["PLR0912", "PLR0913"]

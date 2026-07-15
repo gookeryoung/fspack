@@ -486,7 +486,7 @@ class ScreenFlashAnimation(BaseAnimation):
         self.duration: float = duration
         self.intensity: float = intensity
 
-    def draw(self, surface: pg.Surface, width: int = 0, height: int = 0) -> None:
+    def draw(self, surface: pg.Surface, _width: int = 0, _height: int = 0) -> None:
         import pygame
 
         if not self.active:
