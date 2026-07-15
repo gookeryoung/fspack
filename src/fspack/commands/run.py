@@ -35,7 +35,7 @@ def run(
     rest = rest_args or []
     ep = _select_entry(info, entry)
     if debug:
-        cmd = _build_debug_cmd(project, ep, info.src_dir) + rest
+        cmd = _build_debug_cmd(project, ep) + rest
         debug_env: dict[str, str] = {**os.environ, "PYTHONUNBUFFERED": "1"}
         if platform.system() != "Windows":
             debug_env["PYTHONHOME"] = str(Path(project) / "dist" / "runtime" / "python")
@@ -98,17 +98,19 @@ def _build_cmd(exe: Path) -> list[str]:
     return [str(exe)]
 
 
-def _build_debug_cmd(project: Path, ep: EntryPoint, src_dir: Path) -> list[str]:
-    """构造调试命令：用 embed python 直跑入口脚本（绕过 GUI loader）。
+def _build_debug_cmd(project: Path, ep: EntryPoint) -> list[str]:
+    """构造调试命令：用 embed python 直跑入口包装器（绕过 GUI loader）。
 
     Windows 用 ``dist/runtime/python.exe``，Linux 用 ``dist/runtime/python/bin/python3.X``。
-    embed python 是 console 子系统，print 输出可见；``_pth`` 控制 sys.path 含用户源码与依赖。
+    embed python 是 console 子系统，print 输出可见；运行 ``dist/_entry_<name>.py``
+    包装器（与 loader 一致），由 wrapper 设置 sys.path、Qt 插件路径与包上下文
+    后调 :func:`runpy.run_module`/:func:`runpy.run_path` 执行用户入口，使相对
+    导入可用。
     """
     dist = Path(project) / "dist"
-    entry_rel = ep.file.relative_to(src_dir).as_posix()
-    entry_in_src = dist / "src" / entry_rel
-    if not entry_in_src.is_file():
-        raise FspackError(f"未找到入口脚本: {entry_in_src}（请先执行 fsp b）")
+    wrapper = dist / f"_entry_{ep.name}.py"
+    if not wrapper.is_file():
+        raise FspackError(f"未找到入口包装器: {wrapper}（请先执行 fsp b）")
     if platform.system() == "Windows":
         py = dist / "runtime" / "python.exe"
     else:
@@ -119,4 +121,4 @@ def _build_debug_cmd(project: Path, ep: EntryPoint, src_dir: Path) -> list[str]:
         py = pys[0]
     if not py.is_file():
         raise FspackError(f"未找到 embed python: {py}（请先执行 fsp b）")
-    return [str(py), str(entry_in_src)]
+    return [str(py), str(wrapper)]

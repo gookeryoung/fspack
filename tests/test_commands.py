@@ -136,7 +136,7 @@ def test_run_run_nonzero_exit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_run_run_debug_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """debug 模式 Windows 用 embed python.exe 直跑入口脚本。."""
+    """debug 模式 Windows 用 embed python.exe 直跑入口包装器。."""
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\n')
     (tmp_path / "app.py").write_text("def main():\n    pass\n")
     dist = tmp_path / "dist"
@@ -144,6 +144,8 @@ def test_run_run_debug_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     (dist / "src").mkdir(parents=True)
     (dist / "runtime" / "python.exe").write_bytes(b"")
     (dist / "src" / "app.py").write_text("")
+    # wrapper 文件由 fspack b 生成，debug 模式运行 wrapper 而非直接入口
+    (dist / "_entry_app.py").write_text('"""fspack 生成的入口包装器（app）。"""\n')
 
     captured: dict[str, object] = {}
 
@@ -159,8 +161,8 @@ def test_run_run_debug_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Windows")
     run_run(tmp_path, debug=True, rest_args=["--foo"])
     py = dist / "runtime" / "python.exe"
-    entry = dist / "src" / "app.py"
-    assert captured["cmd"] == [str(py), str(entry), "--foo"]
+    wrapper = dist / "_entry_app.py"
+    assert captured["cmd"] == [str(py), str(wrapper), "--foo"]
     env = captured["env"]
     assert isinstance(env, dict)
     assert env["PYTHONUNBUFFERED"] == "1"
@@ -176,6 +178,8 @@ def test_run_run_debug_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     (bin_dir / "python3.11").write_bytes(b"")
     (dist / "src").mkdir(parents=True)
     (dist / "src" / "app.py").write_text("")
+    # wrapper 文件由 fspack b 生成，debug 模式运行 wrapper 而非直接入口
+    (dist / "_entry_app.py").write_text('"""fspack 生成的入口包装器（app）。"""\n')
 
     captured: dict[str, object] = {}
 
@@ -191,8 +195,8 @@ def test_run_run_debug_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Linux")
     run_run(tmp_path, debug=True)
     py = bin_dir / "python3.11"
-    entry = dist / "src" / "app.py"
-    assert captured["cmd"] == [str(py), str(entry)]
+    wrapper = dist / "_entry_app.py"
+    assert captured["cmd"] == [str(py), str(wrapper)]
     env = captured["env"]
     assert isinstance(env, dict)
     assert env["PYTHONHOME"] == str(dist / "runtime" / "python")
@@ -206,20 +210,22 @@ def test_run_run_debug_missing_python(tmp_path: Path, monkeypatch: pytest.Monkey
     dist = tmp_path / "dist"
     (dist / "src").mkdir(parents=True)
     (dist / "src" / "app.py").write_text("")
+    # wrapper 文件已存在，使流程进入 python 检查
+    (dist / "_entry_app.py").write_text('"""fspack 生成的入口包装器（app）。"""\n')
     monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Windows")
     with pytest.raises(FspackError, match="未找到 embed python"):
         run_run(tmp_path, debug=True)
 
 
 def test_run_run_debug_missing_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """debug 模式入口脚本不存在时报错。."""
+    """debug 模式入口包装器不存在时报错。."""
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\n')
     (tmp_path / "app.py").write_text("def main():\n    pass\n")
     dist = tmp_path / "dist"
     (dist / "runtime").mkdir(parents=True)
     (dist / "runtime" / "python.exe").write_bytes(b"")
     monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Windows")
-    with pytest.raises(FspackError, match="未找到入口脚本"):
+    with pytest.raises(FspackError, match="未找到入口包装器"):
         run_run(tmp_path, debug=True)
 
 

@@ -17,6 +17,7 @@ from typing import Sequence
 from fspack.config import BuildConfig, DependencyReport, MirrorConfig, ProjectInfo
 from fspack.console import success
 from fspack.embed import download_embed, embed_dirname, extract_embed, write_pth
+from fspack.entry_wrapper import dotted_module_name, generate_wrapper_source
 from fspack.exceptions import DependencyError
 from fspack.loader import compile_loader, generate_loader_source
 from fspack.platform import Platform, detect_platform, wheel_platform_tags
@@ -175,13 +176,21 @@ def build(  # noqa: PLR0912, PLR0913
         build_dir = cfg.dist_dir / "build"
         for ep in info.all_entries:
             entry_rel = ep.entry_rel(info.src_dir)
-            entry_file_in_dist = f"src/{entry_rel}"
+            module_dotted = dotted_module_name(info.src_dir, ep.file)
+            # 生成入口包装器：处理 sys.path、Qt 插件路径与包上下文（相对导入）
+            wrapper_name = f"_entry_{ep.name}.py"
+            wrapper_path = cfg.dist_dir / wrapper_name
+            wrapper_path.write_text(
+                generate_wrapper_source(ep.name, module_dotted, entry_rel),
+                encoding="utf-8",
+            )
+            # .entry 指向 wrapper（loader 读 .entry 路径运行）
             if info.entries:
                 # 多入口模式：每个入口写 <name>.entry
-                (cfg.dist_dir / f"{ep.name}.entry").write_text(entry_file_in_dist, encoding="utf-8")
+                (cfg.dist_dir / f"{ep.name}.entry").write_text(wrapper_name, encoding="utf-8")
             else:
                 # 单入口模式：写 .entry（向后兼容）
-                (cfg.dist_dir / ".entry").write_text(entry_file_in_dist, encoding="utf-8")
+                (cfg.dist_dir / ".entry").write_text(wrapper_name, encoding="utf-8")
             exe_name = f"{ep.name}.exe" if target is Platform.WINDOWS else ep.name
             exe = cfg.dist_dir / exe_name
             compile_loader(source, exe, ep.app_type, build_dir, target, stage=st)

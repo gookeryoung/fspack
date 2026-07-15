@@ -832,7 +832,10 @@ def test_build_orchestration_helloworld(tmp_path: Path, monkeypatch: pytest.Monk
     assert (proj / "dist" / "src" / "helloworld.py").is_file()
     assert (proj / "dist" / "runtime" / "python311.dll").is_file()
     assert (proj / "dist" / ".entry").is_file()
-    assert (proj / "dist" / ".entry").read_text(encoding="utf-8") == "src/helloworld.py"
+    assert (proj / "dist" / ".entry").read_text(encoding="utf-8") == "_entry_cli_helloworld.py"
+    wrapper = proj / "dist" / "_entry_cli_helloworld.py"
+    assert wrapper.is_file()
+    assert "fspack 生成的入口包装器" in wrapper.read_text(encoding="utf-8")
     pth = (proj / "dist" / "runtime" / "python311._pth").read_text()
     assert "python311.zip" in pth
     assert "..\\src" in pth
@@ -1007,6 +1010,7 @@ def test_build_orchestration_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert not (proj / "dist" / "runtime" / "python311._pth").exists()
     assert (proj / "dist" / "src" / "helloworld.py").is_file()
     assert (proj / "dist" / ".entry").is_file()
+    assert (proj / "dist" / "_entry_cli_helloworld.py").is_file()
     assert "standalone" in calls
     assert "dlopen" in calls["compile_source"]
     assert "libpython3.11.so" in calls["compile_source"]
