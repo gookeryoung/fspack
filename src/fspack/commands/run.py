@@ -11,7 +11,6 @@ from pathlib import Path
 
 from fspack.config import AppType, ProjectInfo
 from fspack.exceptions import FspackError
-from fspack.project import parse_project
 
 __all__ = ["run"]
 
@@ -24,7 +23,7 @@ def run(project: Path, rest_args: list[str] | None = None, debug: bool = False) 
     ``debug=True`` 时绕过 loader exe，用 embed python 直接跑入口脚本，
     使 GUI 应用（Windows subsystem）的 stdout/stderr 可见。
     """
-    info = parse_project(project)
+    info = ProjectInfo.from_dir(project)
     rest = rest_args or []
     if debug:
         cmd = _build_debug_cmd(project, info) + rest

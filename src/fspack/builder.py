@@ -14,15 +14,14 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Sequence
 
-from fspack.analyzer import analyze_dependencies
-from fspack.config import BuildConfig, MirrorConfig, ProjectInfo
+from fspack.config import BuildConfig, DependencyReport, MirrorConfig, ProjectInfo
 from fspack.console import success
 from fspack.embed import download_embed, embed_dirname, extract_embed, write_pth
 from fspack.exceptions import DependencyError
 from fspack.loader import compile_loader, generate_loader_source
 from fspack.platform import Platform, detect_platform, wheel_platform_tags
 from fspack.progress import BuildTracker, StageRecorder, spinner
-from fspack.project import DEFAULT_LINUX_PY_VERSION, DEFAULT_PY_VERSION, parse_project, resolve_py_version
+from fspack.project import DEFAULT_LINUX_PY_VERSION, DEFAULT_PY_VERSION, resolve_py_version
 from fspack.standalone import STANDALONE_RELEASE_TAG, download_standalone, extract_standalone
 from fspack.wheel_cache import fspack_wheel_cache_dir
 
@@ -70,7 +69,7 @@ def build(  # noqa: PLR0912, PLR0913
     cfg = BuildConfig(project_dir=project_dir, dist_dir=dist, embed_cache_dir=cache, mirror=mirror, target=target)
 
     with tracker.stage("解析项目") as st:
-        info = parse_project(project_dir, py_version)
+        info = ProjectInfo.from_dir(project_dir, py_version)
         default_ver = DEFAULT_LINUX_PY_VERSION if target is Platform.LINUX else DEFAULT_PY_VERSION
         resolved = resolve_py_version(project_dir, py_version, info.requires_python, default_ver)
         if resolved != info.py_version:
@@ -127,7 +126,7 @@ def build(  # noqa: PLR0912, PLR0913
     site_packages.mkdir(parents=True, exist_ok=True)
 
     with tracker.stage("分析依赖") as st:
-        report = analyze_dependencies(project_dir, info.name, info.dependencies)
+        report = DependencyReport.from_src(project_dir, info.name, info.dependencies)
         if report.missing:
             _logger.info("AST 发现未声明依赖: %s", ", ".join(report.missing))
         ast_count = len(report.ast_third_party)

@@ -52,6 +52,16 @@ class ProjectInfo:
     py_version: str
     requires_python: str | None = None
 
+    @classmethod
+    def from_dir(cls, project_dir: Path, py_version: str | None = None) -> ProjectInfo:
+        """从项目目录解析 pyproject.toml 并构造实例。
+
+        惰性导入 :func:`fspack.project.parse_project` 打破 config ↔ project 循环依赖。
+        """
+        from fspack.project import parse_project
+
+        return parse_project(project_dir, py_version)
+
     @property
     def exe_name(self) -> str:
         """生成的可执行文件名。."""
@@ -73,6 +83,16 @@ class DependencyReport:
     ast_stdlib: tuple[str, ...]
     ast_local: tuple[str, ...]
     ast_submodules: dict[str, frozenset[str]] = field(default_factory=dict)
+
+    @classmethod
+    def from_src(cls, src_dir: Path, project_name: str, declared: tuple[str, ...]) -> DependencyReport:
+        """扫描源码目录构造依赖分析报告。
+
+        惰性导入 :func:`fspack.analyzer.analyze_dependencies` 打破 config ↔ analyzer 循环依赖。
+        """
+        from fspack.analyzer import analyze_dependencies
+
+        return analyze_dependencies(src_dir, project_name, declared)
 
     @property
     def missing(self) -> tuple[str, ...]:

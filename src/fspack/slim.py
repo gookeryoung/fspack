@@ -9,7 +9,7 @@ from typing import Sequence
 
 from fspack.exceptions import DependencyError
 from fspack.progress import StageRecorder, iter_with_progress
-from fspack.wheel_cache import normalize_name, parse_wheel_filename
+from fspack.wheel_cache import WheelInfo, normalize_name
 
 __all__ = ["classify_entry", "slim_unpack"]
 
@@ -124,7 +124,7 @@ def slim_unpack(
     sorted_wheels = sorted(wheels)
     count = 0
     for whl in iter_with_progress(sorted_wheels, "解压 wheel", stage=stage):
-        info = parse_wheel_filename(whl.name)
+        info = WheelInfo.from_filename(whl.name)
         if info is None:
             _full_unpack(whl, site_packages_dir)
             count += 1

@@ -12,7 +12,6 @@ from fspack.config import MirrorConfig, ProjectInfo
 from fspack.console import step, success
 from fspack.exceptions import InstallerError
 from fspack.platform import Platform
-from fspack.project import parse_project
 
 __all__ = ["build_deb", "build_linux_installer", "build_tarball"]
 
@@ -103,7 +102,7 @@ def build_linux_installer(
             raise InstallerError(f"未找到 dist 目录: {dist}（请先执行 fsp b）")
     else:
         build(project_dir, mirror, py_version, dist_dir=dist, target=Platform.LINUX)
-    info = parse_project(project_dir, py_version)
+    info = ProjectInfo.from_dir(project_dir, py_version)
     exe = dist / info.name
     if not exe.is_file():
         raise InstallerError(f"未找到已构建的可执行文件: {exe}（请先执行 fsp b）")

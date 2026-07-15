@@ -31,6 +31,20 @@ class WheelInfo:
     abi_tag: str
     platform_tags: tuple[str, ...]
 
+    @classmethod
+    def from_filename(cls, filename: str) -> WheelInfo | None:
+        """从 wheel 文件名构造实例，无法解析返回 None。."""
+        m = _WHEEL_RE.match(filename)
+        if m is None:
+            return None
+        return cls(
+            name=m.group("name"),
+            version=m.group("ver"),
+            python_tags=tuple(m.group("py").split(".")),
+            abi_tag=m.group("abi"),
+            platform_tags=tuple(m.group("plat").split(".")),
+        )
+
 
 def normalize_name(name: str) -> str:
     """PEP 503 名称归一化：小写，连续的 ``-_.`` 合并为 ``-``。."""
@@ -38,17 +52,11 @@ def normalize_name(name: str) -> str:
 
 
 def parse_wheel_filename(filename: str) -> WheelInfo | None:
-    """解析 wheel 文件名为 WheelInfo，无法解析返回 None。."""
-    m = _WHEEL_RE.match(filename)
-    if m is None:
-        return None
-    return WheelInfo(
-        name=m.group("name"),
-        version=m.group("ver"),
-        python_tags=tuple(m.group("py").split(".")),
-        abi_tag=m.group("abi"),
-        platform_tags=tuple(m.group("plat").split(".")),
-    )
+    """解析 wheel 文件名为 WheelInfo，无法解析返回 None。
+
+    .. deprecated:: 向后兼容包装，内部委托 :meth:`WheelInfo.from_filename`。
+    """
+    return WheelInfo.from_filename(filename)
 
 
 def fspack_wheel_cache_dir() -> Path:
