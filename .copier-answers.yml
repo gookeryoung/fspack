@@ -1,6 +1,6 @@
 # Changes here will be overwritten by Copier
-_commit: v0.5.0
-_src_path: https://github.com/gookeryoung/coopie
+_commit: v0.8.3
+_src_path: https://gitee.com/gooker_young/coopie.git
 author_email: gooker_young@qq.com
 author_name: gooker_young
 coverage_fail_under: 95
