@@ -1,7 +1,8 @@
 """端到端慢测试：真实下载 embed python + mingw 编译 + wine 运行。
 
 需 mingw-w64 与 wine（Windows 目标）或 gcc（Linux 目标），标 slow，默认门禁不执行。
-覆盖 8 类典型项目：无库 CLI、有库 CLI、有库 GUI（PySide6/PySide2/PyQt5）、有库 pygame、有库 web。
+覆盖 9 类典型项目：无库 CLI、有库 CLI、有库 GUI（PySide6/PySide2/PyQt5）、有库 pygame、
+有库 web、多入口混合（cli+gui+web 共享 runtime/依赖）。
 另含 Linux 平台端到端测试（python-build-standalone + gcc 编译 + 原生运行）。
 """
 
@@ -210,6 +211,63 @@ def test_build_and_run_snake(tmp_path: Path) -> None:
     )
     proj = tmp_path / "pygame_snake"
     assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "pygame").is_dir()
+
+
+@pytest.mark.slow
+def test_build_and_run_multi_entry(tmp_path: Path) -> None:
+    """multi_entry 示例：多入口项目（cli+gui+web）共享 runtime/依赖。
+
+    验证 [tool.fspack.entries] 解析、三入口 exe 生成、各自运行输出正确。
+    .python-version=3.10 + requires-python=">=3.8,<3.11" 应解析到 3.10.11。
+    GUI 入口（PySide2）在 wine 上可能缺系统 DLL，缺时 skip GUI 运行断言。
+    """
+    from fspack.builder import build
+    from fspack.loader import mingw_available
+    from fspack.mirror import get_mirror
+    from fspack.platform import Platform
+
+    if not mingw_available():
+        pytest.skip("mingw-w64 未安装")
+    if not shutil.which("wine"):
+        pytest.skip("wine 未安装")
+
+    proj = tmp_path / "multi_entry"
+    shutil.copytree(_EXAMPLES / "multi_entry", proj)
+    build(proj, get_mirror("aliyun"), None, target=Platform.WINDOWS, keep_modules={"PySide2.QtGui"})
+
+    # 三个入口 exe 均应生成
+    for ep_name in ("cli", "gui", "web"):
+        exe = proj / "dist" / f"{ep_name}.exe"
+        assert exe.is_file(), f"未生成入口 {ep_name} 的 exe: {exe}"
+
+    # runtime 共享：python310.dll（.python-version=3.10 解析到 3.10.11）
+    assert (proj / "dist" / "runtime" / "python310.dll").is_file(), "未找到 python310.dll"
+    assert (proj / "dist" / "runtime" / "python310._pth").is_file(), "未生成 _pth"
+    # 依赖共享：PySide2 与 flask 均解包到 site-packages
+    assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "PySide2").is_dir(), "PySide2 未解包"
+    assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "flask").is_dir(), "flask 未解包"
+
+    env = {**os.environ, "WINEDEBUG": "-all", "QT_QPA_PLATFORM": "offscreen"}
+
+    # CLI 入口：wine 运行断言输出
+    cli_exe = proj / "dist" / "cli.exe"
+    result = subprocess.run(["wine", str(cli_exe)], capture_output=True, text=True, timeout=120, env=env, check=False)
+    combined = result.stdout + result.stderr
+    assert "hello from multi_entry cli" in combined, f"cli 入口输出异常: {combined!r}"
+
+    # Web 入口：wine 运行断言输出（test_client 不启动服务器，可安全运行）
+    web_exe = proj / "dist" / "web.exe"
+    result = subprocess.run(["wine", str(web_exe)], capture_output=True, text=True, timeout=120, env=env, check=False)
+    combined = result.stdout + result.stderr
+    assert "hello from multi_entry web" in combined, f"web 入口输出异常: {combined!r}"
+
+    # GUI 入口：PySide2 在 wine 上可能缺系统 DLL，缺时 skip
+    gui_exe = proj / "dist" / "gui.exe"
+    result = subprocess.run(["wine", str(gui_exe)], capture_output=True, text=True, timeout=300, env=env, check=False)
+    combined = result.stdout + result.stderr
+    if "hello from multi_entry gui" not in combined and "DLL load failed" in combined:
+        pytest.skip(f"wine 缺少系统 DLL，PySide2 Qt DLL 无法加载，真实 Windows 可运行: {combined!r}")
+    assert "hello from multi_entry gui" in combined, f"gui 入口输出异常: {combined!r}"
 
 
 @pytest.mark.slow

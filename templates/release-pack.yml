@@ -5,7 +5,11 @@
 #
 # 前置条件：
 #   1. 项目根目录有 pyproject.toml
-#   2. 在 GitHub 仓库 Variables 配置 PROJECT_NAME / EXPECTED_OUTPUT
+#   2. 在 GitHub 仓库 Variables 配置：
+#      - PROJECT_NAME: 项目名（与 pyproject.toml 的 name 字段一致）
+#      - EXPECTED_OUTPUT: 运行打包后 exe 应输出的预期字符串
+#      - ENTRY_NAMES（可选）: 多入口项目的入口名列表（逗号分隔，如 "cli,gui,web"），
+#        与 [tool.fspack.entries] 键匹配。未设置时按单入口项目处理。
 #   3. 打 tag 触发：git tag v0.1.0 && git push origin v0.1.0
 #
 # 产出：
@@ -37,12 +41,10 @@ jobs:
             runner: ubuntu-latest
             toolchain: gcc-mingw-w64-x86-64 wine64 nsis
             artifact-name: release-windows
-            run-cmd: wine ./dist/${{ vars.PROJECT_NAME }}.exe
           - target: linux
             runner: ubuntu-latest
             toolchain: build-essential dpkg-deb
             artifact-name: release-linux
-            run-cmd: ./dist/${{ vars.PROJECT_NAME }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     steps:
@@ -76,11 +78,27 @@ jobs:
       - name: Assert build artifacts
         run: |
           if [ "${{ matrix.target }}" = "windows" ]; then
-            test -f dist/${{ vars.PROJECT_NAME }}.exe
             test -f dist/runtime/python311.dll
+            test -f dist/runtime/python311._pth
           else
-            test -f dist/${{ vars.PROJECT_NAME }}
             test -f dist/runtime/python/lib/libpython3.11.so
+          fi
+          # 单入口项目断言 <name>.exe；多入口项目断言每个入口 exe
+          if [ -z "${{ vars.ENTRY_NAMES }}" ]; then
+            if [ "${{ matrix.target }}" = "windows" ]; then
+              test -f dist/${{ vars.PROJECT_NAME }}.exe
+            else
+              test -f dist/${{ vars.PROJECT_NAME }}
+            fi
+          else
+            IFS=',' read -ra ENTRIES <<< "${{ vars.ENTRY_NAMES }}"
+            for ep in "${ENTRIES[@]}"; do
+              if [ "${{ matrix.target }}" = "windows" ]; then
+                test -f dist/${ep}.exe || { echo "::error::入口 $ep exe 未生成"; exit 1; }
+              else
+                test -f dist/${ep} || { echo "::error::入口 $ep 可执行文件未生成"; exit 1; }
+              fi
+            done
           fi
 
       - name: Smoke test run
@@ -94,12 +112,35 @@ jobs:
           if [ "${{ matrix.target }}" = "windows" ]; then
             wineboot --init
           fi
-          output=$((${{ matrix.run-cmd }}) 2>&1 | tr -d '\r')
-          echo "$output"
-          echo "$output" | grep -q "${{ vars.EXPECTED_OUTPUT }}" || {
-            echo "::error::运行输出未含预期字符串 '${{ vars.EXPECTED_OUTPUT }}'"
-            exit 1
-          }
+          if [ -z "${{ vars.ENTRY_NAMES }}" ]; then
+            # 单入口模式
+            if [ "${{ matrix.target }}" = "windows" ]; then
+              output=$(wine ./dist/${{ vars.PROJECT_NAME }}.exe 2>&1 | tr -d '\r')
+            else
+              output=$(./dist/${{ vars.PROJECT_NAME }} 2>&1 | tr -d '\r')
+            fi
+            echo "$output"
+            echo "$output" | grep -q "${{ vars.EXPECTED_OUTPUT }}" || {
+              echo "::error::运行输出未含预期字符串 '${{ vars.EXPECTED_OUTPUT }}'"
+              exit 1
+            }
+          else
+            # 多入口模式：循环运行每个入口
+            IFS=',' read -ra ENTRIES <<< "${{ vars.ENTRY_NAMES }}"
+            for ep in "${ENTRIES[@]}"; do
+              if [ "${{ matrix.target }}" = "windows" ]; then
+                output=$(wine ./dist/${ep}.exe 2>&1 | tr -d '\r')
+              else
+                output=$(./dist/${ep} 2>&1 | tr -d '\r')
+              fi
+              echo "[$ep] $output"
+              # 各入口预期输出含入口名（如 "hello from my_app cli"），按需调整
+              echo "$output" | grep -q "${{ vars.EXPECTED_OUTPUT }}" || {
+                echo "::error::入口 $ep 运行输出未含预期字符串 '${{ vars.EXPECTED_OUTPUT }}'"
+                exit 1
+              }
+            done
+          fi
 
       - name: Generate installer
         run: fspack p . --target ${{ matrix.target }}
