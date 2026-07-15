@@ -1,0 +1,7 @@
+[project]
+name = "conway"
+version = "0.1.4"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = []
