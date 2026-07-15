@@ -1,0 +1,114 @@
+# fspack PR 验证打包模板
+#
+# 用途：在 push/PR 时验证项目改动不破坏 fspack 打包流程。
+# 复制到其他项目的 .github/workflows/pack-check.yml 即可使用。
+#
+# 前置条件：
+#   1. 项目根目录有 pyproject.toml（fspack 可识别的入口）
+#   2. 在 GitHub 仓库 Settings → Secrets and variables → Actions → Variables 配置：
+#      - PROJECT_NAME: 项目名（与 pyproject.toml 的 name 字段一致）
+#      - EXPECTED_OUTPUT: 运行打包后 exe 应输出的预期字符串（用于断言）
+#
+# 自定义：
+#   - 修改 --target 为 linux 可验证 Linux 目标
+#   - GUI 项目取消注释 QT_QPA_PLATFORM/SDL_VIDEODRIVER 环境变量
+#   - 多入口项目改用循环验证（见注释）
+
+name: Pack Check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pack-windows:
+    name: Pack (Windows target)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8
+        with:
+          enable-cache: true
+
+      - name: Install fspack
+        run: uv pip install fspack --system
+
+      - name: Install mingw-w64 & wine
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64-x86-64 wine64
+
+      - name: Cache fspack assets
+        uses: actions/cache@v4
+        with:
+          path: ~/.fspack/cache/
+          key: fspack-windows-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            fspack-windows-
+            fspack-
+
+      - name: Build
+        run: fspack b . --target windows
+
+      - name: Assert artifacts
+        run: |
+          test -f dist/${{ vars.PROJECT_NAME }}.exe
+          test -f dist/runtime/python311.dll
+          test -f dist/runtime/python311._pth
+          test -d dist/runtime/Lib/site-packages
+
+      - name: Run & assert output
+        env:
+          WINEDEBUG: -all
+          WINEPREFIX: ${{ runner.temp }}/.wine
+          # GUI 应用需无头模式（按需取消注释）：
+          # QT_QPA_PLATFORM: offscreen
+          # SDL_VIDEODRIVER: dummy
+          # SDL_AUDIODRIVER: dummy
+        run: |
+          wineboot --init
+          output=$(wine ./dist/${{ vars.PROJECT_NAME }}.exe 2>&1 | tr -d '\r')
+          echo "$output"
+          echo "$output" | grep -q "${{ vars.EXPECTED_OUTPUT }}" || {
+            echo "::error::运行输出未含预期字符串 '${{ vars.EXPECTED_OUTPUT }}'"
+            exit 1
+          }
+
+      # 多入口项目用以下循环替代上面的 Run & assert：
+      # - name: Run & assert (multi-entry)
+      #   env:
+      #     WINEDEBUG: -all
+      #     QT_QPA_PLATFORM: offscreen
+      #   run: |
+      #     wineboot --init
+      #     for ep in cli web; do
+      #       output=$(wine ./dist/${ep}.exe 2>&1 | tr -d '\r')
+      #       echo "$output" | grep -q "hello from multi_entry $ep" || exit 1
+      #     done
+      #     # GUI 入口用 --debug 绕过 GUI loader，使 print 输出可见
+      #     fspack r . --entry gui --debug 2>&1 | grep -q "hello from multi_entry gui" || exit 1
+
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pack-failure-windows
+          path: dist/
+          retention-days: 3
+
+      - name: Upload dist artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-windows
+          path: dist/
+          retention-days: 7

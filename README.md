@@ -218,6 +218,41 @@ ModuleNotFoundError: No module named 'tkinter'
 已正确声明依赖，`missing` 比较归一化包名仍会提示未声明。不影响打包功能（`declared`
 优先下载），仅日志有误导性。
 
+## CI/CD 集成
+
+fspack 可集成到其他 Python 项目的 CI/CD 工作流，实现自动打包与打包成功验证。提供两个可复用的 GitHub Actions workflow 模板：
+
+- [`templates/pack-check.yml`](templates/pack-check.yml) — PR 验证打包（push/PR 触发，验证打包不破坏）
+- [`templates/release-pack.yml`](templates/release-pack.yml) — Release 发布安装包（tag 触发，矩阵打包 Windows + Linux 安装包附到 GitHub Release）
+
+### 快速上手
+
+1. 复制模板到你的项目：
+
+   ```bash
+   cp templates/pack-check.yml your-project/.github/workflows/
+   cp templates/release-pack.yml your-project/.github/workflows/
+   ```
+
+2. 在仓库 **Settings → Secrets and variables → Actions → Variables** 配置：
+
+   | 变量名 | 说明 | 示例值 |
+   |--------|------|--------|
+   | `PROJECT_NAME` | 项目名（与 `pyproject.toml` 的 `name` 一致） | `my_app` |
+   | `EXPECTED_OUTPUT` | 运行打包后 exe 应输出的预期字符串 | `hello from my_app` |
+
+3. 触发：push 到 main 验证打包，打 tag（`git tag v0.1.0`）发布安装包。
+
+### 测试打包成功的三层反馈
+
+| 阶段 | 成功反馈 | 失败反馈 |
+|------|---------|---------|
+| 构建 | `fsp b` 退出码 0 + 产物断言通过 | 退出码非零，上传 dist/ 供调试 |
+| 运行 | grep 命中预期字符串 | grep 失败，输出实际内容到日志 |
+| 安装包 | 文件存在 + 魔数校验（MZ/`!<arch>`/gzip） | 文件缺失或魔数错误 |
+
+完整集成方案见 [CI/CD 集成指南](docs/integration.md)。
+
 ## 开发
 
 ```bash

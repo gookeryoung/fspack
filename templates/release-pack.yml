@@ -1,0 +1,169 @@
+# fspack Release 发布安装包模板
+#
+# 用途：tag push 时矩阵打包 Windows + Linux 安装包，附到 GitHub Release。
+# 复制到其他项目的 .github/workflows/release-pack.yml 即可使用。
+#
+# 前置条件：
+#   1. 项目根目录有 pyproject.toml
+#   2. 在 GitHub 仓库 Variables 配置 PROJECT_NAME / EXPECTED_OUTPUT
+#   3. 打 tag 触发：git tag v0.1.0 && git push origin v0.1.0
+#
+# 产出：
+#   - Windows: dist/release/<name>-setup.exe（NSIS 安装包）
+#   - Linux: dist/release/<name>_<ver>_amd64.deb + <name>-<ver>-linux.tar.gz
+#   - 附到 GitHub Release 供下载
+
+name: Release Pack
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-pack-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  pack:
+    name: Pack & Package (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows
+            runner: ubuntu-latest
+            toolchain: gcc-mingw-w64-x86-64 wine64 nsis
+            artifact-name: release-windows
+            run-cmd: wine ./dist/${{ vars.PROJECT_NAME }}.exe
+          - target: linux
+            runner: ubuntu-latest
+            toolchain: build-essential dpkg-deb
+            artifact-name: release-linux
+            run-cmd: ./dist/${{ vars.PROJECT_NAME }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8
+        with:
+          enable-cache: true
+
+      - name: Install fspack
+        run: uv pip install fspack --system
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.toolchain }}
+
+      - name: Cache fspack assets
+        uses: actions/cache@v4
+        with:
+          path: ~/.fspack/cache/
+          key: fspack-${{ matrix.target }}-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            fspack-${{ matrix.target }}-
+            fspack-
+
+      - name: Build
+        run: fspack b . --target ${{ matrix.target }}
+
+      - name: Assert build artifacts
+        run: |
+          if [ "${{ matrix.target }}" = "windows" ]; then
+            test -f dist/${{ vars.PROJECT_NAME }}.exe
+            test -f dist/runtime/python311.dll
+          else
+            test -f dist/${{ vars.PROJECT_NAME }}
+            test -f dist/runtime/python/lib/libpython3.11.so
+          fi
+
+      - name: Smoke test run
+        env:
+          WINEDEBUG: -all
+          WINEPREFIX: ${{ runner.temp }}/.wine
+          # GUI 应用无头模式（按需取消注释）：
+          # QT_QPA_PLATFORM: offscreen
+          # SDL_VIDEODRIVER: dummy
+        run: |
+          if [ "${{ matrix.target }}" = "windows" ]; then
+            wineboot --init
+          fi
+          output=$((${{ matrix.run-cmd }}) 2>&1 | tr -d '\r')
+          echo "$output"
+          echo "$output" | grep -q "${{ vars.EXPECTED_OUTPUT }}" || {
+            echo "::error::运行输出未含预期字符串 '${{ vars.EXPECTED_OUTPUT }}'"
+            exit 1
+          }
+
+      - name: Generate installer
+        run: fspack p . --target ${{ matrix.target }}
+
+      - name: Assert installer artifacts
+        run: |
+          if [ "${{ matrix.target }}" = "windows" ]; then
+            test -f dist/release/${{ vars.PROJECT_NAME }}-setup.exe
+            # 验证 PE 文件头
+            head -c 2 dist/release/${{ vars.PROJECT_NAME }}-setup.exe | xxd | grep -q "4d5a" || {
+              echo "::error::安装包非合法 PE 文件"; exit 1
+            }
+          else
+            test -f dist/release/${{ vars.PROJECT_NAME }}_*.deb
+            test -f dist/release/${{ vars.PROJECT_NAME }}-*-linux.tar.gz
+            # 验证 .deb ar 归档魔数
+            head -c 8 dist/release/${{ vars.PROJECT_NAME }}_*.deb | grep -q "!<arch>" || {
+              echo "::error::.deb 非 ar 归档"; exit 1
+            }
+          fi
+
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact-name }}-failure
+          path: dist/
+          retention-days: 3
+
+      - name: Upload release artifacts
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact-name }}
+          path: dist/release/
+          retention-days: 30
+
+  release:
+    name: Upload to GitHub Release
+    needs: pack
+    runs-on: ubuntu-latest
+    if: always() && !cancelled()
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets/
+
+      - name: Collect release files
+        run: |
+          mkdir -p release-files/
+          find release-assets/ -type f \( -name "*.exe" -o -name "*.deb" -o -name "*.tar.gz" \) \
+            -exec cp {} release-files/ \;
+          ls -la release-files/
+
+      - name: Upload to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.ref_name }}" release-files/* --clobber
+          echo "::notice::已上传安装包到 Release ${{ github.ref_name }}"
+
+      - name: Report failure (if any pack job failed)
+        if: contains(needs.pack.result, 'failure')
+        run: |
+          echo "::error::部分平台打包失败，请查看对应 job 日志。已成功的产物已上传到 Release。"
+          exit 1

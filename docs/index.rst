@@ -9,6 +9,7 @@ fspack
 
    api
    changelog
+   integration
 
 简介
 ====
