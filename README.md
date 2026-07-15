@@ -145,9 +145,8 @@ dist/
 | cli_office | 有库 CLI | pypdf 依赖，uv workspace 成员 |
 | gui_calc | 有库 GUI | PySide6 依赖，验证 GUI 快捷方式与 DLL 搜索 |
 | pyside2_app | 有库 GUI | PySide2 依赖，验证 requires-python 版本自动解析 |
-| pyqt5_app | 有库 GUI | PyQt5 依赖，验证 Python 3.12 兼容 |
-| tk_basic | 无库 GUI | tkinter 标准库，Windows 打包受限（见已知限制） |
-| pygame_demo | 有库 pygame | pygame 依赖，验证多媒体库打包 |
+| pyqt5_cli | 有库 GUI | PyQt5 依赖，验证 Python 3.12 兼容 |
+| pygame_cli | 有库 pygame | pygame 依赖，验证多媒体库打包 |
 | pygame_snake | 有库 pygame | pygame 贪吃蛇，验证 dummy 驱动运行 |
 | web_app | 有库 web | flask 依赖，验证 web 框架打包 |
 
@@ -175,7 +174,7 @@ ModuleNotFoundError: No module named 'tkinter'
 **替代方案**：
 
 - 改用 PySide2/PySide6/PyQt5/PyQt6 等 Qt 框架（fspack 已验证支持，见 `examples/gui_calc`、
-  `examples/pyside2_app`、`examples/pyqt5_app`）
+  `examples/pyside2_app`、`examples/pyqt5_cli`）
 - 在 Linux 打包（fspack Linux 运行时用 python-build-standalone，含完整标准库，含 tkinter）：
   `fspack b --target linux`
 

@@ -110,15 +110,15 @@ def test_build_and_run_guicalc(tmp_path: Path) -> None:
 
 
 @pytest.mark.slow
-def test_build_and_run_pygamedemo(tmp_path: Path) -> None:
-    """pygame_demo 示例：有库 pygame，dummy 驱动验证。."""
+def test_build_and_run_pygame_cli(tmp_path: Path) -> None:
+    """pygame_cli 示例：有库 pygame，dummy 驱动验证。."""
     _build_and_run(
-        "pygame_demo",
+        "pygame_cli",
         "pygame ",
         tmp_path,
         extra_env={"SDL_VIDEODRIVER": "dummy", "SDL_AUDIODRIVER": "dummy"},
     )
-    proj = tmp_path / "pygame_demo"
+    proj = tmp_path / "pygame_cli"
     assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "pygame").is_dir()
 
 
@@ -166,8 +166,8 @@ def test_build_and_run_pyside2app(tmp_path: Path) -> None:
 
 
 @pytest.mark.slow
-def test_build_and_run_pyqt5app(tmp_path: Path) -> None:
-    """pyqt5_app 示例：Python 3.12 + PyQt5，验证新版本 + PyQt5 兼容。
+def test_build_and_run_pyqt5_cli(tmp_path: Path) -> None:
+    """pyqt5_cli 示例：Python 3.12 + PyQt5，验证新版本 + PyQt5 兼容。
 
     PyQt5 的 Qt DLL 在 wine 上可能缺系统 DLL，缺时跳过运行断言。
     """
@@ -181,11 +181,11 @@ def test_build_and_run_pyqt5app(tmp_path: Path) -> None:
     if not shutil.which("wine"):
         pytest.skip("wine 未安装")
 
-    proj = tmp_path / "pyqt5_app"
-    shutil.copytree(_EXAMPLES / "pyqt5_app", proj)
+    proj = tmp_path / "pyqt5_cli"
+    shutil.copytree(_EXAMPLES / "pyqt5_cli", proj)
     build(proj, get_mirror("aliyun"), "3.12.0", target=Platform.WINDOWS, keep_modules={"PyQt5.QtCore", "PyQt5.QtGui"})
 
-    exe = proj / "dist" / "pyqt5_app.exe"
+    exe = proj / "dist" / "pyqt5_cli.exe"
     assert exe.is_file(), f"未生成 exe: {exe}"
     assert (proj / "dist" / "runtime" / "python312.dll").is_file(), "未找到 python312.dll"
     assert (proj / "dist" / "runtime" / "python312._pth").is_file(), "未生成 _pth"
