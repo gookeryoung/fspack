@@ -19,7 +19,7 @@ fspack 将 Python 项目打包为可执行文件与跨平台安装包：用 embe
 - **跨平台安装包**：`fsp p` 按目标平台生成 Windows NSIS 安装包（含开始菜单/桌面快捷方式、卸载器、中英文双语）或 Linux .deb + tar.gz 便携包
 - **双平台支持**：Windows（embed + mingw 交叉编译）、Linux（python-build-standalone + gcc）
 - **国内镜像**：默认阿里云 PyPI 与 embed python 镜像，`--mirror` 切换
-- **彩色进度显示**：rich 驱动的步骤进度（▶ 准备运行时 / ✓ 构建完成），错误/警告/一般消息颜色区分，`-v` 开启 DEBUG 日志
+- **彩色进度显示**：rich 驱动的步骤进度（> 准备运行时 / √ 构建完成），错误/警告/一般消息颜色区分，`-v` 开启 DEBUG 日志
 
 ## 安装
 
@@ -146,7 +146,7 @@ dist/
 | gui_calc | 有库 GUI | PySide6 依赖，验证 GUI 快捷方式与 DLL 搜索 |
 | pyside2_app | 有库 GUI | PySide2 依赖，验证 requires-python 版本自动解析 |
 | pyqt5_app | 有库 GUI | PyQt5 依赖，验证 Python 3.12 兼容 |
-| tk_basic | 无库 GUI | tkinter 标准库，验证内置 GUI |
+| tk_basic | 无库 GUI | tkinter 标准库，Windows 打包受限（见已知限制） |
 | pygame_demo | 有库 pygame | pygame 依赖，验证多媒体库打包 |
 | pygame_snake | 有库 pygame | pygame 贪吃蛇，验证 dummy 驱动运行 |
 | web_app | 有库 web | flask 依赖，验证 web 框架打包 |
@@ -159,6 +159,32 @@ dist/
 | Linux | python-build-standalone（indygreg） | gcc | .deb + tar.gz |
 
 Linux dev 机可交叉编译 Windows 包（`fsp b --target windows`），反之亦然。
+
+## 已知限制
+
+### Windows 打包不支持 tkinter
+
+fspack Windows 运行时使用 [python.org 官方 embeddable package](https://www.python.org/downloads/windows/)
+（精简版，约 10MB），该发行版为控制体积裁剪了 tkinter 相关文件（`Lib/tkinter/`、
+`_tkinter.pyd`、`tcl/`、`tk/`）。因此 `import tkinter` 的应用在 Windows 打包后运行会报：
+
+```
+ModuleNotFoundError: No module named 'tkinter'
+```
+
+**替代方案**：
+
+- 改用 PySide2/PySide6/PyQt5/PyQt6 等 Qt 框架（fspack 已验证支持，见 `examples/gui_calc`、
+  `examples/pyside2_app`、`examples/pyqt5_app`）
+- 在 Linux 打包（fspack Linux 运行时用 python-build-standalone，含完整标准库，含 tkinter）：
+  `fspack b --target linux`
+
+### `missing` 依赖误报导入名≠包名
+
+`fsp b` 日志中 `AST 发现未声明依赖` 提示可能误报：当导入名与 PyPI 包名不一致时
+（如 `import yaml` 对应包名 `PyYAML`、`import PIL` 对应 `Pillow`），即使 pyproject.toml
+已正确声明依赖，`missing` 比较归一化包名仍会提示未声明。不影响打包功能（`declared`
+优先下载），仅日志有误导性。
 
 ## 开发
 
