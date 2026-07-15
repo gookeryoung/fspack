@@ -47,12 +47,12 @@ def setup_logging(verbose: bool = False) -> None:
 
 def step(title: str) -> None:
     """打印构建步骤标题。."""
-    console.print(f"[step]▶ {title}[/]")
+    console.print(f"[step]> {title}[/]")
 
 
 def success(msg: str) -> None:
     """打印成功消息。."""
-    console.print(f"[success]✓[/] {msg}")
+    console.print(f"[success]√[/] {msg}")
 
 
 def warn(msg: str) -> None:
@@ -62,4 +62,4 @@ def warn(msg: str) -> None:
 
 def error(msg: str) -> None:
     """打印错误消息。."""
-    console.print(f"[error]✗[/] {msg}")
+    console.print(f"[error]×[/] {msg}")

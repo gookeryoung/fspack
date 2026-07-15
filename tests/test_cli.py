@@ -134,6 +134,25 @@ def test_run_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert called["rest"] == ["--foo", "bar"]
 
 
+def test_run_debug_flag_after_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`fspack r <project> --debug` 应解析为 debug 标志,而非透传参数。
+
+    回归测试:曾用 argparse.REMAINDER 导致 --debug 被捕获到 rest_args,
+    改用 nargs="*" 后 --debug 正确解析为 fspack 选项。
+    """
+    called: dict[str, Any] = {}
+
+    def fake_run(project: Path, rest_args: list[str] | None = None, debug: bool = False) -> None:
+        called["project"] = project
+        called["rest"] = rest_args
+        called["debug"] = debug
+
+    monkeypatch.setattr(cli.run_cmd, "run", fake_run)
+    cli.main(["r", str(tmp_path), "--debug"])
+    assert called["debug"] is True
+    assert called["rest"] == []
+
+
 def test_clean_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     called: dict[str, Path] = {}
     monkeypatch.setattr(cli.clean_cmd, "run", lambda project: called.__setitem__("p", project))

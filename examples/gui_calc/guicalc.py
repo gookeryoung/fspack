@@ -16,6 +16,8 @@ def main() -> None:
     pyside_dir = str(Path(PySide6.__file__).parent)
     with contextlib.suppress(OSError):
         os.add_dll_directory(pyside_dir)
+    import PySide6.QtCore  # QtGui 在 C 层依赖 QtCore
+    import PySide6.QtGui  # QtWidgets 在 C 层依赖 QtGui,显式导入以保留 .pyd
     from PySide6.QtWidgets import QApplication, QLabel
 
     app = QApplication([])

@@ -134,17 +134,23 @@ def build(  # noqa: PLR0912, PLR0913
         st.processed(ast_count)
         st.set_detail(f"AST {ast_count} 个第三方")
 
-    if report.ast_third_party:
+    # 下载用包名：优先 declared（pyproject.toml 声明的 PyPI 包名，权威），
+    # declared 为空时回退到 ast_third_party（AST 扫描的导入名，best effort）。
+    # 原因：导入名 ≠ PyPI 包名时（如 orderedset → ordered-set），用导入名 pip download 会失败。
+    # declared 非空时以声明为准，未声明的依赖通过 report.missing 日志提示用户补充。
+    packages_to_download: tuple[str, ...] = report.declared if report.declared else report.ast_third_party
+
+    if packages_to_download:
         if _site_packages_has_deps(site_packages):
             with tracker.stage("下载依赖") as st:
                 _logger.info("site-packages 已有依赖，跳过下载解压")
-                st.skip(len(report.ast_third_party))
+                st.skip(len(packages_to_download))
                 st.set_detail("已存在跳过")
         else:
             wheel_cache = fspack_wheel_cache_dir()
             with tracker.stage("下载依赖") as st:
                 wheels = download_wheels(
-                    report.ast_third_party,
+                    packages_to_download,
                     info.py_version,
                     cfg.mirror.pypi_index,
                     wheel_cache,

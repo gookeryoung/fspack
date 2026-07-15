@@ -886,6 +886,51 @@ def test_build_orchestration_with_deps(tmp_path: Path, monkeypatch: pytest.Monke
     assert downloaded.get("called") is True
 
 
+def test_build_prefers_declared_over_ast(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """declared 非空时用 declared 的 PyPI 包名下载，不用 AST 扫描的导入名。
+
+    覆盖导入名 ≠ PyPI 包名场景：代码 ``import orderedset``（导入名），
+    pyproject 声明 ``ordered-set``（PyPI 包名），应下载 ``ordered-set`` 而非 ``orderedset``。
+    """
+    proj = tmp_path / "app"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\ndependencies = ["ordered-set", "lxml"]\n'
+    )
+    (proj / "app.py").write_text("import orderedset\nimport lxml\ndef main():\n    pass\n")
+
+    monkeypatch.setattr("fspack.builder.download_embed", lambda v, m, c, **kw: tmp_path / "fake.zip")
+    monkeypatch.setattr(
+        "fspack.builder.extract_embed",
+        lambda zip_path, runtime_dir: (
+            runtime_dir.mkdir(parents=True, exist_ok=True),
+            (runtime_dir / "python311.dll").write_bytes(b""),
+            (runtime_dir / "Lib" / "site-packages").mkdir(parents=True, exist_ok=True),
+        )[-1],
+    )
+    captured: dict[str, Any] = {}
+
+    def fake_download(
+        packages: tuple[str, ...] | list[str], py_version: str, index: str, cache_dir: Path, **kw: Any
+    ) -> list[Path]:
+        captured["packages"] = tuple(packages)
+        return []
+
+    monkeypatch.setattr("fspack.builder.download_wheels", fake_download)
+    monkeypatch.setattr("fspack.builder.unpack_wheels", lambda *a, **k: 0)
+    monkeypatch.setattr(
+        "fspack.builder.compile_loader",
+        lambda source, out_exe, app_type, work_dir, platform, **kw: (
+            out_exe.parent.mkdir(parents=True, exist_ok=True),
+            out_exe.write_text(source),
+        )[-1],
+    )
+
+    build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
+    # 下载用的是 declared 的 PyPI 包名（ordered-set），而非 AST 扫描的导入名（orderedset）
+    assert captured["packages"] == ("ordered-set", "lxml")
+
+
 def test_build_skips_download_when_site_packages_has_deps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """site-packages 已有 dist-info 时跳过下载解压，记录跳过数。."""
     proj = tmp_path / "app"

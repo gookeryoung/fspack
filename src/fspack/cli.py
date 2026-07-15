@@ -43,7 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_run = sub.add_parser("run", aliases=["r"], help="运行已打包项目")
     p_run.add_argument("project", nargs="?", default=".", help="项目目录")
-    p_run.add_argument("rest", nargs=argparse.REMAINDER, default=[], help="透传给目标程序的参数（以 -- 分隔）")
+    p_run.add_argument("rest", nargs="*", default=[], help="透传给目标程序的参数（以 -- 分隔）")
     p_run.add_argument("--debug", action="store_true", help="用 embed python 直跑入口脚本（绕过 GUI loader，输出可见）")
 
     p_clean = sub.add_parser("clean", aliases=["c"], help="清理 dist/")

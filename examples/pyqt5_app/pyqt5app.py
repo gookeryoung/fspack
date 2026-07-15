@@ -15,6 +15,8 @@ def main() -> None:
     qt_dir = str(Path(PyQt5.__file__).parent)
     with contextlib.suppress(OSError):
         os.add_dll_directory(qt_dir)
+    import PyQt5.QtCore  # QtGui 在 C 层依赖 QtCore
+    import PyQt5.QtGui  # QtWidgets 在 C 层依赖 QtGui,显式导入以保留 .pyd
     from PyQt5.QtWidgets import QApplication, QLabel
 
     app = QApplication([])
