@@ -18,18 +18,21 @@ import pytest
 _EXAMPLES = Path(__file__).parent.parent / "examples"
 
 
-def _build_and_run(
+def _build_and_run(  # noqa: PLR0913
     proj_name: str,
     expect_substr: str,
     tmp_path: Path,
     extra_env: dict[str, str] | None = None,
     timeout: int = 240,
+    debug: bool = False,
 ) -> None:
     """构建示例并在 wine 下运行，断言输出含预期字符串。
 
     proj_name: examples/ 下的示例目录名。
     expect_substr: 运行输出中应包含的子串。
     extra_env: wine 运行时额外环境变量（如 GUI/pygame 的 offscreen 驱动）。
+    debug: True 时用 embed python + wrapper 直跑入口（绕过 GUI loader，stdout 可见），
+        用于 pygame 等改为 GUI 后无控制台输出的场景。
     """
     from fspack.builder import build
     from fspack.loader import mingw_available
@@ -53,7 +56,18 @@ def _build_and_run(
     env = {**os.environ, "WINEDEBUG": "-all"}
     if extra_env:
         env.update(extra_env)
-    result = subprocess.run(["wine", str(exe)], capture_output=True, text=True, timeout=timeout, env=env, check=False)
+    if debug:
+        # 用 embed python + wrapper 直跑入口，绕过 GUI loader 使 stdout 可见
+        # （等价于 `fspack r --debug`）
+        py = proj / "dist" / "runtime" / "python.exe"
+        wrapper = proj / "dist" / f"_entry_{proj_name}.py"
+        assert py.is_file(), f"未找到 embed python: {py}"
+        assert wrapper.is_file(), f"未找到入口包装器: {wrapper}"
+        env["PYTHONUNBUFFERED"] = "1"
+        cmd = ["wine", str(py), str(wrapper)]
+    else:
+        cmd = ["wine", str(exe)]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env, check=False)
     combined = result.stdout + result.stderr
     assert expect_substr in combined, f"未在输出中发现 {expect_substr!r}: {combined!r}"
 
@@ -112,12 +126,17 @@ def test_build_and_run_guicalc(tmp_path: Path) -> None:
 
 @pytest.mark.slow
 def test_build_and_run_pygame_cli(tmp_path: Path) -> None:
-    """pygame_cli 示例：有库 pygame，dummy 驱动验证。."""
+    """pygame_cli 示例：有库 pygame，dummy 驱动验证。
+
+    pygame 改为 GUI（无控制台）后，用 debug 模式（embed python + wrapper 直跑）
+    使 print 输出可见。SDL dummy 驱动让 pygame 在无显示环境运行。
+    """
     _build_and_run(
         "pygame_cli",
         "pygame ",
         tmp_path,
         extra_env={"SDL_VIDEODRIVER": "dummy", "SDL_AUDIODRIVER": "dummy"},
+        debug=True,
     )
     proj = tmp_path / "pygame_cli"
     assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "pygame").is_dir()
@@ -202,12 +221,18 @@ def test_build_and_run_pyqt5_cli(tmp_path: Path) -> None:
 
 @pytest.mark.slow
 def test_build_and_run_snake(tmp_path: Path) -> None:
-    """pygame_snake 示例：pygame 贪吃蛇，dummy 驱动验证。."""
+    """pygame_snake 示例：pygame 贪吃蛇，dummy 驱动验证。
+
+    pygame 改为 GUI（无控制台）后，用 debug 模式（embed python + wrapper 直跑）
+    使 print 输出可见。SDL dummy 驱动让 pygame 在无显示环境运行，DUMMY_MAX_FRAMES
+    控制循环退出避免死循环。
+    """
     _build_and_run(
         "pygame_snake",
         "snake ready",
         tmp_path,
         extra_env={"SDL_VIDEODRIVER": "dummy", "SDL_AUDIODRIVER": "dummy"},
+        debug=True,
     )
     proj = tmp_path / "pygame_snake"
     assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "pygame").is_dir()

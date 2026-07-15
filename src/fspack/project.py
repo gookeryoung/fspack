@@ -57,7 +57,7 @@ _KNOWN_FULL_VERSIONS: list[str] = sorted(KNOWN_EMBED_VERSIONS.values(), key=_ver
 # PEP 440 版本规范符正则
 _SPEC_RE = re.compile(r"(>=|<=|==|!=|~=|>|<)\s*(\d+(?:\.\d+)*)")
 
-_GUI_HINTS = frozenset({"tkinter", "PySide2", "PySide6", "PyQt5", "PyQt6", "matplotlib", "wx", "win32gui"})
+_GUI_HINTS = frozenset({"tkinter", "PySide2", "PySide6", "PyQt5", "PyQt6", "matplotlib", "wx", "win32gui", "pygame"})
 
 
 def parse_project(project_dir: Path, py_version: str | None = None) -> ProjectInfo:
@@ -88,6 +88,8 @@ def parse_project(project_dir: Path, py_version: str | None = None) -> ProjectIn
     tool: dict[str, Any] = data.get("tool", {}) if isinstance(data.get("tool"), dict) else {}
     fspack_cfg: dict[str, Any] = tool.get("fspack", {}) if isinstance(tool.get("fspack"), dict) else {}
     entries_tbl: dict[str, Any] = fspack_cfg.get("entries", {}) if isinstance(fspack_cfg.get("entries"), dict) else {}
+    icon_rel = fspack_cfg.get("icon")
+    icon_path = _resolve_icon(project_dir, icon_rel)
 
     if entries_tbl:
         entries = _parse_entries(project_dir, entries_tbl, deps)
@@ -103,6 +105,7 @@ def parse_project(project_dir: Path, py_version: str | None = None) -> ProjectIn
             py_version=py_version or DEFAULT_PY_VERSION,
             requires_python=requires_python,
             entries=entries,
+            icon=icon_path,
         )
 
     entry_module, entry_file, app_type = detect_entry(project_dir, name, deps)
@@ -116,6 +119,7 @@ def parse_project(project_dir: Path, py_version: str | None = None) -> ProjectIn
         dependencies=deps,
         py_version=py_version or DEFAULT_PY_VERSION,
         requires_python=requires_python,
+        icon=icon_path,
     )
 
 
@@ -148,6 +152,23 @@ def _parse_entries(
             raise ProjectError(f"[tool.fspack.entries] {entry_name} 的脚本不存在: {script_rel}")
         entries.append(EntryPoint.from_script(entry_name, script_path))
     return tuple(entries)
+
+
+def _resolve_icon(project_dir: Path, icon_rel: object) -> Path | None:
+    """解析 ``[tool.fspack] icon`` 配置为绝对路径。
+
+    ``icon_rel`` 为相对项目目录的路径字符串（POSIX 或原生均可）。为空时返回
+    ``None``（由 builder 回退到默认 icon）。路径不存在时报错，避免构建时
+    才发现 windres 找不到文件。
+    """
+    if not icon_rel:
+        return None
+    if not isinstance(icon_rel, str) or not icon_rel.strip():
+        raise ProjectError(f"[tool.fspack] icon 配置无效: {icon_rel!r}")
+    icon_path = (project_dir / icon_rel.strip()).resolve()
+    if not icon_path.is_file():
+        raise ProjectError(f"[tool.fspack] icon 文件不存在: {icon_rel}")
+    return icon_path
 
 
 def resolve_py_version(

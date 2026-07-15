@@ -12,6 +12,10 @@ from fspack.config import AppType
 from fspack.exceptions import LoaderError
 from fspack.loader import (
     MINGW_GCC,
+    MINGW_WINDRES,
+    _compile_icon_resource,
+    _find_windres,
+    _icon_hash,
     _loader_cache_key,
     compile_loader,
     gcc_available,
@@ -313,3 +317,312 @@ def test_compile_loader_cache_writeback_failure_logged(tmp_path: Path, monkeypat
         "x", tmp_path / "app.exe", AppType.CLI, tmp_path / "w", Platform.WINDOWS, cache_dir=tmp_path / "cache"
     )
     assert (tmp_path / "app.exe").is_file()
+
+
+# --- icon 相关测试 ---
+
+
+def test_icon_hash_stable_and_differs_by_content(tmp_path: Path) -> None:
+    """_icon_hash 对同内容稳定，对不同内容产生不同哈希。."""
+    ico1 = tmp_path / "a.ico"
+    ico1.write_bytes(b"icon-data")
+    ico2 = tmp_path / "b.ico"
+    ico2.write_bytes(b"icon-data")  # 相同内容
+    ico3 = tmp_path / "c.ico"
+    ico3.write_bytes(b"different-content")
+    assert _icon_hash(ico1) == _icon_hash(ico2)
+    assert _icon_hash(ico1) != _icon_hash(ico3)
+    assert len(_icon_hash(ico1)) == 16
+
+
+def test_find_windres_prefers_mingw_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_find_windres 优先返回 mingw 交叉前缀名。."""
+
+    def fake_which(name: str) -> str | None:
+        if name == MINGW_WINDRES:
+            return "/usr/bin/" + MINGW_WINDRES
+        if name == "windres":
+            return "/usr/bin/windres"
+        return None
+
+    monkeypatch.setattr("fspack.loader.shutil.which", fake_which)
+    assert _find_windres() == MINGW_WINDRES
+
+
+def test_find_windres_fallback_plain(monkeypatch: pytest.MonkeyPatch) -> None:
+    """mingw 前缀不存在时回退到 windres。."""
+
+    def fake_which(name: str) -> str | None:
+        if name == "windres":
+            return "/usr/bin/windres"
+        return None
+
+    monkeypatch.setattr("fspack.loader.shutil.which", fake_which)
+    assert _find_windres() == "windres"
+
+
+def test_find_windres_missing_returns_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """两者都不存在时返回默认 mingw 名，让后续 subprocess 报错。."""
+    monkeypatch.setattr("fspack.loader.shutil.which", lambda name: None)
+    assert _find_windres() == MINGW_WINDRES
+
+
+def test_compile_icon_resource_missing_file_returns_none(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """icon 文件不存在时返回 None 并记录警告。."""
+    result = _compile_icon_resource(tmp_path / "missing.ico", tmp_path / "w")
+    assert result is None
+    assert "icon 文件不存在" in caplog.text
+
+
+def test_compile_icon_resource_no_windres_returns_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """windres 不可用时返回 None 并记录警告。."""
+    icon = tmp_path / "icon.ico"
+    icon.write_bytes(b"ico")
+    monkeypatch.setattr("fspack.loader.shutil.which", lambda name: None)
+    result = _compile_icon_resource(icon, tmp_path / "w")
+    assert result is None
+    assert "未找到 windres" in caplog.text
+
+
+def test_compile_icon_resource_windres_filenotfound_returns_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """windres FileNotFoundError 时返回 None 并记录警告。."""
+    icon = tmp_path / "icon.ico"
+    icon.write_bytes(b"ico")
+    work = tmp_path / "w"
+    work.mkdir()
+
+    # _find_windres 找到，但 subprocess.run 抛 FileNotFoundError
+    def fake_which(name: str) -> str | None:
+        return "/usr/bin/" + name
+
+    def fake_run(cmd: list[str], **kw: Any) -> object:
+        raise FileNotFoundError("no windres in PATH")
+
+    monkeypatch.setattr("fspack.loader.shutil.which", fake_which)
+    monkeypatch.setattr("fspack.loader.subprocess.run", fake_run)
+    result = _compile_icon_resource(icon, work)
+    assert result is None
+    assert "windres 不可用" in caplog.text
+
+
+def test_compile_icon_resource_windres_failure_returns_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """windres CalledProcessError 时返回 None 并记录警告。."""
+    icon = tmp_path / "icon.ico"
+    icon.write_bytes(b"ico")
+    work = tmp_path / "w"
+    work.mkdir()
+    err = subprocess.CalledProcessError(1, "windres", stderr="invalid ico")
+
+    def fake_which(name: str) -> str | None:
+        return "/usr/bin/" + name
+
+    def fake_run(cmd: list[str], **kw: Any) -> object:
+        raise err
+
+    monkeypatch.setattr("fspack.loader.shutil.which", fake_which)
+    monkeypatch.setattr("fspack.loader.subprocess.run", fake_run)
+    result = _compile_icon_resource(icon, work)
+    assert result is None
+    assert "icon 资源编译失败" in caplog.text
+
+
+def test_compile_icon_resource_success_returns_obj_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """windres 成功时返回 icon.o 路径并复制 icon 到 work_dir。."""
+    icon = tmp_path / "icon.ico"
+    icon.write_bytes(b"ico-content")
+    work = tmp_path / "w"
+    work.mkdir()
+
+    def fake_which(name: str) -> str | None:
+        return "/usr/bin/" + name
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        # 模拟 windres 生成 icon.o
+        output = Path(cmd[cmd.index("--output") + 1])
+        output.write_bytes(b"coff-obj")
+        return _Completed()
+
+    monkeypatch.setattr("fspack.loader.shutil.which", fake_which)
+    monkeypatch.setattr("fspack.loader.subprocess.run", fake_run)
+    result = _compile_icon_resource(icon, work)
+    assert result is not None
+    assert result.name == "icon.o"
+    assert result.is_file()
+    # icon 被复制到 work_dir
+    assert (work / "icon.ico").read_bytes() == b"ico-content"
+    # icon.rc 内容正确
+    rc = (work / "icon.rc").read_text(encoding="utf-8")
+    assert 'id ICON "icon.ico"' in rc
+
+
+def test_compile_loader_with_icon_appends_obj_to_cmd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """compile_loader Windows + icon 时把 icon.o 路径加到 gcc 命令末尾。."""
+    captured: dict[str, list[str]] = {}
+
+    def fake_which(name: str) -> str | None:
+        return "/usr/bin/" + name
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        captured["cmd"] = cmd
+        # 模拟 windres 与 gcc 都生成输出
+        if "--output-format=coff" in cmd:
+            output = Path(cmd[cmd.index("--output") + 1])
+            output.write_bytes(b"obj")
+        else:
+            out_path = Path(cmd[cmd.index("-o") + 1])
+            out_path.write_bytes(b"exe")
+        return _Completed()
+
+    monkeypatch.setattr("fspack.loader.shutil.which", fake_which)
+    monkeypatch.setattr("fspack.loader.subprocess.run", fake_run)
+
+    icon = tmp_path / "icon.ico"
+    icon.write_bytes(b"ico")
+    out = tmp_path / "app.exe"
+    compile_loader(
+        "x",
+        out,
+        AppType.GUI,
+        tmp_path / "w",
+        Platform.WINDOWS,
+        icon=icon,
+        cache_dir=tmp_path / "cache",
+    )
+    cmd = captured["cmd"]
+    assert cmd[-1].endswith("icon.o")
+    assert "-mwindows" in cmd  # GUI 加 -mwindows
+
+
+def test_compile_loader_linux_ignores_icon(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """compile_loader Linux 平台忽略 icon 参数（ELF 无图标资源概念）。"""
+    captured: dict[str, list[str]] = {}
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        captured["cmd"] = cmd
+        _touch_out(cmd)
+        return _Completed()
+
+    monkeypatch.setattr("fspack.loader.subprocess.run", fake_run)
+
+    icon = tmp_path / "icon.ico"
+    icon.write_bytes(b"ico")
+    out = tmp_path / "app"
+    compile_loader(
+        "x",
+        out,
+        AppType.CLI,
+        tmp_path / "w",
+        Platform.LINUX,
+        icon=icon,
+        cache_dir=tmp_path / "cache",
+    )
+    # icon 不应出现在 gcc 命令中
+    assert "icon.o" not in captured["cmd"]
+    assert "icon.ico" not in captured["cmd"]
+
+
+def test_compile_loader_cache_key_differs_by_icon(tmp_path: Path) -> None:
+    """相同源码不同 icon 产生不同缓存键。"""
+    source = "int wmain(){return 0;}"
+    key_no_icon = _loader_cache_key(source, AppType.CLI, Platform.WINDOWS, "")
+    key_with_icon = _loader_cache_key(source, AppType.CLI, Platform.WINDOWS, "abc123")
+    assert key_no_icon != key_with_icon
+
+
+def test_compile_loader_with_icon_second_call_hits_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """相同 icon 第二次调用命中缓存（icon_hash 相同）。"""
+    call_count = 0
+
+    def fake_which(name: str) -> str | None:
+        return "/usr/bin/" + name
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        nonlocal call_count
+        call_count += 1
+        if "--output-format=coff" in cmd:
+            output = Path(cmd[cmd.index("--output") + 1])
+            output.write_bytes(b"obj")
+        else:
+            out_path = Path(cmd[cmd.index("-o") + 1])
+            out_path.write_bytes(b"exe")
+        return _Completed()
+
+    monkeypatch.setattr("fspack.loader.shutil.which", fake_which)
+    monkeypatch.setattr("fspack.loader.subprocess.run", fake_run)
+
+    icon = tmp_path / "icon.ico"
+    icon.write_bytes(b"ico-content")
+    cache = tmp_path / "cache"
+    compile_loader(
+        "x",
+        tmp_path / "app1.exe",
+        AppType.CLI,
+        tmp_path / "w1",
+        Platform.WINDOWS,
+        icon=icon,
+        cache_dir=cache,
+    )
+    compile_loader(
+        "x",
+        tmp_path / "app2.exe",
+        AppType.CLI,
+        tmp_path / "w2",
+        Platform.WINDOWS,
+        icon=icon,
+        cache_dir=cache,
+    )
+    # windres + gcc 只调一次（第二次缓存命中）
+    assert call_count == 2  # windres + gcc
+
+
+def test_compile_loader_different_icon_misses_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """不同 icon 内容产生不同缓存键，第二次不命中。"""
+    calls: list[str] = []
+
+    def fake_which(name: str) -> str | None:
+        return "/usr/bin/" + name
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        calls.append(cmd[0])
+        if "--output-format=coff" in cmd:
+            output = Path(cmd[cmd.index("--output") + 1])
+            output.write_bytes(b"obj")
+        else:
+            out_path = Path(cmd[cmd.index("-o") + 1])
+            out_path.write_bytes(b"exe")
+        return _Completed()
+
+    monkeypatch.setattr("fspack.loader.shutil.which", fake_which)
+    monkeypatch.setattr("fspack.loader.subprocess.run", fake_run)
+
+    icon1 = tmp_path / "icon1.ico"
+    icon1.write_bytes(b"ico-1")
+    icon2 = tmp_path / "icon2.ico"
+    icon2.write_bytes(b"ico-2")
+    cache = tmp_path / "cache"
+    compile_loader(
+        "x",
+        tmp_path / "app1.exe",
+        AppType.CLI,
+        tmp_path / "w1",
+        Platform.WINDOWS,
+        icon=icon1,
+        cache_dir=cache,
+    )
+    compile_loader(
+        "x",
+        tmp_path / "app2.exe",
+        AppType.CLI,
+        tmp_path / "w2",
+        Platform.WINDOWS,
+        icon=icon2,
+        cache_dir=cache,
+    )
+    # 两次都完整编译（windres + gcc 各两次）
+    assert len(calls) == 4

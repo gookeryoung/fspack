@@ -20,54 +20,63 @@ from fspack.platform import Platform, detect_platform
 def test_build_run_default_mirror_and_py_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
-    def fake_build(
+    def fake_build(  # noqa: PLR0913
         project: Path,
         mirror: object,
         py_version: str | None,
         target: object = None,
         keep_modules: set[str] | None = None,
+        icon: Path | None = None,
     ) -> None:
         captured["mirror"] = mirror
         captured["py_version"] = py_version
         captured["target"] = target
+        captured["icon"] = icon
 
     monkeypatch.setattr("fspack.commands.build.build", fake_build)
     build_run(tmp_path, mirror=None, py_version=None)
     assert captured["mirror"] == get_mirror("aliyun")
     assert captured["py_version"] is None
     assert captured["target"] is detect_platform()
+    assert captured["icon"] is None
 
 
 def test_build_run_explicit_options(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
-    def fake_build(
+    def fake_build(  # noqa: PLR0913
         project: Path,
         mirror: object,
         py_version: str,
         target: object = None,
         keep_modules: set[str] | None = None,
+        icon: Path | None = None,
     ) -> None:
         captured["mirror"] = mirror
         captured["py_version"] = py_version
         captured["target"] = target
+        captured["icon"] = icon
 
     monkeypatch.setattr("fspack.commands.build.build", fake_build)
-    build_run(tmp_path, mirror="aliyun", py_version="3.10.0", target=Platform.LINUX)
+    icon_path = tmp_path / "custom.ico"
+    icon_path.write_bytes(b"")
+    build_run(tmp_path, mirror="aliyun", py_version="3.10.0", target=Platform.LINUX, icon=icon_path)
     assert captured["mirror"] == get_mirror("aliyun")
     assert captured["py_version"] == "3.10.0"
     assert captured["target"] is Platform.LINUX
+    assert captured["icon"] == icon_path
 
 
 def test_build_run_keep_modules(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
-    def fake_build(
+    def fake_build(  # noqa: PLR0913
         project: Path,
         mirror: object,
         py_version: str | None,
         target: object = None,
         keep_modules: set[str] | None = None,
+        icon: Path | None = None,
     ) -> None:
         captured["keep_modules"] = keep_modules
 

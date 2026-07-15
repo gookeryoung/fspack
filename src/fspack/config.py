@@ -86,6 +86,7 @@ class ProjectInfo:
     py_version: str
     requires_python: str | None = None
     entries: tuple[EntryPoint, ...] = ()
+    icon: Path | None = None
 
     @classmethod
     def from_dir(cls, project_dir: Path, py_version: str | None = None) -> ProjectInfo:

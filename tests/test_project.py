@@ -296,3 +296,123 @@ def test_entry_point_entry_rel(tmp_path: Path) -> None:
     script.write_text("def main():\n    pass\n")
     ep = EntryPoint.from_script("app", script)
     assert ep.entry_rel(tmp_path) == "sub/app.py"
+
+
+# --- icon 解析测试 ---
+
+
+def test_resolve_icon_none_returns_none(tmp_path: Path) -> None:
+    """icon_rel 为 None/空时返回 None。."""
+    from fspack.project import _resolve_icon
+
+    assert _resolve_icon(tmp_path, None) is None
+    assert _resolve_icon(tmp_path, "") is None
+
+
+def test_resolve_icon_invalid_type_raises(tmp_path: Path) -> None:
+    """icon_rel 非字符串时报错。."""
+    from fspack.project import _resolve_icon
+
+    with pytest.raises(ProjectError, match="icon 配置无效"):
+        _resolve_icon(tmp_path, 123)
+
+
+def test_resolve_icon_blank_string_raises(tmp_path: Path) -> None:
+    """icon_rel 为纯空白字符串时报错。."""
+    from fspack.project import _resolve_icon
+
+    with pytest.raises(ProjectError, match="icon 配置无效"):
+        _resolve_icon(tmp_path, "   ")
+
+
+def test_resolve_icon_missing_file_raises(tmp_path: Path) -> None:
+    """icon 文件不存在时报错。."""
+    from fspack.project import _resolve_icon
+
+    with pytest.raises(ProjectError, match="icon 文件不存在"):
+        _resolve_icon(tmp_path, "missing.ico")
+
+
+def test_resolve_icon_valid_returns_absolute(tmp_path: Path) -> None:
+    """icon 文件存在时返回绝对路径。."""
+    from fspack.project import _resolve_icon
+
+    icon = tmp_path / "custom.ico"
+    icon.write_bytes(b"ico")
+    result = _resolve_icon(tmp_path, "custom.ico")
+    assert result is not None
+    assert result == icon.resolve()
+    assert result.is_absolute()
+
+
+def test_resolve_icon_strips_whitespace(tmp_path: Path) -> None:
+    """icon 路径两侧空白被剥离。."""
+    from fspack.project import _resolve_icon
+
+    icon = tmp_path / "custom.ico"
+    icon.write_bytes(b"ico")
+    assert _resolve_icon(tmp_path, "  custom.ico  ") == icon.resolve()
+
+
+def test_parse_project_no_icon_returns_none(tmp_path: Path) -> None:
+    """无 [tool.fspack] icon 配置时 ProjectInfo.icon 为 None。."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    info = parse_project(tmp_path)
+    assert info.icon is None
+
+
+def test_parse_project_with_icon_returns_path(tmp_path: Path) -> None:
+    """[tool.fspack] icon 配置存在时 ProjectInfo.icon 为绝对路径。."""
+    icon = tmp_path / "my.ico"
+    icon.write_bytes(b"ico")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nicon = "my.ico"\n'
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    info = parse_project(tmp_path)
+    assert info.icon == icon.resolve()
+
+
+def test_parse_project_with_missing_icon_raises(tmp_path: Path) -> None:
+    """[tool.fspack] icon 指向不存在文件时报错。."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nicon = "missing.ico"\n'
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    with pytest.raises(ProjectError, match="icon 文件不存在"):
+        parse_project(tmp_path)
+
+
+def test_parse_project_with_icon_in_multi_entry(tmp_path: Path) -> None:
+    """多入口项目也正确解析 icon。."""
+    icon = tmp_path / "icon.ico"
+    icon.write_bytes(b"ico")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nicon = "icon.ico"\n\n[tool.fspack.entries]\ncli = "cli.py"\n'
+    )
+    (tmp_path / "cli.py").write_text("def main():\n    pass\n")
+    info = parse_project(tmp_path)
+    assert info.icon == icon.resolve()
+
+
+# --- pygame GUI 推断测试 ---
+
+
+def test_infer_app_type_pygame_is_gui(tmp_path: Path) -> None:
+    """import pygame 的脚本推断为 GUI（无控制台）。."""
+    script = tmp_path / "game.py"
+    script.write_text("import pygame\ndef main():\n    pass\n")
+    assert infer_app_type(script, ()) is AppType.GUI
+
+
+def test_parse_project_pygame_example_is_gui() -> None:
+    """pygame_cli 示例被识别为 GUI。."""
+    info = parse_project(_EXAMPLES / "pygame_cli")
+    assert info.app_type is AppType.GUI
+
+
+def test_parse_project_pygame_snake_is_gui() -> None:
+    """pygame_snake 示例被识别为 GUI。."""
+    info = parse_project(_EXAMPLES / "pygame_snake")
+    assert info.app_type is AppType.GUI

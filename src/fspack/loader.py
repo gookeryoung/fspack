@@ -38,7 +38,10 @@ __all__ = [
 
 _logger = logging.getLogger(__name__)
 MINGW_GCC = "x86_64-w64-mingw32-gcc"
+MINGW_WINDRES = "x86_64-w64-mingw32-windres"
 LINUX_GCC = "gcc"
+
+_ICON_RC_TEMPLATE = 'id ICON "{icon_path}"\n'
 
 
 def loader_cache_dir() -> Path:
@@ -46,17 +49,19 @@ def loader_cache_dir() -> Path:
     return Path.home() / ".fspack" / "cache" / "loaders"
 
 
-def _loader_cache_key(source: str, app_type: AppType, platform: Platform) -> str:
-    """计算 loader 缓存键：sha256(source + app_type + platform) 前 16 字符 hex。
+def _loader_cache_key(source: str, app_type: AppType, platform: Platform, icon_hash: str = "") -> str:
+    """计算 loader 缓存键：sha256(source + app_type + platform + icon_hash) 前 16 字符 hex。
 
     源码仅依赖 ``py_xy`` 与平台（入口路径运行时从 ``<exe_basename>.entry``
-    或回退 ``.entry`` 读取），应用类型影响 ``-mwindows`` 编译选项，三者组合哈希
-    作为缓存文件名，保证同配置命中、改配置失效。
+    或回退 ``.entry`` 读取），应用类型影响 ``-mwindows`` 编译选项，icon_hash
+    区分不同 icon（空串表示无 icon）。四者组合哈希作为缓存文件名，保证同配置
+    命中、改配置失效。
     """
     h = hashlib.sha256()
     h.update(source.encode("utf-8"))
     h.update(app_type.value.encode("utf-8"))
     h.update(platform.value.encode("utf-8"))
+    h.update(icon_hash.encode("utf-8"))
     return h.hexdigest()[:16]
 
 
@@ -311,6 +316,7 @@ def compile_loader(  # noqa: PLR0913
     work_dir: Path,
     platform: Platform = Platform.WINDOWS,
     *,
+    icon: Path | None = None,
     cache_dir: Path | None = None,
     stage: StageRecorder | None = None,
 ) -> Path:
@@ -318,17 +324,21 @@ def compile_loader(  # noqa: PLR0913
 
     Windows 用 mingw 交叉编译（GUI 加 -mwindows），Linux 用 gcc（链接 libdl）。
 
+    ``icon`` 为 Windows 可执行文件图标（.ico），用 windres 编译资源文件
+    链接到 exe。Linux 忽略 icon（ELF 无图标资源概念）。
+
     缓存命中时直接复制到 ``out_exe`` 并调 ``stage.hit_cache()``；
     未命中时编译并 best-effort 回写缓存供后续复用。缓存键为
-    ``sha256(source + app_type + platform)`` 前 16 字符，保证同配置命中、
-    改配置失效。``cache_dir`` 默认 ``~/.fspack/cache/loaders/``。
+    ``sha256(source + app_type + platform + icon_hash)`` 前 16 字符，保证
+    同配置命中、改配置失效。``cache_dir`` 默认 ``~/.fspack/cache/loaders/``。
     """
     work_dir.mkdir(parents=True, exist_ok=True)
     out_exe.parent.mkdir(parents=True, exist_ok=True)
 
+    icon_hash = _icon_hash(icon) if icon is not None and platform is Platform.WINDOWS else ""
     cache = cache_dir or loader_cache_dir()
     cache.mkdir(parents=True, exist_ok=True)
-    key = _loader_cache_key(source, app_type, platform)
+    key = _loader_cache_key(source, app_type, platform, icon_hash)
     suffix = ".exe" if platform is Platform.WINDOWS else ""
     cached_exe = cache / f"{key}{suffix}"
 
@@ -351,6 +361,9 @@ def compile_loader(  # noqa: PLR0913
         cmd = [MINGW_GCC, "-O2", "-municode", "-o", str(out_exe), str(c_file)]
         if app_type is AppType.GUI:
             cmd.insert(1, "-mwindows")
+        icon_obj = _compile_icon_resource(icon, work_dir) if icon is not None else None
+        if icon_obj is not None:
+            cmd.append(str(icon_obj))
         compiler = MINGW_GCC
         install_hint = "mingw-w64"
     _logger.info("编译 loader: %s", " ".join(cmd))
@@ -368,3 +381,58 @@ def compile_loader(  # noqa: PLR0913
     if stage is not None:
         stage.set_detail(compiler)
     return out_exe
+
+
+def _icon_hash(icon: Path) -> str:
+    """计算 icon 文件内容的 sha256 前 16 字符 hex，用于缓存键。."""
+    h = hashlib.sha256()
+    h.update(icon.read_bytes())
+    return h.hexdigest()[:16]
+
+
+def _find_windres() -> str:
+    """查找可用的 windres，优先交叉前缀，回退无前缀。
+
+    Windows mingw64 发行版通常命名 ``windres``（无前缀），Linux 交叉编译
+    环境命名 ``x86_64-w64-mingw32-windres``（带前缀）。两者都查找不到时
+    返回默认名，让后续 subprocess 报 FileNotFoundError。
+    """
+    for name in (MINGW_WINDRES, "windres"):
+        if shutil.which(name):
+            return name
+    return MINGW_WINDRES
+
+
+def _compile_icon_resource(icon: Path, work_dir: Path) -> Path | None:
+    """用 windres 把 .ico 编译为 COFF 格式 .o 文件，返回路径。
+
+    生成 ``icon.rc`` 引用 icon 文件，windres 编译为 ``icon.o`` 供 gcc 链接。
+    windres 处理路径用 Windows 反斜杠风格，icon 文件复制到 work_dir 避免相对
+    路径问题。windres 不可用时 warning 并返回 None（exe 仍可编译，仅无图标）。
+    """
+    if not icon.is_file():
+        _logger.warning("icon 文件不存在，跳过图标嵌入: %s", icon)
+        return None
+    windres = _find_windres()
+    if not shutil.which(windres):
+        _logger.warning("未找到 windres，跳过图标嵌入（请安装 mingw-w64）")
+        return None
+    # 复制 icon 到 work_dir 避免相对路径问题
+    icon_copy = work_dir / "icon.ico"
+    shutil.copy2(icon, icon_copy)
+    # windres 处理路径用 Windows 反斜杠
+    rc_content = _ICON_RC_TEMPLATE.format(icon_path="icon.ico")
+    rc_file = work_dir / "icon.rc"
+    rc_file.write_text(rc_content, encoding="utf-8")
+    obj_file = work_dir / "icon.o"
+    cmd = [windres, "--input", str(rc_file), "--output", str(obj_file), "--output-format=coff"]
+    _logger.info("编译 icon 资源: %s", " ".join(cmd))
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True, cwd=work_dir)
+    except FileNotFoundError as e:
+        _logger.warning("windres 不可用，跳过图标嵌入: %s", e)
+        return None
+    except subprocess.CalledProcessError as e:
+        _logger.warning("icon 资源编译失败，跳过图标嵌入:\n%s", e.stderr)
+        return None
+    return obj_file

@@ -14,14 +14,15 @@ __all__ = ["run"]
 _logger = logging.getLogger(__name__)
 
 
-def run(
+def run(  # noqa: PLR0913
     project: Path,
     mirror: str | None = None,
     py_version: str | None = None,
     target: Platform | None = None,
     keep_modules: set[str] | None = None,
+    icon: Path | None = None,
 ) -> None:
     """执行项目构建。."""
     mirror_cfg = get_mirror(mirror)
     resolved_target = target or detect_platform()
-    build(project, mirror_cfg, py_version, target=resolved_target, keep_modules=keep_modules)
+    build(project, mirror_cfg, py_version, target=resolved_target, keep_modules=keep_modules, icon=icon)

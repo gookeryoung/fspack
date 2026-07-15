@@ -40,6 +40,11 @@ def build_parser() -> argparse.ArgumentParser:
         dest="keep_modules",
         help="显式保留子模块（如 PySide2.QtGui），可重复指定",
     )
+    p_build.add_argument(
+        "--icon",
+        default=None,
+        help="exe 图标文件路径（.ico），覆盖 [tool.fspack] icon；未指定用默认 app.ico",
+    )
 
     p_run = sub.add_parser("run", aliases=["r"], help="运行已打包项目")
     p_run.add_argument("project", nargs="?", default=".", help="项目目录")
@@ -82,6 +87,7 @@ def main(argv: list[str] | None = None) -> None:
             py_version=ns.py_version,
             target=_parse_target(ns.target),
             keep_modules=set(ns.keep_modules) if ns.keep_modules else None,
+            icon=Path(ns.icon).resolve() if ns.icon else None,
         )
     elif command in ("run", "r"):
         run_cmd.run(project, rest_args=_drop_separator(ns.rest), debug=ns.debug, entry=ns.entry)

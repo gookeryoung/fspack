@@ -29,12 +29,13 @@ def test_no_command_prints_help(capsys: pytest.CaptureFixture[str]) -> None:
 def test_build_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     called: dict[str, Any] = {}
 
-    def fake_run(
+    def fake_run(  # noqa: PLR0913
         project: Path,
         mirror: str | None = None,
         py_version: str | None = None,
         target: object = None,
         keep_modules: set[str] | None = None,
+        icon: Path | None = None,
     ) -> None:
         called["project"] = project
         called["mirror"] = mirror
@@ -50,7 +51,9 @@ def test_build_default_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(
         cli.build_cmd,
         "run",
-        lambda project, mirror=None, py_version=None, target=None, keep_modules=None: called.__setitem__("p", project),
+        lambda project, mirror=None, py_version=None, target=None, keep_modules=None, icon=None: called.__setitem__(
+            "p", project
+        ),
     )
     monkeypatch.chdir(tmp_path)
     cli.main(["build"])
@@ -62,7 +65,7 @@ def test_build_custom_py_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(
         cli.build_cmd,
         "run",
-        lambda project, mirror=None, py_version=None, target=None, keep_modules=None: called.__setitem__(
+        lambda project, mirror=None, py_version=None, target=None, keep_modules=None, icon=None: called.__setitem__(
             "pv", py_version
         ),
     )
@@ -73,12 +76,13 @@ def test_build_custom_py_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 def test_build_target_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     called: dict[str, Any] = {}
 
-    def fake_run(
+    def fake_run(  # noqa: PLR0913
         project: Path,
         mirror: str | None = None,
         py_version: str | None = None,
         target: object = None,
         keep_modules: set[str] | None = None,
+        icon: Path | None = None,
     ) -> None:
         called["target"] = target
 
@@ -90,12 +94,13 @@ def test_build_target_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 def test_build_target_windows_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     called: dict[str, Any] = {}
 
-    def fake_run(
+    def fake_run(  # noqa: PLR0913
         project: Path,
         mirror: str | None = None,
         py_version: str | None = None,
         target: object = None,
         keep_modules: set[str] | None = None,
+        icon: Path | None = None,
     ) -> None:
         called["target"] = target
 
@@ -107,18 +112,59 @@ def test_build_target_windows_dispatch(tmp_path: Path, monkeypatch: pytest.Monke
 def test_build_keep_module_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     called: dict[str, Any] = {}
 
-    def fake_run(
+    def fake_run(  # noqa: PLR0913
         project: Path,
         mirror: str | None = None,
         py_version: str | None = None,
         target: object = None,
         keep_modules: set[str] | None = None,
+        icon: Path | None = None,
     ) -> None:
         called["keep_modules"] = keep_modules
 
     monkeypatch.setattr(cli.build_cmd, "run", fake_run)
     cli.main(["b", str(tmp_path), "--keep-module", "PySide2.QtGui", "--keep-module", "PySide2.QtNetwork"])
     assert called["keep_modules"] == {"PySide2.QtGui", "PySide2.QtNetwork"}
+
+
+def test_build_icon_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`fspack b <project> --icon <path>` 解析为绝对路径并传递给 build_cmd.run。."""
+    called: dict[str, Any] = {}
+
+    def fake_run(  # noqa: PLR0913
+        project: Path,
+        mirror: str | None = None,
+        py_version: str | None = None,
+        target: object = None,
+        keep_modules: set[str] | None = None,
+        icon: Path | None = None,
+    ) -> None:
+        called["icon"] = icon
+
+    monkeypatch.setattr(cli.build_cmd, "run", fake_run)
+    # 用绝对路径避免 CWD 依赖
+    icon_abs = tmp_path / "custom.ico"
+    cli.main(["b", str(tmp_path), "--icon", str(icon_abs)])
+    assert called["icon"] == icon_abs.resolve()
+
+
+def test_build_no_icon_passes_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """未指定 --icon 时传递 None（由 builder 回退到默认 app.ico）。."""
+    called: dict[str, Any] = {}
+
+    def fake_run(  # noqa: PLR0913
+        project: Path,
+        mirror: str | None = None,
+        py_version: str | None = None,
+        target: object = None,
+        keep_modules: set[str] | None = None,
+        icon: Path | None = None,
+    ) -> None:
+        called["icon"] = icon
+
+    monkeypatch.setattr(cli.build_cmd, "run", fake_run)
+    cli.main(["b", str(tmp_path)])
+    assert called["icon"] is None
 
 
 def test_run_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

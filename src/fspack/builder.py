@@ -26,9 +26,18 @@ from fspack.project import DEFAULT_LINUX_PY_VERSION, DEFAULT_PY_VERSION, resolve
 from fspack.standalone import STANDALONE_RELEASE_TAG, download_standalone, extract_standalone
 from fspack.wheel_cache import fspack_wheel_cache_dir
 
-__all__ = ["DEFAULT_PY_VERSION", "build", "copy_source", "download_wheels", "unpack_wheels"]
+__all__ = ["DEFAULT_PY_VERSION", "build", "copy_source", "default_icon_path", "download_wheels", "unpack_wheels"]
 
 _logger = logging.getLogger(__name__)
+
+# 默认 icon：打包在 fspack 包内，随 wheel 分发
+_DEFAULT_ICON = Path(__file__).parent / "assets" / "icons" / "app.ico"
+
+
+def default_icon_path() -> Path:
+    """返回 fspack 自带的默认 icon 路径（``assets/icons/app.ico``）。."""
+    return _DEFAULT_ICON
+
 
 _EXCLUDE = shutil.ignore_patterns(
     "dist",
@@ -58,8 +67,14 @@ def build(  # noqa: PLR0912, PLR0913
     embed_cache: Path | None = None,
     target: Platform | None = None,
     keep_modules: set[str] | None = None,
+    icon: Path | None = None,
 ) -> ProjectInfo:
-    """执行完整构建流水线，返回项目信息。."""
+    """执行完整构建流水线，返回项目信息。
+
+    ``icon`` 为 exe 图标路径，``None`` 时用项目 ``[tool.fspack] icon`` 声明，
+    项目未声明则用 fspack 默认 ``assets/icons/app.ico``。仅 Windows 目标生效，
+    Linux 忽略（ELF 无图标资源概念）。
+    """
     from fspack.console import console as rich_console
 
     tracker = BuildTracker()
@@ -170,6 +185,9 @@ def build(  # noqa: PLR0912, PLR0913
         with spinner(f"复制 {info.name} 源码"):
             copy_source(project_dir, src_dst)
 
+    # icon 优先级：CLI --icon > 项目 [tool.fspack] icon > 默认 app.ico（仅 Windows）
+    resolved_icon = icon if icon is not None else (info.icon if info.icon is not None else _DEFAULT_ICON)
+
     exes: list[Path] = []
     with tracker.stage("生成 C loader") as st:
         source = generate_loader_source(info.py_xy, target)
@@ -193,7 +211,7 @@ def build(  # noqa: PLR0912, PLR0913
                 (cfg.dist_dir / ".entry").write_text(wrapper_name, encoding="utf-8")
             exe_name = f"{ep.name}.exe" if target is Platform.WINDOWS else ep.name
             exe = cfg.dist_dir / exe_name
-            compile_loader(source, exe, ep.app_type, build_dir, target, stage=st)
+            compile_loader(source, exe, ep.app_type, build_dir, target, icon=resolved_icon, stage=st)
             exes.append(exe)
         st.processed(len(exes))
 
