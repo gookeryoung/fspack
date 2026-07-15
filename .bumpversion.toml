@@ -16,9 +16,3 @@ replace = '\1"{new_version}"'
 filename = "src/fspack/__init__.py"
 search = '__version__ = "{current_version}"'
 replace = '__version__ = "{new_version}"'
-
-[[tool.bumpversion.files]]
-filename = ".copier-answers.yml"
-regex = true
-search = '_commit: v{current_version}'
-replace = '_commit: v{new_version}'
