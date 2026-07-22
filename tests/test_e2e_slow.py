@@ -367,7 +367,7 @@ def test_build_installer_helloworld_slow(tmp_path: Path) -> None:
     shutil.copytree(_EXAMPLES / "cli_helloworld", proj)
 
     out = build_installer(proj, get_mirror("aliyun"), "3.11.9", no_build=False)
-    expected = proj / "dist" / "release" / "cli_helloworld-setup.exe"
+    expected = proj / "dist" / "release" / "cli_helloworld-0.1.0-setup.exe"
     assert out == expected
     assert expected.is_file(), f"未生成安装包: {expected}"
     assert expected.stat().st_size > 1024 * 1024, f"安装包过小: {expected.stat().st_size} bytes"
@@ -379,7 +379,7 @@ def test_build_installer_helloworld_slow(tmp_path: Path) -> None:
     assert nsi.is_file(), "未生成 installer.nsi"
     content = nsi.read_text(encoding="utf-8")
     assert 'Name "cli_helloworld 0.1.0"' in content
-    assert 'OutFile "release\\cli_helloworld-setup.exe"' in content
+    assert 'OutFile "release\\cli_helloworld-0.1.0-setup.exe"' in content
 
 
 @pytest.mark.slow

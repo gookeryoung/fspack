@@ -43,7 +43,7 @@ def test_generate_nsis_script_cli(tmp_path: Path) -> None:
     assert nsi == dist / "installer.nsi"
     assert release.is_dir()
     assert 'Name "app 1.0"' in content
-    assert 'OutFile "release\\app-setup.exe"' in content
+    assert 'OutFile "release\\app-1.0-setup.exe"' in content
     assert 'InstallDir "$PROGRAMFILES64\\app"' in content
     assert "File /r /x installer.nsi /x release *.*" in content
     assert 'WriteUninstaller "$INSTDIR\\uninstall.exe"' in content
@@ -164,7 +164,7 @@ def test_build_installer_no_build_success(tmp_path: Path, monkeypatch: pytest.Mo
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "app.exe").write_bytes(b"")
-    out_setup = dist / "release" / "app-setup.exe"
+    out_setup = dist / "release" / "app-1.0-setup.exe"
 
     def fake_run(cmd: list[str], **kw: Any) -> _Completed:
         out_setup.parent.mkdir(parents=True, exist_ok=True)
@@ -175,14 +175,14 @@ def test_build_installer_no_build_success(tmp_path: Path, monkeypatch: pytest.Mo
     result = build_installer(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True)
     assert result == out_setup
     assert (dist / "installer.nsi").is_file()
-    assert "app-setup.exe" in (dist / "installer.nsi").read_text(encoding="utf-8")
+    assert "app-1.0-setup.exe" in (dist / "installer.nsi").read_text(encoding="utf-8")
 
 
 def test_build_installer_with_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0"\n')
     (tmp_path / "app.py").write_text("def main():\n    pass\n")
     dist = tmp_path / "dist"
-    out_setup = dist / "release" / "app-setup.exe"
+    out_setup = dist / "release" / "app-1.0-setup.exe"
 
     def fake_build(
         project_dir: Path,

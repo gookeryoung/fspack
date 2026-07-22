@@ -55,7 +55,7 @@ def generate_nsis_script(project: ProjectInfo, dist_dir: Path, release_dir: Path
     release_dir 必须是 dist_dir 的子目录，OutFile 路径相对 dist_dir 计算。
     """
     release_dir.mkdir(parents=True, exist_ok=True)
-    out_setup_rel = release_dir.relative_to(dist_dir) / f"{project.name}-setup.exe"
+    out_setup_rel = release_dir.relative_to(dist_dir) / f"{project.name}-{project.version}-setup.exe"
     out_setup_win = str(out_setup_rel).replace("/", "\\")
     content = _NSIS_TEMPLATE.format(
         name=project.name,
@@ -156,7 +156,7 @@ def build_installer(
     release = dist / "release"
     step("生成 NSIS 脚本")
     nsi = generate_nsis_script(info, dist, release)
-    out_setup = release / f"{info.name}-setup.exe"
+    out_setup = release / f"{info.name}-{info.version}-setup.exe"
     step("编译 NSIS 安装包")
     result = compile_installer(nsi, out_setup)
     success(f"安装包已生成: {result}")
