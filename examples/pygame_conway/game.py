@@ -17,11 +17,16 @@
 事件处理：处理用户输入，如暂停、重启等。
 """
 
+from __future__ import annotations
+
+import os
 from typing import cast
 
 import numpy as np
 import pygame as pg
 from attrs import define, field
+
+DUMMY_MAX_FRAMES = 30
 
 
 @define(slots=True, kw_only=True)
@@ -76,6 +81,7 @@ class Cells:
 
 
 def main() -> None:
+    is_dummy = os.environ.get("SDL_VIDEODRIVER") == "dummy"
     _ = pg.init()
     sw, sh, fps = 800, 600, 60
     screen = pg.display.set_mode((sw, sh))
@@ -84,6 +90,7 @@ def main() -> None:
 
     # 主循环
     running = True
+    frame = 0
     while running:
         for event in pg.event.get():
             if event.type == pg.QUIT:
@@ -100,6 +107,10 @@ def main() -> None:
         cells.draw(screen)
         pg.display.flip()
         _ = clock.tick(fps)  # 控制更新速度
+
+        frame += 1
+        if is_dummy and frame >= DUMMY_MAX_FRAMES:
+            running = False
     pg.quit()
 
 

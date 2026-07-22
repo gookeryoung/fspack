@@ -1478,12 +1478,18 @@ class TetrisGame:
     # ─── 主循环 ───
 
     def run(self) -> None:
+        is_dummy = os.environ.get("SDL_VIDEODRIVER") == "dummy"
+        frame = 0
         while self.running:
             dt = self.clock.tick(FPS) / 1000.0
             self._handle_events()
             self.on_update(dt)
             self._render()
             pygame.display.flip()
+
+            frame += 1
+            if is_dummy and frame >= 30:
+                self.running = False
         pygame.quit()
         sys.exit()
 
