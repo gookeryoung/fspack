@@ -38,11 +38,13 @@ Section "Main"
   File /r /x installer.nsi /x release *.*
   WriteUninstaller "$INSTDIR\\uninstall.exe"
 {shortcut_block}
+{registry_block}
 SectionEnd
 
 Section "Uninstall"
   RMDir /r "$INSTDIR"
 {uninstall_shortcut_block}
+{uninstall_registry_block}
 SectionEnd
 """
 
@@ -61,6 +63,8 @@ def generate_nsis_script(project: ProjectInfo, dist_dir: Path, release_dir: Path
         out_setup=out_setup_win,
         shortcut_block=_build_shortcut_block(project),
         uninstall_shortcut_block=_build_uninstall_shortcut_block(project),
+        registry_block=_build_registry_block(project),
+        uninstall_registry_block=_build_uninstall_registry_block(project),
     )
     nsi = dist_dir / "installer.nsi"
     nsi.write_text(content, encoding="utf-8")
@@ -69,24 +73,58 @@ def generate_nsis_script(project: ProjectInfo, dist_dir: Path, release_dir: Path
 
 
 def _build_shortcut_block(project: ProjectInfo) -> str:
-    """GUI 项目生成开始菜单与桌面快捷方式创建指令，CLI 返回空串。."""
-    if project.app_type is not AppType.GUI:
-        return ""
-    exe = project.exe_name
+    """生成开始菜单快捷方式创建指令。
+
+    所有应用均在开始菜单创建文件夹与卸载快捷方式，便于用户卸载；
+    GUI 项目额外创建程序快捷方式与桌面快捷方式。
+    """
     name = project.name
-    return (
-        f'  CreateDirectory "$SMPROGRAMS\\{name}"\n'
-        f'  CreateShortCut "$SMPROGRAMS\\{name}\\{name}.lnk" "$INSTDIR\\{exe}"\n'
-        f'  CreateShortCut "$DESKTOP\\{name}.lnk" "$INSTDIR\\{exe}"'
-    )
+    lines = [
+        f'  CreateDirectory "$SMPROGRAMS\\{name}"',
+        f'  CreateShortCut "$SMPROGRAMS\\{name}\\卸载 {name}.lnk" "$INSTDIR\\uninstall.exe"',
+    ]
+    if project.app_type is AppType.GUI:
+        exe = project.exe_name
+        lines.append(f'  CreateShortCut "$SMPROGRAMS\\{name}\\{name}.lnk" "$INSTDIR\\{exe}"')
+        lines.append(f'  CreateShortCut "$DESKTOP\\{name}.lnk" "$INSTDIR\\{exe}"')
+    return "\n".join(lines)
 
 
 def _build_uninstall_shortcut_block(project: ProjectInfo) -> str:
-    """GUI 项目生成卸载时清理快捷方式指令，CLI 返回空串。."""
-    if project.app_type is not AppType.GUI:
-        return ""
+    """生成卸载时清理快捷方式指令。
+
+    所有应用均清理开始菜单文件夹；GUI 项目额外清理桌面快捷方式。
+    """
     name = project.name
-    return f'  RMDir /r "$SMPROGRAMS\\{name}"\n  Delete "$DESKTOP\\{name}.lnk"'
+    lines = [f'  RMDir /r "$SMPROGRAMS\\{name}"']
+    if project.app_type is AppType.GUI:
+        lines.append(f'  Delete "$DESKTOP\\{name}.lnk"')
+    return "\n".join(lines)
+
+
+def _build_registry_block(project: ProjectInfo) -> str:
+    """生成添加/删除程序注册表条目，使应用出现在 Windows 设置的应用列表中。."""
+    name = project.name
+    version = project.version
+    exe = project.exe_name
+    key = f"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{name}"
+    return (
+        f'  WriteRegStr HKLM "{key}" "DisplayName" "{name}"\n'
+        f'  WriteRegStr HKLM "{key}" "DisplayVersion" "{version}"\n'
+        f'  WriteRegStr HKLM "{key}" "UninstallString" \'"$INSTDIR\\uninstall.exe"\'\n'
+        f'  WriteRegStr HKLM "{key}" "QuietUninstallString" \'"$INSTDIR\\uninstall.exe" /S\'\n'
+        f'  WriteRegStr HKLM "{key}" "InstallLocation" "$INSTDIR"\n'
+        f'  WriteRegStr HKLM "{key}" "Publisher" "fspack"\n'
+        f'  WriteRegStr HKLM "{key}" "DisplayIcon" "$INSTDIR\\{exe}"\n'
+        f'  WriteRegDWORD HKLM "{key}" "NoModify" 1\n'
+        f'  WriteRegDWORD HKLM "{key}" "NoRepair" 1'
+    )
+
+
+def _build_uninstall_registry_block(project: ProjectInfo) -> str:
+    """生成卸载时删除注册表条目的指令。."""
+    key = f"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{project.name}"
+    return f'  DeleteRegKey HKLM "{key}"'
 
 
 def compile_installer(nsi_path: Path, out_setup: Path) -> Path:

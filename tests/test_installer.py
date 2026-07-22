@@ -47,7 +47,20 @@ def test_generate_nsis_script_cli(tmp_path: Path) -> None:
     assert 'InstallDir "$PROGRAMFILES64\\app"' in content
     assert "File /r /x installer.nsi /x release *.*" in content
     assert 'WriteUninstaller "$INSTDIR\\uninstall.exe"' in content
-    assert "CreateShortCut" not in content
+    # CLI 应用也有开始菜单卸载快捷方式
+    assert 'CreateDirectory "$SMPROGRAMS\\app"' in content
+    assert 'CreateShortCut "$SMPROGRAMS\\app\\卸载 app.lnk" "$INSTDIR\\uninstall.exe"' in content
+    # CLI 应用不创建桌面快捷方式与程序快捷方式（仅注册表 DisplayIcon 合法引用 exe）
+    assert "$DESKTOP" not in content
+    assert 'CreateShortCut "$SMPROGRAMS\\app\\app.lnk"' not in content
+    # 所有应用都有注册表卸载条目
+    assert "WriteRegStr HKLM" in content
+    assert "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\app" in content
+    assert '"DisplayName" "app"' in content
+    assert '"DisplayVersion" "1.0"' in content
+    assert '"NoModify" 1' in content
+    assert '"NoRepair" 1' in content
+    assert "DeleteRegKey HKLM" in content
     assert 'Section "Uninstall"' in content
     assert "MUI_PAGE_WELCOME" in content
     assert 'MUI_LANGUAGE "SimpChinese"' in content
@@ -59,11 +72,39 @@ def test_generate_nsis_script_gui(tmp_path: Path) -> None:
     dist.mkdir()
     nsi = generate_nsis_script(info, dist, dist / "release")
     content = nsi.read_text(encoding="utf-8")
+    # GUI 应用快捷方式：开始菜单程序快捷方式 + 桌面快捷方式 + 卸载快捷方式
     assert 'CreateDirectory "$SMPROGRAMS\\guiapp"' in content
     assert 'CreateShortCut "$SMPROGRAMS\\guiapp\\guiapp.lnk" "$INSTDIR\\guiapp.exe"' in content
     assert 'CreateShortCut "$DESKTOP\\guiapp.lnk"' in content
+    assert 'CreateShortCut "$SMPROGRAMS\\guiapp\\卸载 guiapp.lnk" "$INSTDIR\\uninstall.exe"' in content
+    # 卸载时清理
     assert 'RMDir /r "$SMPROGRAMS\\guiapp"' in content
     assert 'Delete "$DESKTOP\\guiapp.lnk"' in content
+    # 注册表条目
+    assert "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\guiapp" in content
+    assert '"DisplayIcon" "$INSTDIR\\guiapp.exe"' in content
+
+
+def test_generate_nsis_script_registry_block(tmp_path: Path) -> None:
+    """所有应用都生成完整的添加/删除程序注册表条目。."""
+    info = _make_info(tmp_path, name="myapp")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    nsi = generate_nsis_script(info, dist, dist / "release")
+    content = nsi.read_text(encoding="utf-8")
+    key = "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\myapp"
+    assert f'WriteRegStr HKLM "{key}" "DisplayName" "myapp"' in content
+    assert f'WriteRegStr HKLM "{key}" "DisplayVersion" "1.0"' in content
+    # UninstallString 含引号包裹的路径（路径可能含空格）
+    assert f'WriteRegStr HKLM "{key}" "UninstallString" \'"$INSTDIR\\uninstall.exe"\'' in content
+    assert f'WriteRegStr HKLM "{key}" "QuietUninstallString" \'"$INSTDIR\\uninstall.exe" /S\'' in content
+    assert f'WriteRegStr HKLM "{key}" "InstallLocation" "$INSTDIR"' in content
+    assert f'WriteRegStr HKLM "{key}" "Publisher" "fspack"' in content
+    assert f'WriteRegStr HKLM "{key}" "DisplayIcon" "$INSTDIR\\myapp.exe"' in content
+    assert f'WriteRegDWORD HKLM "{key}" "NoModify" 1' in content
+    assert f'WriteRegDWORD HKLM "{key}" "NoRepair" 1' in content
+    # 卸载时删除注册表键
+    assert f'DeleteRegKey HKLM "{key}"' in content
 
 
 def test_compile_installer_makensis_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
