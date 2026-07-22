@@ -469,3 +469,56 @@ def test_build_and_run_pygame_gktetris(tmp_path: Path) -> None:
     )
     proj = tmp_path / "pygame_gktetris"
     assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "pygame").is_dir()
+
+
+@pytest.mark.slow
+def test_build_and_run_sci_numpy(tmp_path: Path) -> None:
+    """sci_numpy 示例：numpy 数组运算，验证科学库精简打包与运行.
+
+    numpy 顶层 C 扩展（_multiarray_umath 等）归 shared 始终保留；
+    f2py/distutils/_pyinstaller 由 NumpySlimSpec 剥离。timeout 加大以
+    适应 numpy wheel 下载与解压。
+    """
+    _build_and_run("sci_numpy", "numpy demo ok", tmp_path, timeout=600)
+    proj = tmp_path / "sci_numpy"
+    assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "numpy").is_dir()
+    # numpy 专属剥离目录不应解包
+    assert not (proj / "dist" / "runtime" / "Lib" / "site-packages" / "numpy" / "f2py").is_dir()
+
+
+@pytest.mark.slow
+def test_build_and_run_sci_matplotlib(tmp_path: Path) -> None:
+    """sci_matplotlib 示例：Agg 后端绘图保存 PNG，验证 matplotlib 精简打包.
+
+    matplotlib wheel 含跨包 mpl_toolkits 与 matplotlib.libs 共享 DLL；
+    sphinxext 文档扩展与跨包/嵌套 tests 目录由 MatplotlibSlimSpec 剥离。
+    Agg 后端无需 GUI，打包后无显示环境可运行。timeout 加大以适应
+    matplotlib + numpy wheel 下载与解压。
+    """
+    _build_and_run("sci_matplotlib", "matplotlib demo ok", tmp_path, timeout=600)
+    proj = tmp_path / "sci_matplotlib"
+    assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "matplotlib").is_dir()
+    # 跨包 mpl_toolkits 应解包（运行时模块）
+    assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "mpl_toolkits").is_dir()
+    # matplotlib 专属剥离目录不应解包
+    assert not ((proj / "dist" / "runtime" / "Lib" / "site-packages" / "matplotlib" / "sphinxext").is_dir())
+    # 跨包嵌套 tests 不应解包
+    assert not ((proj / "dist" / "runtime" / "Lib" / "site-packages" / "mpl_toolkits" / "tests").is_dir())
+
+
+@pytest.mark.slow
+def test_build_and_run_sci_scipy(tmp_path: Path) -> None:
+    """sci_scipy 示例：scipy 线性代数与优化求解，验证 scipy 精简打包.
+
+    scipy 各子模块下嵌套 tests 目录由 ScipySlimSpec 剥离（约占 scipy
+    总体积 10-15%）；_lib 内部库与各子模块运行时代码保留。timeout 加大
+    以适应 scipy + numpy wheel 下载与解压。
+    """
+    _build_and_run("sci_scipy", "scipy demo ok", tmp_path, timeout=900)
+    proj = tmp_path / "sci_scipy"
+    assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "scipy").is_dir()
+    # 嵌套 tests 不应解包（ScipySlimSpec 核心剥离场景）
+    assert not ((proj / "dist" / "runtime" / "Lib" / "site-packages" / "scipy" / "linalg" / "tests").is_dir())
+    assert not ((proj / "dist" / "runtime" / "Lib" / "site-packages" / "scipy" / "optimize" / "tests").is_dir())
+    # 运行时内部库应保留
+    assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "scipy" / "_lib").is_dir()

@@ -123,16 +123,19 @@ class SlimSpec(abc.ABC):
         return None
 
     @classmethod
-    def _default_classify(
+    def _default_classify(  # noqa: PLR0911
         cls,
         entry: str,
         top_pkg: str,
         keep_subs: set[str],  # noqa: ARG003
         extra_excludes: frozenset[str] = frozenset(),
+        nested_excludes: frozenset[str] = frozenset(),
     ) -> tuple[str, str | None]:
         """默认分类逻辑（供 ``DefaultSlimSpec`` 与简单 spec 复用）。
 
         - ``*.dist-info/**`` → metadata
+        - 嵌套剥离：``nested_excludes`` 中目录名出现在任意层级（含跨包）
+          → exclude（用于 ``scipy/<sub>/tests/``、``mpl_toolkits/tests/``）
         - 跨包文件 → shared
         - ``__init__.*``/``_*`` → shared
         - 顶层 ``.pyd``/``.pyi``/``.so`` → submodule（按原文件名 stem）
@@ -140,14 +143,25 @@ class SlimSpec(abc.ABC):
         - 子目录在 ``COMMON_EXCLUDE_SUBDIRS`` 或 ``extra_excludes`` 中 → exclude
         - 其他子目录 → shared
 
-        ``extra_excludes`` 用于库专属剥离目录（如 numpy 的 f2py/distutils、
-        lxml 的 includes）。Qt 等复杂 spec 不用此方法。
+        ``extra_excludes`` 用于库专属二级剥离目录（如 numpy 的 f2py/distutils、
+        lxml 的 includes）；``nested_excludes`` 用于任意层级剥离（含跨包，
+        如 scipy 各子模块下的 tests、matplotlib 跨包 mpl_toolkits 下的 tests）。
+        Qt 等复杂 spec 不用此方法。
         """
-        common = cls._classify_top_or_meta(entry, top_pkg)
-        if common is not None:
-            return common
-
         parts = entry.split("/")
+        if parts[0].endswith(".dist-info"):
+            return ("metadata", None)
+
+        # 嵌套剥离：任意层级（含跨包）匹配则剥离
+        # 用于 scipy/<sub>/tests/、mpl_toolkits/<sub>/tests/ 等嵌套测试目录
+        if nested_excludes:
+            for part in parts[1:]:
+                if part in nested_excludes:
+                    return ("exclude", None)
+
+        if parts[0] != top_pkg:
+            return ("shared", None)
+
         # 顶层文件（parts == 2）
         if len(parts) == 2:
             filename = parts[1]

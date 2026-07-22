@@ -954,6 +954,270 @@ class TestLxmlSlimSpec:
             )
 
 
+class TestMatplotlibSlimSpec:
+    """matplotlib 精简规则：剥离 sphinxext 与跨包/嵌套 tests 目录。."""
+
+    def test_match_matplotlib_only(self) -> None:
+        from fspack.slim.libs import MatplotlibSlimSpec
+
+        assert MatplotlibSlimSpec.match("matplotlib") is True
+        assert MatplotlibSlimSpec.match("matplotlib-inline") is False  # 归一化后不同
+        assert MatplotlibSlimSpec.match("numpy") is False
+        assert MatplotlibSlimSpec.match("scipy") is False
+
+    def test_normalize_submodule_noop(self) -> None:
+        from fspack.slim.libs import MatplotlibSlimSpec
+
+        assert MatplotlibSlimSpec.normalize_submodule("pyplot") == "pyplot"
+        assert MatplotlibSlimSpec.normalize_submodule("backends") == "backends"
+
+    def test_expand_closure_noop(self) -> None:
+        from fspack.slim.libs import MatplotlibSlimSpec
+
+        result = MatplotlibSlimSpec.expand_closure({"pyplot", "backends"})
+        assert result == {"pyplot", "backends"}
+        src = {"a"}
+        MatplotlibSlimSpec.expand_closure(src)
+        assert src == {"a"}
+
+    def test_classify_dist_info(self) -> None:
+        from fspack.slim.libs import MatplotlibSlimSpec
+
+        assert MatplotlibSlimSpec.classify_entry("matplotlib-3.7.0.dist-info/METADATA", "matplotlib", set()) == (
+            "metadata",
+            None,
+        )
+
+    def test_classify_runtime_subdir_kept(self) -> None:
+        """matplotlib 运行时子目录（mpl-data/backends/tri/style 等）归 shared 保留."""
+        from fspack.slim.libs import MatplotlibSlimSpec
+
+        for subdir in ("mpl-data", "backends", "tri", "style", "axes", "colors", "image"):
+            assert MatplotlibSlimSpec.classify_entry(f"matplotlib/{subdir}/_internal.py", "matplotlib", set()) == (
+                "shared",
+                None,
+            ), f"{subdir} 应当保留"
+
+    def test_classify_sphinxext_excluded(self) -> None:
+        """matplotlib/sphinxext/ 文档构建扩展归 exclude."""
+        from fspack.slim.libs import MatplotlibSlimSpec
+
+        assert MatplotlibSlimSpec.classify_entry("matplotlib/sphinxext/plot_directive.py", "matplotlib", set()) == (
+            "exclude",
+            None,
+        )
+        # 嵌套子目录同样剥离
+        assert MatplotlibSlimSpec.classify_entry("matplotlib/sphinxext/nested/deep.py", "matplotlib", set()) == (
+            "exclude",
+            None,
+        )
+
+    def test_classify_matplotlib_tests_excluded(self) -> None:
+        """matplotlib/tests/ 归 exclude（与 COMMON_EXCLUDE_SUBDIRS 冗余但无害）."""
+        from fspack.slim.libs import MatplotlibSlimSpec
+
+        assert MatplotlibSlimSpec.classify_entry("matplotlib/tests/test_figure.py", "matplotlib", set()) == (
+            "exclude",
+            None,
+        )
+
+    def test_classify_mpl_toolkits_tests_excluded(self) -> None:
+        """mpl_toolkits/tests/ 跨包嵌套 tests 归 exclude（nested_excludes 核心场景）."""
+        from fspack.slim.libs import MatplotlibSlimSpec
+
+        assert MatplotlibSlimSpec.classify_entry("mpl_toolkits/tests/test_mplot3d.py", "matplotlib", set()) == (
+            "exclude",
+            None,
+        )
+        # 三级嵌套同样剥离
+        assert MatplotlibSlimSpec.classify_entry("mpl_toolkits/mplot3d/tests/test_axes3d.py", "matplotlib", set()) == (
+            "exclude",
+            None,
+        )
+
+    def test_classify_mpl_toolkits_runtime_kept(self) -> None:
+        """mpl_toolkits/ 非 tests 部分归 shared 保留（跨包运行时模块）."""
+        from fspack.slim.libs import MatplotlibSlimSpec
+
+        assert MatplotlibSlimSpec.classify_entry("mpl_toolkits/mplot3d/axes3d.py", "matplotlib", set()) == (
+            "shared",
+            None,
+        )
+        assert MatplotlibSlimSpec.classify_entry("mpl_toolkits/__init__.py", "matplotlib", set()) == ("shared", None)
+
+    def test_classify_matplotlib_libs_kept(self) -> None:
+        """matplotlib.libs/ 跨包共享 DLL 归 shared 保留."""
+        from fspack.slim.libs import MatplotlibSlimSpec
+
+        assert MatplotlibSlimSpec.classify_entry("matplotlib.libs/libopenblas.dll", "matplotlib", set()) == (
+            "shared",
+            None,
+        )
+
+    def test_classify_pylab_kept(self) -> None:
+        """pylab.py 跨包顶层模块归 shared 保留."""
+        from fspack.slim.libs import MatplotlibSlimSpec
+
+        assert MatplotlibSlimSpec.classify_entry("pylab.py", "matplotlib", set()) == ("shared", None)
+
+    def test_classify_common_excluded(self) -> None:
+        """matplotlib 通用剥离目录（examples/docs 等）归 exclude."""
+        from fspack.slim.libs import MatplotlibSlimSpec
+
+        for subdir in ("examples", "docs", "doc"):
+            assert MatplotlibSlimSpec.classify_entry(f"matplotlib/{subdir}/dummy.py", "matplotlib", set()) == (
+                "exclude",
+                None,
+            ), f"{subdir} 应当剥离"
+
+    def test_classify_init_and_private(self) -> None:
+        """matplotlib 顶层 __init__/私有文件归 shared."""
+        from fspack.slim.libs import MatplotlibSlimSpec
+
+        assert MatplotlibSlimSpec.classify_entry("matplotlib/__init__.py", "matplotlib", set()) == (
+            "shared",
+            None,
+        )
+        assert MatplotlibSlimSpec.classify_entry("matplotlib/_cmocean.py", "matplotlib", set()) == (
+            "shared",
+            None,
+        )
+
+
+class TestScipySlimSpec:
+    """scipy 精简规则：剥离各子模块下的嵌套 tests 目录。."""
+
+    def test_match_scipy_only(self) -> None:
+        from fspack.slim.libs import ScipySlimSpec
+
+        assert ScipySlimSpec.match("scipy") is True
+        assert ScipySlimSpec.match("scipy-1") is False  # 归一化后不同
+        assert ScipySlimSpec.match("numpy") is False
+        assert ScipySlimSpec.match("matplotlib") is False
+
+    def test_normalize_submodule_noop(self) -> None:
+        from fspack.slim.libs import ScipySlimSpec
+
+        assert ScipySlimSpec.normalize_submodule("linalg") == "linalg"
+        assert ScipySlimSpec.normalize_submodule("fft") == "fft"
+
+    def test_expand_closure_noop(self) -> None:
+        from fspack.slim.libs import ScipySlimSpec
+
+        result = ScipySlimSpec.expand_closure({"linalg", "fft"})
+        assert result == {"linalg", "fft"}
+        src = {"a"}
+        ScipySlimSpec.expand_closure(src)
+        assert src == {"a"}
+
+    def test_classify_dist_info(self) -> None:
+        from fspack.slim.libs import ScipySlimSpec
+
+        assert ScipySlimSpec.classify_entry("scipy-1.10.0.dist-info/METADATA", "scipy", set()) == (
+            "metadata",
+            None,
+        )
+
+    def test_classify_nested_tests_excluded(self) -> None:
+        """scipy/<sub>/tests/ 嵌套 tests 归 exclude（nested_excludes 核心场景）."""
+        from fspack.slim.libs import ScipySlimSpec
+
+        for sub in ("linalg", "fft", "optimize", "stats", "integrate", "interpolate", "ndimage", "signal"):
+            assert ScipySlimSpec.classify_entry(f"scipy/{sub}/tests/test_basic.py", "scipy", set()) == (
+                "exclude",
+                None,
+            ), f"{sub}/tests 应当剥离"
+        # 更深层嵌套同样剥离
+        assert ScipySlimSpec.classify_entry("scipy/fft/_pocketfft/tests/test_pocketfft.py", "scipy", set()) == (
+            "exclude",
+            None,
+        )
+
+    def test_classify_runtime_subdir_kept(self) -> None:
+        """scipy 运行时子目录（_lib/linalg/fft/optimize 等非 tests）归 shared 保留."""
+        from fspack.slim.libs import ScipySlimSpec
+
+        for subdir in ("_lib", "linalg", "fft", "optimize", "stats", "constants", "io"):
+            assert ScipySlimSpec.classify_entry(f"scipy/{subdir}/_internal.py", "scipy", set()) == ("shared", None), (
+                f"{subdir} 应当保留"
+            )
+
+    def test_classify_scipy_libs_kept(self) -> None:
+        """scipy.libs/ 跨包共享 DLL 归 shared 保留."""
+        from fspack.slim.libs import ScipySlimSpec
+
+        assert ScipySlimSpec.classify_entry("scipy.libs/libopenblas.dll", "scipy", set()) == (
+            "shared",
+            None,
+        )
+
+    def test_classify_top_tests_excluded(self) -> None:
+        """scipy/tests/ 顶层 tests 归 exclude（与 COMMON_EXCLUDE_SUBDIRS 冗余但无害）."""
+        from fspack.slim.libs import ScipySlimSpec
+
+        assert ScipySlimSpec.classify_entry("scipy/tests/test_dummy.py", "scipy", set()) == (
+            "exclude",
+            None,
+        )
+
+    def test_classify_common_excluded(self) -> None:
+        """scipy 通用剥离目录（examples/docs 等）归 exclude."""
+        from fspack.slim.libs import ScipySlimSpec
+
+        for subdir in ("examples", "docs", "doc"):
+            assert ScipySlimSpec.classify_entry(f"scipy/{subdir}/dummy.py", "scipy", set()) == ("exclude", None), (
+                f"{subdir} 应当剥离"
+            )
+
+    def test_classify_init_and_private(self) -> None:
+        """scipy 顶层 __init__/私有文件归 shared."""
+        from fspack.slim.libs import ScipySlimSpec
+
+        assert ScipySlimSpec.classify_entry("scipy/__init__.py", "scipy", set()) == ("shared", None)
+        assert ScipySlimSpec.classify_entry("scipy/_lib/_util.py", "scipy", set()) == ("shared", None)
+
+
+class TestNestedExcludesBehavior:
+    """_default_classify 的 nested_excludes 参数行为。."""
+
+    def test_nested_excludes_cross_pkg(self) -> None:
+        """nested_excludes 在跨包路径上生效（mpl_toolkits/tests/）."""
+        from fspack.slim.base import SlimSpec
+
+        # nested_excludes={"tests"} 应剥离跨包 mpl_toolkits/tests/
+        assert SlimSpec._default_classify(
+            "mpl_toolkits/tests/x.py", "matplotlib", set(), frozenset(), frozenset({"tests"})
+        ) == ("exclude", None)
+
+    def test_nested_excludes_deep_level(self) -> None:
+        """nested_excludes 在任意深层级生效（scipy/fft/_pocketfft/tests/）."""
+        from fspack.slim.base import SlimSpec
+
+        assert SlimSpec._default_classify(
+            "scipy/fft/_pocketfft/tests/x.py", "scipy", set(), frozenset(), frozenset({"tests"})
+        ) == ("exclude", None)
+
+    def test_nested_excludes_empty_no_strip(self) -> None:
+        """nested_excludes 为空时不剥离嵌套 tests（向后兼容）."""
+        from fspack.slim.base import SlimSpec
+
+        # 默认行为：scipy/linalg/tests/ 归 shared（parts[1]=linalg 非 tests）
+        assert SlimSpec._default_classify("scipy/linalg/tests/x.py", "scipy", set(), frozenset(), frozenset()) == (
+            "shared",
+            None,
+        )
+
+    def test_nested_excludes_not_affect_top_pkg_name(self) -> None:
+        """nested_excludes 不检查 parts[0]（顶层包名），避免误伤同名包."""
+        from fspack.slim.base import SlimSpec
+
+        # 假设有包名为 tests（极端情况），不应被 nested_excludes 误剥离
+        assert SlimSpec._default_classify("tests/__init__.py", "tests", set(), frozenset(), frozenset({"tests"})) == (
+            "shared",
+            None,
+        )
+
+
 class TestSlimSpecRegistry:
     """spec 注册表分发。."""
 
@@ -979,6 +1243,24 @@ class TestSlimSpecRegistry:
 
         assert get_spec("numpy") is NumpySlimSpec
         assert get_spec("lxml") is LxmlSlimSpec
+
+    def test_get_spec_sci_libs(self) -> None:
+        """matplotlib/scipy 走专门的 spec（非默认兜底）."""
+        from fspack.slim import get_spec
+        from fspack.slim.libs import MatplotlibSlimSpec, ScipySlimSpec
+
+        assert get_spec("matplotlib") is MatplotlibSlimSpec
+        assert get_spec("scipy") is ScipySlimSpec
+
+    def test_classify_entry_dispatches_to_matplotlib(self) -> None:
+        """classify_entry 按 top_pkg 归一化名分发到 MatplotlibSlimSpec。."""
+        # mpl_toolkits/tests/ 跨包嵌套剥离验证分发到 matplotlib spec
+        assert classify_entry("mpl_toolkits/tests/x.py", "matplotlib") == ("exclude", None)
+
+    def test_classify_entry_dispatches_to_scipy(self) -> None:
+        """classify_entry 按 top_pkg 归一化名分发到 ScipySlimSpec。."""
+        # scipy/linalg/tests/ 嵌套剥离验证分发到 scipy spec
+        assert classify_entry("scipy/linalg/tests/x.py", "scipy") == ("exclude", None)
 
     def test_classify_entry_dispatches_to_qt(self) -> None:
         """classify_entry 按 top_pkg 归一化名分发到 QtSlimSpec。."""
