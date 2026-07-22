@@ -264,7 +264,11 @@ class TestSlimUnpack:
                 "PySide2/Qt5Core.dll": b"qt5core",
                 "PySide2/Qt5Widgets.dll": b"qt5widgets",
                 "PySide2/Qt5Gui.dll": b"qt5gui",
-                "PySide2/Qt5Network.dll": b"net",  # 不在闭包内 → 剥离
+                # abi3.dll 隐式依赖 Qml/Network 的 DLL → 归 shared 始终保留
+                "PySide2/Qt5Network.dll": b"net",
+                "PySide2/Qt5Qml.dll": b"qml",
+                # 非 abi3 依赖且未 import → 剥离
+                "PySide2/Qt5Sql.dll": b"sql",
                 "PySide2/plugins/platforms/qwindows.dll": b"plugin",
                 "PySide2/plugins/mediaservice/wmf.dll": b"media",
                 "PySide2/examples/dummy.py": b"example",
@@ -284,8 +288,11 @@ class TestSlimUnpack:
         assert (dest / "PySide2" / "Qt5Core.dll").is_file()
         assert (dest / "PySide2" / "Qt5Widgets.dll").is_file()
         assert (dest / "PySide2" / "Qt5Gui.dll").is_file()  # 闭包自动加入
-        # 不在闭包内 → Qt5Network.dll 剥离
-        assert not (dest / "PySide2" / "Qt5Network.dll").exists()
+        # abi3.dll 隐式依赖的 Qml/Network DLL → 归 shared 始终保留（.pyd 仍按需）
+        assert (dest / "PySide2" / "Qt5Network.dll").is_file()
+        assert (dest / "PySide2" / "Qt5Qml.dll").is_file()
+        # 未 import 且非 abi3 依赖的 Qt5Sql.dll → 剥离
+        assert not (dest / "PySide2" / "Qt5Sql.dll").exists()
         # platforms 基础插件始终保留
         assert (dest / "PySide2" / "plugins" / "platforms" / "qwindows.dll").is_file()
         # mediaservice 无 Multimedia 依赖 → 剥离
