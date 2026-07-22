@@ -384,6 +384,22 @@ def _download_online(  # noqa: PLR0913
             )
             assert result is not None  # suppress_error=False，不会返回 None
             return result
+        except DependencyError as e:
+            # sdist 回退：uv 解析出的某些包可能只有 sdist 无 wheel
+            # （如 win-unicode-console==0.5），--only-binary=:all: 无法下载
+            missing = _parse_missing_packages(str(e))
+            if not missing:
+                raise
+            _logger.info("尝试用 pip wheel 构建无 wheel 的包: %s", ", ".join(missing))
+            _build_sdist_wheels(missing, py, pypi_index, cache_dir)
+            # 构建后从本地缓存重新下载（--no-index 避免网络查询）
+            result = _run_pip(
+                [*base_args, "--no-deps", "--progress-bar", "on", "--no-index", "-r", str(req_file)],
+                f"pip download 重试 {len(resolved)} 个已解析依赖",
+                stream=True,
+            )
+            assert result is not None  # suppress_error=False，不会返回 None
+            return result
         finally:
             req_file.unlink(missing_ok=True)
 

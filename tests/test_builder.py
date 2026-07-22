@@ -1603,6 +1603,59 @@ def test_download_wheels_uv_path_integration(tmp_path: Path, monkeypatch: pytest
     assert any(p.name == whl_name for p in result)
 
 
+def test_download_online_uv_sdist_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """uv 路径 sdist 回退：pip download --no-deps 失败 → pip wheel 构建 → 重试成功。."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    whl_name = "win-unicode-console-0.5-py3-none-any.whl"
+    monkeypatch.setattr("fspack.builder._find_uv", lambda: "/usr/bin/uv")
+    monkeypatch.setattr(
+        "fspack.builder._resolve_with_uv",
+        lambda pkgs, pv, pt, idx: ["win-unicode-console==0.5"],
+    )
+    call_count = {"pip_download": 0, "pip_wheel": 0}
+
+    class _Result:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_stream(cmd: list[str]) -> _Result:
+        if "wheel" in cmd and "--no-deps" in cmd and "-w" in cmd:
+            # pip wheel --no-deps 构建路径
+            call_count["pip_wheel"] += 1
+            (cache / whl_name).write_bytes(b"wuc")
+            return _Result()
+        call_count["pip_download"] += 1
+        if call_count["pip_download"] == 1:
+            # 第一次 pip download --no-deps 失败（无 wheel）
+            raise subprocess.CalledProcessError(
+                1,
+                cmd,
+                stderr="ERROR: Could not find a version that satisfies the requirement win-unicode-console==0.5 (from versions: none)\n"
+                "ERROR: No matching distribution found for win-unicode-console==0.5",
+            )
+        # 第二次 pip download --no-deps --no-index 从本地缓存下载成功
+        r = _Result()
+        r.stdout = f"Saved {whl_name}\n"
+        return r
+
+    monkeypatch.setattr("fspack.builder._stream_subprocess", fake_stream)
+    base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache), "--only-binary=:all:"]
+    result = _download_online(
+        ["win-unicode-console"],
+        base_args,
+        "/py/python",
+        "3.8.10",
+        ("win_amd64",),
+        "https://idx/simple",
+        cache,
+    )
+    assert call_count["pip_download"] == 2  # 第一次失败，第二次成功
+    assert call_count["pip_wheel"] == 1  # sdist 构建一次
+    assert f"Saved {whl_name}" in result.stdout
+
+
 # ---------- _stream_subprocess ----------
 
 
