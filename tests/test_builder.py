@@ -745,7 +745,7 @@ def test_unpack_wheels_bad_zip(tmp_path: Path) -> None:
 
 
 def test_unpack_wheels_with_submodule_usage(tmp_path: Path) -> None:
-    """提供 submodule_usage 时按需解压，跳过未用子模块。."""
+    """提供 submodule_usage 时按需解压，Qt 闭包自动加入 C 层依赖子模块。."""
     wh = tmp_path / "wh"
     wh.mkdir()
     whl = wh / "PySide2-5.15.2.1-cp39-none-win_amd64.whl"
@@ -759,14 +759,16 @@ def test_unpack_wheels_with_submodule_usage(tmp_path: Path) -> None:
         zf.writestr("PySide2/Qt5Widgets.dll", b"w")
         zf.writestr("PySide2-5.15.2.1.dist-info/METADATA", b"m")
     sp = tmp_path / "sp"
+    # 用户 import QtCore/QtWidgets，闭包自动加入 Gui（C 层依赖）
     count = unpack_wheels([whl], sp, {"PySide2": frozenset({"QtCore", "QtWidgets"})})
     assert count == 1
+    # 闭包内 Core/Widgets/Gui → 对应 .pyd 与 Qt5*.dll 保留
     assert (sp / "PySide2" / "QtCore.pyd").is_file()
     assert (sp / "PySide2" / "QtWidgets.pyd").is_file()
+    assert (sp / "PySide2" / "QtGui.pyd").is_file()  # 闭包自动加入
     assert (sp / "PySide2" / "Qt5Core.dll").is_file()
     assert (sp / "PySide2" / "Qt5Widgets.dll").is_file()
-    assert not (sp / "PySide2" / "QtGui.pyd").exists()
-    assert (sp / "PySide2" / "Qt5Gui.dll").is_file()
+    assert (sp / "PySide2" / "Qt5Gui.dll").is_file()  # 闭包自动加入
 
 
 def test_build_forwards_keep_modules(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
