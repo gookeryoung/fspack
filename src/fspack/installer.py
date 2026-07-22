@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 
 from fspack.builder import build
-from fspack.config import AppType, MirrorConfig, ProjectInfo
+from fspack.config import MirrorConfig, ProjectInfo
 from fspack.console import step, success
 from fspack.exceptions import InstallerError
 from fspack.platform import Platform
@@ -73,33 +73,25 @@ def generate_nsis_script(project: ProjectInfo, dist_dir: Path, release_dir: Path
 
 
 def _build_shortcut_block(project: ProjectInfo) -> str:
-    """生成开始菜单快捷方式创建指令。
+    """生成开始菜单与桌面快捷方式创建指令。
 
-    所有应用均在开始菜单创建文件夹与卸载快捷方式，便于用户卸载；
-    GUI 项目额外创建程序快捷方式与桌面快捷方式。
+    所有应用类型默认生成：开始菜单文件夹、程序快捷方式、卸载快捷方式、桌面快捷方式。
     """
     name = project.name
+    exe = project.exe_name
     lines = [
         f'  CreateDirectory "$SMPROGRAMS\\{name}"',
+        f'  CreateShortCut "$SMPROGRAMS\\{name}\\{name}.lnk" "$INSTDIR\\{exe}"',
         f'  CreateShortCut "$SMPROGRAMS\\{name}\\卸载 {name}.lnk" "$INSTDIR\\uninstall.exe"',
+        f'  CreateShortCut "$DESKTOP\\{name}.lnk" "$INSTDIR\\{exe}"',
     ]
-    if project.app_type is AppType.GUI:
-        exe = project.exe_name
-        lines.append(f'  CreateShortCut "$SMPROGRAMS\\{name}\\{name}.lnk" "$INSTDIR\\{exe}"')
-        lines.append(f'  CreateShortCut "$DESKTOP\\{name}.lnk" "$INSTDIR\\{exe}"')
     return "\n".join(lines)
 
 
 def _build_uninstall_shortcut_block(project: ProjectInfo) -> str:
-    """生成卸载时清理快捷方式指令。
-
-    所有应用均清理开始菜单文件夹；GUI 项目额外清理桌面快捷方式。
-    """
+    """生成卸载时清理快捷方式指令（所有应用类型均清理）。."""
     name = project.name
-    lines = [f'  RMDir /r "$SMPROGRAMS\\{name}"']
-    if project.app_type is AppType.GUI:
-        lines.append(f'  Delete "$DESKTOP\\{name}.lnk"')
-    return "\n".join(lines)
+    return f'  RMDir /r "$SMPROGRAMS\\{name}"\n  Delete "$DESKTOP\\{name}.lnk"'
 
 
 def _build_registry_block(project: ProjectInfo) -> str:

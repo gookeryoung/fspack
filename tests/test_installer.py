@@ -47,12 +47,11 @@ def test_generate_nsis_script_cli(tmp_path: Path) -> None:
     assert 'InstallDir "$PROGRAMFILES64\\app"' in content
     assert "File /r /x installer.nsi /x release *.*" in content
     assert 'WriteUninstaller "$INSTDIR\\uninstall.exe"' in content
-    # CLI 应用也有开始菜单卸载快捷方式
+    # 所有应用默认生成开始菜单程序快捷方式、卸载快捷方式与桌面快捷方式
     assert 'CreateDirectory "$SMPROGRAMS\\app"' in content
+    assert 'CreateShortCut "$SMPROGRAMS\\app\\app.lnk" "$INSTDIR\\app.exe"' in content
     assert 'CreateShortCut "$SMPROGRAMS\\app\\卸载 app.lnk" "$INSTDIR\\uninstall.exe"' in content
-    # CLI 应用不创建桌面快捷方式与程序快捷方式（仅注册表 DisplayIcon 合法引用 exe）
-    assert "$DESKTOP" not in content
-    assert 'CreateShortCut "$SMPROGRAMS\\app\\app.lnk"' not in content
+    assert 'CreateShortCut "$DESKTOP\\app.lnk" "$INSTDIR\\app.exe"' in content
     # 所有应用都有注册表卸载条目
     assert "WriteRegStr HKLM" in content
     assert "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\app" in content
@@ -72,7 +71,7 @@ def test_generate_nsis_script_gui(tmp_path: Path) -> None:
     dist.mkdir()
     nsi = generate_nsis_script(info, dist, dist / "release")
     content = nsi.read_text(encoding="utf-8")
-    # GUI 应用快捷方式：开始菜单程序快捷方式 + 桌面快捷方式 + 卸载快捷方式
+    # GUI 应用快捷方式：与 CLI 一致（开始菜单程序快捷方式 + 桌面快捷方式 + 卸载快捷方式）
     assert 'CreateDirectory "$SMPROGRAMS\\guiapp"' in content
     assert 'CreateShortCut "$SMPROGRAMS\\guiapp\\guiapp.lnk" "$INSTDIR\\guiapp.exe"' in content
     assert 'CreateShortCut "$DESKTOP\\guiapp.lnk"' in content
