@@ -802,6 +802,158 @@ class TestDefaultSlimSpec:
         )
 
 
+class TestNumpySlimSpec:
+    """numpy 精简规则：通用剥离 + 库专属剥离（f2py/distutils/_pyinstaller）。."""
+
+    def test_match_numpy_only(self) -> None:
+        from fspack.slim.libs import NumpySlimSpec
+
+        assert NumpySlimSpec.match("numpy") is True
+        assert NumpySlimSpec.match("numpy-1") is False  # 归一化后应为 numpy1
+        assert NumpySlimSpec.match("scipy") is False
+        assert NumpySlimSpec.match("pandas") is False
+
+    def test_normalize_submodule_noop(self) -> None:
+        from fspack.slim.libs import NumpySlimSpec
+
+        assert NumpySlimSpec.normalize_submodule("core") == "core"
+        assert NumpySlimSpec.normalize_submodule("fft") == "fft"
+
+    def test_expand_closure_noop(self) -> None:
+        from fspack.slim.libs import NumpySlimSpec
+
+        result = NumpySlimSpec.expand_closure({"core", "fft"})
+        assert result == {"core", "fft"}
+        src = {"a"}
+        NumpySlimSpec.expand_closure(src)
+        assert src == {"a"}
+
+    def test_classify_dist_info(self) -> None:
+        from fspack.slim.libs import NumpySlimSpec
+
+        assert NumpySlimSpec.classify_entry("numpy-1.24.4.dist-info/METADATA", "numpy", set()) == (
+            "metadata",
+            None,
+        )
+
+    def test_classify_runtime_subdir_kept(self) -> None:
+        """numpy 运行时子目录（core/lib/random/fft/linalg/typing 等）归 shared 保留."""
+        from fspack.slim.libs import NumpySlimSpec
+
+        for subdir in ("core", "lib", "random", "fft", "linalg", "typing", "ma", "polynomial"):
+            assert NumpySlimSpec.classify_entry(f"numpy/{subdir}/_internal.py", "numpy", set()) == ("shared", None), (
+                f"{subdir} 应当保留"
+            )
+
+    def test_classify_common_excluded(self) -> None:
+        """numpy 的通用剥离目录（examples/docs/tests/testing 等）归 exclude."""
+        from fspack.slim.libs import NumpySlimSpec
+
+        for subdir in ("examples", "docs", "doc", "tests", "test", "testing"):
+            assert NumpySlimSpec.classify_entry(f"numpy/{subdir}/dummy.py", "numpy", set()) == ("exclude", None), (
+                f"{subdir} 应当剥离"
+            )
+
+    def test_classify_numpy_extra_excluded(self) -> None:
+        """numpy 专属剥离目录：f2py/distutils/_pyinstaller 归 exclude."""
+        from fspack.slim.libs import NumpySlimSpec
+
+        for subdir in ("f2py", "distutils", "_pyinstaller"):
+            assert NumpySlimSpec.classify_entry(f"numpy/{subdir}/dummy.py", "numpy", set()) == ("exclude", None), (
+                f"{subdir} 应当剥离"
+            )
+            # 嵌套子目录同样剥离
+            assert NumpySlimSpec.classify_entry(f"numpy/{subdir}/nested/deep.py", "numpy", set()) == (
+                "exclude",
+                None,
+            ), f"{subdir}/nested 应当剥离"
+
+    def test_classify_top_pyd_as_submodule(self) -> None:
+        """numpy 顶层 .pyd 分类：``_`` 前缀私有 C 扩展归 shared 始终保留。
+
+        numpy 的 C 扩展几乎都以 ``_`` 开头（``_multiarray_umath``、``_fft_helper``
+        等），属运行时核心，按 :meth:`_default_classify` 规则归 shared 始终保留。
+        """
+        from fspack.slim.libs import NumpySlimSpec
+
+        # _ 前缀私有 C 扩展归 shared（始终保留）
+        assert NumpySlimSpec.classify_entry("numpy/_multiarray_umath.cp38-win_amd64.pyd", "numpy", set()) == (
+            "shared",
+            None,
+        )
+        # 非 _ 前缀的 .pyd 按原文件名归类为 submodule（选择性保留）
+        assert NumpySlimSpec.classify_entry("numpy/multiarray.pyd", "numpy", set()) == ("submodule", "multiarray")
+
+    def test_classify_init_and_private(self) -> None:
+        """numpy 顶层 __init__/私有文件归 shared."""
+        from fspack.slim.libs import NumpySlimSpec
+
+        assert NumpySlimSpec.classify_entry("numpy/__init__.py", "numpy", set()) == ("shared", None)
+        assert NumpySlimSpec.classify_entry("numpy/_config.py", "numpy", set()) == ("shared", None)
+        assert NumpySlimSpec.classify_entry("numpy/version.py", "numpy", set()) == ("shared", None)
+
+
+class TestLxmlSlimSpec:
+    """lxml 精简规则：剥离 includes C 头文件目录。."""
+
+    def test_match_lxml_only(self) -> None:
+        from fspack.slim.libs import LxmlSlimSpec
+
+        assert LxmlSlimSpec.match("lxml") is True
+        assert LxmlSlimSpec.match("lxml-html") is False  # 归一化后不同
+        assert LxmlSlimSpec.match("bs4") is False
+        assert LxmlSlimSpec.match("numpy") is False
+
+    def test_normalize_submodule_noop(self) -> None:
+        from fspack.slim.libs import LxmlSlimSpec
+
+        assert LxmlSlimSpec.normalize_submodule("etree") == "etree"
+        assert LxmlSlimSpec.normalize_submodule("html") == "html"
+
+    def test_expand_closure_noop(self) -> None:
+        from fspack.slim.libs import LxmlSlimSpec
+
+        result = LxmlSlimSpec.expand_closure({"etree", "html"})
+        assert result == {"etree", "html"}
+
+    def test_classify_includes_excluded(self) -> None:
+        """lxml/includes C 头文件目录归 exclude 始终剥离."""
+        from fspack.slim.libs import LxmlSlimSpec
+
+        # libxml/libxslt/c14n/etc 子目录均剥离
+        for sub in ("libxml", "libxslt", "libexslt", "c14n", "relaxng"):
+            assert LxmlSlimSpec.classify_entry(f"lxml/includes/{sub}/xmlreader.h", "lxml", set()) == (
+                "exclude",
+                None,
+            ), f"includes/{sub} 应当剥离"
+
+    def test_classify_runtime_subdir_kept(self) -> None:
+        """lxml 运行时子目录（html/isoschematron 等）归 shared 保留."""
+        from fspack.slim.libs import LxmlSlimSpec
+
+        assert LxmlSlimSpec.classify_entry("lxml/html/clean.py", "lxml", set()) == ("shared", None)
+        assert LxmlSlimSpec.classify_entry("lxml/isoschematron/rng.xsl", "lxml", set()) == (
+            "shared",
+            None,
+        )
+
+    def test_classify_top_pyd_as_submodule(self) -> None:
+        """lxml 顶层 .pyd 按原文件名归类（如 etree.cpython-38.pyd）."""
+        from fspack.slim.libs import LxmlSlimSpec
+
+        result = LxmlSlimSpec.classify_entry("lxml/etree.cpython-38-x86_64-linux-gnu.so", "lxml", set())
+        assert result == ("submodule", "etree.cpython-38-x86_64-linux-gnu")
+
+    def test_classify_common_excluded(self) -> None:
+        """lxml 通用剥离目录（tests/examples 等）归 exclude."""
+        from fspack.slim.libs import LxmlSlimSpec
+
+        for subdir in ("examples", "docs", "tests"):
+            assert LxmlSlimSpec.classify_entry(f"lxml/{subdir}/dummy.py", "lxml", set()) == ("exclude", None), (
+                f"{subdir} 应当剥离"
+            )
+
+
 class TestSlimSpecRegistry:
     """spec 注册表分发。."""
 
@@ -816,9 +968,17 @@ class TestSlimSpecRegistry:
         from fspack.slim import get_spec
         from fspack.slim.default import DefaultSlimSpec
 
-        assert get_spec("numpy") is DefaultSlimSpec
+        # numpy/lxml 有专门 spec，不走默认
         assert get_spec("requests") is DefaultSlimSpec
         assert get_spec("unknown") is DefaultSlimSpec
+
+    def test_get_spec_numpy_lxml(self) -> None:
+        """numpy/lxml 走专门的 spec（非默认兜底）."""
+        from fspack.slim import get_spec
+        from fspack.slim.libs import LxmlSlimSpec, NumpySlimSpec
+
+        assert get_spec("numpy") is NumpySlimSpec
+        assert get_spec("lxml") is LxmlSlimSpec
 
     def test_classify_entry_dispatches_to_qt(self) -> None:
         """classify_entry 按 top_pkg 归一化名分发到 QtSlimSpec。."""
@@ -871,7 +1031,7 @@ class TestSlimSpecRegistry:
             # 其他包仍走默认
             from fspack.slim.default import DefaultSlimSpec
 
-            assert get_spec("numpy") is DefaultSlimSpec
+            assert get_spec("requests") is DefaultSlimSpec
         finally:
             _SPECS.remove(MySpec)
 

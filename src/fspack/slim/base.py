@@ -55,6 +55,18 @@ class SlimSpec(abc.ABC):
     # 子模块扩展名：仅这些文件按子模块名选择性保留
     SUBMODULE_EXTS: frozenset[str] = frozenset({".pyd", ".pyi", ".so"})
 
+    # 通用剥离子目录：示例代码、文档、测试代码非运行时必需，所有 spec 共享
+    COMMON_EXCLUDE_SUBDIRS: frozenset[str] = frozenset(
+        {
+            "examples",  # 示例代码
+            "docs",  # 文档（多数包用复数）
+            "doc",  # 文档（少数包用单数）
+            "tests",  # 测试代码（多数包用复数）
+            "test",  # 测试代码（少数包用单数）
+            "testing",  # 测试辅助目录
+        }
+    )
+
     @classmethod
     @abc.abstractmethod
     def match(cls, whl_pkg: str) -> bool:
@@ -109,6 +121,49 @@ class SlimSpec(abc.ABC):
         if parts[0] != top_pkg:
             return ("shared", None)
         return None
+
+    @classmethod
+    def _default_classify(
+        cls,
+        entry: str,
+        top_pkg: str,
+        keep_subs: set[str],  # noqa: ARG003
+        extra_excludes: frozenset[str] = frozenset(),
+    ) -> tuple[str, str | None]:
+        """默认分类逻辑（供 ``DefaultSlimSpec`` 与简单 spec 复用）。
+
+        - ``*.dist-info/**`` → metadata
+        - 跨包文件 → shared
+        - ``__init__.*``/``_*`` → shared
+        - 顶层 ``.pyd``/``.pyi``/``.so`` → submodule（按原文件名 stem）
+        - 其他文件 → shared
+        - 子目录在 ``COMMON_EXCLUDE_SUBDIRS`` 或 ``extra_excludes`` 中 → exclude
+        - 其他子目录 → shared
+
+        ``extra_excludes`` 用于库专属剥离目录（如 numpy 的 f2py/distutils、
+        lxml 的 includes）。Qt 等复杂 spec 不用此方法。
+        """
+        common = cls._classify_top_or_meta(entry, top_pkg)
+        if common is not None:
+            return common
+
+        parts = entry.split("/")
+        # 顶层文件（parts == 2）
+        if len(parts) == 2:
+            filename = parts[1]
+            if filename.startswith("__init__.") or filename.startswith("_"):
+                return ("shared", None)
+            suffix = Path(filename).suffix.lower()
+            stem = Path(filename).stem
+            if suffix in cls.SUBMODULE_EXTS:
+                # 非归一化，按原文件名归类
+                return ("submodule", stem)
+            return ("shared", None)
+
+        # 子目录（len(parts) >= 3）：通用剥离 + 库专属剥离
+        if parts[1] in cls.COMMON_EXCLUDE_SUBDIRS or parts[1] in extra_excludes:
+            return ("exclude", None)
+        return ("shared", None)
 
 
 # 注册表：按注册顺序匹配，首个命中的 spec 类生效。DefaultSlimSpec 必须最后注册。

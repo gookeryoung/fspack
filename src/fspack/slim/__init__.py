@@ -4,11 +4,14 @@
 
 - :class:`fspack.slim.qt.QtSlimSpec`：Qt 库（PySide2/PySide6/PyQt5/PyQt6）白名单 +
   子模块依赖闭包（``import QtWidgets`` 自动加入 ``Gui``/``Core``）
+- :class:`fspack.slim.libs.NumpySlimSpec`：numpy 剥离 ``f2py``/``distutils``/
+  ``_pyinstaller`` 等编译工具与 PyInstaller hook 子目录
+- :class:`fspack.slim.libs.LxmlSlimSpec`：lxml 剥离 ``includes`` C 头文件目录
 - :class:`fspack.slim.default.DefaultSlimSpec`：兜底规则，非 Qt 库按子模块
   选择性保留 ``.pyd``/``.pyi``/``.so``，其他全保留
 
-新增包精简规则只需继承 ``SlimSpec`` 并在 ``_register_builtin_specs`` 中
-``register_spec`` 注册，``slim_unpack``/``classify_entry`` 自动分发。
+新增包精简规则只需继承 ``SlimSpec`` 并在下方 ``register_spec`` 注册，
+``slim_unpack``/``classify_entry`` 自动分发。
 
 公共 API：
 
@@ -33,6 +36,7 @@ from fspack.slim.base import (
     slim_unpack,
 )
 from fspack.slim.default import DefaultSlimSpec
+from fspack.slim.libs import LxmlSlimSpec, NumpySlimSpec
 from fspack.slim.qt import (
     QT_PACKAGES,
     QtSlimSpec,
@@ -42,14 +46,20 @@ from fspack.slim.qt import (
 )
 
 # 显式按顺序注册内置 spec：
-# QtSlimSpec 优先于 DefaultSlimSpec（match 始终 True，兜底）。
+# - QtSlimSpec：match 限定为 Qt 包名，优先匹配
+# - NumpySlimSpec/LxmlSlimSpec：match 限定为具体包名，优先于兜底
+# - DefaultSlimSpec：match 始终 True，必须最后注册（兜底）
 # Python 模块只初始化一次（除 reload），无需额外去重。
 # 不依赖 from-import 顺序，避免 isort 重排导致注册顺序错误。
 register_spec(QtSlimSpec)
+register_spec(NumpySlimSpec)
+register_spec(LxmlSlimSpec)
 register_spec(DefaultSlimSpec)
 
 __all__ = [
     "QT_PACKAGES",
+    "LxmlSlimSpec",
+    "NumpySlimSpec",
     "QtSlimSpec",
     "SlimSpec",
     "_normalize_qt_sub",
