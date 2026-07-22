@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import io
-import ssl
 import time
-from pathlib import Path
 
 import pytest
 
@@ -16,7 +13,6 @@ from fspack.progress import (
     StageRecorder,
     _fmt_bytes,
     _fmt_seconds,
-    download_with_progress,
     iter_with_progress,
     spinner,
 )
@@ -172,8 +168,8 @@ class TestBuildTracker:
             rec.skip(3)
             rec.set_detail("已存在跳过")
         table = tracker.summary()
-        with console.capture() as capture:
-            console.print(table)
+        with console.rich.capture() as capture:
+            console.rich.print(table)
         out = capture.get()
         assert "解析项目" in out
         assert "准备运行时" in out
@@ -192,8 +188,8 @@ class TestBuildTracker:
         with tracker.stage("空阶段"):
             pass
         table = tracker.summary()
-        with console.capture() as capture:
-            console.print(table)
+        with console.rich.capture() as capture:
+            console.rich.print(table)
         out = capture.get()
         assert "空阶段" in out
         assert "-" in out
@@ -231,73 +227,6 @@ class TestFmtBytes:
 
     def test_gigabytes(self) -> None:
         assert _fmt_bytes(1024 * 1024 * 1024) == "1.00GB"
-
-
-class _FakeResp:
-    """模拟 urlopen 响应，支持分块 read(n)."""
-
-    def __init__(self, data: bytes, block_size: int = 64) -> None:
-        self._buf = io.BytesIO(data)
-        self._block_size = block_size
-        self.headers = {"Content-Length": str(len(data))}
-
-    def read(self, n: int = -1) -> bytes:
-        if n < 0:
-            return self._buf.read(self._block_size)
-        return self._buf.read(min(n, self._block_size))
-
-    def __enter__(self) -> _FakeResp:
-        return self
-
-    def __exit__(self, *a: object) -> bool:
-        return False
-
-
-class TestDownloadWithProgress:
-    """download_with_progress 下载与指标回写."""
-
-    def test_downloads_file_and_returns_bytes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        captured: dict[str, str] = {}
-
-        def fake_urlopen(req: object, timeout: int, **kwargs: object) -> _FakeResp:
-            captured["url"] = req.full_url  # type: ignore[union-attr]
-            return _FakeResp(b"hello world data")
-
-        monkeypatch.setattr("fspack.progress.urllib.request.urlopen", fake_urlopen)
-        dest = tmp_path / "out" / "file.zip"
-        ctx = ssl.create_default_context()
-        written = download_with_progress("https://x/test.zip", dest, ssl_ctx=ctx, label="测试下载")
-        assert written == len(b"hello world data")
-        assert dest.read_bytes() == b"hello world data"
-        assert captured["url"] == "https://x/test.zip"
-
-    def test_stage_receives_bytes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(
-            "fspack.progress.urllib.request.urlopen",
-            lambda req, timeout, **kw: _FakeResp(b"abc" * 100),
-        )
-        rec = StageRecorder("download")
-        written = download_with_progress(
-            "https://x/d", tmp_path / "f.zip", ssl_ctx=ssl.create_default_context(), stage=rec
-        )
-        assert rec._bytes == written
-        assert rec._bytes == 300
-
-    def test_no_stage_works(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(
-            "fspack.progress.urllib.request.urlopen",
-            lambda req, timeout, **kw: _FakeResp(b"abc"),
-        )
-        written = download_with_progress("https://x/d", tmp_path / "f.zip", ssl_ctx=ssl.create_default_context())
-        assert written == 3
-
-    def test_propagates_network_error(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        def fake_urlopen(req: object, timeout: int, **kwargs: object) -> object:
-            raise OSError("boom")
-
-        monkeypatch.setattr("fspack.progress.urllib.request.urlopen", fake_urlopen)
-        with pytest.raises(OSError, match="boom"):
-            download_with_progress("https://x/d", tmp_path / "f.zip", ssl_ctx=ssl.create_default_context())
 
 
 class TestSpinner:
@@ -394,8 +323,8 @@ class TestIntegrationBuildTracker:
         total_bytes = sum(r.bytes_downloaded for r in records)
         assert total_bytes == 24 * 1024 * 1024
         table = tracker.summary()
-        with console.capture() as capture:
-            console.print(table)
+        with console.rich.capture() as capture:
+            console.rich.print(table)
         out = capture.get()
         assert "构建阶段汇总" in out
         assert "24.0MB" in out

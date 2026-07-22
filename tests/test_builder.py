@@ -399,7 +399,7 @@ def test_build_orchestration_helloworld(tmp_path: Path, monkeypatch: pytest.Monk
 
     monkeypatch.setattr("fspack.builder.compile_loader", fake_compile)
 
-    with console.capture() as capture:
+    with console.rich.capture() as capture:
         info = build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
     assert info.name == "cli_helloworld"
     assert (proj / "dist" / "cli_helloworld.exe").is_file()
@@ -543,7 +543,7 @@ def test_build_skips_download_when_site_packages_has_deps(tmp_path: Path, monkey
         )[-1],
     )
 
-    with console.capture() as capture:
+    with console.rich.capture() as capture:
         build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
     assert not download_called
     out = capture.get()

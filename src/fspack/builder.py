@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Sequence
 
 from fspack.config import BuildConfig, DependencyReport, MirrorConfig, ProjectInfo
-from fspack.console import success
-from fspack.entry_wrapper import dotted_module_name, generate_wrapper_source
+from fspack.console import console
+from fspack.packaging.entry import EntryWrapper
 from fspack.packaging.loader import compile_loader, generate_loader_source
 from fspack.packaging.runtime import (
     STANDALONE_RELEASE_TAG,
@@ -125,8 +125,6 @@ def build(  # noqa: PLR0912, PLR0913
     项目未声明则用 fspack 默认 ``assets/icons/app.ico``。仅 Windows 目标生效，
     Linux 忽略（ELF 无图标资源概念）。
     """
-    from fspack.console import console as rich_console
-
     tracker = BuildTracker()
     project_dir = Path(project_dir).resolve()
     target = target or detect_platform()
@@ -244,14 +242,14 @@ def build(  # noqa: PLR0912, PLR0913
         build_dir = cfg.dist_dir / "build"
         for ep in info.all_entries:
             entry_rel = ep.entry_rel(info.src_dir)
-            result = dotted_module_name(info.src_dir, ep.file)
+            result = EntryWrapper.dotted_module_name(info.src_dir, ep.file)
             module_dotted = result[0] if result is not None else None
             pkg_root_rel = result[1] if result is not None else "."
             # 生成入口包装器：处理 sys.path、Qt 插件路径与包上下文（相对导入）
             wrapper_name = f"_entry_{ep.name}.py"
             wrapper_path = cfg.dist_dir / wrapper_name
             wrapper_path.write_text(
-                generate_wrapper_source(ep.name, module_dotted, entry_rel, pkg_root_rel),
+                EntryWrapper.generate_wrapper_source(ep.name, module_dotted, entry_rel, pkg_root_rel),
                 encoding="utf-8",
             )
             # .entry 指向 wrapper（loader 读 .entry 路径运行）
@@ -267,13 +265,13 @@ def build(  # noqa: PLR0912, PLR0913
             exes.append(exe)
         st.processed(len(exes))
 
-    rich_console.print(tracker.summary())
+    console.rich.print(tracker.summary())
     if len(exes) == 1:
-        success(f"构建完成: {exes[0]}")
+        console.success(f"构建完成: {exes[0]}")
     else:
-        success(f"构建完成: {len(exes)} 个入口")
+        console.success(f"构建完成: {len(exes)} 个入口")
         for exe in exes:
-            rich_console.print(f"  - {exe}")
+            console.rich.print(f"  - {exe}")
     return info
 
 

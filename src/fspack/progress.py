@@ -1,29 +1,26 @@
 """构建进度跟踪与 rich 可视化展示。
 
 提供 ``BuildTracker``/``StageRecorder`` 数据类用于记录各阶段耗时与指标，
-``download_with_progress``/``spinner``/``iter_with_progress`` 三个辅助函数
-封装 rich.progress/Live 的实时展示。数据与渲染分离，便于测试。
+``spinner``/``iter_with_progress`` 两个辅助函数封装 rich.progress/Live 的实时展示。
+数据与渲染分离，便于测试。
+
+HTTP 下载（含进度条）见 :class:`fspack.packaging.net.Downloader`。
 """
 
 from __future__ import annotations
 
 import logging
-import ssl
 import time
-import urllib.request
 from contextlib import contextmanager
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING, Iterator, Sequence, TypeVar
 
 from rich.progress import (
     BarColumn,
-    DownloadColumn,
     Progress,
     SpinnerColumn,
     TextColumn,
     TimeRemainingColumn,
-    TransferSpeedColumn,
 )
 from rich.table import Table
 
@@ -36,7 +33,6 @@ __all__ = [
     "BuildTracker",
     "StageRecord",
     "StageRecorder",
-    "download_with_progress",
     "iter_with_progress",
     "spinner",
 ]
@@ -44,8 +40,6 @@ __all__ = [
 _logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
-
-_BLOCK_SIZE = 64 * 1024
 
 
 @dataclass
@@ -205,49 +199,6 @@ def _fmt_bytes(n: int) -> str:
     return f"{n / 1024 / 1024 / 1024:.2f}GB"
 
 
-def download_with_progress(  # noqa: PLR0913
-    url: str,
-    dest: Path,
-    *,
-    ssl_ctx: ssl.SSLContext,
-    stage: StageRecorder | None = None,
-    timeout: int = 180,
-    label: str = "",
-) -> int:
-    """从 ``url`` 下载到 ``dest``，显示实时进度条，返回字节数。
-
-    使用 ``urllib.request.urlopen`` + 分块读写 + ``rich.progress.Progress`` 显示下载进度。
-    下载完成后若提供 ``stage``，调 ``stage.add_bytes`` 累加。
-    """
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    req = urllib.request.Request(url, headers={"User-Agent": "fspack"})
-    progress = Progress(
-        SpinnerColumn(),
-        TextColumn("[bold blue]{task.description}"),
-        BarColumn(),
-        DownloadColumn(),
-        TransferSpeedColumn(),
-        TimeRemainingColumn(),
-        console=console,
-        transient=True,
-    )
-    with progress, urllib.request.urlopen(req, timeout=timeout, context=ssl_ctx) as resp:
-        total = int(resp.headers.get("Content-Length") or 0)
-        task_id = progress.add_task(label or url.rsplit("/", 1)[-1], total=total or None)
-        written = 0
-        with dest.open("wb") as f:
-            while True:
-                chunk = resp.read(_BLOCK_SIZE)
-                if not chunk:
-                    break
-                f.write(chunk)
-                written += len(chunk)
-                progress.update(task_id, advance=len(chunk))
-    if stage:
-        stage.add_bytes(written)
-    return written
-
-
 @contextmanager
 def spinner(label: str) -> Iterator[None]:
     """显示旋转符 ``label`` 直到 ``with`` 块退出。
@@ -255,7 +206,7 @@ def spinner(label: str) -> Iterator[None]:
     不封装子进程：调用方在 ``with`` 块内自行调 ``subprocess.run``。
     异常会正常传播，不会吞噬。
     """
-    status: Status = console.status(label, spinner="dots")
+    status: Status = console.rich.status(label, spinner="dots")
     status.start()
     try:
         yield
@@ -280,7 +231,7 @@ def iter_with_progress(
         BarColumn(),
         TextColumn("{task.completed}/{task.total}"),
         TimeRemainingColumn(),
-        console=console,
+        console=console.rich,
         transient=True,
     )
     total = len(items)

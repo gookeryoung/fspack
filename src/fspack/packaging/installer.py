@@ -20,7 +20,7 @@ from pathlib import Path
 
 from fspack.builder import build
 from fspack.config import MirrorConfig, ProjectInfo
-from fspack.console import step, success
+from fspack.console import console
 from fspack.exceptions import InstallerError
 from fspack.platform import Platform
 
@@ -154,12 +154,12 @@ class NsisInstaller(Installer):
     @override
     def build_package(cls, dist_dir: Path, info: ProjectInfo, release_dir: Path) -> Path:
         """生成 NSIS 脚本并编译为安装包。"""
-        step("生成 NSIS 脚本")
+        console.step("生成 NSIS 脚本")
         nsi = generate_nsis_script(info, dist_dir, release_dir)
         out_setup = release_dir / f"{info.name}-{info.version}-setup.exe"
-        step("编译 NSIS 安装包")
+        console.step("编译 NSIS 安装包")
         result = compile_installer(nsi, out_setup)
-        success(f"安装包已生成: {result}")
+        console.success(f"安装包已生成: {result}")
         return result
 
 
@@ -275,11 +275,11 @@ class LinuxInstaller(Installer):
     @override
     def build_package(cls, dist_dir: Path, info: ProjectInfo, release_dir: Path) -> Path:
         """生成 tar.gz 便携包与 .deb 安装包，返回 .deb 路径。"""
-        step("生成 tar.gz 便携包")
+        console.step("生成 tar.gz 便携包")
         build_tarball(dist_dir, info.name, info.version, release_dir)
-        step("构造 .deb 安装包")
+        console.step("构造 .deb 安装包")
         result = build_deb(dist_dir, info, release_dir)
-        success(f"安装包已生成: {result}")
+        console.success(f"安装包已生成: {result}")
         return result
 
 

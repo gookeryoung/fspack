@@ -10,7 +10,7 @@ from fspack.commands import build as build_cmd
 from fspack.commands import clean as clean_cmd
 from fspack.commands import package as package_cmd
 from fspack.commands import run as run_cmd
-from fspack.console import setup_logging
+from fspack.console import console
 from fspack.mirror import MIRRORS
 from fspack.platform import Platform
 
@@ -77,7 +77,7 @@ def main(argv: list[str] | None = None) -> None:
         parser.print_help()
         return
 
-    setup_logging(verbose=ns.verbose)
+    console.setup_logging(verbose=ns.verbose)
 
     project = Path(ns.project).resolve()
     if command in ("build", "b"):

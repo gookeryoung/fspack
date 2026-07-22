@@ -22,8 +22,8 @@ from pathlib import Path
 
 from fspack.config import MirrorConfig
 from fspack.exceptions import EmbedError
-from fspack.net import create_ssl_context
-from fspack.progress import StageRecorder, download_with_progress
+from fspack.packaging.net import Downloader
+from fspack.progress import StageRecorder
 
 if sys.version_info >= (3, 12):  # pragma: no cover
     from typing import override
@@ -157,14 +157,8 @@ class RuntimeDownloader(abc.ABC):
         url = cls.download_url(version, **kwargs)
         _logger.info("下载 %s: %s", cls.runtime_label, url)
         try:
-            download_with_progress(
-                url,
-                archive_path,
-                ssl_ctx=create_ssl_context(),
-                stage=stage,
-                timeout=cls.download_timeout,
-                label=cls.download_label(version),
-            )
+            downloader = Downloader(timeout=cls.download_timeout)
+            downloader.download(url, archive_path, stage=stage, label=cls.download_label(version))
         except OSError as e:
             raise EmbedError(f"下载 {cls.runtime_label} 失败: {url} -> {e}") from e
         return archive_path

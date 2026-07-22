@@ -9,7 +9,7 @@ from rich.console import Console
 from rich.logging import RichHandler
 from rich.theme import Theme
 
-__all__ = ["console", "error", "setup_logging", "step", "success", "warn"]
+__all__ = ["ConsoleUI", "console"]
 
 _theme = Theme(
     {
@@ -21,45 +21,58 @@ _theme = Theme(
     }
 )
 
-console: Final = Console(theme=_theme)
 
+class ConsoleUI:
+    """控制台 UI：封装 rich Console 与彩色日志、步骤输出.
 
-def setup_logging(verbose: bool = False) -> None:
-    """配置 root logger 使用 RichHandler，按级别着色。
-
-    ERROR/WARNING 红黄高亮，INFO 青色，DEBUG 灰色（仅 verbose）。
+    模块级提供 :data:`console` 单例，调用方通过 ``console.step()``/``console.success()``
+    等方法使用。需要 rich 原生组件（如 Progress/Status）时用 :attr:`rich` 属性
+    获取底层 :class:`rich.console.Console`。
     """
-    level = logging.DEBUG if verbose else logging.INFO
-    root = logging.getLogger()
-    root.handlers.clear()
-    root.setLevel(level)
-    root.addHandler(
-        RichHandler(
-            console=console,
-            show_time=True,
-            show_level=True,
-            show_path=False,
-            rich_tracebacks=True,
-            markup=True,
+
+    def __init__(self) -> None:
+        self._console: Final = Console(theme=_theme)
+
+    @property
+    def rich(self) -> Console:
+        """底层 rich Console，供 Progress/Status 等 rich 组件使用."""
+        return self._console
+
+    def setup_logging(self, verbose: bool = False) -> None:
+        """配置 root logger 使用 RichHandler，按级别着色。
+
+        ERROR/WARNING 红黄高亮，INFO 青色，DEBUG 灰色（仅 verbose）。
+        """
+        level = logging.DEBUG if verbose else logging.INFO
+        root = logging.getLogger()
+        root.handlers.clear()
+        root.setLevel(level)
+        root.addHandler(
+            RichHandler(
+                console=self._console,
+                show_time=True,
+                show_level=True,
+                show_path=False,
+                rich_tracebacks=True,
+                markup=True,
+            )
         )
-    )
+
+    def step(self, title: str) -> None:
+        """打印构建步骤标题."""
+        self._console.print(f"[step]> {title}[/]")
+
+    def success(self, msg: str) -> None:
+        """打印成功消息."""
+        self._console.print(f"[success]√[/] {msg}")
+
+    def warn(self, msg: str) -> None:
+        """打印警告消息."""
+        self._console.print(f"[warning]![/] {msg}")
+
+    def error(self, msg: str) -> None:
+        """打印错误消息."""
+        self._console.print(f"[error]×[/] {msg}")
 
 
-def step(title: str) -> None:
-    """打印构建步骤标题."""
-    console.print(f"[step]> {title}[/]")
-
-
-def success(msg: str) -> None:
-    """打印成功消息."""
-    console.print(f"[success]√[/] {msg}")
-
-
-def warn(msg: str) -> None:
-    """打印警告消息."""
-    console.print(f"[warning]![/] {msg}")
-
-
-def error(msg: str) -> None:
-    """打印错误消息."""
-    console.print(f"[error]×[/] {msg}")
+console: Final[ConsoleUI] = ConsoleUI()
