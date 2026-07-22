@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 from dataclasses import replace
 from pathlib import Path
 from typing import Sequence
@@ -372,8 +373,7 @@ def _build_sdist_wheels(packages: list[str], py: str, pypi_index: str, cache_dir
     for pkg in packages:
         cmd = [py, "-m", "pip", "wheel", "--no-deps", "-w", str(cache_dir), "-i", pypi_index, pkg]
         try:
-            with spinner(f"pip wheel {pkg}"):
-                subprocess.run(cmd, check=True, capture_output=True, text=True)
+            _stream_subprocess(cmd)
         except subprocess.CalledProcessError as e:
             _logger.warning("pip wheel 构建失败 %s: %s", pkg, (e.stderr or "").strip())
         except FileNotFoundError as e:
@@ -469,7 +469,11 @@ def download_wheels(  # noqa: PLR0912, PLR0913
     if result is None:
         _logger.info("缓存解析失败，回退到索引下载")
         try:
-            result = _run_pip([*base_args, "-i", pypi_index, *filtered], f"pip download {len(filtered)} 个依赖")
+            result = _run_pip(
+                [*base_args, "-i", pypi_index, *filtered],
+                f"pip download {len(filtered)} 个依赖",
+                stream=True,
+            )
         except DependencyError as e:
             # sdist 回退：解析无 wheel 的包，用 pip wheel 从 sdist 构建后重试
             missing = _parse_missing_packages(str(e))
@@ -477,7 +481,11 @@ def download_wheels(  # noqa: PLR0912, PLR0913
                 raise
             _logger.info("尝试用 pip wheel 构建无 wheel 的包: %s", ", ".join(missing))
             _build_sdist_wheels(missing, py, pypi_index, cache_dir)
-            result = _run_pip([*base_args, "-i", pypi_index, *filtered], f"pip download 重试 {len(filtered)} 个依赖")
+            result = _run_pip(
+                [*base_args, "-i", pypi_index, *filtered],
+                f"pip download 重试 {len(filtered)} 个依赖",
+                stream=True,
+            )
     else:
         _logger.info("缓存解析成功，跳过网络查询")
     assert result is not None  # 回退路径 suppress_error=False，要么返回结果要么抛异常
@@ -553,11 +561,52 @@ def _save_deps_cache(cache_dir: Path, key: str, wheels: Sequence[Path]) -> None:
         _logger.warning("写入依赖解析缓存失败: %s", e)
 
 
+def _stream_subprocess(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+    """运行命令，实时流式输出 stderr 到终端，捕获 stdout 和 stderr。
+
+    用 ``Popen`` + 守护线程读取 stderr 字节块（``read1``）并实时写入 ``sys.stderr``，
+    支持 pip 进度条的 ``\\r`` 回车更新。stdout 始终捕获用于解析 wheel 列表。
+    stderr 同时累积，供失败时构造 ``CalledProcessError``。
+
+    调用方应在调用前停止 spinner（避免 ``\\r`` 与 pip 进度条冲突），并在调用后
+    恢复 spinner 或继续后续日志输出。
+    """
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=0,
+    )
+    stderr_chunks: list[bytes] = []
+
+    def _drain_stderr() -> None:
+        assert process.stderr is not None
+        while True:
+            chunk = process.stderr.read1(4096)  # type: ignore[missing-attribute]
+            if not chunk:
+                break
+            stderr_chunks.append(chunk)
+            sys.stderr.buffer.write(chunk)
+            sys.stderr.buffer.flush()
+
+    thread = threading.Thread(target=_drain_stderr, daemon=True)
+    thread.start()
+    stdout_bytes = process.stdout.read() if process.stdout else b""
+    returncode = process.wait()
+    thread.join()
+    stdout = stdout_bytes.decode("utf-8", errors="replace")
+    stderr = b"".join(stderr_chunks).decode("utf-8", errors="replace")
+    if returncode != 0:
+        raise subprocess.CalledProcessError(returncode, cmd, stdout, stderr)
+    return subprocess.CompletedProcess(cmd, returncode, stdout, stderr)
+
+
 def _run_pip(
     cmd: list[str],
     label: str,
     *,
     suppress_error: bool = False,
+    stream: bool = False,
 ) -> subprocess.CompletedProcess[str] | None:
     """运行 pip download 命令，返回执行结果。
 
@@ -565,8 +614,14 @@ def _run_pip(
     回退路径，调用方据 None 回退到带 index 命令）；``suppress_error=False`` 时转为
     ``DependencyError`` 抛出（含 stderr）。``FileNotFoundError`` 总是转为
     ``DependencyError``（pip 消失）。
+
+    ``stream=True`` 时停止 spinner，用 ``_stream_subprocess`` 实时流式输出 pip 的
+    stderr 到终端（显示下载进度条），stdout 仍捕获用于解析 wheel 列表。适用于
+    耗时的网络下载和 sdist 构建场景；快速本地缓存检查保持 ``stream=False`` 用 spinner。
     """
     try:
+        if stream:
+            return _stream_subprocess(cmd)
         with spinner(label):
             return subprocess.run(cmd, check=True, capture_output=True, text=True)
     except FileNotFoundError as e:

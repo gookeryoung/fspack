@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import types
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -22,8 +23,10 @@ from fspack.builder import (
     _load_deps_cache,
     _parse_missing_packages,
     _parse_pip_download_wheels,
+    _run_pip,
     _save_deps_cache,
     _site_packages_has_deps,
+    _stream_subprocess,
     build,
     copy_source,
     download_wheels,
@@ -103,11 +106,15 @@ def test_download_wheels_fallback_cmd_has_index(tmp_path: Path, monkeypatch: pyt
 
     def fake_run(cmd: list[str], **kw: Any) -> _Completed:
         calls.append(cmd)
-        if "--no-index" in cmd:
-            raise subprocess.CalledProcessError(1, "pip", stderr="not in cache")
+        # --no-index 路径失败，触发回退
+        raise subprocess.CalledProcessError(1, "pip", stderr="not in cache")
+
+    def fake_stream(cmd: list[str]) -> _Completed:
+        calls.append(cmd)
         return _Completed()
 
     monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.builder._stream_subprocess", fake_stream)
     monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
     download_wheels(("numpy",), "3.11.9", "https://idx/simple", tmp_path / "cache")
     assert len(calls) == 2
@@ -172,7 +179,11 @@ def test_download_wheels_pip_error(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     def fake_run(cmd: list[str], **kw: Any) -> object:
         raise err
 
+    def fake_stream(cmd: list[str]) -> _Completed:
+        raise err
+
     monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.builder._stream_subprocess", fake_stream)
     monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
     with pytest.raises(DependencyError, match="依赖下载失败"):
         download_wheels(("numpy",), "3.11.9", "https://idx", tmp_path / "cache")
@@ -1198,11 +1209,11 @@ def test_build_sdist_wheels_runs_pip_wheel(tmp_path: Path, monkeypatch: pytest.M
     """对每个缺失包调用一次 pip wheel --no-deps。."""
     captured: list[list[str]] = []
 
-    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+    def fake_stream(cmd: list[str]) -> _Completed:
         captured.append(cmd)
         return _Completed()
 
-    monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.builder._stream_subprocess", fake_stream)
     cache = tmp_path / "cache"
     cache.mkdir()
     _build_sdist_wheels(["odfpy>=1.4.1"], "/py/python", "https://idx/simple", cache)
@@ -1222,11 +1233,11 @@ def test_build_sdist_wheels_multiple_packages(tmp_path: Path, monkeypatch: pytes
     """多个缺失包各调用一次 pip wheel。."""
     calls: list[str] = []
 
-    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+    def fake_stream(cmd: list[str]) -> _Completed:
         calls.append(cmd[-1])
         return _Completed()
 
-    monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.builder._stream_subprocess", fake_stream)
     _build_sdist_wheels(["odfpy>=1.4.1", "foo>=1.0"], "/py/python", "https://idx", tmp_path / "cache")
     assert calls == ["odfpy>=1.4.1", "foo>=1.0"]
 
@@ -1234,17 +1245,17 @@ def test_build_sdist_wheels_multiple_packages(tmp_path: Path, monkeypatch: pytes
 def test_build_sdist_wheels_failure_only_warning(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """pip wheel 构建失败仅 warning 不抛异常（让后续重试失败时抛原始错误）。."""
 
-    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+    def fake_stream(cmd: list[str]) -> _Completed:
         raise subprocess.CalledProcessError(1, cmd, stderr="build failed")
 
-    monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.builder._stream_subprocess", fake_stream)
     # 不抛异常即通过
     _build_sdist_wheels(["odfpy>=1.4.1"], "/py/python", "https://idx", tmp_path / "cache")
 
 
 def test_build_sdist_wheels_pip_missing_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """FileNotFoundError 包装为 DependencyError（pip 解释器不存在）。."""
-    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: (_ for _ in ()).throw(FileNotFoundError()))
+    monkeypatch.setattr("fspack.builder._stream_subprocess", lambda cmd: (_ for _ in ()).throw(FileNotFoundError()))
     with pytest.raises(DependencyError, match="未找到 pip"):
         _build_sdist_wheels(["odfpy>=1.4.1"], "/missing/python", "https://idx", tmp_path / "cache")
 
@@ -1306,32 +1317,34 @@ def test_download_wheels_sdist_fallback_retry(tmp_path: Path, monkeypatch: pytes
         stdout = ""
         stderr = ""
 
+    # --no-index 路径走 subprocess.run（stream=False）
     def fake_run(cmd: list[str], **kw: Any) -> _Result:
+        raise subprocess.CalledProcessError(1, cmd, stderr="not in cache")
+
+    # -i index 下载和 pip wheel 走 _stream_subprocess（stream=True）
+    def fake_stream(cmd: list[str]) -> _Result:
         if "wheel" in cmd and "--no-deps" in cmd:
             call_count["pip_wheel"] += 1
             # 模拟从 sdist 构建 wheel 写入 cache_dir
             (cache / whl_name).write_bytes(b"odfpy")
             return _Result()
-        if "download" in cmd:
-            if "--no-index" in cmd:
-                # --no-index 缓存解析失败
-                raise subprocess.CalledProcessError(1, cmd, stderr="not in cache")
-            call_count["index_download"] += 1
-            if call_count["index_download"] == 1:
-                # 第一次 -i index 下载失败：报 odfpy 无 wheel
-                raise subprocess.CalledProcessError(
-                    1,
-                    cmd,
-                    stderr="ERROR: Could not find a version that satisfies the requirement odfpy>=1.4.1 (from versions: none)\n"
-                    "ERROR: No matching distribution found for odfpy>=1.4.1",
-                )
-            # 第二次重试成功
-            r = _Result()
-            r.stdout = f"Saved {whl_name}\n"
-            return r
-        return _Result()
+        # -i index 下载
+        call_count["index_download"] += 1
+        if call_count["index_download"] == 1:
+            # 第一次 -i index 下载失败：报 odfpy 无 wheel
+            raise subprocess.CalledProcessError(
+                1,
+                cmd,
+                stderr="ERROR: Could not find a version that satisfies the requirement odfpy>=1.4.1 (from versions: none)\n"
+                "ERROR: No matching distribution found for odfpy>=1.4.1",
+            )
+        # 第二次重试成功
+        r = _Result()
+        r.stdout = f"Saved {whl_name}\n"
+        return r
 
     monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.builder._stream_subprocess", fake_stream)
     monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
     result = download_wheels(("odfpy>=1.4.1",), "3.8.10", "https://idx/simple", cache)
     assert call_count["index_download"] == 2
@@ -1344,13 +1357,186 @@ def test_download_wheels_sdist_fallback_no_missing_reraises(tmp_path: Path, monk
     err = subprocess.CalledProcessError(1, "pip", stderr="network error, no missing pkg line")
 
     def fake_run(cmd: list[str], **kw: Any) -> _Completed:
-        if "download" in cmd:
-            if "--no-index" in cmd:
-                raise subprocess.CalledProcessError(1, cmd, stderr="not in cache")
-            raise err
-        return _Completed()
+        # --no-index 缓存解析失败
+        raise subprocess.CalledProcessError(1, cmd, stderr="not in cache")
+
+    def fake_stream(cmd: list[str]) -> _Completed:
+        # -i index 下载失败（无 missing 包）
+        raise err
 
     monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.builder._stream_subprocess", fake_stream)
     monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
     with pytest.raises(DependencyError, match="依赖下载失败"):
         download_wheels(("numpy",), "3.8.10", "https://idx/simple", tmp_path / "cache")
+
+
+# ---------- _stream_subprocess ----------
+
+
+class _FakePipe:
+    """模拟管道，支持 ``read()`` 和 ``read1(size)``。."""
+
+    def __init__(self, data: bytes) -> None:
+        self._data = data
+        self._pos = 0
+
+    def read(self) -> bytes:
+        result = self._data[self._pos :]
+        self._pos = len(self._data)
+        return result
+
+    def read1(self, size: int) -> bytes:
+        chunk = self._data[self._pos : self._pos + size]
+        self._pos += len(chunk)
+        return chunk
+
+
+class _FakePopen:
+    """模拟 ``subprocess.Popen``，配合 ``_stream_subprocess`` 测试。."""
+
+    def __init__(self, cmd: list[str], stdout_bytes: bytes, stderr_bytes: bytes, returncode: int) -> None:
+        self.args = cmd
+        self.stdout = _FakePipe(stdout_bytes)
+        self.stderr = _FakePipe(stderr_bytes)
+        self._returncode = returncode
+
+    def wait(self) -> int:
+        return self._returncode
+
+
+def _patch_stderr_buffer(monkeypatch: pytest.MonkeyPatch) -> list[bytes]:
+    """替换 ``sys.stderr.buffer``，返回写入的字节块列表。."""
+    written: list[bytes] = []
+
+    class _FakeBuffer:
+        def write(self, data: bytes) -> int:
+            written.append(data)
+            return len(data)
+
+        def flush(self) -> None:
+            pass
+
+    fake_stderr = types.SimpleNamespace(buffer=_FakeBuffer(), write=lambda s: None, flush=lambda: None)
+    monkeypatch.setattr("fspack.builder.sys.stderr", fake_stderr)
+    return written
+
+
+def test_stream_subprocess_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    """成功时返回 CompletedProcess，stdout/stderr 正确捕获，stderr 实时写入终端。."""
+    written = _patch_stderr_buffer(monkeypatch)
+
+    def fake_popen(cmd: list[str], **kw: Any) -> _FakePopen:
+        return _FakePopen(cmd, stdout_bytes=b"saved wheel\n", stderr_bytes=b"Downloading pkg", returncode=0)
+
+    monkeypatch.setattr("fspack.builder.subprocess.Popen", fake_popen)
+    result = _stream_subprocess(["pip", "download"])
+    assert result.returncode == 0
+    assert result.stdout == "saved wheel\n"
+    assert result.stderr == "Downloading pkg"
+    # stderr 被实时写入 sys.stderr.buffer
+    assert b"".join(written) == b"Downloading pkg"
+
+
+def test_stream_subprocess_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """失败时抛出 CalledProcessError，含 stdout/stderr。."""
+    _patch_stderr_buffer(monkeypatch)
+
+    def fake_popen(cmd: list[str], **kw: Any) -> _FakePopen:
+        return _FakePopen(cmd, stdout_bytes=b"out", stderr_bytes=b"err msg", returncode=1)
+
+    monkeypatch.setattr("fspack.builder.subprocess.Popen", fake_popen)
+    with pytest.raises(subprocess.CalledProcessError) as exc_info:
+        _stream_subprocess(["pip"])
+    assert exc_info.value.returncode == 1
+    assert exc_info.value.stdout == "out"
+    assert exc_info.value.stderr == "err msg"
+
+
+def test_stream_subprocess_file_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Popen 抛 FileNotFoundError 时透传（pip 解释器不存在）。."""
+    monkeypatch.setattr("fspack.builder.subprocess.Popen", lambda cmd, **kw: (_ for _ in ()).throw(FileNotFoundError()))
+    with pytest.raises(FileNotFoundError):
+        _stream_subprocess(["/missing/cmd"])
+
+
+def test_stream_subprocess_multibyte_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
+    """多字节 stderr（中文）正确解码，不抛 UnicodeDecodeError。."""
+    _patch_stderr_buffer(monkeypatch)
+
+    def fake_popen(cmd: list[str], **kw: Any) -> _FakePopen:
+        return _FakePopen(cmd, stdout_bytes=b"", stderr_bytes="下载中\n".encode(), returncode=0)
+
+    monkeypatch.setattr("fspack.builder.subprocess.Popen", fake_popen)
+    result = _stream_subprocess(["cmd"])
+    assert result.stderr == "下载中\n"
+
+
+# ---------- _run_pip stream 参数 ----------
+
+
+def test_run_pip_stream_uses_stream_subprocess(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """stream=True 时调用 _stream_subprocess 而非 subprocess.run。."""
+    stream_called = False
+
+    def fake_stream(cmd: list[str]) -> _Completed:
+        nonlocal stream_called
+        stream_called = True
+        return _Completed()
+
+    monkeypatch.setattr("fspack.builder._stream_subprocess", fake_stream)
+    monkeypatch.setattr(
+        "fspack.builder.subprocess.run",
+        lambda cmd, **kw: (_ for _ in ()).throw(AssertionError("不应调用 subprocess.run")),
+    )
+    result = _run_pip(["pip"], "label", stream=True)
+    assert stream_called is True
+    assert result is not None
+    assert result.returncode == 0
+
+
+def test_run_pip_stream_false_uses_subprocess_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """stream=False 时调用 subprocess.run 而非 _stream_subprocess。."""
+    run_called = False
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        nonlocal run_called
+        run_called = True
+        return _Completed()
+
+    monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "fspack.builder._stream_subprocess",
+        lambda cmd: (_ for _ in ()).throw(AssertionError("不应调用 _stream_subprocess")),
+    )
+    _run_pip(["pip"], "label", stream=False)
+    assert run_called is True
+
+
+def test_run_pip_stream_suppress_error_returns_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """stream=True + suppress_error=True 时 CalledProcessError 返回 None。."""
+
+    def fake_stream(cmd: list[str]) -> _Completed:
+        raise subprocess.CalledProcessError(1, cmd, stderr="fail")
+
+    monkeypatch.setattr("fspack.builder._stream_subprocess", fake_stream)
+    result = _run_pip(["pip"], "label", stream=True, suppress_error=True)
+    assert result is None
+
+
+def test_run_pip_stream_failure_raises_dependency_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """stream=True + suppress_error=False 时 CalledProcessError 转为 DependencyError。."""
+
+    def fake_stream(cmd: list[str]) -> _Completed:
+        raise subprocess.CalledProcessError(1, cmd, stderr="download failed")
+
+    monkeypatch.setattr("fspack.builder._stream_subprocess", fake_stream)
+    with pytest.raises(DependencyError, match="依赖下载失败"):
+        _run_pip(["pip"], "label", stream=True)
+
+
+def test_run_pip_stream_file_not_found_raises_dependency_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """stream=True 时 FileNotFoundError 转为 DependencyError。."""
+    monkeypatch.setattr("fspack.builder._stream_subprocess", lambda cmd: (_ for _ in ()).throw(FileNotFoundError()))
+    with pytest.raises(DependencyError, match="未找到 pip"):
+        _run_pip(["/missing/pip"], "label", stream=True)
