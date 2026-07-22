@@ -278,7 +278,109 @@ def _find_pip_python() -> str:
     raise DependencyError("未找到可用的 pip，请在当前 venv 执行 `uv pip install pip`，或在系统安装 python3-pip 包")
 
 
-def download_wheels(  # noqa: PLR0913
+# 匹配 pip download stderr 中的 "Could not find a version that satisfies the requirement <pkg>"
+_MISSING_PKG_RE = re.compile(r"Could not find a version that satisfies the requirement (.+?) \(from versions:")
+
+# 匹配 python_version 环境标记中的比较表达式
+_MARKER_PY_VER_RE = re.compile(r"""python_version\s*(<=|>=|<|>|==|!=)\s*['"](\d+(?:\.\d+)*)['"]""")
+
+
+def _filter_by_python_version(packages: Sequence[str], py_version: str) -> list[str]:
+    """按 ``python_version`` 环境标记过滤依赖列表。
+
+    ``pip download --python-version`` 不评估命令行参数中的环境标记（marker），
+    需在调用前预过滤。标记匹配目标 Python 版本的依赖去掉标记后返回
+    （避免 pip 用运行时 Python 版本评估标记导致误跳过）；
+    不匹配的依赖被剔除。
+
+    仅处理 ``python_version`` 标记；其他标记（如 ``platform_system``）视为 True
+    （保守保留，让 pip 自行处理）。
+    """
+    py_parts = tuple(int(x) for x in py_version.split(".")[:2])
+    result: list[str] = []
+    for pkg in packages:
+        if ";" not in pkg:
+            result.append(pkg)
+            continue
+        spec, _, marker = pkg.partition(";")
+        spec = spec.strip()
+        marker = marker.strip()
+        if _eval_python_version_marker(marker, py_parts):
+            result.append(spec)
+    return result
+
+
+def _eval_python_version_marker(marker: str, py_parts: tuple[int, ...]) -> bool:
+    """评估标记表达式中的 ``python_version`` 条件是否满足。
+
+    支持 ``and``/``or`` 组合。非 ``python_version`` 标记视为 True（保守保留）。
+    """
+    or_parts = re.split(r"\s+or\s+", marker, flags=re.IGNORECASE)
+    for or_part in or_parts:
+        and_parts = re.split(r"\s+and\s+", or_part, flags=re.IGNORECASE)
+        if all(_eval_single_marker(part.strip(), py_parts) for part in and_parts):
+            return True
+    return False
+
+
+def _eval_single_marker(expr: str, py_parts: tuple[int, ...]) -> bool:
+    """评估单个标记表达式。"""
+    m = _MARKER_PY_VER_RE.match(expr)
+    if not m:
+        return True  # 非 python_version 标记，保守保留
+    op, ver = m.groups()
+    ver_parts = tuple(int(x) for x in ver.split("."))
+    length = max(len(py_parts), len(ver_parts))
+    py = py_parts + (0,) * (length - len(py_parts))
+    spec = ver_parts + (0,) * (length - len(ver_parts))
+    return {
+        ">=": py >= spec,
+        "<=": py <= spec,
+        ">": py > spec,
+        "<": py < spec,
+        "==": py == spec,
+        "!=": py != spec,
+    }.get(op, True)
+
+
+def _parse_missing_packages(stderr: str) -> list[str]:
+    """从 pip download stderr 解析找不到 wheel 的依赖列表。
+
+    匹配 ``Could not find a version that satisfies the requirement <pkg>``，
+    返回去重的依赖字符串列表（含版本 specifier，供 pip wheel 使用）。
+    """
+    seen: set[str] = set()
+    result: list[str] = []
+    for m in _MISSING_PKG_RE.finditer(stderr):
+        req = m.group(1).strip()
+        if req and req not in seen:
+            seen.add(req)
+            result.append(req)
+    return result
+
+
+def _build_sdist_wheels(packages: list[str], py: str, pypi_index: str, cache_dir: Path) -> None:
+    """用 ``pip wheel --no-deps`` 从 sdist 构建 wheel（纯 Python 包无 wheel 时回退）。
+
+    ``pip download --only-binary=:all:`` 无法下载无 wheel 的包（如 odfpy 仅有 sdist）。
+    ``pip wheel --no-deps`` 可从 sdist 构建纯 Python wheel（``py3-none-any``），
+    构建产物放入 cache_dir 供后续 ``pip download --find-links`` 使用。
+
+    构建失败仅 warning（可能是 C 扩展包无法在当前环境编译），
+    不影响后续重试——重试失败时抛出原始下载错误。
+    """
+    for pkg in packages:
+        cmd = [py, "-m", "pip", "wheel", "--no-deps", "-w", str(cache_dir), "-i", pypi_index, pkg]
+        try:
+            with spinner(f"pip wheel {pkg}"):
+                subprocess.run(cmd, check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as e:
+            _logger.warning("pip wheel 构建失败 %s: %s", pkg, (e.stderr or "").strip())
+        except FileNotFoundError as e:
+            raise DependencyError(f"未找到 pip: {cmd[0]}") from e
+
+
+def download_wheels(  # noqa: PLR0912, PLR0913
     packages: tuple[str, ...] | list[str],
     py_version: str,
     pypi_index: str,
@@ -292,6 +394,13 @@ def download_wheels(  # noqa: PLR0913
     优先用 ``--no-index --find-links cache_dir`` 从本地缓存解析依赖，命中则完全跳过
     网络查询；缓存不完整或条件依赖未满足（如 pypdf 的 ``typing_extensions`` marker）
     时回退到带 ``-i index`` 的完整下载。
+
+    预过滤 ``python_version`` 环境标记：``pip download --python-version`` 不评估
+    命令行参数中的 marker，需在调用前按目标 Python 版本过滤（如目标 3.8 时跳过
+    ``PySide6>=6.5.0; python_version >= '3.11'``）。
+
+    sdist 回退：``--only-binary=:all:`` 无法下载无 wheel 的包（如 odfpy 仅有 sdist），
+    回退到 ``pip wheel --no-deps`` 从 sdist 构建纯 Python wheel 后重试。
 
     ``platform_tags`` 为 pip ``--platform`` 标签列表，可重复指定以匹配多个
     平台标签（如 Linux 同时匹配 manylinux2014 与 manylinux_2_28）。
@@ -308,8 +417,16 @@ def download_wheels(  # noqa: PLR0913
     """
     cache_dir.mkdir(parents=True, exist_ok=True)
 
+    # 预过滤 python_version 环境标记
+    filtered = _filter_by_python_version(packages, py_version)
+    if len(filtered) < len(packages):
+        _logger.info("按 python_version 标记过滤: 保留 %d，跳过 %d 个", len(filtered), len(packages) - len(filtered))
+    if not filtered:
+        _logger.info("所有依赖被 python_version 标记过滤，跳过下载")
+        return []
+
     # 尝试读取依赖解析缓存，命中则跳过 pip 调用
-    deps_key = _deps_cache_key(packages, py_version, platform_tags)
+    deps_key = _deps_cache_key(filtered, py_version, platform_tags)
     cached_wheels = _load_deps_cache(cache_dir, deps_key)
     if cached_wheels is not None:
         _logger.info("依赖解析缓存命中，跳过 pip 调用")
@@ -324,7 +441,7 @@ def download_wheels(  # noqa: PLR0913
     platform_args: list[str] = []
     for tag in platform_tags:
         platform_args.extend(["--platform", tag])
-    common_args: list[str] = [
+    base_args: list[str] = [
         py,
         "-m",
         "pip",
@@ -341,18 +458,26 @@ def download_wheels(  # noqa: PLR0913
         "--implementation",
         "cp",
         "--only-binary=:all:",
-        *packages,
     ]
 
-    _logger.info("下载依赖 wheel: %s", " ".join(packages))
+    _logger.info("下载依赖 wheel: %s", " ".join(filtered))
     before = {f.name for f in cache_dir.glob("*.whl")}
 
     # 先用 --no-index 从本地缓存解析，命中则跳过网络查询；
     # 缓存不完整或条件依赖未满足时回退到带 index 的完整下载
-    result = _run_pip([*common_args, "--no-index"], f"检查缓存 {len(packages)} 个依赖", suppress_error=True)
+    result = _run_pip([*base_args, "--no-index", *filtered], f"检查缓存 {len(filtered)} 个依赖", suppress_error=True)
     if result is None:
         _logger.info("缓存解析失败，回退到索引下载")
-        result = _run_pip([*common_args, "-i", pypi_index], f"pip download {len(packages)} 个依赖")
+        try:
+            result = _run_pip([*base_args, "-i", pypi_index, *filtered], f"pip download {len(filtered)} 个依赖")
+        except DependencyError as e:
+            # sdist 回退：解析无 wheel 的包，用 pip wheel 从 sdist 构建后重试
+            missing = _parse_missing_packages(str(e))
+            if not missing:
+                raise
+            _logger.info("尝试用 pip wheel 构建无 wheel 的包: %s", ", ".join(missing))
+            _build_sdist_wheels(missing, py, pypi_index, cache_dir)
+            result = _run_pip([*base_args, "-i", pypi_index, *filtered], f"pip download 重试 {len(filtered)} 个依赖")
     else:
         _logger.info("缓存解析成功，跳过网络查询")
     assert result is not None  # 回退路径 suppress_error=False，要么返回结果要么抛异常

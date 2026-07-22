@@ -13,9 +13,14 @@ import pytest
 
 from fspack.builder import (
     _PIP_PYTHON_NAMES,
+    _build_sdist_wheels,
     _deps_cache_key,
+    _eval_python_version_marker,
+    _eval_single_marker,
+    _filter_by_python_version,
     _find_pip_python,
     _load_deps_cache,
+    _parse_missing_packages,
     _parse_pip_download_wheels,
     _save_deps_cache,
     _site_packages_has_deps,
@@ -796,8 +801,7 @@ def test_build_forwards_keep_modules(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
 def test_build_orchestration_helloworld(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     proj = tmp_path / "cli_helloworld"
-    shutil.copytree(_EXAMPLES / "cli_helloworld", proj)
-
+    shutil.copytree(_EXAMPLES / "cli_helloworld", proj, ignore=shutil.ignore_patterns("dist", "__pycache__"))
     calls: dict[str, Any] = {}
 
     def fake_extract_embed(zip_path: object, runtime_dir: Path) -> None:
@@ -977,7 +981,7 @@ def test_build_skips_download_when_site_packages_has_deps(tmp_path: Path, monkey
 
 def test_build_orchestration_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     proj = tmp_path / "cli_helloworld"
-    shutil.copytree(_EXAMPLES / "cli_helloworld", proj)
+    shutil.copytree(_EXAMPLES / "cli_helloworld", proj, ignore=shutil.ignore_patterns("dist", "__pycache__"))
     calls: dict[str, Any] = {}
 
     def fake_extract_standalone(tar_path: object, runtime_dir: Path) -> None:
@@ -1015,3 +1019,338 @@ def test_build_orchestration_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert "dlopen" in calls["compile_source"]
     assert "libpython3.11.so" in calls["compile_source"]
     assert ".entry" in calls["compile_source"]
+
+
+# ---------- _filter_by_python_version ----------
+
+
+def test_filter_by_python_version_no_marker_kept() -> None:
+    """无环境标记的依赖原样保留。."""
+    result = _filter_by_python_version(["numpy>=1.20", "requests"], "3.8.10")
+    assert result == ["numpy>=1.20", "requests"]
+
+
+def test_filter_by_python_version_skip_higher() -> None:
+    """目标 3.8 时跳过 python_version >= '3.11' 的依赖。."""
+    pkgs = [
+        "PySide2>=5.15.2.1; python_version <= '3.10'",
+        "PySide6>=6.5.0; python_version >= '3.11'",
+        "PyYAML>=6.0",
+    ]
+    result = _filter_by_python_version(pkgs, "3.8.10")
+    assert result == ["PySide2>=5.15.2.1", "PyYAML>=6.0"]
+
+
+def test_filter_by_python_version_keep_when_matches() -> None:
+    """目标 3.11 时保留 python_version >= '3.11' 的依赖（去标记）。."""
+    pkgs = [
+        "PySide2>=5.15.2.1; python_version <= '3.10'",
+        "PySide6>=6.5.0; python_version >= '3.11'",
+    ]
+    result = _filter_by_python_version(pkgs, "3.11.9")
+    assert result == ["PySide6>=6.5.0"]
+
+
+def test_filter_by_python_version_keep_lower_bound_match() -> None:
+    """边界值匹配：python_version <= '3.10' 在目标 3.10 时保留。."""
+    result = _filter_by_python_version(["PySide2>=5.15.2.1; python_version <= '3.10'"], "3.10.11")
+    assert result == ["PySide2>=5.15.2.1"]
+
+
+def test_filter_by_python_version_keep_non_python_marker() -> None:
+    """非 python_version 标记保守保留（去标记）。."""
+    result = _filter_by_python_version(["foo>=1.0; platform_system == 'Windows'"], "3.8.10")
+    assert result == ["foo>=1.0"]
+
+
+def test_filter_by_python_version_and_combination() -> None:
+    """and 组合：两个条件都满足才保留。."""
+    pkgs = ["bar>=1.0; python_version >= '3.8' and python_version < '3.12'"]
+    assert _filter_by_python_version(pkgs, "3.10.11") == ["bar>=1.0"]
+    assert _filter_by_python_version(pkgs, "3.12.0") == []
+
+
+def test_filter_by_python_version_or_combination() -> None:
+    """or 组合：任一条件满足即保留。."""
+    pkgs = ["baz>=1.0; python_version < '3.9' or python_version >= '3.12'"]
+    assert _filter_by_python_version(pkgs, "3.8.10") == ["baz>=1.0"]
+    assert _filter_by_python_version(pkgs, "3.11.9") == []
+    assert _filter_by_python_version(pkgs, "3.12.0") == ["baz>=1.0"]
+
+
+def test_filter_by_python_version_empty_input() -> None:
+    """空列表输入返回空列表。."""
+    assert _filter_by_python_version([], "3.8.10") == []
+
+
+def test_filter_by_python_version_all_filtered() -> None:
+    """所有依赖都被标记过滤时返回空列表。."""
+    pkgs = ["PySide6>=6.5.0; python_version >= '3.11'"]
+    assert _filter_by_python_version(pkgs, "3.8.10") == []
+
+
+# ---------- _eval_single_marker / _eval_python_version_marker ----------
+
+
+def test_eval_single_marker_ge() -> None:
+    py = (3, 8)
+    assert _eval_single_marker("python_version >= '3.8'", py) is True
+    assert _eval_single_marker("python_version >= '3.9'", py) is False
+
+
+def test_eval_single_marker_le() -> None:
+    py = (3, 10)
+    assert _eval_single_marker("python_version <= '3.10'", py) is True
+    assert _eval_single_marker("python_version <= '3.9'", py) is False
+
+
+def test_eval_single_marker_lt_gt() -> None:
+    py = (3, 9)
+    assert _eval_single_marker("python_version < '3.10'", py) is True
+    assert _eval_single_marker("python_version > '3.8'", py) is True
+    assert _eval_single_marker("python_version < '3.9'", py) is False
+    assert _eval_single_marker("python_version > '3.9'", py) is False
+
+
+def test_eval_single_marker_eq_ne() -> None:
+    py = (3, 11)
+    assert _eval_single_marker("python_version == '3.11'", py) is True
+    assert _eval_single_marker("python_version != '3.10'", py) is True
+    assert _eval_single_marker("python_version == '3.10'", py) is False
+
+
+def test_eval_single_marker_non_python_returns_true() -> None:
+    """非 python_version 标记保守返回 True。."""
+    assert _eval_single_marker("platform_system == 'Windows'", (3, 8)) is True
+
+
+def test_eval_single_marker_double_quotes() -> None:
+    """双引号标记值也能匹配。."""
+    assert _eval_single_marker('python_version >= "3.8"', (3, 9)) is True
+
+
+def test_eval_python_version_marker_and() -> None:
+    py = (3, 10)
+    assert _eval_python_version_marker("python_version >= '3.8' and python_version <= '3.10'", py) is True
+    assert _eval_python_version_marker("python_version >= '3.8' and python_version <= '3.9'", py) is False
+
+
+def test_eval_python_version_marker_or() -> None:
+    py = (3, 8)
+    assert _eval_python_version_marker("python_version < '3.9' or python_version >= '3.12'", py) is True
+    assert _eval_python_version_marker("python_version >= '3.9' or python_version >= '3.12'", py) is False
+
+
+def test_eval_python_version_marker_case_insensitive() -> None:
+    """and/or 大小写不敏感。."""
+    py = (3, 10)
+    assert _eval_python_version_marker("python_version >= '3.8' AND python_version <= '3.10'", py) is True
+    assert _eval_python_version_marker("python_version < '3.8' OR python_version >= '3.12'", py) is False
+
+
+def test_eval_python_version_marker_non_python_returns_true() -> None:
+    """纯非 python_version 标记保守返回 True。."""
+    assert _eval_python_version_marker("platform_system == 'Windows'", (3, 8)) is True
+
+
+# ---------- _parse_missing_packages ----------
+
+
+def test_parse_missing_packages_single() -> None:
+    stderr = "ERROR: Could not find a version that satisfies the requirement odfpy>=1.4.1 (from versions: none)\n"
+    assert _parse_missing_packages(stderr) == ["odfpy>=1.4.1"]
+
+
+def test_parse_missing_packages_multiple() -> None:
+    stderr = (
+        "ERROR: Could not find a version that satisfies the requirement PySide6>=6.5.0 (from versions: none)\n"
+        "ERROR: Could not find a version that satisfies the requirement odfpy>=1.4.1 (from versions: none)\n"
+    )
+    assert _parse_missing_packages(stderr) == ["PySide6>=6.5.0", "odfpy>=1.4.1"]
+
+
+def test_parse_missing_packages_dedup() -> None:
+    stderr = (
+        "ERROR: Could not find a version that satisfies the requirement odfpy>=1.4.1 (from versions: none)\n"
+        "ERROR: Could not find a version that satisfies the requirement odfpy>=1.4.1 (from versions: none)\n"
+    )
+    assert _parse_missing_packages(stderr) == ["odfpy>=1.4.1"]
+
+
+def test_parse_missing_packages_empty() -> None:
+    """无匹配行返回空列表。."""
+    assert _parse_missing_packages("") == []
+    assert _parse_missing_packages("no error here\n") == []
+
+
+def test_parse_missing_packages_preserves_spec() -> None:
+    """保留版本 specifier 供 pip wheel 使用。."""
+    stderr = (
+        "ERROR: Could not find a version that satisfies the requirement reportlab>=3.6.13,<4.0 (from versions: none)\n"
+    )
+    assert _parse_missing_packages(stderr) == ["reportlab>=3.6.13,<4.0"]
+
+
+# ---------- _build_sdist_wheels ----------
+
+
+def test_build_sdist_wheels_runs_pip_wheel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """对每个缺失包调用一次 pip wheel --no-deps。."""
+    captured: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        captured.append(cmd)
+        return _Completed()
+
+    monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    _build_sdist_wheels(["odfpy>=1.4.1"], "/py/python", "https://idx/simple", cache)
+    assert len(captured) == 1
+    cmd = captured[0]
+    assert cmd[0] == "/py/python"
+    assert "wheel" in cmd
+    assert "--no-deps" in cmd
+    assert "-w" in cmd
+    assert str(cache) in cmd
+    assert "-i" in cmd
+    assert "https://idx/simple" in cmd
+    assert "odfpy>=1.4.1" in cmd
+
+
+def test_build_sdist_wheels_multiple_packages(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """多个缺失包各调用一次 pip wheel。."""
+    calls: list[str] = []
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        calls.append(cmd[-1])
+        return _Completed()
+
+    monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
+    _build_sdist_wheels(["odfpy>=1.4.1", "foo>=1.0"], "/py/python", "https://idx", tmp_path / "cache")
+    assert calls == ["odfpy>=1.4.1", "foo>=1.0"]
+
+
+def test_build_sdist_wheels_failure_only_warning(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """pip wheel 构建失败仅 warning 不抛异常（让后续重试失败时抛原始错误）。."""
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        raise subprocess.CalledProcessError(1, cmd, stderr="build failed")
+
+    monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
+    # 不抛异常即通过
+    _build_sdist_wheels(["odfpy>=1.4.1"], "/py/python", "https://idx", tmp_path / "cache")
+
+
+def test_build_sdist_wheels_pip_missing_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """FileNotFoundError 包装为 DependencyError（pip 解释器不存在）。."""
+    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: (_ for _ in ()).throw(FileNotFoundError()))
+    with pytest.raises(DependencyError, match="未找到 pip"):
+        _build_sdist_wheels(["odfpy>=1.4.1"], "/missing/python", "https://idx", tmp_path / "cache")
+
+
+# ---------- download_wheels 标记过滤 / sdist 回退分支 ----------
+
+
+def test_download_wheels_filters_python_version_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """带 python_version >= '3.11' 的依赖在目标 3.8 时被剔除，不传给 pip。."""
+    captured: dict[str, list[str]] = {}
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        captured["cmd"] = cmd
+        return _Completed()
+
+    monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
+    pkgs = (
+        "PySide2>=5.15.2.1; python_version <= '3.10'",
+        "PySide6>=6.5.0; python_version >= '3.11'",
+        "PyYAML>=6.0",
+    )
+    download_wheels(pkgs, "3.8.10", "https://idx/simple", tmp_path / "cache")
+    cmd = captured["cmd"]
+    # PySide6 不应出现在命令中，PySide2 去掉标记后传入
+    assert any(a == "PySide2>=5.15.2.1" for a in cmd)
+    assert not any(a.startswith("PySide6") for a in cmd)
+    assert "PyYAML>=6.0" in cmd
+    # 标记部分不应作为独立参数传入
+    assert not any("python_version" in a for a in cmd)
+
+
+def test_download_wheels_all_filtered_returns_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """所有依赖被标记过滤时返回空列表，不调用 pip。."""
+    pip_called = False
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        nonlocal pip_called
+        pip_called = True
+        return _Completed()
+
+    monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
+    pkgs = ("PySide6>=6.5.0; python_version >= '3.11'",)
+    result = download_wheels(pkgs, "3.8.10", "https://idx/simple", tmp_path / "cache")
+    assert result == []
+    assert not pip_called
+
+
+def test_download_wheels_sdist_fallback_retry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """--no-index 失败 → -i index 失败（含 missing 包）→ pip wheel 构建 → 重试成功。."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    whl_name = "odfpy-1.4.1-py3-none-any.whl"
+    call_count = {"index_download": 0, "pip_wheel": 0}
+
+    class _Result:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Result:
+        if "wheel" in cmd and "--no-deps" in cmd:
+            call_count["pip_wheel"] += 1
+            # 模拟从 sdist 构建 wheel 写入 cache_dir
+            (cache / whl_name).write_bytes(b"odfpy")
+            return _Result()
+        if "download" in cmd:
+            if "--no-index" in cmd:
+                # --no-index 缓存解析失败
+                raise subprocess.CalledProcessError(1, cmd, stderr="not in cache")
+            call_count["index_download"] += 1
+            if call_count["index_download"] == 1:
+                # 第一次 -i index 下载失败：报 odfpy 无 wheel
+                raise subprocess.CalledProcessError(
+                    1,
+                    cmd,
+                    stderr="ERROR: Could not find a version that satisfies the requirement odfpy>=1.4.1 (from versions: none)\n"
+                    "ERROR: No matching distribution found for odfpy>=1.4.1",
+                )
+            # 第二次重试成功
+            r = _Result()
+            r.stdout = f"Saved {whl_name}\n"
+            return r
+        return _Result()
+
+    monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
+    result = download_wheels(("odfpy>=1.4.1",), "3.8.10", "https://idx/simple", cache)
+    assert call_count["index_download"] == 2
+    assert call_count["pip_wheel"] == 1
+    assert any(p.name == whl_name for p in result)
+
+
+def test_download_wheels_sdist_fallback_no_missing_reraises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """下载失败但无 missing 包时直接抛出原始错误（不进入 sdist 回退）。."""
+    err = subprocess.CalledProcessError(1, "pip", stderr="network error, no missing pkg line")
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        if "download" in cmd:
+            if "--no-index" in cmd:
+                raise subprocess.CalledProcessError(1, cmd, stderr="not in cache")
+            raise err
+        return _Completed()
+
+    monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
+    with pytest.raises(DependencyError, match="依赖下载失败"):
+        download_wheels(("numpy",), "3.8.10", "https://idx/simple", tmp_path / "cache")
