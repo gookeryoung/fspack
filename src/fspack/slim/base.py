@@ -26,7 +26,7 @@ from fspack.exceptions import DependencyError
 from fspack.progress import StageRecorder, iter_with_progress
 from fspack.wheel_cache import WheelInfo, normalize_name
 
-if sys.version_info >= (3, 12):
+if sys.version_info >= (3, 12):  # pragma: no cover
     from typing import override
 else:
     from typing_extensions import override  # type: ignore[import-not-found]
@@ -134,7 +134,7 @@ def get_spec(whl_pkg: str) -> type[SlimSpec]:
         if spec.match(whl_pkg):
             return spec
     # 兜底：不应到达（DefaultSlimSpec.match 始终 True），仅做防御
-    return _SPECS[-1]
+    return _SPECS[-1]  # pragma: no cover
 
 
 def classify_entry(

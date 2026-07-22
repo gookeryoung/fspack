@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fspack.slim.base import SlimSpec, override, register_spec
+from fspack.slim.base import SlimSpec, override
 from fspack.wheel_cache import normalize_name
 
 __all__ = [
@@ -236,7 +236,6 @@ def _qt_module_closure(submodules: set[str]) -> set[str]:
     return closure
 
 
-@register_spec
 class QtSlimSpec(SlimSpec):
     """Qt 库精简规则：PySide2/PySide6/PyQt5/PyQt6 共享同一规则。
 

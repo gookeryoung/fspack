@@ -587,3 +587,189 @@ class TestSlimUnpack:
         # qml 目录依赖 Qml/Quick → 保留
         assert (dest / "PySide2" / "qml" / "QtQuick.2" / "qmldir").is_file()
         assert (dest / "PySide2" / "qml" / "QtQml" / "Models.2" / "qmldir").is_file()
+
+
+class TestDefaultSlimSpec:
+    """默认精简规则（非 Qt 库兜底）。."""
+
+    def test_match_always_true(self) -> None:
+        from fspack.slim.default import DefaultSlimSpec
+
+        assert DefaultSlimSpec.match("numpy") is True
+        assert DefaultSlimSpec.match("requests") is True
+        assert DefaultSlimSpec.match("unknown-pkg") is True
+
+    def test_normalize_submodule_noop(self) -> None:
+        from fspack.slim.default import DefaultSlimSpec
+
+        assert DefaultSlimSpec.normalize_submodule("core") == "core"
+        assert DefaultSlimSpec.normalize_submodule("QtCore") == "QtCore"
+
+    def test_expand_closure_noop(self) -> None:
+        from fspack.slim.default import DefaultSlimSpec
+
+        result = DefaultSlimSpec.expand_closure({"core", "fft"})
+        assert result == {"core", "fft"}
+        # 不就地修改输入
+        src = {"a"}
+        DefaultSlimSpec.expand_closure(src)
+        assert src == {"a"}
+
+    def test_classify_dist_info(self) -> None:
+        from fspack.slim.default import DefaultSlimSpec
+
+        assert DefaultSlimSpec.classify_entry("numpy-1.0.dist-info/METADATA", "numpy", set()) == (
+            "metadata",
+            None,
+        )
+
+    def test_classify_cross_pkg_shared(self) -> None:
+        """跨包文件归 shared（如 shiboken2 在 PySide2 wheel 中）。."""
+        from fspack.slim.default import DefaultSlimSpec
+
+        assert DefaultSlimSpec.classify_entry("shiboken2/something.py", "numpy", set()) == (
+            "shared",
+            None,
+        )
+
+    def test_classify_init_and_private(self) -> None:
+        from fspack.slim.default import DefaultSlimSpec
+
+        assert DefaultSlimSpec.classify_entry("mypkg/__init__.py", "mypkg", set()) == ("shared", None)
+        assert DefaultSlimSpec.classify_entry("mypkg/_config.py", "mypkg", set()) == ("shared", None)
+
+    def test_classify_other_top_level_shared(self) -> None:
+        """非 .pyd/.pyi/.so 的顶层文件归 shared（.dll/.py/.py.typed 等）。."""
+        from fspack.slim.default import DefaultSlimSpec
+
+        assert DefaultSlimSpec.classify_entry("mypkg/py.typed", "mypkg", set()) == ("shared", None)
+        assert DefaultSlimSpec.classify_entry("mypkg/foo.dll", "mypkg", set()) == ("shared", None)
+        assert DefaultSlimSpec.classify_entry("mypkg/utils.py", "mypkg", set()) == ("shared", None)
+
+    def test_classify_top_pyd_as_submodule(self) -> None:
+        from fspack.slim.default import DefaultSlimSpec
+
+        assert DefaultSlimSpec.classify_entry("mypkg/core.pyd", "mypkg", set()) == ("submodule", "core")
+        assert DefaultSlimSpec.classify_entry("mypkg/fft.so", "mypkg", set()) == ("submodule", "fft")
+
+    def test_classify_subdir_shared(self) -> None:
+        """子目录默认归 shared（不细分子模块）。."""
+        from fspack.slim.default import DefaultSlimSpec
+
+        assert DefaultSlimSpec.classify_entry("numpy/core/multiarray.pyd", "numpy", set()) == (
+            "shared",
+            None,
+        )
+        assert DefaultSlimSpec.classify_entry("mypkg/sub/x.py", "mypkg", set()) == ("shared", None)
+
+
+class TestSlimSpecRegistry:
+    """spec 注册表分发。."""
+
+    def test_get_spec_qt(self) -> None:
+        from fspack.slim import get_spec
+        from fspack.slim.qt import QtSlimSpec
+
+        for pkg in ("pyside2", "pyside6", "pyqt5", "pyqt6"):
+            assert get_spec(pkg) is QtSlimSpec
+
+    def test_get_spec_default_fallback(self) -> None:
+        from fspack.slim import get_spec
+        from fspack.slim.default import DefaultSlimSpec
+
+        assert get_spec("numpy") is DefaultSlimSpec
+        assert get_spec("requests") is DefaultSlimSpec
+        assert get_spec("unknown") is DefaultSlimSpec
+
+    def test_classify_entry_dispatches_to_qt(self) -> None:
+        """classify_entry 按 top_pkg 归一化名分发到 QtSlimSpec。."""
+        # PySide2/PySide6/PyQt5/PyQt6 都走 Qt 规则（.pyd 归一化）
+        assert classify_entry("PySide2/QtCore.pyd", "PySide2") == ("submodule", "Core")
+        assert classify_entry("PySide6/Qt6Gui.dll", "PySide6") == ("submodule", "Gui")
+        assert classify_entry("PyQt5/QtWidgets.pyd", "PyQt5") == ("submodule", "Widgets")
+
+    def test_classify_entry_dispatches_to_default(self) -> None:
+        """非 Qt 库走默认规则（.pyd 不归一化）。."""
+        assert classify_entry("mypkg/core.pyd", "mypkg") == ("submodule", "core")
+
+    def test_register_spec_custom(self) -> None:
+        """自定义 spec 注册后能被 get_spec 命中。."""
+        from fspack.slim import get_spec
+        from fspack.slim.base import SlimSpec, override
+
+        class MySpec(SlimSpec):
+            @classmethod
+            @override
+            def match(cls, whl_pkg: str) -> bool:
+                return whl_pkg == "mylib"
+
+            @classmethod
+            @override
+            def normalize_submodule(cls, sub: str) -> str:
+                return sub
+
+            @classmethod
+            @override
+            def expand_closure(cls, subs: set[str]) -> set[str]:
+                return set(subs)
+
+            @classmethod
+            @override
+            def classify_entry(
+                cls,
+                entry: str,  # noqa: ARG003
+                top_pkg: str,  # noqa: ARG003
+                keep_subs: set[str],  # noqa: ARG003
+            ) -> tuple[str, str | None]:
+                return ("shared", None)
+
+        # 注册到 DefaultSlimSpec 之前，否则会被兜底规则提前命中
+        from fspack.slim.base import _SPECS
+
+        _SPECS.insert(0, MySpec)
+        try:
+            assert get_spec("mylib") is MySpec
+            # 其他包仍走默认
+            from fspack.slim.default import DefaultSlimSpec
+
+            assert get_spec("numpy") is DefaultSlimSpec
+        finally:
+            _SPECS.remove(MySpec)
+
+
+class TestQtSubdirSharedFallback:
+    """Qt 库非 plugins/resources/qml 子目录归 shared 兜底。."""
+
+    def test_qt_other_subdir_shared(self) -> None:
+        """Qt 库非白名单子目录（如 lib/）归 shared 始终保留。."""
+        assert classify_entry("PySide2/lib/fonts/times.ttf", "PySide2") == ("shared", None)
+        assert classify_entry("PySide2/PySide2/__init__.py", "PySide2") == ("shared", None)
+
+
+class TestSlimUnpackStageCallback:
+    """slim_unpack 的 stage 回调参数。."""
+
+    def test_stage_set_detail_called(self, tmp_path: Path) -> None:
+        from fspack.progress import BuildTracker
+
+        whl = tmp_path / "wh" / "PySide2-5.15.2.1-cp39-none-win_amd64.whl"
+        whl.parent.mkdir()
+        _make_wheel(whl, {"PySide2/QtCore.pyd": b"core"})
+        dest = tmp_path / "sp"
+        tracker = BuildTracker()
+        with tracker.stage("解压 wheel") as stage:
+            count = slim_unpack([whl], dest, {"PySide2": frozenset({"QtCore"})}, stage=stage)
+        assert count == 1
+        # tracker.records[0].items 反映 wheel 解压数（iter_with_progress 调用 stage.processed()）
+        assert tracker.records[0].items == 1
+        # slim_unpack 末尾调用 stage.set_detail 设置备注
+        assert tracker.records[0].detail == "1 wheels 解压"
+
+    def test_stage_none_no_error(self, tmp_path: Path) -> None:
+        """stage=None 时不报错。."""
+        whl = tmp_path / "wh" / "PySide2-5.15.2.1-cp39-none-win_amd64.whl"
+        whl.parent.mkdir()
+        _make_wheel(whl, {"PySide2/QtCore.pyd": b"core"})
+        dest = tmp_path / "sp"
+        count = slim_unpack([whl], dest, {"PySide2": frozenset({"QtCore"})})
+        assert count == 1

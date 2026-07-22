@@ -15,12 +15,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fspack.slim.base import SlimSpec, override, register_spec
+from fspack.slim.base import SlimSpec, override
 
 __all__ = ["DefaultSlimSpec"]
 
 
-@register_spec
 class DefaultSlimSpec(SlimSpec):
     """默认精简规则：兜底，``match`` 始终返回 ``True``。
 

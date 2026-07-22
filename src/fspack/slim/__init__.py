@@ -7,8 +7,8 @@
 - :class:`fspack.slim.default.DefaultSlimSpec`：兜底规则，非 Qt 库按子模块
   选择性保留 ``.pyd``/``.pyi``/``.so``，其他全保留
 
-新增包精简规则只需继承 ``SlimSpec`` 并 ``@register_spec`` 注册，
-``slim_unpack``/``classify_entry`` 自动分发。
+新增包精简规则只需继承 ``SlimSpec`` 并在 ``_register_builtin_specs`` 中
+``register_spec`` 注册，``slim_unpack``/``classify_entry`` 自动分发。
 
 公共 API：
 
@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import zipfile  # noqa: F401  暴露在 fspack.slim 命名空间，供外部 monkeypatch 使用
 
-from fspack.slim import default  # noqa: F401  触发 DefaultSlimSpec 注册（兜底）
 from fspack.slim.base import (
     SlimSpec,
     classify_entry,
@@ -33,8 +32,7 @@ from fspack.slim.base import (
     register_spec,
     slim_unpack,
 )
-
-# 导入顺序决定 spec 注册顺序：QtSlimSpec 先注册，DefaultSlimSpec 兜底最后注册
+from fspack.slim.default import DefaultSlimSpec
 from fspack.slim.qt import (
     QT_PACKAGES,
     QtSlimSpec,
@@ -42,6 +40,13 @@ from fspack.slim.qt import (
     _qt_dll_submodule,
     _qt_module_closure,
 )
+
+# 显式按顺序注册内置 spec：
+# QtSlimSpec 优先于 DefaultSlimSpec（match 始终 True，兜底）。
+# Python 模块只初始化一次（除 reload），无需额外去重。
+# 不依赖 from-import 顺序，避免 isort 重排导致注册顺序错误。
+register_spec(QtSlimSpec)
+register_spec(DefaultSlimSpec)
 
 __all__ = [
     "QT_PACKAGES",
