@@ -26,6 +26,12 @@ uv run pyrefly check
 uv run pytest -m "not slow" --cov=fspack --cov-fail-under=95
 ```
 
+slow 全量测试（端到端构建+运行，耗时较长）：**每 5 次开发循环至少跑一次**，确保示例项目真实可构建可运行。
+
+```bash
+uv run pytest --cov=fspack --cov-fail-under=95
+```
+
 详细参考：工具链配置拆分决策与完整示例见 `python-project-structure` SKILL「工具链配置拆分」章节；覆盖率排除规则与 `# pragma: no cover` 见 `python-testing` SKILL「覆盖率」章节。
 
 ## 兼容性
