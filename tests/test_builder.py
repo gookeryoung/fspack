@@ -71,6 +71,130 @@ def test_copy_source_overwrites_existing(tmp_path: Path) -> None:
     assert not (dst / "old.py").exists()
 
 
+def test_copy_source_strips_dev_artifacts(tmp_path: Path) -> None:
+    """剥离开发期元数据/工具配置/凭证/文档/测试目录。."""
+    src = tmp_path / "proj"
+    src.mkdir()
+    (src / "app.py").write_text("print('hi')\n")
+    # Python 项目元数据
+    (src / ".python-version").write_text("3.11\n")
+    (src / "pyproject.toml").write_text('[project]\nname = "app"\n')
+    (src / "uv.lock").write_text("version = 1\n")
+    (src / "uv.toml").write_text("preview = true\n")
+    (src / "setup.py").write_text("from setuptools import setup\n")
+    (src / "setup.cfg").write_text("[metadata]\n")
+    (src / "MANIFEST.in").write_text("include LICENSE\n")
+    (src / "requirements.txt").write_text("rich\n")
+    (src / "requirements-dev.txt").write_text("pytest\n")
+    # 工具链配置
+    for cfg in ("ruff.toml", "pyrefly.toml", "pytest.ini", "tox.ini", "uv.toml"):
+        if not (src / cfg).exists():
+            (src / cfg).write_text("# cfg\n")
+    (src / ".ruff.toml").write_text("# ruff\n")
+    (src / ".bumpversion.toml").write_text("[bumpversion]\n")
+    (src / ".pre-commit-config.yaml").write_text("repos: []\n")
+    (src / ".coveragerc").write_text("[run]\n")
+    (src / ".readthedocs.yaml").write_text("version: 2\n")
+    (src / "Makefile").write_text("all:\n\techo hi\n")
+    (src / ".copier-answers.yml").write_text("_commit: x\n")
+    # 凭证
+    (src / ".env").write_text("SECRET=x\n")
+    (src / ".env.local").write_text("SECRET=y\n")
+    # 版本控制与 IDE
+    (src / ".gitignore").write_text("dist/\n")
+    (src / ".gitattributes").write_text("* text=auto\n")
+    (src / ".vscode").mkdir()
+    (src / ".vscode" / "settings.json").write_text("{}")
+    (src / ".idea").mkdir()
+    (src / ".github").mkdir()
+    (src / ".github" / "ci.yml").write_text("on: push\n")
+    # 文档
+    (src / "README.md").write_text("# app\n")
+    (src / "CHANGELOG.rst").write_text("v0.1\n")
+    (src / "docs").mkdir()
+    (src / "docs" / "index.md").write_text("# docs\n")
+    # 测试目录
+    (src / "tests").mkdir()
+    (src / "tests" / "test_app.py").write_text("def test(): pass\n")
+    # 覆盖率与缓存
+    (src / ".coverage").write_text("x")
+    (src / "htmlcov").mkdir()
+    (src / "htmlcov" / "index.html").write_text("<html/>")
+    (src / ".ruff_cache").mkdir()
+    (src / ".pyrefly_cache").mkdir()
+
+    dst = tmp_path / "out" / "src"
+    copy_source(src, dst)
+
+    # 应用源码保留
+    assert (dst / "app.py").is_file()
+    # 元数据与配置全部剥离
+    for name in (
+        ".python-version",
+        "pyproject.toml",
+        "uv.lock",
+        "uv.toml",
+        "setup.py",
+        "setup.cfg",
+        "MANIFEST.in",
+        "requirements.txt",
+        "requirements-dev.txt",
+        "ruff.toml",
+        ".ruff.toml",
+        "pyrefly.toml",
+        "pytest.ini",
+        "tox.ini",
+        ".bumpversion.toml",
+        ".pre-commit-config.yaml",
+        ".coveragerc",
+        ".readthedocs.yaml",
+        "Makefile",
+        ".copier-answers.yml",
+        ".env",
+        ".env.local",
+        ".gitignore",
+        ".gitattributes",
+        "README.md",
+        "CHANGELOG.rst",
+        ".coverage",
+    ):
+        assert not (dst / name).exists(), f"应被剥离: {name}"
+    # 目录全部剥离
+    for d in (".vscode", ".idea", ".github", "docs", "tests", "htmlcov", ".ruff_cache", ".pyrefly_cache"):
+        assert not (dst / d).exists(), f"应被剥离目录: {d}"
+
+
+def test_copy_source_keeps_runtime_resources(tmp_path: Path) -> None:
+    """保留运行时所需资源：源码、数据文件、LICENSE、子包。."""
+    src = tmp_path / "proj"
+    src.mkdir()
+    (src / "app.py").write_text("print('hi')\n")
+    (src / "LICENSE").write_text("MIT License\n")
+    (src / "data.json").write_text("{}\n")
+    (src / "assets").mkdir()
+    (src / "assets" / "logo.png").write_bytes(b"\x89PNG")
+    (src / "pkg").mkdir()
+    (src / "pkg" / "__init__.py").write_text("")
+    (src / "pkg" / "mod.py").write_text("x = 1\n")
+    # 子包内的开发文件也应剥离
+    (src / "pkg" / "README.md").write_text("# pkg\n")
+    (src / "pkg" / "tests").mkdir()
+    (src / "pkg" / "tests" / "test_mod.py").write_text("pass\n")
+
+    dst = tmp_path / "out" / "src"
+    copy_source(src, dst)
+
+    assert (dst / "app.py").is_file()
+    assert (dst / "LICENSE").is_file(), "LICENSE 应保留以符合开源协议分发要求"
+    assert (dst / "data.json").is_file()
+    assert (dst / "assets" / "logo.png").is_file()
+    assert (dst / "pkg" / "__init__.py").is_file()
+    assert (dst / "pkg" / "mod.py").is_file()
+    # 子包内的开发文件同样剥离
+    assert not (dst / "pkg" / "README.md").exists()
+    assert not (dst / "pkg" / "tests").exists()
+
+
 class _Completed:
     returncode = 0
     stdout = ""

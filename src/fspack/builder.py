@@ -40,19 +40,72 @@ def default_icon_path() -> Path:
     return _DEFAULT_ICON
 
 
+# dist/src 仅保留应用运行所需源码与资源，剥离所有开发期文件。
+# 向后兼容策略：未在下方显式列出的文件默认保留，避免误删项目特有运行时资源。
+# LICENSE 不排除：分发产物保留许可证文件满足 MIT/GPL 等开源协议「随附 LICENSE」要求。
 _EXCLUDE = shutil.ignore_patterns(
+    # 构建产物与 Python 缓存
     "dist",
     "build",
-    ".git",
     "__pycache__",
     "*.egg-info",
+    "*.pyc",
+    "*.pyo",
+    # 虚拟环境、测试与覆盖率
     ".venv",
     ".tox",
+    ".pytest_cache",
+    "htmlcov",
+    ".coverage",
+    ".coverage.*",
+    "coverage.xml",
+    "tests",
+    # 工具缓存
+    ".ruff_cache",
+    ".pyrefly_cache",
+    ".mypy_cache",
+    ".uv-cache",
+    # 版本控制
+    ".git",
+    ".gitignore",
+    ".gitattributes",
+    # IDE 与编辑器
+    ".idea",
+    ".vscode",
+    "*.code-workspace",
+    # fspack 自身目录
     ".fspack",
     ".trae",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".mypy_cache",
+    # 凭证与敏感信息（rule-11 安全要求：.env 须排除避免泄漏到 dist）
+    ".env",
+    ".env.*",
+    # Python 项目元数据（打包阶段已解析完毕，运行时不再需要）
+    ".python-version",
+    "pyproject.toml",
+    "uv.lock",
+    "uv.toml",
+    "setup.py",
+    "setup.cfg",
+    "MANIFEST.in",
+    "requirements*.txt",
+    # 工具链配置文件（rule-11 独立配置文件，仅开发期使用）
+    "ruff.toml",
+    ".ruff.toml",
+    "pyrefly.toml",
+    "pytest.ini",
+    "tox.ini",
+    ".bumpversion.toml",
+    ".pre-commit-config.yaml",
+    ".coveragerc",
+    ".readthedocs.yaml",
+    "Makefile",
+    ".copier-answers.yml",
+    # CI/CD
+    ".github",
+    # 文档（应用运行时不需要）
+    "*.md",
+    "*.rst",
+    "docs",
 )
 
 # Windows 系统标准命名为 python.exe；Microsoft Store 版本另提供 python3.exe stub。
@@ -229,7 +282,14 @@ def build(  # noqa: PLR0912, PLR0913
 
 
 def copy_source(project_dir: Path, src_dst: Path) -> None:
-    """将项目源码复制到 dist/src，排除构建产物与缓存。."""
+    """将项目源码复制到 dist/src，剥离开发期文件。
+
+    保留应用运行所需源码与资源（``.py``/数据文件/``LICENSE`` 等），
+    排除构建产物、缓存、虚拟环境、工具配置、项目元数据（
+    ``pyproject.toml``/``.python-version``/``uv.lock`` 等）、
+    凭证（``.env``）、文档（``*.md``/``*.rst``/``docs``）与测试代码（``tests``）。
+    详见 ``_EXCLUDE`` 模式列表。
+    """
     if src_dst.exists():
         shutil.rmtree(src_dst)
     shutil.copytree(project_dir, src_dst, ignore=_EXCLUDE)
