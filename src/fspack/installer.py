@@ -35,7 +35,8 @@ Unicode True
 
 Section "Main"
   SetOutPath "$INSTDIR"
-  File /r /x installer.nsi /x release *.*
+  # /x 排除 fspack 自身产物（installer.nsi/release）与 uv build 重叠产物（*.whl/*.tar.gz）
+  File /r /x installer.nsi /x release /x *.whl /x *.tar.gz *.*
   WriteUninstaller "$INSTDIR\\uninstall.exe"
 {shortcut_block}
 {registry_block}

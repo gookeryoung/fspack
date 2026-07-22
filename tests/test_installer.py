@@ -45,7 +45,7 @@ def test_generate_nsis_script_cli(tmp_path: Path) -> None:
     assert 'Name "app 1.0"' in content
     assert 'OutFile "release\\app-1.0-setup.exe"' in content
     assert 'InstallDir "$PROGRAMFILES64\\app"' in content
-    assert "File /r /x installer.nsi /x release *.*" in content
+    assert "File /r /x installer.nsi /x release /x *.whl /x *.tar.gz *.*" in content
     assert 'WriteUninstaller "$INSTDIR\\uninstall.exe"' in content
     # 所有应用默认生成开始菜单程序快捷方式、卸载快捷方式与桌面快捷方式
     assert 'CreateDirectory "$SMPROGRAMS\\app"' in content
