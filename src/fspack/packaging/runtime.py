@@ -3,7 +3,7 @@
 提取 :class:`RuntimeDownloader` 基类封装 ``download → extract → ensure`` 三步流程的共性：
 
 - 缓存检查（命中调 ``stage.hit_cache``）
-- 进度条下载（``download_with_progress``）
+- 进度条下载（:class:`fspack.packaging.net.Downloader`）
 - 归档解压（zipfile/tarfile）
 - marker 检查（重复构建跳过）
 - 解压后钩子（``post_extract``，用于 embed 的 site-packages 创建）
@@ -90,7 +90,7 @@ class RuntimeDownloader(abc.ABC):
 
     通用流程：
     1. :meth:`download` —— 缓存检查 → 命中调 ``stage.hit_cache`` →
-       未命中 ``download_with_progress``
+       未命中调 :meth:`Downloader.download`
     2. :meth:`extract` —— ``mkdir runtime_dir`` → 调 :meth:`extract_archive` 钩子
     3. :meth:`ensure` —— marker 检查 → 命中跳过 → 未命中 download+extract →
        :meth:`post_extract`
@@ -144,7 +144,7 @@ class RuntimeDownloader(abc.ABC):
     ) -> Path:
         """下载运行时归档到缓存目录，已存在则复用。
 
-        缓存命中时调 ``stage.hit_cache()``；下载时用 ``download_with_progress`` 显示
+        缓存命中时调 ``stage.hit_cache()``；下载时用 :class:`Downloader` 显示
         实时进度条，并通过 ``stage.add_bytes`` 回写字节数。
         """
         cache_dir.mkdir(parents=True, exist_ok=True)
