@@ -392,9 +392,10 @@ def _download_online(  # noqa: PLR0913
                 raise
             _logger.info("尝试用 pip wheel 构建无 wheel 的包: %s", ", ".join(missing))
             _build_sdist_wheels(missing, py, pypi_index, cache_dir)
-            # 构建后从本地缓存重新下载（--no-index 避免网络查询）
+            # 构建后用 -i index 重试：sdist 构建的 wheel 在本地缓存（--find-links），
+            # 其他包从网络下载（第一次整体失败可能未下载到缓存）
             result = _run_pip(
-                [*base_args, "--no-deps", "--progress-bar", "on", "--no-index", "-r", str(req_file)],
+                [*base_args, "--no-deps", "--progress-bar", "on", "-i", pypi_index, "-r", str(req_file)],
                 f"pip download 重试 {len(resolved)} 个已解析依赖",
                 stream=True,
             )

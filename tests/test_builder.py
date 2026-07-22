@@ -1635,7 +1635,7 @@ def test_download_online_uv_sdist_fallback(tmp_path: Path, monkeypatch: pytest.M
                 stderr="ERROR: Could not find a version that satisfies the requirement win-unicode-console==0.5 (from versions: none)\n"
                 "ERROR: No matching distribution found for win-unicode-console==0.5",
             )
-        # 第二次 pip download --no-deps --no-index 从本地缓存下载成功
+        # 第二次 pip download --no-deps -i index 重试成功（sdist 构建的 wheel 在缓存）
         r = _Result()
         r.stdout = f"Saved {whl_name}\n"
         return r
