@@ -195,12 +195,14 @@ def build(  # noqa: PLR0912, PLR0913
         build_dir = cfg.dist_dir / "build"
         for ep in info.all_entries:
             entry_rel = ep.entry_rel(info.src_dir)
-            module_dotted = dotted_module_name(info.src_dir, ep.file)
+            result = dotted_module_name(info.src_dir, ep.file)
+            module_dotted = result[0] if result is not None else None
+            pkg_root_rel = result[1] if result is not None else "."
             # 生成入口包装器：处理 sys.path、Qt 插件路径与包上下文（相对导入）
             wrapper_name = f"_entry_{ep.name}.py"
             wrapper_path = cfg.dist_dir / wrapper_name
             wrapper_path.write_text(
-                generate_wrapper_source(ep.name, module_dotted, entry_rel),
+                generate_wrapper_source(ep.name, module_dotted, entry_rel, pkg_root_rel),
                 encoding="utf-8",
             )
             # .entry 指向 wrapper（loader 读 .entry 路径运行）
