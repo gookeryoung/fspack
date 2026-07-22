@@ -172,7 +172,7 @@ def test_compile_loader_linux_gcc_missing(tmp_path: Path, monkeypatch: pytest.Mo
 
 
 def test_compile_loader_cache_hit_copies_without_compiling(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """缓存命中时直接复制，不调用编译器。."""
+    """缓存命中时直接复制，不调用编译器，也不创建编译工作目录。."""
     source = "int wmain(){return 0;}"
     cache = tmp_path / "cache"
     cache.mkdir()
@@ -185,12 +185,15 @@ def test_compile_loader_cache_hit_copies_without_compiling(tmp_path: Path, monke
 
     monkeypatch.setattr("fspack.loader.subprocess.run", fake_run)
     out = tmp_path / "app.exe"
+    work_dir = tmp_path / "build"
     stage = StageRecorder("生成 C loader")
-    compile_loader(source, out, AppType.CLI, tmp_path / "w", Platform.WINDOWS, cache_dir=cache, stage=stage)
+    compile_loader(source, out, AppType.CLI, work_dir, Platform.WINDOWS, cache_dir=cache, stage=stage)
     assert out.read_bytes() == b"cached-exe"
     record = stage._finalize()
     assert record.cache_hit == 1
     assert record.detail == "缓存命中"
+    # 缓存命中不应创建编译工作目录，避免 dist/build/ 留下空目录
+    assert not work_dir.exists()
 
 
 def test_compile_loader_cache_miss_writes_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -254,7 +257,7 @@ def test_compile_loader_cache_key_differs_by_app_type(tmp_path: Path, monkeypatc
 
 
 def test_compile_loader_cache_linux_no_suffix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Linux 平台缓存文件无 .exe 后缀。."""
+    """Linux 平台缓存文件无 .exe 后缀，缓存命中不创建编译工作目录。."""
     source = "int main(){return 0;}"
     cache = tmp_path / "cache"
     key = _loader_cache_key(source, AppType.CLI, Platform.LINUX)
@@ -267,8 +270,10 @@ def test_compile_loader_cache_linux_no_suffix(tmp_path: Path, monkeypatch: pytes
 
     monkeypatch.setattr("fspack.loader.subprocess.run", fake_run)
     out = tmp_path / "app"
-    compile_loader(source, out, AppType.CLI, tmp_path / "w", Platform.LINUX, cache_dir=cache)
+    work_dir = tmp_path / "build"
+    compile_loader(source, out, AppType.CLI, work_dir, Platform.LINUX, cache_dir=cache)
     assert out.read_bytes() == b"linux-exe"
+    assert not work_dir.exists()
 
 
 def test_loader_cache_dir_default() -> None:
@@ -579,6 +584,8 @@ def test_compile_loader_with_icon_second_call_hits_cache(tmp_path: Path, monkeyp
     )
     # windres + gcc 只调一次（第二次缓存命中）
     assert call_count == 2  # windres + gcc
+    # 缓存命中不应创建第二个编译工作目录
+    assert not (tmp_path / "w2").exists()
 
 
 def test_compile_loader_different_icon_misses_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -332,7 +332,6 @@ def compile_loader(  # noqa: PLR0913
     ``sha256(source + app_type + platform + icon_hash)`` 前 16 字符，保证
     同配置命中、改配置失效。``cache_dir`` 默认 ``~/.fspack/cache/loaders/``。
     """
-    work_dir.mkdir(parents=True, exist_ok=True)
     out_exe.parent.mkdir(parents=True, exist_ok=True)
 
     icon_hash = _icon_hash(icon) if icon is not None and platform is Platform.WINDOWS else ""
@@ -350,6 +349,9 @@ def compile_loader(  # noqa: PLR0913
             stage.set_detail("缓存命中")
         return out_exe
 
+    # 缓存未命中：创建编译工作目录并写 loader.c
+    # 缓存命中路径不创建 work_dir，避免 dist/build/ 留下空目录
+    work_dir.mkdir(parents=True, exist_ok=True)
     c_file = work_dir / "loader.c"
     c_file.write_text(source, encoding="utf-8")
 
