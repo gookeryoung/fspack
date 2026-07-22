@@ -1,8 +1,8 @@
 # Changes here will be overwritten by Copier
-_commit: v0.8.5
+_commit: v0.8.7
 _src_path: https://gitee.com/gooker_young/coopie.git
 author_email: gooker_young@qq.com
-author_name: gooker_young
+author_name: gookeryoung
 coverage_fail_under: 95
 description: 极速 Python 项目打包器。
 license: MIT

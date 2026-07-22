@@ -13,8 +13,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 # -- 项目信息 --------------------------------------------------------------
 project = "fspack"
-author = "gooker_young"
-copyright = "2026, gooker_young"
+author = "gookeryoung"
+copyright = "2026, gookeryoung"
 
 try:
     from fspack import __version__  # type: ignore[import-not-found]

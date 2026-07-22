@@ -11,6 +11,7 @@ alwaysApply: true
 
 Python 项目须遵守 `rule-11-python-standards.md` 硬约束；涉及以下领域时调用对应 SKILL 获取详细参考：
 
+- 项目骨架（src layout/pyproject.toml 元数据/PEP 631/735 依赖声明/工具链配置拆分/包内部结构/测试文档CI 目录组织/项目类型差异/版本管理与发布流程）→ `python-project-structure` SKILL
 - 类设计（dataclass/ABC/Enum/缓存/继承组合/设计模式）→ `python-class-design` SKILL
 - 并发（threading/concurrent.futures/multiprocessing/asyncio/线程安全）→ `python-concurrency` SKILL
 - 文件 I/O（pathlib/读写/上下文管理/临时文件/序列化/原子写入）→ `python-file-io` SKILL
@@ -19,6 +20,7 @@ Python 项目须遵守 `rule-11-python-standards.md` 硬约束；涉及以下领
 - 日志（dictConfig/文件轮转/结构化日志/GUI 日志面板/CLI --verbose）→ `python-logging` SKILL
 - 配置管理（TOML 读取/环境变量/.env/多层覆盖/Pydantic Settings/热重载）→ `python-config` SKILL
 - 子进程（subprocess.run/Popen/流式输出/超时/管道/GUI 集成/安全准则）→ `python-subprocess` SKILL
+- 性能（基线测量/cProfile 热点剖析/memray 内存分析/pytest-benchmark 回归门禁）→ `python-performance` SKILL
 
 ## 项目场景
 

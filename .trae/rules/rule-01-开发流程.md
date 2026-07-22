@@ -42,7 +42,7 @@ alwaysApply: true
 仅以下情况中断找用户：
 
 1. **歧义无法自决**：多种合理解读且无既有约定可循。
-2. **高风险/不可逆**：删除非临时文件、重命名公共模块/包、`force-push`、`reset --hard`（工作区有未提交改动时）、`git clean -f`/`-fd`/`-fx`、修改 CI/git config、引入新依赖、修改 pre-commit/工具链配置文件（ruff.toml/pytest.ini/.coveragerc/pyrefly.toml/.bumpversion.toml/uv.toml）、卸载或降级既有依赖。**普通 commit/push 不属于此类**（自动执行）。
+2. **高风险/不可逆**：删除非临时文件、重命名公共模块/包、`force-push`、`reset --hard`（工作区有未提交改动时）、`git clean -f`/`-fd`/`-fx`、修改 CI/git config、引入新依赖、修改 pre-commit/工具链配置文件（.pre-commit-config.yaml/ruff.toml/pytest.ini/.coveragerc/pyrefly.toml/.bumpversion.toml/uv.toml）、修改 `.trae/rules/` 下规则文件（见 `rule-02-产物约束.md` 规则变更约束）、卸载或降级既有依赖。**普通 commit/push 不属于此类**（自动执行）。
 3. **不可恢复的失败**：根因不在本仓库、需外部环境/权限配合、或两轮尝试仍无法定位。
 4. **超出初始确认范围**：需显著扩大范围或改变方向。
 5. **用户主动询问**。
