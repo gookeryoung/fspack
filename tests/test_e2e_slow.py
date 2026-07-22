@@ -418,3 +418,54 @@ def test_build_linux_installer_helloworld_slow(tmp_path: Path) -> None:
 
     with tarball.open("rb") as f:
         assert f.read(2) == b"\x1f\x8b", "tar.gz 非 gzip 格式"
+
+
+@pytest.mark.slow
+def test_build_and_run_cli_complex(tmp_path: Path) -> None:
+    """cli_complex 示例：多包嵌套 + lxml/ordered-set 依赖，验证子模块导入链。."""
+    _build_and_run("cli_complex", "hello, world", tmp_path, debug=True)
+    proj = tmp_path / "cli_complex"
+    assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "lxml").is_dir()
+    assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "ordered_set").is_dir()
+
+
+@pytest.mark.slow
+def test_build_and_run_cli_office(tmp_path: Path) -> None:
+    """cli_office 示例：pypdf 依赖，验证 PDF 生成 CLI。."""
+    _build_and_run("cli_office", "文件生成成功", tmp_path, debug=True)
+    proj = tmp_path / "cli_office"
+    assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "pypdf").is_dir()
+
+
+@pytest.mark.slow
+def test_build_and_run_pygame_conway(tmp_path: Path) -> None:
+    """pygame_conway 示例：numpy/attrs/pygame 依赖，dummy 驱动验证。."""
+    _build_and_run(
+        "pygame_conway",
+        "Hello from the pygame community",
+        tmp_path,
+        extra_env={"SDL_VIDEODRIVER": "dummy", "SDL_AUDIODRIVER": "dummy"},
+        debug=True,
+    )
+    proj = tmp_path / "pygame_conway"
+    assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "numpy").is_dir()
+    assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "attrs").is_dir()
+    assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "pygame").is_dir()
+
+
+@pytest.mark.slow
+def test_build_and_run_pygame_gktetris(tmp_path: Path) -> None:
+    """pygame_gktetris 示例：包模式（src.game）+ pygame，dummy 驱动验证。
+
+    src_dir 有 __init__.py，入口 game.py 在顶层，wrapper 用 runpy.run_module
+    以包上下文运行（_ENTRY_MODULE='src.game'），相对导入可用。
+    """
+    _build_and_run(
+        "pygame_gktetris",
+        "Hello from the pygame community",
+        tmp_path,
+        extra_env={"SDL_VIDEODRIVER": "dummy", "SDL_AUDIODRIVER": "dummy"},
+        debug=True,
+    )
+    proj = tmp_path / "pygame_gktetris"
+    assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "pygame").is_dir()
