@@ -46,6 +46,7 @@ from fspack.packaging.runtime import (
     standalone_url,
     write_pth,
 )
+from fspack.packaging.wheels import download_wheels
 
 __all__ = [
     "LINUX_GCC",
@@ -61,6 +62,7 @@ __all__ = [
     "compile_loader",
     "download_embed",
     "download_standalone",
+    "download_wheels",
     "embed_dirname",
     "embed_zip_name",
     "ensure_embed",
