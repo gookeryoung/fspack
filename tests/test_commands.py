@@ -90,7 +90,23 @@ def test_clean_run_removes_dist(tmp_path: Path) -> None:
     dist.mkdir()
     (dist / "x.txt").write_text("x")
     clean_run(tmp_path)
-    assert not dist.exists()
+    # clean 后 dist 目录重建为空（保留目录结构便于重新构建）
+    assert dist.is_dir()
+    assert not (dist / "x.txt").exists()
+
+
+def test_clean_run_preserves_nsi(tmp_path: Path) -> None:
+    """clean 保留 installer.nsi 便于改代码后重新打包分发。."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    nsi = dist / "installer.nsi"
+    nsi.write_text('Name "app"', encoding="utf-8")
+    (dist / "x.txt").write_text("x")
+    clean_run(tmp_path)
+    assert dist.is_dir()
+    assert nsi.is_file()
+    assert nsi.read_text(encoding="utf-8") == 'Name "app"'
+    assert not (dist / "x.txt").exists()
 
 
 def test_clean_run_no_dist(tmp_path: Path) -> None:
