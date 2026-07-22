@@ -1374,20 +1374,28 @@ def test_download_wheels_sdist_fallback_no_missing_reraises(tmp_path: Path, monk
 # ---------- _stream_subprocess ----------
 
 
-class _FakePipe:
-    """模拟管道，支持 ``read()`` 和 ``read1(size)``。."""
+_FAKE_STDOUT_FD = 3
+_FAKE_STDERR_FD = 4
 
-    def __init__(self, data: bytes) -> None:
+
+class _FakePipe:
+    """模拟管道，提供 ``read()``、``fileno()`` 和分块读取。."""
+
+    def __init__(self, data: bytes, fd: int) -> None:
         self._data = data
         self._pos = 0
+        self._fd = fd
 
     def read(self) -> bytes:
         result = self._data[self._pos :]
         self._pos = len(self._data)
         return result
 
-    def read1(self, size: int) -> bytes:
-        chunk = self._data[self._pos : self._pos + size]
+    def fileno(self) -> int:
+        return self._fd
+
+    def read_chunk(self, n: int) -> bytes:
+        chunk = self._data[self._pos : self._pos + n]
         self._pos += len(chunk)
         return chunk
 
@@ -1397,12 +1405,25 @@ class _FakePopen:
 
     def __init__(self, cmd: list[str], stdout_bytes: bytes, stderr_bytes: bytes, returncode: int) -> None:
         self.args = cmd
-        self.stdout = _FakePipe(stdout_bytes)
-        self.stderr = _FakePipe(stderr_bytes)
+        self.stdout = _FakePipe(stdout_bytes, _FAKE_STDOUT_FD)
+        self.stderr = _FakePipe(stderr_bytes, _FAKE_STDERR_FD)
         self._returncode = returncode
 
     def wait(self) -> int:
         return self._returncode
+
+
+def _patch_os_read_for(monkeypatch: pytest.MonkeyPatch, popen: _FakePopen) -> None:
+    """mock ``os.read`` 按 fd 从 ``popen`` 的管道取数据。."""
+    pipes = {popen.stdout._fd: popen.stdout, popen.stderr._fd: popen.stderr}
+
+    def fake_read(fd: int, n: int) -> bytes:
+        pipe = pipes.get(fd)
+        if pipe is None:
+            return b""
+        return pipe.read_chunk(n)
+
+    monkeypatch.setattr("fspack.builder.os.read", fake_read)
 
 
 def _patch_stderr_buffer(monkeypatch: pytest.MonkeyPatch) -> list[bytes]:
@@ -1427,7 +1448,9 @@ def test_stream_subprocess_success(monkeypatch: pytest.MonkeyPatch) -> None:
     written = _patch_stderr_buffer(monkeypatch)
 
     def fake_popen(cmd: list[str], **kw: Any) -> _FakePopen:
-        return _FakePopen(cmd, stdout_bytes=b"saved wheel\n", stderr_bytes=b"Downloading pkg", returncode=0)
+        popen = _FakePopen(cmd, stdout_bytes=b"saved wheel\n", stderr_bytes=b"Downloading pkg", returncode=0)
+        _patch_os_read_for(monkeypatch, popen)
+        return popen
 
     monkeypatch.setattr("fspack.builder.subprocess.Popen", fake_popen)
     result = _stream_subprocess(["pip", "download"])
@@ -1443,7 +1466,9 @@ def test_stream_subprocess_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_stderr_buffer(monkeypatch)
 
     def fake_popen(cmd: list[str], **kw: Any) -> _FakePopen:
-        return _FakePopen(cmd, stdout_bytes=b"out", stderr_bytes=b"err msg", returncode=1)
+        popen = _FakePopen(cmd, stdout_bytes=b"out", stderr_bytes=b"err msg", returncode=1)
+        _patch_os_read_for(monkeypatch, popen)
+        return popen
 
     monkeypatch.setattr("fspack.builder.subprocess.Popen", fake_popen)
     with pytest.raises(subprocess.CalledProcessError) as exc_info:
@@ -1465,7 +1490,9 @@ def test_stream_subprocess_multibyte_stderr(monkeypatch: pytest.MonkeyPatch) -> 
     _patch_stderr_buffer(monkeypatch)
 
     def fake_popen(cmd: list[str], **kw: Any) -> _FakePopen:
-        return _FakePopen(cmd, stdout_bytes=b"", stderr_bytes="下载中\n".encode(), returncode=0)
+        popen = _FakePopen(cmd, stdout_bytes=b"", stderr_bytes="下载中\n".encode(), returncode=0)
+        _patch_os_read_for(monkeypatch, popen)
+        return popen
 
     monkeypatch.setattr("fspack.builder.subprocess.Popen", fake_popen)
     result = _stream_subprocess(["cmd"])

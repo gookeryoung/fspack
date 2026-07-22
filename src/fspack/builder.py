@@ -564,9 +564,12 @@ def _save_deps_cache(cache_dir: Path, key: str, wheels: Sequence[Path]) -> None:
 def _stream_subprocess(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     """运行命令，实时流式输出 stderr 到终端，捕获 stdout 和 stderr。
 
-    用 ``Popen`` + 守护线程读取 stderr 字节块（``read1``）并实时写入 ``sys.stderr``，
-    支持 pip 进度条的 ``\\r`` 回车更新。stdout 始终捕获用于解析 wheel 列表。
-    stderr 同时累积，供失败时构造 ``CalledProcessError``。
+    用 ``Popen`` + 守护线程通过 ``os.read`` 读取 stderr 文件描述符字节块并实时
+    写入 ``sys.stderr``，支持 pip 进度条的 ``\\r`` 回车更新。stdout 始终捕获
+    用于解析 wheel 列表。stderr 同时累积，供失败时构造 ``CalledProcessError``。
+
+    使用 ``os.read`` 而非 ``BufferedReader.read1``：前者直接读 fd，不依赖
+    ``Popen`` 的缓冲层（``bufsize=0`` 时 stderr 是 ``FileIO`` 无 ``read1`` 方法）。
 
     调用方应在调用前停止 spinner（避免 ``\\r`` 与 pip 进度条冲突），并在调用后
     恢复 spinner 或继续后续日志输出。
@@ -575,14 +578,14 @@ def _stream_subprocess(cmd: list[str]) -> subprocess.CompletedProcess[str]:
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        bufsize=0,
     )
     stderr_chunks: list[bytes] = []
 
     def _drain_stderr() -> None:
         assert process.stderr is not None
+        fd = process.stderr.fileno()
         while True:
-            chunk = process.stderr.read1(4096)  # type: ignore[missing-attribute]
+            chunk = os.read(fd, 4096)
             if not chunk:
                 break
             stderr_chunks.append(chunk)
