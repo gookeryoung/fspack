@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 def main() -> None:
-    """创建 QApplication 验证 GUI 库可用。."""
+    """创建 QApplication 验证 GUI 库可用."""
     import PySide6
 
     pyside_dir = str(Path(PySide6.__file__).parent)

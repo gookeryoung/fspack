@@ -1,4 +1,4 @@
-"""fsp p —— 生成安装包（Windows NSIS / Linux .deb + tar.gz）。."""
+"""fsp p —— 生成安装包（Windows NSIS / Linux .deb + tar.gz）."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ def run(
     no_build: bool = False,
     target: Platform | None = None,
 ) -> None:
-    """生成安装包到 dist/release/。."""
+    """生成安装包到 dist/release/."""
     mirror_cfg = get_mirror(mirror)
     resolved_target = target or detect_platform()
     if resolved_target is Platform.LINUX:

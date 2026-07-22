@@ -1,4 +1,4 @@
-"""analyzer AST 依赖分析测试。."""
+"""analyzer AST 依赖分析测试."""
 
 from __future__ import annotations
 
@@ -32,38 +32,38 @@ def test_collect_imports_empty() -> None:
 
 
 def test_collect_submodule_imports_dotted() -> None:
-    """import X.Y 收集 {X: {Y}}。."""
+    """import X.Y 收集 {X: {Y}}."""
     tree = _tree("import os.path\nimport numpy.core\n")
     result = collect_submodule_imports(tree)
     assert result == {"os": frozenset({"path"}), "numpy": frozenset({"core"})}
 
 
 def test_collect_submodule_imports_from_dotted() -> None:
-    """from X.Y import Z 收集 {X: {Y}}。."""
+    """from X.Y import Z 收集 {X: {Y}}."""
     tree = _tree("from PySide2.QtWidgets import QApplication\n")
     assert collect_submodule_imports(tree) == {"PySide2": frozenset({"QtWidgets"})}
 
 
 def test_collect_submodule_imports_from_simple() -> None:
-    """from X import Y 收集 {X: {Y}}（Y 可能是类名，不匹配 wheel 文件时自然忽略）。."""
+    """from X import Y 收集 {X: {Y}}（Y 可能是类名，不匹配 wheel 文件时自然忽略）."""
     tree = _tree("from flask import Flask\n")
     assert collect_submodule_imports(tree) == {"flask": frozenset({"Flask"})}
 
 
 def test_collect_submodule_imports_relative_skipped() -> None:
-    """相对导入跳过。."""
+    """相对导入跳过."""
     tree = _tree("from .sub import bar\nfrom . import foo\n")
     assert collect_submodule_imports(tree) == {}
 
 
 def test_collect_submodule_imports_star_skipped() -> None:
-    """星号导入跳过。."""
+    """星号导入跳过."""
     tree = _tree("from numpy import *\n")
     assert collect_submodule_imports(tree) == {}
 
 
 def test_collect_submodule_imports_empty() -> None:
-    """无 import 返回空字典。."""
+    """无 import 返回空字典."""
     assert collect_submodule_imports(_tree("x = 1\n")) == {}
 
 
@@ -97,7 +97,7 @@ def test_stdlib_fallback_contents() -> None:
 
 
 def test_analyze_dependencies_excludes_build_artifacts(tmp_path: Path) -> None:
-    """dist/build/.venv 等目录下的 .py 不应被扫描，避免误报标准库内部模块为第三方依赖。."""
+    """dist/build/.venv 等目录下的 .py 不应被扫描，避免误报标准库内部模块为第三方依赖."""
     (tmp_path / "main.py").write_text("import os\n")
     # 模拟构建产物：dist/runtime/python/lib/ 下有 Python 标准库源码
     stdlib_dir = tmp_path / "dist" / "runtime" / "python" / "lib" / "python3.11"
@@ -115,14 +115,14 @@ def test_analyze_dependencies_excludes_build_artifacts(tmp_path: Path) -> None:
 
 
 def test_analyze_dependencies_submodules(tmp_path: Path) -> None:
-    """第三方包的子模块 import 被收集到 ast_submodules。."""
+    """第三方包的子模块 import 被收集到 ast_submodules."""
     (tmp_path / "main.py").write_text("from PySide2.QtCore import QTimer\nfrom PySide2.QtWidgets import QApplication\n")
     r = analyze_dependencies(tmp_path, "main", ())
     assert r.ast_submodules["PySide2"] == frozenset({"QtCore", "QtWidgets"})
 
 
 def test_analyze_dependencies_submodules_stdlib_filtered(tmp_path: Path) -> None:
-    """标准库的子模块 import 不进入 ast_submodules。."""
+    """标准库的子模块 import 不进入 ast_submodules."""
     (tmp_path / "main.py").write_text("import os.path\nfrom json import loads\n")
     r = analyze_dependencies(tmp_path, "main", ())
     assert "os" not in r.ast_submodules

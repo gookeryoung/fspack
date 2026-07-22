@@ -1,4 +1,4 @@
-"""网络下载的 SSL 上下文与公共配置。.
+"""网络下载的 SSL 上下文与公共配置.
 
 合并 certifi CA bundle 与系统 CA 证书，支持 SSL_CERT_FILE 环境变量覆盖。
 用于 embed.py 与 standalone.py 的 HTTPS 下载。

@@ -50,7 +50,7 @@ _BLOCK_SIZE = 64 * 1024
 
 @dataclass
 class StageRecord:
-    """单阶段执行结果记录。."""
+    """单阶段执行结果记录."""
 
     name: str
     elapsed: float
@@ -71,7 +71,7 @@ class StageRecorder:
     __slots__ = ("_bytes", "_detail", "_hits", "_items", "_name", "_skipped", "_start")
 
     def __init__(self, name: str) -> None:
-        """初始化阶段记录器，开始计时。."""
+        """初始化阶段记录器，开始计时."""
         self._name = name
         self._bytes = 0
         self._hits = 0
@@ -82,35 +82,35 @@ class StageRecorder:
 
     @property
     def name(self) -> str:
-        """阶段名称。."""
+        """阶段名称."""
         return self._name
 
     def add_bytes(self, n: int) -> None:
-        """累加下载字节数。."""
+        """累加下载字节数."""
         if n > 0:
             self._bytes += n
 
     def hit_cache(self, n: int = 1) -> None:
-        """累加缓存命中次数。."""
+        """累加缓存命中次数."""
         if n > 0:
             self._hits += n
 
     def processed(self, n: int = 1) -> None:
-        """累加处理项数。."""
+        """累加处理项数."""
         if n > 0:
             self._items += n
 
     def skip(self, n: int = 1) -> None:
-        """累加跳过项数（dist 已有依赖等场景）。."""
+        """累加跳过项数（dist 已有依赖等场景）."""
         if n > 0:
             self._skipped += n
 
     def set_detail(self, text: str) -> None:
-        """设置备注文本，覆盖既有值。."""
+        """设置备注文本，覆盖既有值."""
         self._detail = text
 
     def _finalize(self) -> StageRecord:
-        """结束计时并返回不可变记录。."""
+        """结束计时并返回不可变记录."""
         return StageRecord(
             name=self._name,
             elapsed=time.perf_counter() - self._start,
@@ -123,16 +123,16 @@ class StageRecorder:
 
 
 class BuildTracker:
-    """构建全流程进度跟踪器。."""
+    """构建全流程进度跟踪器."""
 
     def __init__(self) -> None:
-        """初始化空跟踪器，开始总计时。."""
+        """初始化空跟踪器，开始总计时."""
         self._records: list[StageRecord] = []
         self._start = time.perf_counter()
 
     @contextmanager
     def stage(self, name: str) -> Iterator[StageRecorder]:
-        """进入一个构建阶段，返回 ``StageRecorder`` 上下文。."""
+        """进入一个构建阶段，返回 ``StageRecorder`` 上下文."""
         rec = StageRecorder(name)
         try:
             yield rec
@@ -141,16 +141,16 @@ class BuildTracker:
 
     @property
     def total_elapsed(self) -> float:
-        """自创建以来的总耗时（秒）。."""
+        """自创建以来的总耗时（秒）."""
         return time.perf_counter() - self._start
 
     @property
     def records(self) -> list[StageRecord]:
-        """已完成阶段记录列表（拷贝）。."""
+        """已完成阶段记录列表（拷贝）."""
         return list(self._records)
 
     def summary(self) -> Table:
-        """渲染汇总表格。."""
+        """渲染汇总表格."""
         table = Table(title="构建阶段汇总", show_lines=False, title_style="bold blue")
         table.add_column("阶段", style="bold cyan", no_wrap=True)
         table.add_column("耗时", justify="right")
@@ -186,7 +186,7 @@ class BuildTracker:
 
 
 def _fmt_seconds(s: float) -> str:
-    """格式化耗时为人类可读字符串。."""
+    """格式化耗时为人类可读字符串."""
     if s < 1:
         return f"{s * 1000:.0f}ms"
     if s < 60:
@@ -195,7 +195,7 @@ def _fmt_seconds(s: float) -> str:
 
 
 def _fmt_bytes(n: int) -> str:
-    """格式化字节数为人类可读字符串（KB/MB/GB）。."""
+    """格式化字节数为人类可读字符串（KB/MB/GB）."""
     if n < 1024:
         return f"{n}B"
     if n < 1024 * 1024:

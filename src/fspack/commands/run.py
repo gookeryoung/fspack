@@ -1,4 +1,4 @@
-"""fsp r —— 运行已打包项目（Linux 用 wine，Windows 直跑）。."""
+"""fsp r —— 运行已打包项目（Linux 用 wine，Windows 直跑）."""
 
 from __future__ import annotations
 
@@ -91,7 +91,7 @@ def _find_exe(project: Path, name: str) -> Path | None:
 
 
 def _build_cmd(exe: Path) -> list[str]:
-    """构造运行命令：Linux 下 .exe 用 wine，原生可执行文件直跑。."""
+    """构造运行命令：Linux 下 .exe 用 wine，原生可执行文件直跑."""
     if exe.suffix == ".exe" and platform.system() == "Linux":
         wine = shutil.which("wine") or "wine"
         return [wine, str(exe)]

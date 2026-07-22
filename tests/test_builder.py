@@ -1,4 +1,4 @@
-"""builder 流水线编排测试。."""
+"""builder 流水线编排测试."""
 
 from __future__ import annotations
 
@@ -72,7 +72,7 @@ def test_copy_source_overwrites_existing(tmp_path: Path) -> None:
 
 
 def test_copy_source_strips_dev_artifacts(tmp_path: Path) -> None:
-    """剥离开发期元数据/工具配置/凭证/文档/测试目录。."""
+    """剥离开发期元数据/工具配置/凭证/文档/测试目录."""
     src = tmp_path / "proj"
     src.mkdir()
     (src / "app.py").write_text("print('hi')\n")
@@ -165,7 +165,7 @@ def test_copy_source_strips_dev_artifacts(tmp_path: Path) -> None:
 
 
 def test_copy_source_keeps_runtime_resources(tmp_path: Path) -> None:
-    """保留运行时所需资源：源码、数据文件、LICENSE、子包。."""
+    """保留运行时所需资源：源码、数据文件、LICENSE、子包."""
     src = tmp_path / "proj"
     src.mkdir()
     (src / "app.py").write_text("print('hi')\n")
@@ -202,7 +202,7 @@ class _Completed:
 
 
 def test_download_wheels_cmd_construction(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """--no-index 成功路径：命令含 --no-index，不含 -i index。."""
+    """--no-index 成功路径：命令含 --no-index，不含 -i index."""
     captured: dict[str, list[str]] = {}
 
     def fake_run(cmd: list[str], **kw: Any) -> _Completed:
@@ -228,7 +228,7 @@ def test_download_wheels_cmd_construction(tmp_path: Path, monkeypatch: pytest.Mo
 
 
 def test_download_wheels_fallback_cmd_has_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """--no-index 失败且 uv 不可用时回退到带 -i index 的命令。."""
+    """--no-index 失败且 uv 不可用时回退到带 -i index 的命令."""
     calls: list[list[str]] = []
 
     def fake_run(cmd: list[str], **kw: Any) -> _Completed:
@@ -252,7 +252,7 @@ def test_download_wheels_fallback_cmd_has_index(tmp_path: Path, monkeypatch: pyt
 
 
 def test_download_wheels_no_index_skips_network(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """--no-index 成功时只调用 pip 一次，不查询网络 index。."""
+    """--no-index 成功时只调用 pip 一次，不查询网络 index."""
     calls: list[list[str]] = []
 
     def fake_run(cmd: list[str], **kw: Any) -> _Completed:
@@ -268,7 +268,7 @@ def test_download_wheels_no_index_skips_network(tmp_path: Path, monkeypatch: pyt
 
 
 def test_download_wheels_multi_platform(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """多个 platform_tags 展开为多个 --platform 参数。."""
+    """多个 platform_tags 展开为多个 --platform 参数."""
     captured: dict[str, list[str]] = {}
 
     def fake_run(cmd: list[str], **kw: Any) -> _Completed:
@@ -292,7 +292,7 @@ def test_download_wheels_multi_platform(tmp_path: Path, monkeypatch: pytest.Monk
 
 
 def test_download_wheels_pip_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """_find_pip_python 抛 DependencyError 时 download_wheels 透传。."""
+    """_find_pip_python 抛 DependencyError 时 download_wheels 透传."""
     monkeypatch.setattr(
         "fspack.builder._find_pip_python",
         lambda: (_ for _ in ()).throw(DependencyError("未找到可用的 pip")),
@@ -319,7 +319,7 @@ def test_download_wheels_pip_error(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
 
 def test_download_wheels_python_disappeared(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """_find_pip_python 验证通过后 download 时 python 消失（FileNotFoundError）。."""
+    """_find_pip_python 验证通过后 download 时 python 消失（FileNotFoundError）."""
     monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
     monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: (_ for _ in ()).throw(FileNotFoundError()))
     with pytest.raises(DependencyError, match="未找到 pip"):
@@ -327,7 +327,7 @@ def test_download_wheels_python_disappeared(tmp_path: Path, monkeypatch: pytest.
 
 
 def test_download_wheels_records_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """download_wheels 回写新增 wheel 字节数到 stage。."""
+    """download_wheels 回写新增 wheel 字节数到 stage."""
     whl_name = "numpy-1.24.0-cp311-cp311-win_amd64.whl"
     whl_content = b"x" * 100
 
@@ -351,7 +351,7 @@ def test_download_wheels_records_bytes(tmp_path: Path, monkeypatch: pytest.Monke
 
 
 def test_download_wheels_cache_hit_no_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """cache_dir 已存在的 wheel 不计入新增字节数，但计入缓存命中。."""
+    """cache_dir 已存在的 wheel 不计入新增字节数，但计入缓存命中."""
     whl_name = "numpy-1.24.0-cp311-cp311-win_amd64.whl"
     cache = tmp_path / "cache"
     cache.mkdir()
@@ -373,7 +373,7 @@ def test_download_wheels_cache_hit_no_bytes(tmp_path: Path, monkeypatch: pytest.
 
 
 def test_download_wheels_parses_stdout_for_wheels(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """download_wheels 从 pip stdout 解析 wheel 列表（含传递依赖）。."""
+    """download_wheels 从 pip stdout 解析 wheel 列表（含传递依赖）."""
     whl1 = "numpy-1.24.0-cp311-cp311-win_amd64.whl"
     whl2 = "requests-2.31.0-py3-none-any.whl"
 
@@ -397,7 +397,7 @@ def test_download_wheels_parses_stdout_for_wheels(tmp_path: Path, monkeypatch: p
 
 
 def test_download_wheels_fallback_to_dir_scan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """stdout 无匹配行时回退到目录扫描。."""
+    """stdout 无匹配行时回退到目录扫描."""
     whl_name = "numpy-1.24.0-cp311-cp311-win_amd64.whl"
 
     class _Result:
@@ -418,7 +418,7 @@ def test_download_wheels_fallback_to_dir_scan(tmp_path: Path, monkeypatch: pytes
 
 
 def test_deps_cache_key_stable_and_distinct() -> None:
-    """相同输入产生相同键；不同输入产生不同键。."""
+    """相同输入产生相同键；不同输入产生不同键."""
     k1 = _deps_cache_key(("numpy", "requests"), "3.11.9", ("win_amd64",))
     k2 = _deps_cache_key(("numpy", "requests"), "3.11.9", ("win_amd64",))
     k3 = _deps_cache_key(("numpy",), "3.11.9", ("win_amd64",))
@@ -431,19 +431,19 @@ def test_deps_cache_key_stable_and_distinct() -> None:
 
 
 def test_deps_cache_key_order_independent() -> None:
-    """包顺序不影响键（sorted 后哈希）。."""
+    """包顺序不影响键（sorted 后哈希）."""
     k1 = _deps_cache_key(("numpy", "requests"), "3.11.9", ("win_amd64",))
     k2 = _deps_cache_key(("requests", "numpy"), "3.11.9", ("win_amd64",))
     assert k1 == k2
 
 
 def test_load_deps_cache_miss_when_no_file(tmp_path: Path) -> None:
-    """缓存文件不存在时返回 None。."""
+    """缓存文件不存在时返回 None."""
     assert _load_deps_cache(tmp_path / "cache", "abc123") is None
 
 
 def test_load_deps_cache_hit_when_wheels_exist(tmp_path: Path) -> None:
-    """缓存文件存在且 wheel 文件齐全时返回路径列表。."""
+    """缓存文件存在且 wheel 文件齐全时返回路径列表."""
     cache = tmp_path / "cache"
     cache.mkdir()
     (cache / "numpy-1.0.whl").write_bytes(b"x")
@@ -456,7 +456,7 @@ def test_load_deps_cache_hit_when_wheels_exist(tmp_path: Path) -> None:
 
 
 def test_load_deps_cache_miss_when_wheel_deleted(tmp_path: Path) -> None:
-    """缓存文件存在但 wheel 文件被删时返回 None（需重新解析）。."""
+    """缓存文件存在但 wheel 文件被删时返回 None（需重新解析）."""
     cache = tmp_path / "cache"
     cache.mkdir()
     _save_deps_cache(cache, "abc123", [cache / "numpy-1.0.whl"])
@@ -465,7 +465,7 @@ def test_load_deps_cache_miss_when_wheel_deleted(tmp_path: Path) -> None:
 
 
 def test_load_deps_cache_handles_corrupt_json(tmp_path: Path) -> None:
-    """缓存文件 JSON 损坏时返回 None 不抛异常。."""
+    """缓存文件 JSON 损坏时返回 None 不抛异常."""
     cache = tmp_path / "cache"
     cache.mkdir()
     (cache / ".deps-corrupt.json").write_text("{bad json", encoding="utf-8")
@@ -473,7 +473,7 @@ def test_load_deps_cache_handles_corrupt_json(tmp_path: Path) -> None:
 
 
 def test_save_deps_cache_best_effort(tmp_path: Path) -> None:
-    """写入失败仅 warning 不抛异常（best-effort）。."""
+    """写入失败仅 warning 不抛异常（best-effort）."""
     cache = tmp_path / "cache"
     cache.mkdir()
     _save_deps_cache(cache, "abc123", [cache / "numpy-1.0.whl"])
@@ -486,7 +486,7 @@ def test_save_deps_cache_best_effort(tmp_path: Path) -> None:
 
 
 def test_download_wheels_deps_cache_hit_skips_pip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """依赖解析缓存命中时完全跳过 pip 调用。."""
+    """依赖解析缓存命中时完全跳过 pip 调用."""
     cache = tmp_path / "cache"
     cache.mkdir()
     whl_name = "numpy-1.24.0-cp311-cp311-win_amd64.whl"
@@ -517,7 +517,7 @@ def test_download_wheels_deps_cache_hit_skips_pip(tmp_path: Path, monkeypatch: p
 
 
 def test_download_wheels_writes_deps_cache_after_pip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """pip 解析成功后写入依赖解析缓存，下次调用命中。."""
+    """pip 解析成功后写入依赖解析缓存，下次调用命中."""
     cache = tmp_path / "cache"
     whl_name = "numpy-1.24.0-cp311-cp311-win_amd64.whl"
 
@@ -545,7 +545,7 @@ def test_download_wheels_writes_deps_cache_after_pip(tmp_path: Path, monkeypatch
 
 
 def test_download_wheels_deps_cache_hit_no_stage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """依赖解析缓存命中且 stage=None 时不报错。."""
+    """依赖解析缓存命中且 stage=None 时不报错."""
     cache = tmp_path / "cache"
     cache.mkdir()
     whl_name = "numpy-1.24.0-cp311-cp311-win_amd64.whl"
@@ -569,7 +569,7 @@ def test_download_wheels_deps_cache_hit_no_stage(tmp_path: Path, monkeypatch: py
 
 
 def test_save_deps_cache_oserror_warning(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """write_text 抛 OSError 时仅 warning 不抛异常。."""
+    """write_text 抛 OSError 时仅 warning 不抛异常."""
     cache = tmp_path / "cache"
     cache.mkdir()
 
@@ -581,7 +581,7 @@ def test_save_deps_cache_oserror_warning(tmp_path: Path, monkeypatch: pytest.Mon
 
 
 def test_build_skips_runtime_when_already_prepared_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """runtime 已就绪（dll 存在）时跳过下载和解压，两 stage 均 hit_cache。."""
+    """runtime 已就绪（dll 存在）时跳过下载和解压，两 stage 均 hit_cache."""
     proj = tmp_path / "app"
     proj.mkdir()
     (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
@@ -621,7 +621,7 @@ def test_build_skips_runtime_when_already_prepared_windows(tmp_path: Path, monke
 
 
 def test_build_skips_runtime_when_already_prepared_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """runtime 已就绪（python bin 存在）时跳过下载和解压。."""
+    """runtime 已就绪（python bin 存在）时跳过下载和解压."""
     proj = tmp_path / "app"
     proj.mkdir()
     (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
@@ -662,7 +662,7 @@ def test_build_skips_runtime_when_already_prepared_linux(tmp_path: Path, monkeyp
 
 
 def test_parse_pip_download_wheels_saved_and_cached() -> None:
-    """解析 Saved 和 File was already downloaded 两种行。."""
+    """解析 Saved 和 File was already downloaded 两种行."""
     stdout = (
         "Collecting numpy\n  Saved /path/to/numpy-1.0-cp311-win_amd64.whl\n"
         "Collecting requests\n  File was already downloaded /other/requests-2.0-py3-none-any.whl\n"
@@ -672,20 +672,20 @@ def test_parse_pip_download_wheels_saved_and_cached() -> None:
 
 
 def test_parse_pip_download_wheels_dedup() -> None:
-    """重复 wheel 文件名去重。."""
+    """重复 wheel 文件名去重."""
     stdout = "Saved a-1.0.whl\nSaved a-1.0.whl\nSaved b-2.0.whl\n"
     names = _parse_pip_download_wheels(stdout)
     assert names == ["a-1.0.whl", "b-2.0.whl"]
 
 
 def test_parse_pip_download_wheels_empty() -> None:
-    """无匹配行返回空列表。."""
+    """无匹配行返回空列表."""
     assert _parse_pip_download_wheels("nothing here\n") == []
     assert _parse_pip_download_wheels("") == []
 
 
 def test_site_packages_has_deps_true(tmp_path: Path) -> None:
-    """site-packages 含 dist-info 目录时返回 True。."""
+    """site-packages 含 dist-info 目录时返回 True."""
     sp = tmp_path / "sp"
     sp.mkdir()
     (sp / "numpy-1.0.dist-info").mkdir()
@@ -693,19 +693,19 @@ def test_site_packages_has_deps_true(tmp_path: Path) -> None:
 
 
 def test_site_packages_has_deps_false_empty(tmp_path: Path) -> None:
-    """site-packages 为空目录时返回 False。."""
+    """site-packages 为空目录时返回 False."""
     sp = tmp_path / "sp"
     sp.mkdir()
     assert _site_packages_has_deps(sp) is False
 
 
 def test_site_packages_has_deps_false_no_dir(tmp_path: Path) -> None:
-    """site-packages 不存在时返回 False。."""
+    """site-packages 不存在时返回 False."""
     assert _site_packages_has_deps(tmp_path / "nonexistent") is False
 
 
 def test_find_pip_python_uses_sys_executable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """sys.executable 能跑 pip 时优先用它。."""
+    """sys.executable 能跑 pip 时优先用它."""
     venv_py = tmp_path / "venv" / "python"
     venv_py.parent.mkdir(parents=True)
     venv_py.write_text("")
@@ -722,7 +722,7 @@ def test_find_pip_python_uses_sys_executable(monkeypatch: pytest.MonkeyPatch, tm
 
 
 def test_find_pip_python_falls_back_to_system(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """sys.executable 无 pip 时遍历 PATH 找系统 python。."""
+    """sys.executable 无 pip 时遍历 PATH 找系统 python."""
     venv_py = tmp_path / "venv" / "python"
     venv_py.parent.mkdir(parents=True)
     venv_py.write_text("")
@@ -743,7 +743,7 @@ def test_find_pip_python_falls_back_to_system(monkeypatch: pytest.MonkeyPatch, t
 
 
 def test_find_pip_python_skips_venv_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """PATH 中 venv 所在目录的系统 python 被跳过。."""
+    """PATH 中 venv 所在目录的系统 python 被跳过."""
     venv_bin = tmp_path / "venv"
     venv_bin.mkdir()
     venv_py = venv_bin / _PIP_PYTHON_NAMES[0]
@@ -759,7 +759,7 @@ def test_find_pip_python_skips_venv_dir(monkeypatch: pytest.MonkeyPatch, tmp_pat
 
 
 def test_find_pip_python_all_fail(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """所有候选都无 pip 时抛 DependencyError。."""
+    """所有候选都无 pip 时抛 DependencyError."""
     venv_py = tmp_path / "venv" / "python"
     venv_py.parent.mkdir(parents=True)
     venv_py.write_text("")
@@ -778,7 +778,7 @@ def test_find_pip_python_all_fail(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
 
 
 def test_find_pip_python_empty_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """PATH 为空时只检测 sys.executable。."""
+    """PATH 为空时只检测 sys.executable."""
     venv_py = tmp_path / "venv" / "python"
     venv_py.parent.mkdir(parents=True)
     venv_py.write_text("")
@@ -793,7 +793,7 @@ def test_find_pip_python_empty_path(monkeypatch: pytest.MonkeyPatch, tmp_path: P
 
 
 def test_find_pip_python_skips_dir_without_python3(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """PATH 中无系统 python 的目录被跳过，继续找下一个。."""
+    """PATH 中无系统 python 的目录被跳过，继续找下一个."""
     venv_py = tmp_path / "venv" / "python"
     venv_py.parent.mkdir(parents=True)
     venv_py.write_text("")
@@ -816,7 +816,7 @@ def test_find_pip_python_skips_dir_without_python3(monkeypatch: pytest.MonkeyPat
 
 
 def test_find_pip_python_skips_unresolvable_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Path.resolve 抛 OSError 的目录被跳过。."""
+    """Path.resolve 抛 OSError 的目录被跳过."""
     venv_py = tmp_path / "venv" / "python"
     venv_py.parent.mkdir(parents=True)
     venv_py.write_text("")
@@ -869,7 +869,7 @@ def test_unpack_wheels_bad_zip(tmp_path: Path) -> None:
 
 
 def test_unpack_wheels_with_submodule_usage(tmp_path: Path) -> None:
-    """提供 submodule_usage 时按需解压，Qt 闭包自动加入 C 层依赖子模块。."""
+    """提供 submodule_usage 时按需解压，Qt 闭包自动加入 C 层依赖子模块."""
     wh = tmp_path / "wh"
     wh.mkdir()
     whl = wh / "PySide2-5.15.2.1-cp39-none-win_amd64.whl"
@@ -896,7 +896,7 @@ def test_unpack_wheels_with_submodule_usage(tmp_path: Path) -> None:
 
 
 def test_build_forwards_keep_modules(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """build() 将 keep_modules 和 ast_submodules 透传给 unpack_wheels。."""
+    """build() 将 keep_modules 和 ast_submodules 透传给 unpack_wheels."""
     proj = tmp_path / "app"
     proj.mkdir()
     (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
@@ -1081,7 +1081,7 @@ def test_build_prefers_declared_over_ast(tmp_path: Path, monkeypatch: pytest.Mon
 
 
 def test_build_skips_download_when_site_packages_has_deps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """site-packages 已有 dist-info 时跳过下载解压，记录跳过数。."""
+    """site-packages 已有 dist-info 时跳过下载解压，记录跳过数."""
     proj = tmp_path / "app"
     proj.mkdir()
     (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
@@ -1167,13 +1167,13 @@ def test_build_orchestration_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
 
 def test_filter_by_python_version_no_marker_kept() -> None:
-    """无环境标记的依赖原样保留。."""
+    """无环境标记的依赖原样保留."""
     result = _filter_by_python_version(["numpy>=1.20", "requests"], "3.8.10")
     assert result == ["numpy>=1.20", "requests"]
 
 
 def test_filter_by_python_version_skip_higher() -> None:
-    """目标 3.8 时跳过 python_version >= '3.11' 的依赖。."""
+    """目标 3.8 时跳过 python_version >= '3.11' 的依赖."""
     pkgs = [
         "PySide2>=5.15.2.1; python_version <= '3.10'",
         "PySide6>=6.5.0; python_version >= '3.11'",
@@ -1184,7 +1184,7 @@ def test_filter_by_python_version_skip_higher() -> None:
 
 
 def test_filter_by_python_version_keep_when_matches() -> None:
-    """目标 3.11 时保留 python_version >= '3.11' 的依赖（去标记）。."""
+    """目标 3.11 时保留 python_version >= '3.11' 的依赖（去标记）."""
     pkgs = [
         "PySide2>=5.15.2.1; python_version <= '3.10'",
         "PySide6>=6.5.0; python_version >= '3.11'",
@@ -1194,26 +1194,26 @@ def test_filter_by_python_version_keep_when_matches() -> None:
 
 
 def test_filter_by_python_version_keep_lower_bound_match() -> None:
-    """边界值匹配：python_version <= '3.10' 在目标 3.10 时保留。."""
+    """边界值匹配：python_version <= '3.10' 在目标 3.10 时保留."""
     result = _filter_by_python_version(["PySide2>=5.15.2.1; python_version <= '3.10'"], "3.10.11")
     assert result == ["PySide2>=5.15.2.1"]
 
 
 def test_filter_by_python_version_keep_non_python_marker() -> None:
-    """非 python_version 标记保守保留（去标记）。."""
+    """非 python_version 标记保守保留（去标记）."""
     result = _filter_by_python_version(["foo>=1.0; platform_system == 'Windows'"], "3.8.10")
     assert result == ["foo>=1.0"]
 
 
 def test_filter_by_python_version_and_combination() -> None:
-    """and 组合：两个条件都满足才保留。."""
+    """and 组合：两个条件都满足才保留."""
     pkgs = ["bar>=1.0; python_version >= '3.8' and python_version < '3.12'"]
     assert _filter_by_python_version(pkgs, "3.10.11") == ["bar>=1.0"]
     assert _filter_by_python_version(pkgs, "3.12.0") == []
 
 
 def test_filter_by_python_version_or_combination() -> None:
-    """or 组合：任一条件满足即保留。."""
+    """or 组合：任一条件满足即保留."""
     pkgs = ["baz>=1.0; python_version < '3.9' or python_version >= '3.12'"]
     assert _filter_by_python_version(pkgs, "3.8.10") == ["baz>=1.0"]
     assert _filter_by_python_version(pkgs, "3.11.9") == []
@@ -1221,12 +1221,12 @@ def test_filter_by_python_version_or_combination() -> None:
 
 
 def test_filter_by_python_version_empty_input() -> None:
-    """空列表输入返回空列表。."""
+    """空列表输入返回空列表."""
     assert _filter_by_python_version([], "3.8.10") == []
 
 
 def test_filter_by_python_version_all_filtered() -> None:
-    """所有依赖都被标记过滤时返回空列表。."""
+    """所有依赖都被标记过滤时返回空列表."""
     pkgs = ["PySide6>=6.5.0; python_version >= '3.11'"]
     assert _filter_by_python_version(pkgs, "3.8.10") == []
 
@@ -1262,12 +1262,12 @@ def test_eval_single_marker_eq_ne() -> None:
 
 
 def test_eval_single_marker_non_python_returns_true() -> None:
-    """非 python_version 标记保守返回 True。."""
+    """非 python_version 标记保守返回 True."""
     assert _eval_single_marker("platform_system == 'Windows'", (3, 8)) is True
 
 
 def test_eval_single_marker_double_quotes() -> None:
-    """双引号标记值也能匹配。."""
+    """双引号标记值也能匹配."""
     assert _eval_single_marker('python_version >= "3.8"', (3, 9)) is True
 
 
@@ -1284,14 +1284,14 @@ def test_eval_python_version_marker_or() -> None:
 
 
 def test_eval_python_version_marker_case_insensitive() -> None:
-    """and/or 大小写不敏感。."""
+    """and/or 大小写不敏感."""
     py = (3, 10)
     assert _eval_python_version_marker("python_version >= '3.8' AND python_version <= '3.10'", py) is True
     assert _eval_python_version_marker("python_version < '3.8' OR python_version >= '3.12'", py) is False
 
 
 def test_eval_python_version_marker_non_python_returns_true() -> None:
-    """纯非 python_version 标记保守返回 True。."""
+    """纯非 python_version 标记保守返回 True."""
     assert _eval_python_version_marker("platform_system == 'Windows'", (3, 8)) is True
 
 
@@ -1320,13 +1320,13 @@ def test_parse_missing_packages_dedup() -> None:
 
 
 def test_parse_missing_packages_empty() -> None:
-    """无匹配行返回空列表。."""
+    """无匹配行返回空列表."""
     assert _parse_missing_packages("") == []
     assert _parse_missing_packages("no error here\n") == []
 
 
 def test_parse_missing_packages_preserves_spec() -> None:
-    """保留版本 specifier 供 pip wheel 使用。."""
+    """保留版本 specifier 供 pip wheel 使用."""
     stderr = (
         "ERROR: Could not find a version that satisfies the requirement reportlab>=3.6.13,<4.0 (from versions: none)\n"
     )
@@ -1337,7 +1337,7 @@ def test_parse_missing_packages_preserves_spec() -> None:
 
 
 def test_build_sdist_wheels_runs_pip_wheel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """对每个缺失包调用一次 pip wheel --no-deps。."""
+    """对每个缺失包调用一次 pip wheel --no-deps."""
     captured: list[list[str]] = []
 
     def fake_stream(cmd: list[str]) -> _Completed:
@@ -1361,7 +1361,7 @@ def test_build_sdist_wheels_runs_pip_wheel(tmp_path: Path, monkeypatch: pytest.M
 
 
 def test_build_sdist_wheels_multiple_packages(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """多个缺失包各调用一次 pip wheel。."""
+    """多个缺失包各调用一次 pip wheel."""
     calls: list[str] = []
 
     def fake_stream(cmd: list[str]) -> _Completed:
@@ -1374,7 +1374,7 @@ def test_build_sdist_wheels_multiple_packages(tmp_path: Path, monkeypatch: pytes
 
 
 def test_build_sdist_wheels_failure_only_warning(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """pip wheel 构建失败仅 warning 不抛异常（让后续重试失败时抛原始错误）。."""
+    """pip wheel 构建失败仅 warning 不抛异常（让后续重试失败时抛原始错误）."""
 
     def fake_stream(cmd: list[str]) -> _Completed:
         raise subprocess.CalledProcessError(1, cmd, stderr="build failed")
@@ -1385,7 +1385,7 @@ def test_build_sdist_wheels_failure_only_warning(tmp_path: Path, monkeypatch: py
 
 
 def test_build_sdist_wheels_pip_missing_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """FileNotFoundError 包装为 DependencyError（pip 解释器不存在）。."""
+    """FileNotFoundError 包装为 DependencyError（pip 解释器不存在）."""
     monkeypatch.setattr("fspack.builder._stream_subprocess", lambda cmd: (_ for _ in ()).throw(FileNotFoundError()))
     with pytest.raises(DependencyError, match="未找到 pip"):
         _build_sdist_wheels(["odfpy>=1.4.1"], "/missing/python", "https://idx", tmp_path / "cache")
@@ -1395,7 +1395,7 @@ def test_build_sdist_wheels_pip_missing_raises(tmp_path: Path, monkeypatch: pyte
 
 
 def test_download_wheels_filters_python_version_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """带 python_version >= '3.11' 的依赖在目标 3.8 时被剔除，不传给 pip。."""
+    """带 python_version >= '3.11' 的依赖在目标 3.8 时被剔除，不传给 pip."""
     captured: dict[str, list[str]] = {}
 
     def fake_run(cmd: list[str], **kw: Any) -> _Completed:
@@ -1420,7 +1420,7 @@ def test_download_wheels_filters_python_version_marker(tmp_path: Path, monkeypat
 
 
 def test_download_wheels_all_filtered_returns_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """所有依赖被标记过滤时返回空列表，不调用 pip。."""
+    """所有依赖被标记过滤时返回空列表，不调用 pip."""
     pip_called = False
 
     def fake_run(cmd: list[str], **kw: Any) -> _Completed:
@@ -1437,7 +1437,7 @@ def test_download_wheels_all_filtered_returns_empty(tmp_path: Path, monkeypatch:
 
 
 def test_download_wheels_sdist_fallback_retry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """--no-index 失败 → -i index 失败（含 missing 包）→ pip wheel 构建 → 重试成功。."""
+    """--no-index 失败 → -i index 失败（含 missing 包）→ pip wheel 构建 → 重试成功."""
     cache = tmp_path / "cache"
     cache.mkdir()
     whl_name = "odfpy-1.4.1-py3-none-any.whl"
@@ -1485,7 +1485,7 @@ def test_download_wheels_sdist_fallback_retry(tmp_path: Path, monkeypatch: pytes
 
 
 def test_download_wheels_sdist_fallback_no_missing_reraises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """下载失败但无 missing 包时直接抛出原始错误（不进入 sdist 回退）。."""
+    """下载失败但无 missing 包时直接抛出原始错误（不进入 sdist 回退）."""
     err = subprocess.CalledProcessError(1, "pip", stderr="network error, no missing pkg line")
 
     def fake_run(cmd: list[str], **kw: Any) -> _Completed:
@@ -1508,19 +1508,19 @@ def test_download_wheels_sdist_fallback_no_missing_reraises(tmp_path: Path, monk
 
 
 def test_find_uv_returns_path_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
-    """uv 可用时返回路径。."""
+    """uv 可用时返回路径."""
     monkeypatch.setattr("fspack.builder.shutil.which", lambda name: "/usr/local/bin/uv")
     assert _find_uv() == "/usr/local/bin/uv"
 
 
 def test_find_uv_returns_none_when_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
-    """uv 不可用时返回 None。."""
+    """uv 不可用时返回 None."""
     monkeypatch.setattr("fspack.builder.shutil.which", lambda name: None)
     assert _find_uv() is None
 
 
 def test_resolve_with_uv_success(monkeypatch: pytest.MonkeyPatch) -> None:
-    """uv pip compile 成功时返回 name==version 列表。."""
+    """uv pip compile 成功时返回 name==version 列表."""
     monkeypatch.setattr("fspack.builder._find_uv", lambda: "/usr/bin/uv")
     # uv pip compile 输出格式：每行 "name==version"，含注释行（# 开头）
     fake_output = "numpy==1.24.0\n  # via -r -\nrequests==2.31.0\n  # via -r -\n"
@@ -1548,7 +1548,7 @@ def test_resolve_with_uv_success(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_resolve_with_uv_linux_platform(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Linux 平台标签映射到 --python-platform linux。."""
+    """Linux 平台标签映射到 --python-platform linux."""
     monkeypatch.setattr("fspack.builder._find_uv", lambda: "/usr/bin/uv")
     captured: dict[str, list[str]] = {}
 
@@ -1562,14 +1562,14 @@ def test_resolve_with_uv_linux_platform(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_resolve_with_uv_no_uv_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    """uv 不可用时抛 DependencyError。."""
+    """uv 不可用时抛 DependencyError."""
     monkeypatch.setattr("fspack.builder._find_uv", lambda: None)
     with pytest.raises(DependencyError, match="未找到 uv"):
         _resolve_with_uv(("numpy",), "3.11.9", ("win_amd64",), "https://idx/simple")
 
 
 def test_resolve_with_uv_empty_output_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    """uv 输出无匹配行时抛 DependencyError。."""
+    """uv 输出无匹配行时抛 DependencyError."""
     monkeypatch.setattr("fspack.builder._find_uv", lambda: "/usr/bin/uv")
 
     def fake_run(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
@@ -1581,7 +1581,7 @@ def test_resolve_with_uv_empty_output_raises(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_resolve_with_uv_calledprocess_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    """uv pip compile 非零退出时抛 CalledProcessError（供 _download_online 捕获回退）。."""
+    """uv pip compile 非零退出时抛 CalledProcessError（供 _download_online 捕获回退）."""
     monkeypatch.setattr("fspack.builder._find_uv", lambda: "/usr/bin/uv")
 
     def fake_run(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
@@ -1593,7 +1593,7 @@ def test_resolve_with_uv_calledprocess_error(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_download_online_uv_resolved_uses_no_deps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """uv 解析成功时用 pip download --no-deps -r 下载，含 --progress-bar on。."""
+    """uv 解析成功时用 pip download --no-deps -r 下载，含 --progress-bar on."""
     cache = tmp_path / "cache"
     cache.mkdir()
     monkeypatch.setattr("fspack.builder._find_uv", lambda: "/usr/bin/uv")
@@ -1620,7 +1620,7 @@ def test_download_online_uv_resolved_uses_no_deps(tmp_path: Path, monkeypatch: p
 
 
 def test_download_online_uv_fails_falls_back_to_pip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """uv 解析失败时回退到 pip 完整解析+下载。."""
+    """uv 解析失败时回退到 pip 完整解析+下载."""
     cache = tmp_path / "cache"
     cache.mkdir()
     monkeypatch.setattr("fspack.builder._find_uv", lambda: "/usr/bin/uv")
@@ -1644,7 +1644,7 @@ def test_download_online_uv_fails_falls_back_to_pip(tmp_path: Path, monkeypatch:
 
 
 def test_download_online_no_uv_uses_pip_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """uv 不可用时直接用 pip 完整解析+下载。."""
+    """uv 不可用时直接用 pip 完整解析+下载."""
     cache = tmp_path / "cache"
     cache.mkdir()
     monkeypatch.setattr("fspack.builder._find_uv", lambda: None)
@@ -1664,7 +1664,7 @@ def test_download_online_no_uv_uses_pip_full(tmp_path: Path, monkeypatch: pytest
 
 
 def test_download_online_sdist_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """pip 下载失败且含 missing 包时走 sdist 回退。."""
+    """pip 下载失败且含 missing 包时走 sdist 回退."""
     cache = tmp_path / "cache"
     cache.mkdir()
     monkeypatch.setattr("fspack.builder._find_uv", lambda: None)
@@ -1701,7 +1701,7 @@ def test_download_online_sdist_fallback(tmp_path: Path, monkeypatch: pytest.Monk
 
 
 def test_download_wheels_uv_path_integration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """download_wheels 集成测试：--no-index 失败 → uv 解析 → pip --no-deps 下载。."""
+    """download_wheels 集成测试：--no-index 失败 → uv 解析 → pip --no-deps 下载."""
     cache = tmp_path / "cache"
     cache.mkdir()
     whl_name = "numpy-1.24.0-cp311-cp311-win_amd64.whl"
@@ -1730,7 +1730,7 @@ def test_download_wheels_uv_path_integration(tmp_path: Path, monkeypatch: pytest
 
 
 def test_download_online_uv_sdist_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """uv 路径 sdist 回退：pip download --no-deps 失败 → pip wheel 构建 → 重试成功。."""
+    """uv 路径 sdist 回退：pip download --no-deps 失败 → pip wheel 构建 → 重试成功."""
     cache = tmp_path / "cache"
     cache.mkdir()
     whl_name = "win-unicode-console-0.5-py3-none-any.whl"
@@ -1790,7 +1790,7 @@ _FAKE_STDERR_FD = 4
 
 
 class _FakePipe:
-    """模拟管道，提供 ``read()``、``fileno()`` 和分块读取。."""
+    """模拟管道，提供 ``read()``、``fileno()`` 和分块读取."""
 
     def __init__(self, data: bytes, fd: int) -> None:
         self._data = data
@@ -1812,7 +1812,7 @@ class _FakePipe:
 
 
 class _FakePopen:
-    """模拟 ``subprocess.Popen``，配合 ``_stream_subprocess`` 测试。."""
+    """模拟 ``subprocess.Popen``，配合 ``_stream_subprocess`` 测试."""
 
     def __init__(self, cmd: list[str], stdout_bytes: bytes, stderr_bytes: bytes, returncode: int) -> None:
         self.args = cmd
@@ -1825,7 +1825,7 @@ class _FakePopen:
 
 
 def _patch_os_read_for(monkeypatch: pytest.MonkeyPatch, popen: _FakePopen) -> None:
-    """mock ``os.read`` 按 fd 从 ``popen`` 的管道取数据。."""
+    """mock ``os.read`` 按 fd 从 ``popen`` 的管道取数据."""
     pipes = {popen.stdout._fd: popen.stdout, popen.stderr._fd: popen.stderr}
 
     def fake_read(fd: int, n: int) -> bytes:
@@ -1838,7 +1838,7 @@ def _patch_os_read_for(monkeypatch: pytest.MonkeyPatch, popen: _FakePopen) -> No
 
 
 def _patch_stderr_buffer(monkeypatch: pytest.MonkeyPatch) -> list[bytes]:
-    """替换 ``sys.stderr.buffer``，返回写入的字节块列表。."""
+    """替换 ``sys.stderr.buffer``，返回写入的字节块列表."""
     written: list[bytes] = []
 
     class _FakeBuffer:
@@ -1855,7 +1855,7 @@ def _patch_stderr_buffer(monkeypatch: pytest.MonkeyPatch) -> list[bytes]:
 
 
 def test_stream_subprocess_success(monkeypatch: pytest.MonkeyPatch) -> None:
-    """成功时返回 CompletedProcess，stdout/stderr 正确捕获，stderr 实时写入终端。."""
+    """成功时返回 CompletedProcess，stdout/stderr 正确捕获，stderr 实时写入终端."""
     written = _patch_stderr_buffer(monkeypatch)
 
     def fake_popen(cmd: list[str], **kw: Any) -> _FakePopen:
@@ -1873,7 +1873,7 @@ def test_stream_subprocess_success(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_stream_subprocess_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    """失败时抛出 CalledProcessError，含 stdout/stderr。."""
+    """失败时抛出 CalledProcessError，含 stdout/stderr."""
     _patch_stderr_buffer(monkeypatch)
 
     def fake_popen(cmd: list[str], **kw: Any) -> _FakePopen:
@@ -1890,14 +1890,14 @@ def test_stream_subprocess_failure(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_stream_subprocess_file_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Popen 抛 FileNotFoundError 时透传（pip 解释器不存在）。."""
+    """Popen 抛 FileNotFoundError 时透传（pip 解释器不存在）."""
     monkeypatch.setattr("fspack.builder.subprocess.Popen", lambda cmd, **kw: (_ for _ in ()).throw(FileNotFoundError()))
     with pytest.raises(FileNotFoundError):
         _stream_subprocess(["/missing/cmd"])
 
 
 def test_stream_subprocess_multibyte_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
-    """多字节 stderr（中文）正确解码，不抛 UnicodeDecodeError。."""
+    """多字节 stderr（中文）正确解码，不抛 UnicodeDecodeError."""
     _patch_stderr_buffer(monkeypatch)
 
     def fake_popen(cmd: list[str], **kw: Any) -> _FakePopen:
@@ -1914,7 +1914,7 @@ def test_stream_subprocess_multibyte_stderr(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_run_pip_stream_uses_stream_subprocess(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """stream=True 时调用 _stream_subprocess 而非 subprocess.run。."""
+    """stream=True 时调用 _stream_subprocess 而非 subprocess.run."""
     stream_called = False
 
     def fake_stream(cmd: list[str]) -> _Completed:
@@ -1934,7 +1934,7 @@ def test_run_pip_stream_uses_stream_subprocess(tmp_path: Path, monkeypatch: pyte
 
 
 def test_run_pip_stream_false_uses_subprocess_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """stream=False 时调用 subprocess.run 而非 _stream_subprocess。."""
+    """stream=False 时调用 subprocess.run 而非 _stream_subprocess."""
     run_called = False
 
     def fake_run(cmd: list[str], **kw: Any) -> _Completed:
@@ -1952,7 +1952,7 @@ def test_run_pip_stream_false_uses_subprocess_run(tmp_path: Path, monkeypatch: p
 
 
 def test_run_pip_stream_suppress_error_returns_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """stream=True + suppress_error=True 时 CalledProcessError 返回 None。."""
+    """stream=True + suppress_error=True 时 CalledProcessError 返回 None."""
 
     def fake_stream(cmd: list[str]) -> _Completed:
         raise subprocess.CalledProcessError(1, cmd, stderr="fail")
@@ -1963,7 +1963,7 @@ def test_run_pip_stream_suppress_error_returns_none(tmp_path: Path, monkeypatch:
 
 
 def test_run_pip_stream_failure_raises_dependency_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """stream=True + suppress_error=False 时 CalledProcessError 转为 DependencyError。."""
+    """stream=True + suppress_error=False 时 CalledProcessError 转为 DependencyError."""
 
     def fake_stream(cmd: list[str]) -> _Completed:
         raise subprocess.CalledProcessError(1, cmd, stderr="download failed")
@@ -1974,7 +1974,7 @@ def test_run_pip_stream_failure_raises_dependency_error(tmp_path: Path, monkeypa
 
 
 def test_run_pip_stream_file_not_found_raises_dependency_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """stream=True 时 FileNotFoundError 转为 DependencyError。."""
+    """stream=True 时 FileNotFoundError 转为 DependencyError."""
     monkeypatch.setattr("fspack.builder._stream_subprocess", lambda cmd: (_ for _ in ()).throw(FileNotFoundError()))
     with pytest.raises(DependencyError, match="未找到 pip"):
         _run_pip(["/missing/pip"], "label", stream=True)

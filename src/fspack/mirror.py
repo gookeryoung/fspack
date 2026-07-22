@@ -1,4 +1,4 @@
-"""国内镜像源配置。."""
+"""国内镜像源配置."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ DEFAULT_MIRROR = "aliyun"
 
 
 def get_mirror(name: str | None = None) -> MirrorConfig:
-    """按名称获取镜像配置，name 为 None 时返回默认镜像。."""
+    """按名称获取镜像配置，name 为 None 时返回默认镜像."""
     key = name or DEFAULT_MIRROR
     if key not in MIRRORS:
         raise KeyError(f"未知镜像源: {key}，可选: {', '.join(MIRRORS)}")

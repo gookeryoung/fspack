@@ -178,7 +178,7 @@ HTTP 请求，验证后正常退出，适合打包验证。
 ```python
 @dataclass(frozen=True)
 class EntryPoint:
-    """单个打包入口：用于多入口项目生成多个可执行文件。."""
+    """单个打包入口：用于多入口项目生成多个可执行文件."""
     name: str
     module: str
     file: Path
@@ -203,7 +203,7 @@ class EntryPoint:
 ```python
 @property
 def all_entries(self) -> tuple[EntryPoint, ...]:
-    """所有入口：多入口模式返回 entries，单入口模式构造单一入口。."""
+    """所有入口：多入口模式返回 entries，单入口模式构造单一入口."""
     if self.entries:
         return self.entries
     return (

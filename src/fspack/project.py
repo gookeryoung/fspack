@@ -1,4 +1,4 @@
-"""pyproject.toml 解析与项目入口识别。."""
+"""pyproject.toml 解析与项目入口识别."""
 
 from __future__ import annotations
 
@@ -209,7 +209,7 @@ def resolve_py_version(
 
 
 def _satisfies(version: str, specifiers: str) -> bool:
-    """检查版本是否满足 PEP 440 ``requires-python`` 规范符。."""
+    """检查版本是否满足 PEP 440 ``requires-python`` 规范符."""
     ver_parts = tuple(int(x) for x in version.split("."))
     for op, spec_ver in _SPEC_RE.findall(specifiers):
         spec_parts = tuple(int(x) for x in spec_ver.split("."))
@@ -292,7 +292,7 @@ def _is_main_check(node: ast.AST) -> bool:
 
 
 def infer_app_type(path: Path, declared: tuple[str, ...]) -> AppType:
-    """根据 import 与声明依赖推断 CLI/GUI 类型。."""
+    """根据 import 与声明依赖推断 CLI/GUI 类型."""
     tree = ast.parse(path.read_text(encoding="utf-8"))
     for top in collect_imports(tree):
         if top in _GUI_HINTS:

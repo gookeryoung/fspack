@@ -1,4 +1,4 @@
-"""embed python 下载、解压与 _pth 配置。."""
+"""embed python 下载、解压与 _pth 配置."""
 
 from __future__ import annotations
 
@@ -24,13 +24,13 @@ _logger = logging.getLogger(__name__)
 
 
 def embed_dirname(version: str) -> str:
-    """返回形如 python311 的版本前缀。."""
+    """返回形如 python311 的版本前缀."""
     major, minor = version.split(".")[:2]
     return f"python{major}{minor}"
 
 
 def embed_zip_name(version: str) -> str:
-    """返回 embed zip 文件名。."""
+    """返回 embed zip 文件名."""
     return f"python-{version}-embed-amd64.zip"
 
 
@@ -70,7 +70,7 @@ def download_embed(
 
 
 def extract_embed(zip_path: Path, runtime_dir: Path) -> None:
-    """解压 embed zip 到 runtime_dir。."""
+    """解压 embed zip 到 runtime_dir."""
     runtime_dir.mkdir(parents=True, exist_ok=True)
     try:
         with zipfile.ZipFile(zip_path) as zf:

@@ -1,4 +1,4 @@
-"""NSIS 安装脚本生成与 makensis 编译。."""
+"""NSIS 安装脚本生成与 makensis 编译."""
 
 from __future__ import annotations
 
@@ -68,7 +68,9 @@ def generate_nsis_script(project: ProjectInfo, dist_dir: Path, release_dir: Path
         uninstall_registry_block=_build_uninstall_registry_block(project),
     )
     nsi = dist_dir / "installer.nsi"
-    nsi.write_text(content, encoding="utf-8")
+    # 用 UTF-8-SIG（带 BOM）写入，makensis 依 BOM 识别 UTF-8，
+    # 否则按 ANSI 代码页解析导致中文（注释/快捷方式名）报 Bad text encoding
+    nsi.write_text(content, encoding="utf-8-sig")
     _logger.info("已生成 NSIS 脚本: %s", nsi)
     return nsi
 
@@ -90,13 +92,13 @@ def _build_shortcut_block(project: ProjectInfo) -> str:
 
 
 def _build_uninstall_shortcut_block(project: ProjectInfo) -> str:
-    """生成卸载时清理快捷方式指令（所有应用类型均清理）。."""
+    """生成卸载时清理快捷方式指令（所有应用类型均清理）."""
     name = project.name
     return f'  RMDir /r "$SMPROGRAMS\\{name}"\n  Delete "$DESKTOP\\{name}.lnk"'
 
 
 def _build_registry_block(project: ProjectInfo) -> str:
-    """生成添加/删除程序注册表条目，使应用出现在 Windows 设置的应用列表中。."""
+    """生成添加/删除程序注册表条目，使应用出现在 Windows 设置的应用列表中."""
     name = project.name
     version = project.version
     exe = project.exe_name
@@ -115,13 +117,13 @@ def _build_registry_block(project: ProjectInfo) -> str:
 
 
 def _build_uninstall_registry_block(project: ProjectInfo) -> str:
-    """生成卸载时删除注册表条目的指令。."""
+    """生成卸载时删除注册表条目的指令."""
     key = f"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{project.name}"
     return f'  DeleteRegKey HKLM "{key}"'
 
 
 def compile_installer(nsi_path: Path, out_setup: Path) -> Path:
-    """调用 makensis 编译 .nsi 为安装包，返回 out_setup 路径。."""
+    """调用 makensis 编译 .nsi 为安装包，返回 out_setup 路径."""
     cmd = ["makensis", str(nsi_path)]
     _logger.info("编译安装包: %s", " ".join(cmd))
     try:
@@ -142,7 +144,7 @@ def build_installer(
     no_build: bool = False,
     dist_dir: Path | None = None,
 ) -> Path:
-    """编排：可选 build → 生成 NSIS 脚本 → 编译安装包，返回安装包路径。."""
+    """编排：可选 build → 生成 NSIS 脚本 → 编译安装包，返回安装包路径."""
     project_dir = Path(project_dir).resolve()
     dist = dist_dir or project_dir / "dist"
     if no_build:

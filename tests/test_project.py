@@ -1,4 +1,4 @@
-"""project pyproject.toml 解析与入口识别测试。."""
+"""project pyproject.toml 解析与入口识别测试."""
 
 from __future__ import annotations
 
@@ -26,14 +26,14 @@ def test_parse_project_helloworld() -> None:
 
 
 def test_parse_project_pyside2app_requires_python() -> None:
-    """pyside2app 示例的 requires-python 约束正确解析。."""
+    """pyside2app 示例的 requires-python 约束正确解析."""
     info = parse_project(_EXAMPLES / "pyside2_app")
     assert info.requires_python == ">=3.8,<3.11"
     assert info.app_type is AppType.GUI
 
 
 def test_resolve_py_version_pyside2app_example() -> None:
-    """pyside2app 示例：.python-version=3.9 + requires-python 解析到 3.9.13。."""
+    """pyside2app 示例：.python-version=3.9 + requires-python 解析到 3.9.13."""
     info = parse_project(_EXAMPLES / "pyside2_app")
     resolved = resolve_py_version(_EXAMPLES / "pyside2_app", None, info.requires_python)
     assert resolved == "3.9.13"
@@ -143,14 +143,14 @@ def test_detect_entry_cli_with_multiple_non_gui_deps(tmp_path: Path) -> None:
 
 
 def test_resolve_py_version_explicit(tmp_path: Path) -> None:
-    """显式 --py-version 始终优先。."""
+    """显式 --py-version 始终优先."""
     assert resolve_py_version(tmp_path, "3.10.0", None) == "3.10.0"
 
 
 def test_resolve_py_version_explicit_overrides_requires_python(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """显式版本不满足 requires-python 时告警但仍使用。."""
+    """显式版本不满足 requires-python 时告警但仍使用."""
     with caplog.at_level("WARNING", logger="fspack.project"):
         result = resolve_py_version(tmp_path, "3.12.0", ">=3.8,<3.11")
     assert result == "3.12.0"
@@ -158,19 +158,19 @@ def test_resolve_py_version_explicit_overrides_requires_python(
 
 
 def test_resolve_py_version_python_version_file(tmp_path: Path) -> None:
-    """有 .python-version 文件时映射到完整版本。."""
+    """有 .python-version 文件时映射到完整版本."""
     (tmp_path / ".python-version").write_text("3.9")
     assert resolve_py_version(tmp_path, None, None) == "3.9.13"
 
 
 def test_resolve_py_version_python_version_file_full_version(tmp_path: Path) -> None:
-    """.python-version 含完整版本号时直接使用。."""
+    """.python-version 含完整版本号时直接使用."""
     (tmp_path / ".python-version").write_text("3.10.5")
     assert resolve_py_version(tmp_path, None, None) == "3.10.5"
 
 
 def test_resolve_py_version_python_version_satisfies_requires_python(tmp_path: Path) -> None:
-    """.python-version 满足 requires-python 时直接使用。."""
+    """.python-version 满足 requires-python 时直接使用."""
     (tmp_path / ".python-version").write_text("3.9")
     assert resolve_py_version(tmp_path, None, ">=3.8,<3.11") == "3.9.13"
 
@@ -178,7 +178,7 @@ def test_resolve_py_version_python_version_satisfies_requires_python(tmp_path: P
 def test_resolve_py_version_python_version_violates_requires_python(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """.python-version 不满足 requires-python 时告警并自动选择。."""
+    """.python-version 不满足 requires-python 时告警并自动选择."""
     (tmp_path / ".python-version").write_text("3.12")
     with caplog.at_level("WARNING", logger="fspack.project"):
         result = resolve_py_version(tmp_path, None, ">=3.8,<3.11")
@@ -187,30 +187,30 @@ def test_resolve_py_version_python_version_violates_requires_python(
 
 
 def test_resolve_py_version_auto_select_highest_compatible(tmp_path: Path) -> None:
-    """无 .python-version 时按 requires-python 自动选最高兼容版本。."""
+    """无 .python-version 时按 requires-python 自动选最高兼容版本."""
     assert resolve_py_version(tmp_path, None, ">=3.8,<3.11") == "3.10.11"
     assert resolve_py_version(tmp_path, None, ">=3.8") == "3.12.0"
     assert resolve_py_version(tmp_path, None, "<3.10") == "3.9.13"
 
 
 def test_resolve_py_version_no_constraints(tmp_path: Path) -> None:
-    """无任何约束时返回 default。."""
+    """无任何约束时返回 default."""
     assert resolve_py_version(tmp_path, None, None) == DEFAULT_PY_VERSION
 
 
 def test_resolve_py_version_custom_default(tmp_path: Path) -> None:
-    """无约束时使用自定义 default。."""
+    """无约束时使用自定义 default."""
     assert resolve_py_version(tmp_path, None, None, default="3.11.10") == "3.11.10"
 
 
 def test_resolve_py_version_unsatisfiable_requires_python(tmp_path: Path) -> None:
-    """requires-python 无法满足时抛 ProjectError。."""
+    """requires-python 无法满足时抛 ProjectError."""
     with pytest.raises(ProjectError, match="无已知兼容 embed python 版本"):
         resolve_py_version(tmp_path, None, ">=4.0")
 
 
 def test_resolve_py_version_complex_specifier(tmp_path: Path) -> None:
-    """复杂规范符 >=3.9,<3.12 选 3.11.9。."""
+    """复杂规范符 >=3.9,<3.12 选 3.11.9."""
     assert resolve_py_version(tmp_path, None, ">=3.9,<3.12") == "3.11.9"
 
 
@@ -218,7 +218,7 @@ def test_resolve_py_version_complex_specifier(tmp_path: Path) -> None:
 
 
 def test_parse_project_multi_entry_example() -> None:
-    """multi_entry 示例：[tool.fspack.entries] 解析为三个入口。."""
+    """multi_entry 示例：[tool.fspack.entries] 解析为三个入口."""
     info = parse_project(_EXAMPLES / "multi_entry")
     assert len(info.entries) == 3
     assert [ep.name for ep in info.entries] == ["cli", "gui", "web"]
@@ -233,7 +233,7 @@ def test_parse_project_multi_entry_example() -> None:
 
 
 def test_parse_project_multi_entry_single_declared_compat(tmp_path: Path) -> None:
-    """无 [tool.fspack.entries] 时走单入口 detect_entry 路径，entries 为空。."""
+    """无 [tool.fspack.entries] 时走单入口 detect_entry 路径，entries 为空."""
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
     (tmp_path / "app.py").write_text("def main():\n    pass\n")
     info = parse_project(tmp_path)
@@ -242,7 +242,7 @@ def test_parse_project_multi_entry_single_declared_compat(tmp_path: Path) -> Non
 
 
 def test_parse_project_multi_entry_missing_script(tmp_path: Path) -> None:
-    """[tool.fspack.entries] 中脚本不存在时报错。."""
+    """[tool.fspack.entries] 中脚本不存在时报错."""
     (tmp_path / "pyproject.toml").write_text(
         '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack.entries]\nmain = "missing.py"\n'
     )
@@ -251,7 +251,7 @@ def test_parse_project_multi_entry_missing_script(tmp_path: Path) -> None:
 
 
 def test_parse_project_multi_entry_empty_path(tmp_path: Path) -> None:
-    """[tool.fspack.entries] 中脚本路径为空时报错。."""
+    """[tool.fspack.entries] 中脚本路径为空时报错."""
     (tmp_path / "pyproject.toml").write_text(
         '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack.entries]\nmain = ""\n'
     )
@@ -260,7 +260,7 @@ def test_parse_project_multi_entry_empty_path(tmp_path: Path) -> None:
 
 
 def test_infer_app_type_by_import(tmp_path: Path) -> None:
-    """infer_app_type 按脚本 import 推断类型。."""
+    """infer_app_type 按脚本 import 推断类型."""
     gui = tmp_path / "gui.py"
     gui.write_text("import PySide2\ndef main():\n    pass\n")
     assert infer_app_type(gui, ()) is AppType.GUI
@@ -271,14 +271,14 @@ def test_infer_app_type_by_import(tmp_path: Path) -> None:
 
 
 def test_infer_app_type_by_declared(tmp_path: Path) -> None:
-    """infer_app_type 按声明依赖推断类型（单入口模式）。."""
+    """infer_app_type 按声明依赖推断类型（单入口模式）."""
     cli = tmp_path / "cli.py"
     cli.write_text("def main():\n    pass\n")
     assert infer_app_type(cli, ("PyQt5>=5",)) is AppType.GUI
 
 
 def test_entry_point_from_script(tmp_path: Path) -> None:
-    """EntryPoint.from_script 按 import 推断 app_type（多入口模式不看 declared）。."""
+    """EntryPoint.from_script 按 import 推断 app_type（多入口模式不看 declared）."""
     script = tmp_path / "gui.py"
     script.write_text("import PySide2\ndef main():\n    pass\n")
     ep = EntryPoint.from_script("gui", script)
@@ -289,7 +289,7 @@ def test_entry_point_from_script(tmp_path: Path) -> None:
 
 
 def test_entry_point_entry_rel(tmp_path: Path) -> None:
-    """EntryPoint.entry_rel 返回相对源码目录的 POSIX 路径。."""
+    """EntryPoint.entry_rel 返回相对源码目录的 POSIX 路径."""
     sub = tmp_path / "sub"
     sub.mkdir()
     script = sub / "app.py"
@@ -302,7 +302,7 @@ def test_entry_point_entry_rel(tmp_path: Path) -> None:
 
 
 def test_resolve_icon_none_returns_none(tmp_path: Path) -> None:
-    """icon_rel 为 None/空时返回 None。."""
+    """icon_rel 为 None/空时返回 None."""
     from fspack.project import _resolve_icon
 
     assert _resolve_icon(tmp_path, None) is None
@@ -310,7 +310,7 @@ def test_resolve_icon_none_returns_none(tmp_path: Path) -> None:
 
 
 def test_resolve_icon_invalid_type_raises(tmp_path: Path) -> None:
-    """icon_rel 非字符串时报错。."""
+    """icon_rel 非字符串时报错."""
     from fspack.project import _resolve_icon
 
     with pytest.raises(ProjectError, match="icon 配置无效"):
@@ -318,7 +318,7 @@ def test_resolve_icon_invalid_type_raises(tmp_path: Path) -> None:
 
 
 def test_resolve_icon_blank_string_raises(tmp_path: Path) -> None:
-    """icon_rel 为纯空白字符串时报错。."""
+    """icon_rel 为纯空白字符串时报错."""
     from fspack.project import _resolve_icon
 
     with pytest.raises(ProjectError, match="icon 配置无效"):
@@ -326,7 +326,7 @@ def test_resolve_icon_blank_string_raises(tmp_path: Path) -> None:
 
 
 def test_resolve_icon_missing_file_raises(tmp_path: Path) -> None:
-    """icon 文件不存在时报错。."""
+    """icon 文件不存在时报错."""
     from fspack.project import _resolve_icon
 
     with pytest.raises(ProjectError, match="icon 文件不存在"):
@@ -334,7 +334,7 @@ def test_resolve_icon_missing_file_raises(tmp_path: Path) -> None:
 
 
 def test_resolve_icon_valid_returns_absolute(tmp_path: Path) -> None:
-    """icon 文件存在时返回绝对路径。."""
+    """icon 文件存在时返回绝对路径."""
     from fspack.project import _resolve_icon
 
     icon = tmp_path / "custom.ico"
@@ -346,7 +346,7 @@ def test_resolve_icon_valid_returns_absolute(tmp_path: Path) -> None:
 
 
 def test_resolve_icon_strips_whitespace(tmp_path: Path) -> None:
-    """icon 路径两侧空白被剥离。."""
+    """icon 路径两侧空白被剥离."""
     from fspack.project import _resolve_icon
 
     icon = tmp_path / "custom.ico"
@@ -355,7 +355,7 @@ def test_resolve_icon_strips_whitespace(tmp_path: Path) -> None:
 
 
 def test_parse_project_no_icon_returns_none(tmp_path: Path) -> None:
-    """无 [tool.fspack] icon 配置时 ProjectInfo.icon 为 None。."""
+    """无 [tool.fspack] icon 配置时 ProjectInfo.icon 为 None."""
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
     (tmp_path / "app.py").write_text("def main():\n    pass\n")
     info = parse_project(tmp_path)
@@ -363,7 +363,7 @@ def test_parse_project_no_icon_returns_none(tmp_path: Path) -> None:
 
 
 def test_parse_project_with_icon_returns_path(tmp_path: Path) -> None:
-    """[tool.fspack] icon 配置存在时 ProjectInfo.icon 为绝对路径。."""
+    """[tool.fspack] icon 配置存在时 ProjectInfo.icon 为绝对路径."""
     icon = tmp_path / "my.ico"
     icon.write_bytes(b"ico")
     (tmp_path / "pyproject.toml").write_text(
@@ -375,7 +375,7 @@ def test_parse_project_with_icon_returns_path(tmp_path: Path) -> None:
 
 
 def test_parse_project_with_missing_icon_raises(tmp_path: Path) -> None:
-    """[tool.fspack] icon 指向不存在文件时报错。."""
+    """[tool.fspack] icon 指向不存在文件时报错."""
     (tmp_path / "pyproject.toml").write_text(
         '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nicon = "missing.ico"\n'
     )
@@ -385,7 +385,7 @@ def test_parse_project_with_missing_icon_raises(tmp_path: Path) -> None:
 
 
 def test_parse_project_with_icon_in_multi_entry(tmp_path: Path) -> None:
-    """多入口项目也正确解析 icon。."""
+    """多入口项目也正确解析 icon."""
     icon = tmp_path / "icon.ico"
     icon.write_bytes(b"ico")
     (tmp_path / "pyproject.toml").write_text(
@@ -400,19 +400,19 @@ def test_parse_project_with_icon_in_multi_entry(tmp_path: Path) -> None:
 
 
 def test_infer_app_type_pygame_is_gui(tmp_path: Path) -> None:
-    """import pygame 的脚本推断为 GUI（无控制台）。."""
+    """import pygame 的脚本推断为 GUI（无控制台）."""
     script = tmp_path / "game.py"
     script.write_text("import pygame\ndef main():\n    pass\n")
     assert infer_app_type(script, ()) is AppType.GUI
 
 
 def test_parse_project_pygame_example_is_gui() -> None:
-    """pygame_cli 示例被识别为 GUI。."""
+    """pygame_cli 示例被识别为 GUI."""
     info = parse_project(_EXAMPLES / "pygame_cli")
     assert info.app_type is AppType.GUI
 
 
 def test_parse_project_pygame_snake_is_gui() -> None:
-    """pygame_snake 示例被识别为 GUI。."""
+    """pygame_snake 示例被识别为 GUI."""
     info = parse_project(_EXAMPLES / "pygame_snake")
     assert info.app_type is AppType.GUI

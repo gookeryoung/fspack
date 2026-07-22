@@ -1,4 +1,4 @@
-"""mirror 镜像源测试。."""
+"""mirror 镜像源测试."""
 
 from __future__ import annotations
 

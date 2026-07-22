@@ -1,4 +1,4 @@
-"""构建流水线编排：解析 → embed → 依赖 → 源码 → loader。."""
+"""构建流水线编排：解析 → embed → 依赖 → 源码 → loader."""
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ _DEFAULT_ICON = Path(__file__).parent / "assets" / "icons" / "app.ico"
 
 
 def default_icon_path() -> Path:
-    """返回 fspack 自带的默认 icon 路径（``assets/icons/app.ico``）。."""
+    """返回 fspack 自带的默认 icon 路径（``assets/icons/app.ico``）."""
     return _DEFAULT_ICON
 
 

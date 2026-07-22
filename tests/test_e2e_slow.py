@@ -74,13 +74,13 @@ def _build_and_run(  # noqa: PLR0913
 
 @pytest.mark.slow
 def test_build_and_run_helloworld(tmp_path: Path) -> None:
-    """cli_helloworld 示例真实构建并在 wine 下运行。."""
+    """cli_helloworld 示例真实构建并在 wine 下运行."""
     _build_and_run("cli_helloworld", "hello, world", tmp_path)
 
 
 @pytest.mark.slow
 def test_build_and_run_clitool(tmp_path: Path) -> None:
-    """cli_tool 示例：有库 CLI（requests），验证依赖打包与运行。."""
+    """cli_tool 示例：有库 CLI（requests），验证依赖打包与运行."""
     _build_and_run("cli_tool", "requests ", tmp_path)
     # 验证 requests 包确实解包到 site-packages
     proj = tmp_path / "cli_tool"
@@ -144,7 +144,7 @@ def test_build_and_run_pygame_cli(tmp_path: Path) -> None:
 
 @pytest.mark.slow
 def test_build_and_run_webapp(tmp_path: Path) -> None:
-    """web_app 示例：有库 web（flask），test_client 验证路由。."""
+    """web_app 示例：有库 web（flask），test_client 验证路由."""
     _build_and_run("web_app", "hello from flask", tmp_path)
     proj = tmp_path / "web_app"
     assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "flask").is_dir()
@@ -325,7 +325,7 @@ def test_build_and_run_linux_helloworld(tmp_path: Path) -> None:
 
 @pytest.mark.slow
 def test_build_and_run_linux_clitool(tmp_path: Path) -> None:
-    """Linux 平台端到端：有库 CLI（requests），验证依赖打包与运行。."""
+    """Linux 平台端到端：有库 CLI（requests），验证依赖打包与运行."""
     from fspack.builder import build
     from fspack.loader import gcc_available
     from fspack.mirror import get_mirror
@@ -422,7 +422,7 @@ def test_build_linux_installer_helloworld_slow(tmp_path: Path) -> None:
 
 @pytest.mark.slow
 def test_build_and_run_cli_complex(tmp_path: Path) -> None:
-    """cli_complex 示例：多包嵌套 + lxml/ordered-set 依赖，验证子模块导入链。."""
+    """cli_complex 示例：多包嵌套 + lxml/ordered-set 依赖，验证子模块导入链."""
     _build_and_run("cli_complex", "hello, world", tmp_path, debug=True)
     proj = tmp_path / "cli_complex"
     assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "lxml").is_dir()
@@ -431,7 +431,7 @@ def test_build_and_run_cli_complex(tmp_path: Path) -> None:
 
 @pytest.mark.slow
 def test_build_and_run_cli_office(tmp_path: Path) -> None:
-    """cli_office 示例：pypdf 依赖，验证 PDF 生成 CLI。."""
+    """cli_office 示例：pypdf 依赖，验证 PDF 生成 CLI."""
     _build_and_run("cli_office", "文件生成成功", tmp_path, debug=True)
     proj = tmp_path / "cli_office"
     assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "pypdf").is_dir()
@@ -439,7 +439,7 @@ def test_build_and_run_cli_office(tmp_path: Path) -> None:
 
 @pytest.mark.slow
 def test_build_and_run_pygame_conway(tmp_path: Path) -> None:
-    """pygame_conway 示例：numpy/attrs/pygame 依赖，dummy 驱动验证。."""
+    """pygame_conway 示例：numpy/attrs/pygame 依赖，dummy 驱动验证."""
     _build_and_run(
         "pygame_conway",
         "Hello from the pygame community",

@@ -1,6 +1,6 @@
-"""精简打包：按子模块 import 分析选择性解压 wheel。
+"""Qt 库精简规则：白名单 + 子模块依赖闭包。
 
-Qt 库（PySide2/PySide6/PyQt5/PyQt6）采用白名单+动态扩展机制：
+适用于 PySide2/PySide6/PyQt5/PyQt6。采用白名单+动态扩展机制：
 
 - 基础依赖白名单：``__init__.py``、``_*.py``、``pyside2.abi3.dll``、VC++ 运行时、
   ``plugins/platforms``、``plugins/imageformats``、``plugins/styles`` 等基础插件
@@ -8,28 +8,28 @@ Qt 库（PySide2/PySide6/PyQt5/PyQt6）采用白名单+动态扩展机制：
   保留对应 ``.pyd``/``.pyi`` 与 ``Qt5Xxx.dll``/``Qt6Xxx.dll``，并按依赖映射保留
   相关 plugins（如 ``plugins/mediaservice``）与 resources
 - 非必要目录剥离：``examples``/``translations``/``include``/``typesystems`` 等始终跳过
+
+依赖闭包：用户 ``import QtWidgets`` 时自动加入 ``Gui``/``Core``（C 层链接依赖，
+AST 无法发现），无需用户显式声明或 ``--keep-module``。
 """
 
 from __future__ import annotations
 
-import logging
-import zipfile
 from pathlib import Path
-from typing import Sequence
 
-from fspack.exceptions import DependencyError
-from fspack.progress import StageRecorder, iter_with_progress
-from fspack.wheel_cache import WheelInfo, normalize_name
+from fspack.slim.base import SlimSpec, override, register_spec
+from fspack.wheel_cache import normalize_name
 
-__all__ = ["classify_entry", "slim_unpack"]
-
-_logger = logging.getLogger(__name__)
-
-# 子模块扩展名：仅这些文件按子模块名选择性保留
-_SUBMODULE_EXTS = frozenset({".pyd", ".pyi", ".so"})
+__all__ = [
+    "QT_PACKAGES",
+    "QtSlimSpec",
+    "_normalize_qt_sub",
+    "_qt_dll_submodule",
+    "_qt_module_closure",
+]
 
 # Qt 库归一化包名集合
-_QT_PACKAGES = frozenset({"pyside2", "pyside6", "pyqt5", "pyqt6"})
+QT_PACKAGES = frozenset({"pyside2", "pyside6", "pyqt5", "pyqt6"})
 
 # 含 ABI 绑定 DLL（pyside2.abi3.dll/pyside6.abi3.dll）的 Qt 包。
 # 这些绑定层归 shared 始终保留，但其 C 层隐式依赖 Qt5Qml.dll/Qt6Qml.dll（AST 无法发现），
@@ -236,72 +236,94 @@ def _qt_module_closure(submodules: set[str]) -> set[str]:
     return closure
 
 
-def classify_entry(  # noqa: PLR0911, PLR0912
-    entry: str,
-    top_pkg: str,
-    keep_subs: set[str] | None = None,
-) -> tuple[str, str | None]:
-    """分类 wheel 条目归属。
+@register_spec
+class QtSlimSpec(SlimSpec):
+    """Qt 库精简规则：PySide2/PySide6/PyQt5/PyQt6 共享同一规则。
 
-    返回 ``(类别, 子模块名|None)``，类别为 ``"metadata"``/``"exclude"``/``"shared"``/``"submodule"``：
-
-    - ``metadata``: ``*.dist-info/**`` 元数据，始终保留
-    - ``exclude``: 可安全剥离的非必要文件（Qt 库的 examples/translations/include 等、
-      开发工具 exe），始终跳过
-    - ``shared``: 包级共享文件（``__init__.py``、``_*.py``、VC++ 运行时、
-      ``pyside2.abi3.dll`` 等、基础 plugins），始终保留
-    - ``submodule``: 子模块专属文件（``.pyd``/``.pyi``/``.so``、Qt5/Qt6 原生 DLL），
-      仅当子模块被 import 时保留
-
-    Qt 库（PySide2/PySide6/PyQt5/PyQt6）启用白名单精简：
-
-    - ``Qt5Xxx.dll``/``Qt6Xxx.dll`` 按子模块选择性保留（``Qt5Core.dll`` ↔ ``Core``）
-    - ``plugins/`` 子目录按依赖映射保留（``platforms``/``imageformats`` 始终保留，
-      ``mediaservice`` 需 ``Multimedia`` 等）
-    - ``resources/`` 仅 WebEngine 相关子模块时保留
-    - ``qml/`` 仅 Qml/Quick 相关子模块时保留
-    - ``examples``/``translations``/``include``/``typesystems`` 等始终剥离
-
-    ``keep_subs`` 为归一化后的子模块名集合（Qt 库为 ``Core``/``Gui`` 等）。
+    白名单 + 子模块依赖闭包：用户 ``import QtWidgets`` 自动加入 ``Gui``/``Core``，
+    闭包内的 ``.pyd`` 与 ``Qt5/6*.dll`` 保留；abi3.dll 隐式依赖的 Qml/Network DLL
+    归 shared 始终保留（避免误保留 qml/ 资源目录）。
     """
-    parts = entry.split("/")
-    if parts[0].endswith(".dist-info"):
-        return ("metadata", None)
-    if parts[0] != top_pkg:
-        return ("shared", None)
 
-    is_qt = normalize_name(top_pkg) in _QT_PACKAGES
-    is_abi_pkg = normalize_name(top_pkg) in _QT_ABI_DLL_PACKAGES
-    subs = keep_subs or set()
+    @classmethod
+    @override
+    def match(cls, whl_pkg: str) -> bool:
+        """匹配 Qt 库归一化包名（pyside2/pyside6/pyqt5/pyqt6）."""
+        return whl_pkg in QT_PACKAGES
 
-    # 顶层文件（parts == 2）
-    if len(parts) == 2:
-        filename = parts[1]
-        if filename.startswith("__init__.") or filename.startswith("_"):
+    @classmethod
+    @override
+    def normalize_submodule(cls, sub: str) -> str:
+        """Qt 子模块名归一化（``QtCore``/``Qt5Core`` → ``Core``）."""
+        return _normalize_qt_sub(sub)
+
+    @classmethod
+    @override
+    def expand_closure(cls, subs: set[str]) -> set[str]:
+        """Qt 子模块依赖闭包扩展（就地修改 ``subs`` 并返回）。
+
+        与基类约定不同：此处返回 ``subs`` 自身（已在 :func:`_qt_module_closure`
+        中就地扩展），调用方据此直接 ``subs.update(...)`` 累积闭包结果。
+        """
+        closure = _qt_module_closure(subs)
+        subs.update(closure)
+        return subs
+
+    @classmethod
+    @override
+    def classify_entry(  # noqa: PLR0911, PLR0912
+        cls,
+        entry: str,
+        top_pkg: str,
+        keep_subs: set[str],
+    ) -> tuple[str, str | None]:
+        """Qt 库条目分类。
+
+        - 顶层 ``.exe`` → exclude（Qt 自带开发工具）
+        - 顶层 ``.pyd``/``.pyi``/``.so`` → submodule（归一化子模块名）
+        - 顶层 ``Qt5Xxx.dll``/``Qt6Xxx.dll`` → submodule（归一化子模块名）；
+          PySide2/PySide6 的 abi3.dll 隐式依赖 Qml/Network DLL → 归 shared
+        - 非 Qt5/Qt6 前缀 DLL → shared（VC++ 运行时等）
+        - 子目录 ``examples``/``translations``/``include`` 等 → exclude
+        - ``plugins/<subdir>/<files>`` → 按依赖映射保留/剥离，未知子目录剥离
+        - ``resources/`` → 仅 WebEngine 相关子模块时保留
+        - ``qml/`` → 仅 Qml/Quick 相关子模块时保留
+        - 其他 → shared
+        """
+        common = cls._classify_top_or_meta(entry, top_pkg)
+        if common is not None:
+            return common
+
+        is_abi_pkg = normalize_name(top_pkg) in _QT_ABI_DLL_PACKAGES
+
+        parts = entry.split("/")
+
+        # 顶层文件（parts == 2）
+        if len(parts) == 2:
+            filename = parts[1]
+            if filename.startswith("__init__.") or filename.startswith("_"):
+                return ("shared", None)
+            suffix = Path(filename).suffix.lower()
+            stem = Path(filename).stem
+            if suffix == ".exe":
+                # Qt 自带开发工具（designer.exe 等），运行时不需要
+                return ("exclude", None)
+            if suffix in cls.SUBMODULE_EXTS:
+                # .pyd/.pyi/.so 按归一化子模块名选择性保留
+                return ("submodule", _normalize_qt_sub(stem))
+            if suffix == ".dll":
+                # Qt5Xxx.dll/Qt6Xxx.dll 按子模块选择性保留
+                qt_sub = _qt_dll_submodule(stem)
+                if qt_sub is not None:
+                    # PySide2/PySide6 的 abi3.dll 隐式依赖 Qml/Network 的 DLL → 归 shared
+                    # 始终保留（AST 无法发现此 C 层依赖）；.pyd 仍按子模块选择性保留
+                    if is_abi_pkg and qt_sub in _QT_ABI_DLL_DEPS:
+                        return ("shared", None)
+                    return ("submodule", qt_sub)
+                return ("shared", None)
             return ("shared", None)
-        suffix = Path(filename).suffix.lower()
-        stem = Path(filename).stem
-        if is_qt and suffix == ".exe":
-            # Qt 自带开发工具（designer.exe 等），运行时不需要
-            return ("exclude", None)
-        if suffix in _SUBMODULE_EXTS:
-            # .pyd/.pyi/.so 按子模块名选择性保留
-            sub = _normalize_qt_sub(stem) if is_qt else stem
-            return ("submodule", sub)
-        if is_qt and suffix == ".dll":
-            # Qt5Xxx.dll/Qt6Xxx.dll 按子模块选择性保留
-            qt_sub = _qt_dll_submodule(stem)
-            if qt_sub is not None:
-                # PySide2/PySide6 的 abi3.dll 隐式依赖 Qml/Network 的 DLL → 归 shared
-                # 始终保留（AST 无法发现此 C 层依赖）；.pyd 仍按子模块选择性保留
-                if is_abi_pkg and qt_sub in _QT_ABI_DLL_DEPS:
-                    return ("shared", None)
-                return ("submodule", qt_sub)
-            return ("shared", None)
-        return ("shared", None)
 
-    # 子目录（len(parts) >= 3）
-    if is_qt:
+        # 子目录（len(parts) >= 3）
         subdir = parts[1]
         if subdir in _QT_EXCLUDE_SUBDIRS:
             return ("exclude", None)
@@ -314,142 +336,15 @@ def classify_entry(  # noqa: PLR0911, PLR0912
             if not deps:
                 # 空依赖集合 = 基础功能，始终保留
                 return ("shared", None)
-            if deps & subs:
+            if deps & keep_subs:
                 return ("shared", None)
             return ("exclude", None)
         if subdir == "resources":
-            if _QT_RESOURCE_DEPS & subs:
+            if _QT_RESOURCE_DEPS & keep_subs:
                 return ("shared", None)
             return ("exclude", None)
         if subdir == "qml":
-            if _QT_QML_DEPS & subs:
+            if _QT_QML_DEPS & keep_subs:
                 return ("shared", None)
             return ("exclude", None)
-    return ("shared", None)
-
-
-def _detect_top_pkg(whl: Path, whl_pkg: str) -> str | None:
-    """从 wheel 条目中找出与 whl_pkg 归一化名匹配的顶层目录名。
-
-    遍历 wheel 条目，返回第一个 ``normalize_name`` 后等于 ``whl_pkg`` 的目录名。
-    无匹配时返回 None（调用方走全量解压）。
-    """
-    try:
-        with zipfile.ZipFile(whl) as zf:
-            for name in zf.namelist():
-                top = name.split("/")[0]
-                if not top.endswith(".dist-info") and normalize_name(top) == whl_pkg:
-                    return top
-    except zipfile.BadZipFile as e:
-        raise DependencyError(f"wheel 损坏: {whl}") from e
-    return None
-
-
-def _full_unpack(whl: Path, dest: Path) -> None:
-    """全量解压单个 wheel 到目标目录。."""
-    try:
-        with zipfile.ZipFile(whl) as zf:
-            zf.extractall(dest)
-    except zipfile.BadZipFile as e:
-        raise DependencyError(f"wheel 损坏: {whl}") from e
-
-
-def _slim_extract(whl: Path, dest: Path, top_pkg: str, keep_subs: set[str]) -> None:
-    """按需解压 wheel，跳过未保留子模块文件与非必要文件。."""
-    skipped = 0
-    try:
-        with zipfile.ZipFile(whl) as zf:
-            for info in zf.infolist():
-                if info.is_dir():
-                    zf.extract(info, dest)
-                    continue
-                category, sub = classify_entry(info.filename, top_pkg, keep_subs)
-                if category == "exclude":
-                    skipped += 1
-                    continue
-                if category == "submodule" and sub not in keep_subs:
-                    skipped += 1
-                    continue
-                zf.extract(info, dest)
-    except zipfile.BadZipFile as e:
-        raise DependencyError(f"wheel 损坏: {whl}") from e
-    if skipped:
-        _logger.info("精简 %s: 跳过 %d 个未用子模块文件", whl.name, skipped)
-
-
-def slim_unpack(  # noqa: PLR0912
-    wheels: Sequence[Path],
-    site_packages_dir: Path,
-    submodule_usage: dict[str, frozenset[str]] | None = None,
-    keep_modules: set[str] | None = None,
-    *,
-    stage: StageRecorder | None = None,
-) -> int:
-    """按子模块 import 分析选择性解压给定 wheel 列表（白名单制）。
-
-    - 合并 ``submodule_usage``（AST 收集）与 ``keep_modules``（用户显式指定）
-      构建每个包的保留集合；Qt 库子模块名归一化（``QtCore`` → ``Core``）
-    - **Qt 库**（pyside2/pyside6/pyqt5/pyqt6）自动按 Qt 模块依赖映射计算传递依赖
-      闭包（如 ``import QtWidgets`` 自动加入 ``Gui``/``Core``），闭包内的子模块
-      对应的 ``.pyd`` 与 ``Qt5/Qt6*.dll`` 均保留，无需用户显式声明 C 层依赖
-    - 有保留集合的 wheel 按需解压（跳过未保留子模块的 ``.pyd``/``.pyi``/``.so``、
-      ``Qt5/Qt6*.dll``，剥离 examples/translations 等非必要目录，
-      绑定层 ``pyside2.abi3.dll``、基础 ``plugins/platforms`` 等始终保留）
-    - 无保留集合的 wheel 全量解压（向后兼容：纯顶层 import 或无子模块分析时）
-    - 返回解包 wheel 数量
-
-    ``stage`` 用于通过 ``iter_with_progress`` 显示解压进度并回写处理项数到 BuildTracker。
-    """
-    site_packages_dir.mkdir(parents=True, exist_ok=True)
-
-    merged: dict[str, set[str]] = {}
-    if submodule_usage:
-        for pkg, subs in submodule_usage.items():
-            pkg_norm = normalize_name(pkg)
-            if pkg_norm in _QT_PACKAGES:
-                merged[pkg_norm] = {_normalize_qt_sub(s) for s in subs}
-            else:
-                merged[pkg_norm] = set(subs)
-    if keep_modules:
-        for spec in keep_modules:
-            if "." not in spec:
-                continue
-            pkg, sub = spec.split(".", 1)
-            pkg_norm = normalize_name(pkg)
-            norm_sub = _normalize_qt_sub(sub) if pkg_norm in _QT_PACKAGES else sub
-            merged.setdefault(pkg_norm, set()).add(norm_sub)
-
-    # Qt 库：按 Qt 模块依赖映射计算传递依赖闭包，自动加入 C 层依赖子模块
-    # 例如用户 import QtWidgets → 闭包自动加入 Gui/Core，保留对应 .pyd 与 Qt5/6*.dll，
-    # 用户无需在代码中显式 import PySide2.QtGui/QtCore 或 --keep-module 声明 C 层依赖。
-    # PySide2/PySide6 的 abi3.dll 隐式依赖 Qml/Network 的 DLL 在 classify_entry 中归 shared
-    # 始终保留，此处不处理——避免误保留 qml/ 资源目录。
-    for pkg, subs in merged.items():
-        if pkg in _QT_PACKAGES:
-            subs.update(_qt_module_closure(subs))
-
-    sorted_wheels = sorted(wheels)
-    count = 0
-    for whl in iter_with_progress(sorted_wheels, "解压 wheel", stage=stage):
-        info = WheelInfo.from_filename(whl.name)
-        if info is None:
-            _full_unpack(whl, site_packages_dir)
-            count += 1
-            continue
-        whl_pkg = normalize_name(info.name)
-        keep_subs = merged.get(whl_pkg)
-        if not keep_subs:
-            _full_unpack(whl, site_packages_dir)
-            count += 1
-            continue
-        top_pkg = _detect_top_pkg(whl, whl_pkg)
-        if top_pkg is None:
-            _full_unpack(whl, site_packages_dir)
-            count += 1
-            continue
-        _logger.info("精简解压 %s: 保留子模块 %s", whl.name, ", ".join(sorted(keep_subs)))
-        _slim_extract(whl, site_packages_dir, top_pkg, keep_subs)
-        count += 1
-    if stage is not None and count:
-        stage.set_detail(f"{count} wheels 解压")
-    return count
+        return ("shared", None)

@@ -45,7 +45,7 @@ _ICON_RC_TEMPLATE = 'id ICON "{icon_path}"\n'
 
 
 def loader_cache_dir() -> Path:
-    """返回 fspack loader 缓存目录 ``~/.fspack/cache/loaders/``。."""
+    """返回 fspack loader 缓存目录 ``~/.fspack/cache/loaders/``."""
     return Path.home() / ".fspack" / "cache" / "loaders"
 
 
@@ -300,12 +300,12 @@ def generate_loader_source(
 
 
 def mingw_available() -> bool:
-    """检测 mingw 交叉编译器是否可用。."""
+    """检测 mingw 交叉编译器是否可用."""
     return shutil.which(MINGW_GCC) is not None
 
 
 def gcc_available() -> bool:
-    """检测 gcc 编译器是否可用。."""
+    """检测 gcc 编译器是否可用."""
     return shutil.which(LINUX_GCC) is not None
 
 
@@ -386,7 +386,7 @@ def compile_loader(  # noqa: PLR0913
 
 
 def _icon_hash(icon: Path) -> str:
-    """计算 icon 文件内容的 sha256 前 16 字符 hex，用于缓存键。."""
+    """计算 icon 文件内容的 sha256 前 16 字符 hex，用于缓存键."""
     h = hashlib.sha256()
     h.update(icon.read_bytes())
     return h.hexdigest()[:16]

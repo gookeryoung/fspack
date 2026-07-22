@@ -1,4 +1,4 @@
-"""linux_installer tar.gz + .deb 生成测试。."""
+"""linux_installer tar.gz + .deb 生成测试."""
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ def _make_info(tmp_path: Path, name: str = "app") -> ProjectInfo:
 
 
 def _make_dist(tmp_path: Path, name: str = "app") -> Path:
-    """构造最小 dist 目录（含 exe + src/<name>.py + release/ 残留）。."""
+    """构造最小 dist 目录（含 exe + src/<name>.py + release/ 残留）."""
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / name).write_bytes(b"#!/bin/sh\nexit 0\n")
@@ -51,7 +51,7 @@ def _make_dist(tmp_path: Path, name: str = "app") -> Path:
 
 
 def test_build_tarball_creates_archive(tmp_path: Path) -> None:
-    """build_tarball 打包 dist 为 tar.gz，排除 release/ 目录。."""
+    """build_tarball 打包 dist 为 tar.gz，排除 release/ 目录."""
     dist = _make_dist(tmp_path)
     release = dist / "release"
 
@@ -71,7 +71,7 @@ def test_build_tarball_creates_archive(tmp_path: Path) -> None:
 
 
 def test_build_tarball_cleans_existing_staging(tmp_path: Path) -> None:
-    """build_tarball 重复打包时清理旧 staging。."""
+    """build_tarball 重复打包时清理旧 staging."""
     dist = _make_dist(tmp_path)
     release = dist / "release"
     stale_staging = release / "app-1.0-linux"
@@ -87,7 +87,7 @@ def test_build_tarball_cleans_existing_staging(tmp_path: Path) -> None:
 
 
 def test_build_deb_creates_deb(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """build_deb 构造 .deb，校验 control/wrapper/exe 内容与 dpkg-deb 调用，清理旧 staging。."""
+    """build_deb 构造 .deb，校验 control/wrapper/exe 内容与 dpkg-deb 调用，清理旧 staging."""
     dist = _make_dist(tmp_path)
     info = _make_info(tmp_path)
     release = tmp_path / "release"
@@ -137,7 +137,7 @@ def test_build_deb_creates_deb(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_build_deb_dpkg_deb_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """dpkg-deb 缺失抛 InstallerError。."""
+    """dpkg-deb 缺失抛 InstallerError."""
     dist = _make_dist(tmp_path)
     info = _make_info(tmp_path)
     release = tmp_path / "release"
@@ -151,7 +151,7 @@ def test_build_deb_dpkg_deb_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
 
 def test_build_deb_dpkg_deb_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """dpkg-deb 失败抛 InstallerError。."""
+    """dpkg-deb 失败抛 InstallerError."""
     dist = _make_dist(tmp_path)
     info = _make_info(tmp_path)
     release = tmp_path / "release"

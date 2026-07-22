@@ -1,4 +1,4 @@
-"""C loader 源码生成与编译测试。."""
+"""C loader 源码生成与编译测试."""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ def test_generate_loader_source_contains_dll_and_entry_reading() -> None:
 
 
 def test_generate_loader_source_no_entry_hardcoded() -> None:
-    """loader 源码不含硬编码入口路径，可跨项目复用。."""
+    """loader 源码不含硬编码入口路径，可跨项目复用."""
     src1 = generate_loader_source("python311")
     src2 = generate_loader_source("python311")
     assert src1 == src2
@@ -132,7 +132,7 @@ def test_generate_loader_source_linux_310() -> None:
 
 
 def test_loader_cache_key_same_for_different_entries() -> None:
-    """不同入口路径产生相同缓存键（源码不含入口路径）。."""
+    """不同入口路径产生相同缓存键（源码不含入口路径）."""
     from fspack.config import AppType
 
     src1 = generate_loader_source("python311")
@@ -172,7 +172,7 @@ def test_compile_loader_linux_gcc_missing(tmp_path: Path, monkeypatch: pytest.Mo
 
 
 def test_compile_loader_cache_hit_copies_without_compiling(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """缓存命中时直接复制，不调用编译器，也不创建编译工作目录。."""
+    """缓存命中时直接复制，不调用编译器，也不创建编译工作目录."""
     source = "int wmain(){return 0;}"
     cache = tmp_path / "cache"
     cache.mkdir()
@@ -197,7 +197,7 @@ def test_compile_loader_cache_hit_copies_without_compiling(tmp_path: Path, monke
 
 
 def test_compile_loader_cache_miss_writes_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """缓存未命中时编译并回写缓存。."""
+    """缓存未命中时编译并回写缓存."""
     source = "int wmain(){return 0;}"
     cache = tmp_path / "cache"
 
@@ -217,7 +217,7 @@ def test_compile_loader_cache_miss_writes_back(tmp_path: Path, monkeypatch: pyte
 
 
 def test_compile_loader_second_call_hits_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """相同配置第二次调用命中缓存，只编译一次。."""
+    """相同配置第二次调用命中缓存，只编译一次."""
     call_count = 0
 
     def fake_run(cmd: list[str], **kw: Any) -> _Completed:
@@ -239,7 +239,7 @@ def test_compile_loader_second_call_hits_cache(tmp_path: Path, monkeypatch: pyte
 
 
 def test_compile_loader_cache_key_differs_by_app_type(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """相同源码不同 app_type 产生不同缓存键，互不命中。."""
+    """相同源码不同 app_type 产生不同缓存键，互不命中."""
     source = "int wmain(){return 0;}"
     cache = tmp_path / "cache"
     calls: list[str] = []
@@ -257,7 +257,7 @@ def test_compile_loader_cache_key_differs_by_app_type(tmp_path: Path, monkeypatc
 
 
 def test_compile_loader_cache_linux_no_suffix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Linux 平台缓存文件无 .exe 后缀，缓存命中不创建编译工作目录。."""
+    """Linux 平台缓存文件无 .exe 后缀，缓存命中不创建编译工作目录."""
     source = "int main(){return 0;}"
     cache = tmp_path / "cache"
     key = _loader_cache_key(source, AppType.CLI, Platform.LINUX)
@@ -277,12 +277,12 @@ def test_compile_loader_cache_linux_no_suffix(tmp_path: Path, monkeypatch: pytes
 
 
 def test_loader_cache_dir_default() -> None:
-    """loader_cache_dir 返回 ~/.fspack/cache/loaders/。."""
+    """loader_cache_dir 返回 ~/.fspack/cache/loaders/."""
     assert loader_cache_dir() == Path.home() / ".fspack" / "cache" / "loaders"
 
 
 def test_compile_loader_compile_path_sets_stage_detail(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """编译路径（非缓存命中）设置 stage.detail 为编译器名。."""
+    """编译路径（非缓存命中）设置 stage.detail 为编译器名."""
 
     def fake_run(cmd: list[str], **kw: Any) -> _Completed:
         out_path = Path(cmd[cmd.index("-o") + 1])
@@ -306,7 +306,7 @@ def test_compile_loader_compile_path_sets_stage_detail(tmp_path: Path, monkeypat
 
 
 def test_compile_loader_cache_writeback_failure_logged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """缓存回写失败时不影响构建，仅记录警告。."""
+    """缓存回写失败时不影响构建，仅记录警告."""
 
     def fake_run(cmd: list[str], **kw: Any) -> _Completed:
         out_path = Path(cmd[cmd.index("-o") + 1])
@@ -328,7 +328,7 @@ def test_compile_loader_cache_writeback_failure_logged(tmp_path: Path, monkeypat
 
 
 def test_icon_hash_stable_and_differs_by_content(tmp_path: Path) -> None:
-    """_icon_hash 对同内容稳定，对不同内容产生不同哈希。."""
+    """_icon_hash 对同内容稳定，对不同内容产生不同哈希."""
     ico1 = tmp_path / "a.ico"
     ico1.write_bytes(b"icon-data")
     ico2 = tmp_path / "b.ico"
@@ -341,7 +341,7 @@ def test_icon_hash_stable_and_differs_by_content(tmp_path: Path) -> None:
 
 
 def test_find_windres_prefers_mingw_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
-    """_find_windres 优先返回 mingw 交叉前缀名。."""
+    """_find_windres 优先返回 mingw 交叉前缀名."""
 
     def fake_which(name: str) -> str | None:
         if name == MINGW_WINDRES:
@@ -355,7 +355,7 @@ def test_find_windres_prefers_mingw_prefix(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_find_windres_fallback_plain(monkeypatch: pytest.MonkeyPatch) -> None:
-    """mingw 前缀不存在时回退到 windres。."""
+    """mingw 前缀不存在时回退到 windres."""
 
     def fake_which(name: str) -> str | None:
         if name == "windres":
@@ -367,13 +367,13 @@ def test_find_windres_fallback_plain(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_find_windres_missing_returns_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    """两者都不存在时返回默认 mingw 名，让后续 subprocess 报错。."""
+    """两者都不存在时返回默认 mingw 名，让后续 subprocess 报错."""
     monkeypatch.setattr("fspack.loader.shutil.which", lambda name: None)
     assert _find_windres() == MINGW_WINDRES
 
 
 def test_compile_icon_resource_missing_file_returns_none(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    """icon 文件不存在时返回 None 并记录警告。."""
+    """icon 文件不存在时返回 None 并记录警告."""
     result = _compile_icon_resource(tmp_path / "missing.ico", tmp_path / "w")
     assert result is None
     assert "icon 文件不存在" in caplog.text
@@ -382,7 +382,7 @@ def test_compile_icon_resource_missing_file_returns_none(tmp_path: Path, caplog:
 def test_compile_icon_resource_no_windres_returns_none(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """windres 不可用时返回 None 并记录警告。."""
+    """windres 不可用时返回 None 并记录警告."""
     icon = tmp_path / "icon.ico"
     icon.write_bytes(b"ico")
     monkeypatch.setattr("fspack.loader.shutil.which", lambda name: None)
@@ -394,7 +394,7 @@ def test_compile_icon_resource_no_windres_returns_none(
 def test_compile_icon_resource_windres_filenotfound_returns_none(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """windres FileNotFoundError 时返回 None 并记录警告。."""
+    """windres FileNotFoundError 时返回 None 并记录警告."""
     icon = tmp_path / "icon.ico"
     icon.write_bytes(b"ico")
     work = tmp_path / "w"
@@ -417,7 +417,7 @@ def test_compile_icon_resource_windres_filenotfound_returns_none(
 def test_compile_icon_resource_windres_failure_returns_none(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """windres CalledProcessError 时返回 None 并记录警告。."""
+    """windres CalledProcessError 时返回 None 并记录警告."""
     icon = tmp_path / "icon.ico"
     icon.write_bytes(b"ico")
     work = tmp_path / "w"
@@ -438,7 +438,7 @@ def test_compile_icon_resource_windres_failure_returns_none(
 
 
 def test_compile_icon_resource_success_returns_obj_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """windres 成功时返回 icon.o 路径并复制 icon 到 work_dir。."""
+    """windres 成功时返回 icon.o 路径并复制 icon 到 work_dir."""
     icon = tmp_path / "icon.ico"
     icon.write_bytes(b"ico-content")
     work = tmp_path / "w"
@@ -467,7 +467,7 @@ def test_compile_icon_resource_success_returns_obj_path(tmp_path: Path, monkeypa
 
 
 def test_compile_loader_with_icon_appends_obj_to_cmd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """compile_loader Windows + icon 时把 icon.o 路径加到 gcc 命令末尾。."""
+    """compile_loader Windows + icon 时把 icon.o 路径加到 gcc 命令末尾."""
     captured: dict[str, list[str]] = {}
 
     def fake_which(name: str) -> str | None:

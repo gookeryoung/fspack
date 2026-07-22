@@ -1,8 +1,8 @@
-"""Web 入口：flask test_client 验证路由响应。."""
+"""Web 入口：flask test_client 验证路由响应."""
 
 
 def main() -> None:
-    """用 flask test_client 验证路由响应。."""
+    """用 flask test_client 验证路由响应."""
     from flask import Flask
 
     app = Flask(__name__)

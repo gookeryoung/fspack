@@ -1,4 +1,4 @@
-"""config 数据结构测试。."""
+"""config 数据结构测试."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ def test_mirror_config_embed_url() -> None:
 
 
 def test_project_info_from_dir_helloworld() -> None:
-    """from_dir 类方法解析 cli_helloworld 示例。."""
+    """from_dir 类方法解析 cli_helloworld 示例."""
     info = ProjectInfo.from_dir(_EXAMPLES / "cli_helloworld")
     assert info.name == "cli_helloworld"
     assert info.entry_module == "helloworld"
@@ -28,7 +28,7 @@ def test_project_info_from_dir_helloworld() -> None:
 
 
 def test_project_info_from_dir_with_explicit_py_version(tmp_path: Path) -> None:
-    """from_dir 接受 py_version 参数透传给 parse_project。."""
+    """from_dir 接受 py_version 参数透传给 parse_project."""
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "p"\nversion = "0.1"\n')
     (tmp_path / "p.py").write_text("def main():\n    pass\n")
     info = ProjectInfo.from_dir(tmp_path, "3.10.0")
@@ -36,14 +36,14 @@ def test_project_info_from_dir_with_explicit_py_version(tmp_path: Path) -> None:
 
 
 def test_project_info_from_dir_pyside2_app() -> None:
-    """from_dir 解析 GUI 示例并读取 requires-python 约束。."""
+    """from_dir 解析 GUI 示例并读取 requires-python 约束."""
     info = ProjectInfo.from_dir(_EXAMPLES / "pyside2_app")
     assert info.requires_python == ">=3.8,<3.11"
     assert info.app_type is AppType.GUI
 
 
 def test_dependency_report_from_src_classification(tmp_path: Path) -> None:
-    """from_src 类方法扫描源码并分类依赖。."""
+    """from_src 类方法扫描源码并分类依赖."""
     (tmp_path / "main.py").write_text("import os\nimport numpy\nimport requests\nfrom json import loads\n")
     r = DependencyReport.from_src(tmp_path, "main", ("numpy>=1.0",))
     assert "os" in r.ast_stdlib
@@ -55,7 +55,7 @@ def test_dependency_report_from_src_classification(tmp_path: Path) -> None:
 
 
 def test_dependency_report_from_src_submodules(tmp_path: Path) -> None:
-    """from_src 收集子模块 import。."""
+    """from_src 收集子模块 import."""
     (tmp_path / "main.py").write_text("from PySide2.QtCore import QTimer\nfrom PySide2.QtWidgets import QApplication\n")
     r = DependencyReport.from_src(tmp_path, "main", ())
     assert r.ast_submodules["PySide2"] == frozenset({"QtCore", "QtWidgets"})
@@ -134,7 +134,7 @@ def test_apptype_values() -> None:
 
 
 def test_project_info_all_entries_single() -> None:
-    """单入口模式（entries 空）all_entries 构造单一入口。."""
+    """单入口模式（entries 空）all_entries 构造单一入口."""
     info = ProjectInfo(
         name="app",
         version="0.1",
@@ -153,7 +153,7 @@ def test_project_info_all_entries_single() -> None:
 
 
 def test_project_info_all_entries_multi() -> None:
-    """多入口模式 all_entries 返回 entries 字段。."""
+    """多入口模式 all_entries 返回 entries 字段."""
     ep1 = EntryPoint(name="cli", module="cli", file=Path("cli.py"), app_type=AppType.CLI)
     ep2 = EntryPoint(name="gui", module="gui", file=Path("gui.py"), app_type=AppType.GUI)
     info = ProjectInfo(
@@ -171,7 +171,7 @@ def test_project_info_all_entries_multi() -> None:
 
 
 def test_project_info_from_dir_multi_entry() -> None:
-    """from_dir 解析 multi_entry 示例返回多个入口。."""
+    """from_dir 解析 multi_entry 示例返回多个入口."""
     info = ProjectInfo.from_dir(_EXAMPLES / "multi_entry")
     assert len(info.entries) == 3
     assert info.all_entries == info.entries

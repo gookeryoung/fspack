@@ -1,4 +1,4 @@
-"""AST 依赖分析：扫描 import，分类标准库/本地/第三方。."""
+"""AST 依赖分析：扫描 import，分类标准库/本地/第三方."""
 
 from __future__ import annotations
 
@@ -234,7 +234,7 @@ _STDLIB: frozenset[str] = getattr(sys, "stdlib_module_names", STDLIB_FALLBACK)
 
 
 def collect_imports(tree: ast.AST) -> list[str]:
-    """收集 AST 中所有 import 的顶层模块名，去重保序。."""
+    """收集 AST 中所有 import 的顶层模块名，去重保序."""
     result: list[str] = []
     seen: set[str] = set()
     for node in ast.walk(tree):
@@ -282,7 +282,7 @@ def collect_submodule_imports(tree: ast.AST) -> dict[str, frozenset[str]]:
 
 
 def _local_packages(src_dir: Path, project_name: str) -> set[str]:
-    """识别项目本地包/模块名（顶层 .py 与含 __init__.py 的目录）。."""
+    """识别项目本地包/模块名（顶层 .py 与含 __init__.py 的目录）."""
     local: set[str] = {project_name}
     for entry in src_dir.iterdir():
         if entry.is_file() and entry.suffix == ".py":
@@ -310,7 +310,7 @@ _EXCLUDED_DIRS = frozenset(
 
 
 def _is_excluded(path: Path, src_dir: Path) -> bool:
-    """判断 .py 文件是否位于构建产物或缓存目录下，应跳过扫描。."""
+    """判断 .py 文件是否位于构建产物或缓存目录下，应跳过扫描."""
     parts = path.relative_to(src_dir).parts[:-1]
     return any(part in _EXCLUDED_DIRS or part.endswith(".egg-info") for part in parts)
 

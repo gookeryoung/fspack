@@ -1,4 +1,4 @@
-"""commands 子命令测试：build/clean/run 直测与 _build_cmd 分支。."""
+"""commands 子命令测试：build/clean/run 直测与 _build_cmd 分支."""
 
 from __future__ import annotations
 
@@ -96,7 +96,7 @@ def test_clean_run_removes_dist(tmp_path: Path) -> None:
 
 
 def test_clean_run_preserves_nsi(tmp_path: Path) -> None:
-    """clean 保留 installer.nsi 便于改代码后重新打包分发。."""
+    """clean 保留 installer.nsi 便于改代码后重新打包分发."""
     dist = tmp_path / "dist"
     dist.mkdir()
     nsi = dist / "installer.nsi"
@@ -161,7 +161,7 @@ def test_run_run_nonzero_exit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_run_run_debug_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """debug 模式 Windows 用 embed python.exe 直跑入口包装器。."""
+    """debug 模式 Windows 用 embed python.exe 直跑入口包装器."""
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\n')
     (tmp_path / "app.py").write_text("def main():\n    pass\n")
     dist = tmp_path / "dist"
@@ -194,7 +194,7 @@ def test_run_run_debug_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_run_run_debug_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """debug 模式 Linux 用 standalone python + PYTHONHOME。."""
+    """debug 模式 Linux 用 standalone python + PYTHONHOME."""
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\n')
     (tmp_path / "app.py").write_text("def main():\n    pass\n")
     dist = tmp_path / "dist"
@@ -229,7 +229,7 @@ def test_run_run_debug_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_run_run_debug_missing_python(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """debug 模式 embed python 不存在时报错。."""
+    """debug 模式 embed python 不存在时报错."""
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\n')
     (tmp_path / "app.py").write_text("def main():\n    pass\n")
     dist = tmp_path / "dist"
@@ -243,7 +243,7 @@ def test_run_run_debug_missing_python(tmp_path: Path, monkeypatch: pytest.Monkey
 
 
 def test_run_run_debug_missing_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """debug 模式入口包装器不存在时报错。."""
+    """debug 模式入口包装器不存在时报错."""
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\n')
     (tmp_path / "app.py").write_text("def main():\n    pass\n")
     dist = tmp_path / "dist"
@@ -257,7 +257,7 @@ def test_run_run_debug_missing_entry(tmp_path: Path, monkeypatch: pytest.MonkeyP
 def test_run_run_gui_nonzero_hints_debug(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """GUI 应用非零退出码时提示用 --debug。."""
+    """GUI 应用非零退出码时提示用 --debug."""
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\ndependencies = ["PySide6"]\n')
     (tmp_path / "app.py").write_text("def main():\n    pass\n")
     exe = tmp_path / "dist" / "app.exe"
@@ -298,7 +298,7 @@ def test_build_cmd_non_linux(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_build_cmd_linux_native(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Linux 原生可执行文件（无后缀）直接运行，不用 wine。."""
+    """Linux 原生可执行文件（无后缀）直接运行，不用 wine."""
     monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Linux")
     exe = Path("/tmp/app")
     cmd = _build_cmd(exe)
@@ -306,7 +306,7 @@ def test_build_cmd_linux_native(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_find_exe_linux_native(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Linux 优先找原生无后缀可执行文件。."""
+    """Linux 优先找原生无后缀可执行文件."""
     monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Linux")
     dist = tmp_path / "dist"
     dist.mkdir()
@@ -316,7 +316,7 @@ def test_find_exe_linux_native(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_find_exe_linux_fallback_exe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Linux 无原生可执行文件时回退 .exe（wine 运行）。."""
+    """Linux 无原生可执行文件时回退 .exe（wine 运行）."""
     monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Linux")
     dist = tmp_path / "dist"
     dist.mkdir()
@@ -325,7 +325,7 @@ def test_find_exe_linux_fallback_exe(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
 
 def test_find_exe_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Windows 只找 .exe。."""
+    """Windows 只找 .exe."""
     monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Windows")
     dist = tmp_path / "dist"
     dist.mkdir()
@@ -334,14 +334,14 @@ def test_find_exe_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
 
 
 def test_find_exe_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """无任何可执行文件返回 None。."""
+    """无任何可执行文件返回 None."""
     monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Linux")
     (tmp_path / "dist").mkdir()
     assert _find_exe(tmp_path, "app") is None
 
 
 def test_run_run_linux_native(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Linux 原生可执行文件直接运行（不调 wine）。."""
+    """Linux 原生可执行文件直接运行（不调 wine）."""
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\n')
     (tmp_path / "app.py").write_text("def main():\n    pass\n")
     exe = tmp_path / "dist" / "app"
@@ -438,7 +438,7 @@ def test_package_run_explicit_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
 
 def _make_multi_entry_info() -> ProjectInfo:
-    """构造多入口 ProjectInfo 用于 _select_entry 测试。."""
+    """构造多入口 ProjectInfo 用于 _select_entry 测试."""
     ep1 = EntryPoint(name="cli", module="cli", file=Path("cli.py"), app_type=AppType.CLI)
     ep2 = EntryPoint(name="gui", module="gui", file=Path("gui.py"), app_type=AppType.GUI)
     ep3 = EntryPoint(name="web", module="web", file=Path("web.py"), app_type=AppType.CLI)
@@ -456,7 +456,7 @@ def _make_multi_entry_info() -> ProjectInfo:
 
 
 def test_select_entry_default_returns_first(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    """多入口未指定 --entry 时返回首个入口并日志提示。."""
+    """多入口未指定 --entry 时返回首个入口并日志提示."""
     info = _make_multi_entry_info()
     with caplog.at_level("INFO", logger="fspack.commands.run"):
         ep = _select_entry(info, None)
@@ -465,21 +465,21 @@ def test_select_entry_default_returns_first(tmp_path: Path, caplog: pytest.LogCa
 
 
 def test_select_entry_by_name() -> None:
-    """--entry 按名匹配返回对应入口。."""
+    """--entry 按名匹配返回对应入口."""
     info = _make_multi_entry_info()
     assert _select_entry(info, "gui").name == "gui"
     assert _select_entry(info, "web").name == "web"
 
 
 def test_select_entry_not_found() -> None:
-    """--entry 未匹配时报错列出可用入口。."""
+    """--entry 未匹配时报错列出可用入口."""
     info = _make_multi_entry_info()
     with pytest.raises(FspackError, match="未找到入口: missing"):
         _select_entry(info, "missing")
 
 
 def test_select_entry_single_project_no_warn(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    """单入口项目未指定 --entry 时不输出多入口提示日志。."""
+    """单入口项目未指定 --entry 时不输出多入口提示日志."""
     info = ProjectInfo(
         name="app",
         version="0.1",
@@ -497,7 +497,7 @@ def test_select_entry_single_project_no_warn(tmp_path: Path, caplog: pytest.LogC
 
 
 def test_run_run_multi_entry_select(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """fspack r --entry gui 运行对应入口的 exe。."""
+    """fspack r --entry gui 运行对应入口的 exe."""
     (tmp_path / "pyproject.toml").write_text(
         '[project]\nname = "multi"\nversion = "0.1"\n\n[tool.fspack.entries]\ncli = "cli.py"\ngui = "gui.py"\n'
     )

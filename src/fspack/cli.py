@@ -1,4 +1,4 @@
-"""fspack CLI 入口 —— cargo 风格短命令（fsp b/c/r）。."""
+"""fspack CLI 入口 —— cargo 风格短命令（fsp b/c/r）."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ __all__ = ["build_parser", "main"]
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """构建参数解析器。."""
+    """构建参数解析器."""
     parser = argparse.ArgumentParser(
         prog="fspack",
         description="极速 Python 打包器（cargo 风格短命令）。",
@@ -69,7 +69,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
-    """主入口，解析参数并分发到子命令。."""
+    """主入口，解析参数并分发到子命令."""
     parser = build_parser()
     ns = parser.parse_args(argv)
     command = ns.command
@@ -100,14 +100,14 @@ def main(argv: list[str] | None = None) -> None:
 
 
 def _drop_separator(rest: list[str]) -> list[str]:
-    """剔除 argparse REMAINDER 捕获的首个 -- 分隔符。."""
+    """剔除 argparse REMAINDER 捕获的首个 -- 分隔符."""
     if rest and rest[0] == "--":
         return rest[1:]
     return rest
 
 
 def _parse_target(value: str | None) -> Platform | None:
-    """将 CLI 字符串转为 Platform 枚举，None 表示用当前平台。."""
+    """将 CLI 字符串转为 Platform 枚举，None 表示用当前平台."""
     if value is None:
         return None
     if value == "windows":

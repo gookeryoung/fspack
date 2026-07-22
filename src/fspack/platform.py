@@ -1,4 +1,4 @@
-"""平台抽象：目标平台枚举与平台相关常量。."""
+"""平台抽象：目标平台枚举与平台相关常量."""
 
 from __future__ import annotations
 
@@ -9,14 +9,14 @@ __all__ = ["Platform", "detect_platform", "libpython_so", "wheel_platform_tags"]
 
 
 class Platform(enum.Enum):
-    """目标平台：Windows 或 Linux。."""
+    """目标平台：Windows 或 Linux."""
 
     WINDOWS = "windows"
     LINUX = "linux"
 
 
 def detect_platform() -> Platform:
-    """根据当前系统识别目标平台。."""
+    """根据当前系统识别目标平台."""
     if _platform.system() == "Windows":
         return Platform.WINDOWS
     return Platform.LINUX
@@ -35,7 +35,7 @@ def wheel_platform_tags(platform: Platform) -> tuple[str, ...]:
 
 
 def libpython_so(py_xy: str, platform: Platform) -> str:
-    """返回 libpython 文件名（py_xy 形如 python311）。."""
+    """返回 libpython 文件名（py_xy 形如 python311）."""
     dotted = f"{py_xy[6]}.{py_xy[7:]}"
     suffix = ".dll" if platform is Platform.WINDOWS else ".so"
     return f"libpython{dotted}{suffix}"

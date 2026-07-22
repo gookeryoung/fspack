@@ -1,4 +1,4 @@
-"""平台抽象测试。."""
+"""平台抽象测试."""
 
 from __future__ import annotations
 

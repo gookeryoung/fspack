@@ -1,8 +1,8 @@
-"""有库 pygame 示例：init + 打印版本。."""
+"""有库 pygame 示例：init + 打印版本."""
 
 
 def main() -> None:
-    """初始化 pygame 并打印版本。."""
+    """初始化 pygame 并打印版本."""
     import pygame
 
     pygame.init()

@@ -12,7 +12,11 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 
-dependencies    = ["rich>=13.0", "tomli>=1.2; python_version < '3.11'"]
+dependencies    = [
+    "rich>=13.0",
+    "tomli>=1.2; python_version < '3.11'",
+    "typing-extensions>=4.0; python_version < '3.13'",
+]
 description     = "极速 Python 项目打包器。"
 license         = "MIT"
 name            = "fspack"

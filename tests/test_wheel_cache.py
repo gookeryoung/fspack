@@ -1,4 +1,4 @@
-"""wheel_cache 模块测试：wheel 文件名解析与缓存目录。."""
+"""wheel_cache 模块测试：wheel 文件名解析与缓存目录."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from fspack.wheel_cache import (
 
 
 class TestWheelInfoFromFilename:
-    """WheelInfo.from_filename 类方法（工厂方法下沉后首选入口）。."""
+    """WheelInfo.from_filename 类方法（工厂方法下沉后首选入口）."""
 
     def test_standard_wheel(self) -> None:
         info = WheelInfo.from_filename("requests-2.31.0-py3-none-any.whl")
@@ -47,7 +47,7 @@ class TestWheelInfoFromFilename:
 
 
 class TestParseWheelFilenameCompat:
-    """parse_wheel_filename 向后兼容包装，行为与 WheelInfo.from_filename 一致。."""
+    """parse_wheel_filename 向后兼容包装，行为与 WheelInfo.from_filename 一致."""
 
     def test_standard_wheel(self) -> None:
         info = parse_wheel_filename("requests-2.31.0-py3-none-any.whl")
@@ -62,13 +62,13 @@ class TestParseWheelFilenameCompat:
         assert parse_wheel_filename("not-a-wheel.txt") is None
 
     def test_delegates_to_classmethod(self) -> None:
-        """兼容包装返回值与类方法一致。."""
+        """兼容包装返回值与类方法一致."""
         filename = "numpy-1.24.0-cp39-cp39-manylinux2014_x86_64.whl"
         assert parse_wheel_filename(filename) == WheelInfo.from_filename(filename)
 
 
 class TestNormalizeName:
-    """PEP 503 名称归一化。."""
+    """PEP 503 名称归一化."""
 
     def test_basic(self) -> None:
         assert normalize_name("PySide2") == "pyside2"
@@ -80,7 +80,7 @@ class TestNormalizeName:
 
 
 class TestFspackWheelCacheDir:
-    """fspack 缓存目录路径。."""
+    """fspack 缓存目录路径."""
 
     def test_path_structure(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))

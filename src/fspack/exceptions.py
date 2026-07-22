@@ -1,4 +1,4 @@
-"""fspack 异常层级。."""
+"""fspack 异常层级."""
 
 from __future__ import annotations
 
@@ -13,24 +13,24 @@ __all__ = [
 
 
 class FspackError(Exception):
-    """fspack 公共异常基类。."""
+    """fspack 公共异常基类."""
 
 
 class ProjectError(FspackError):
-    """项目解析或入口识别错误。."""
+    """项目解析或入口识别错误."""
 
 
 class EmbedError(FspackError):
-    """embed python 下载或配置错误。."""
+    """embed python 下载或配置错误."""
 
 
 class LoaderError(FspackError):
-    """C loader 源码生成或编译错误。."""
+    """C loader 源码生成或编译错误."""
 
 
 class DependencyError(FspackError):
-    """依赖下载或解包错误。."""
+    """依赖下载或解包错误."""
 
 
 class InstallerError(FspackError):
-    """NSIS 脚本生成或安装包编译错误。."""
+    """NSIS 脚本生成或安装包编译错误."""

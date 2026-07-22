@@ -1,4 +1,4 @@
-"""GUI 入口：PySide2 创建并显示一个带文字的窗口。."""
+"""GUI 入口：PySide2 创建并显示一个带文字的窗口."""
 
 import contextlib
 import os
@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 def main() -> None:
-    """创建 QApplication 并显示窗口，进入事件循环等待用户关闭。."""
+    """创建 QApplication 并显示窗口，进入事件循环等待用户关闭."""
     import PySide2
 
     pyside_dir = str(Path(PySide2.__file__).parent)

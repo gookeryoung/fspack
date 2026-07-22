@@ -1,4 +1,4 @@
-"""progress 进度跟踪与展示测试。."""
+"""progress 进度跟踪与展示测试."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from fspack.progress import (
 
 
 class TestStageRecorder:
-    """StageRecorder 指标累积。."""
+    """StageRecorder 指标累积."""
 
     def test_initial_state_starts_timer(self) -> None:
         rec = StageRecorder("test")
@@ -108,7 +108,7 @@ class TestStageRecorder:
 
 
 class TestBuildTracker:
-    """BuildTracker 阶段记录与汇总。."""
+    """BuildTracker 阶段记录与汇总."""
 
     def test_empty_tracker_has_no_records(self) -> None:
         tracker = BuildTracker()
@@ -127,7 +127,7 @@ class TestBuildTracker:
         assert records[0].elapsed > 0
 
     def test_stage_records_even_on_exception(self) -> None:
-        """with 块内抛异常时，阶段仍应记录。."""
+        """with 块内抛异常时，阶段仍应记录."""
         tracker = BuildTracker()
         with pytest.raises(ValueError, match="boom"), tracker.stage("failing") as rec:
             rec.processed(1)
@@ -200,7 +200,7 @@ class TestBuildTracker:
 
 
 class TestFmtSeconds:
-    """_fmt_seconds 单位切换。."""
+    """_fmt_seconds 单位切换."""
 
     def test_milliseconds(self) -> None:
         assert _fmt_seconds(0.5) == "500ms"
@@ -215,7 +215,7 @@ class TestFmtSeconds:
 
 
 class TestFmtBytes:
-    """_fmt_bytes 单位切换。."""
+    """_fmt_bytes 单位切换."""
 
     def test_bytes(self) -> None:
         assert _fmt_bytes(0) == "0B"
@@ -234,7 +234,7 @@ class TestFmtBytes:
 
 
 class _FakeResp:
-    """模拟 urlopen 响应，支持分块 read(n)。."""
+    """模拟 urlopen 响应，支持分块 read(n)."""
 
     def __init__(self, data: bytes, block_size: int = 64) -> None:
         self._buf = io.BytesIO(data)
@@ -254,7 +254,7 @@ class _FakeResp:
 
 
 class TestDownloadWithProgress:
-    """download_with_progress 下载与指标回写。."""
+    """download_with_progress 下载与指标回写."""
 
     def test_downloads_file_and_returns_bytes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         captured: dict[str, str] = {}
@@ -301,7 +301,7 @@ class TestDownloadWithProgress:
 
 
 class TestSpinner:
-    """spinner 上下文管理器。."""
+    """spinner 上下文管理器."""
 
     def test_spinner_executes_block(self) -> None:
         marker = {"ran": False}
@@ -314,7 +314,7 @@ class TestSpinner:
             raise ValueError("inner")
 
     def test_spinner_stops_on_exception(self) -> None:
-        """异常发生时 status.stop 必须被调用，避免残留 spinner。."""
+        """异常发生时 status.stop 必须被调用，避免残留 spinner."""
         with pytest.raises(RuntimeError), spinner("testing"):
             raise RuntimeError("fail")
         # 若 stop 未调用，下次 console.status 会冲突——这里仅验证不抛
@@ -323,7 +323,7 @@ class TestSpinner:
 
 
 class TestIterWithProgress:
-    """iter_with_progress 通用迭代进度。."""
+    """iter_with_progress 通用迭代进度."""
 
     def test_iterates_all_items(self) -> None:
         items = [1, 2, 3, 4, 5]
@@ -361,7 +361,7 @@ class TestIterWithProgress:
 
 
 class TestIntegrationBuildTracker:
-    """BuildTracker 集成：模拟一次完整构建的指标收集。."""
+    """BuildTracker 集成：模拟一次完整构建的指标收集."""
 
     def test_simulated_build_summary(self) -> None:
         tracker = BuildTracker()

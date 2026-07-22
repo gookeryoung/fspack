@@ -1,4 +1,4 @@
-"""installer NSIS 脚本生成与 makensis 编译测试。."""
+"""installer NSIS 脚本生成与 makensis 编译测试."""
 
 from __future__ import annotations
 
@@ -85,7 +85,7 @@ def test_generate_nsis_script_gui(tmp_path: Path) -> None:
 
 
 def test_generate_nsis_script_registry_block(tmp_path: Path) -> None:
-    """所有应用都生成完整的添加/删除程序注册表条目。."""
+    """所有应用都生成完整的添加/删除程序注册表条目."""
     info = _make_info(tmp_path, name="myapp")
     dist = tmp_path / "dist"
     dist.mkdir()

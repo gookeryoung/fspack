@@ -25,7 +25,7 @@ _TEXT = (255, 255, 255)
 
 
 def main() -> None:
-    """运行贪吃蛇游戏：方向键控制，吃食物增长，撞墙或自身结束。."""
+    """运行贪吃蛇游戏：方向键控制，吃食物增长，撞墙或自身结束."""
     import pygame
 
     is_dummy = os.environ.get("SDL_VIDEODRIVER") == "dummy"
@@ -94,7 +94,7 @@ def main() -> None:
 
 
 def _spawn_food(snake: list[tuple[int, int]]) -> tuple[int, int]:
-    """在非蛇身格子随机生成食物。."""
+    """在非蛇身格子随机生成食物."""
     while True:
         pos = (random.randint(0, COLS - 1), random.randint(0, ROWS - 1))
         if pos not in snake:

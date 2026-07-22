@@ -1,4 +1,4 @@
-"""console 彩色输出测试。."""
+"""console 彩色输出测试."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from fspack.console import console, error, setup_logging, step, success, warn
 
 
 def test_step_prints_title() -> None:
-    """step 打印步骤标题，含 > 标记。."""
+    """step 打印步骤标题，含 > 标记."""
     with console.capture() as capture:
         step("解析项目")
     out = capture.get()
@@ -17,7 +17,7 @@ def test_step_prints_title() -> None:
 
 
 def test_success_prints_check() -> None:
-    """success 打印成功消息，含 √ 标记。."""
+    """success 打印成功消息，含 √ 标记."""
     with console.capture() as capture:
         success("构建完成")
     out = capture.get()
@@ -26,7 +26,7 @@ def test_success_prints_check() -> None:
 
 
 def test_warn_prints_warning() -> None:
-    """warn 打印警告消息，含 ! 标记。."""
+    """warn 打印警告消息，含 ! 标记."""
     with console.capture() as capture:
         warn("注意")
     out = capture.get()
@@ -35,7 +35,7 @@ def test_warn_prints_warning() -> None:
 
 
 def test_error_prints_cross() -> None:
-    """error 打印错误消息，含 × 标记。."""
+    """error 打印错误消息，含 × 标记."""
     with console.capture() as capture:
         error("失败")
     out = capture.get()
@@ -44,7 +44,7 @@ def test_error_prints_cross() -> None:
 
 
 def test_setup_logging_configures_root() -> None:
-    """setup_logging 配置 root logger 的 level 与 handler。."""
+    """setup_logging 配置 root logger 的 level 与 handler."""
     root = logging.getLogger()
     original_level = root.level
     original_handlers = list(root.handlers)

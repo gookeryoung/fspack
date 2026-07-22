@@ -1,4 +1,4 @@
-"""slim 精简打包测试：wheel 文件归属分类与按需解压。."""
+"""slim 精简打包测试：wheel 文件归属分类与按需解压."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from fspack.slim import classify_entry, slim_unpack
 
 
 class TestClassifyEntry:
-    """wheel 条目归属分类。."""
+    """wheel 条目归属分类."""
 
     def test_dist_info(self) -> None:
         assert classify_entry("PySide2-5.15.2.1.dist-info/METADATA", "PySide2") == ("metadata", None)
@@ -24,97 +24,97 @@ class TestClassifyEntry:
         assert classify_entry("PySide2/_config.py", "PySide2") == ("shared", None)
 
     def test_pyd_file(self) -> None:
-        """Qt 库 .pyd 归一化子模块名：QtCore.pyd → Core。."""
+        """Qt 库 .pyd 归一化子模块名：QtCore.pyd → Core."""
         assert classify_entry("PySide2/QtCore.pyd", "PySide2") == ("submodule", "Core")
 
     def test_pyi_file(self) -> None:
         assert classify_entry("PySide2/QtCore.pyi", "PySide2") == ("submodule", "Core")
 
     def test_pyd_file_3d(self) -> None:
-        """Qt3DCore.pyd 归一化为 3DCore。."""
+        """Qt3DCore.pyd 归一化为 3DCore."""
         assert classify_entry("PySide2/Qt3DCore.pyd", "PySide2") == ("submodule", "3DCore")
 
     def test_so_file(self) -> None:
-        """子目录下的 .so 文件归类为 shared（len(parts) > 2）。."""
+        """子目录下的 .so 文件归类为 shared（len(parts) > 2）."""
         assert classify_entry("numpy/core/multiarray.so", "numpy") == ("shared", None)
 
     def test_qt5_dll(self) -> None:
-        """Qt5Core.dll 归一化为子模块 Core（按需保留）。."""
+        """Qt5Core.dll 归一化为子模块 Core（按需保留）."""
         assert classify_entry("PySide2/Qt5Core.dll", "PySide2") == ("submodule", "Core")
 
     def test_qt5_3d_dll(self) -> None:
-        """Qt53DAnimation.dll 归一化为子模块 3DAnimation。."""
+        """Qt53DAnimation.dll 归一化为子模块 3DAnimation."""
         assert classify_entry("PySide2/Qt53DAnimation.dll", "PySide2") == ("submodule", "3DAnimation")
 
     def test_qt6_dll(self) -> None:
-        """PySide6 的 Qt6Gui.dll 归一化为子模块 Gui。."""
+        """PySide6 的 Qt6Gui.dll 归一化为子模块 Gui."""
         assert classify_entry("PySide6/Qt6Gui.dll", "PySide6") == ("submodule", "Gui")
 
     def test_other_dll(self) -> None:
-        """非 Qt5/Qt6 前缀的 DLL（VC++ 运行时等）归 shared 始终保留。."""
+        """非 Qt5/Qt6 前缀的 DLL（VC++ 运行时等）归 shared 始终保留."""
         assert classify_entry("PySide2/concrt140.dll", "PySide2") == ("shared", None)
 
     def test_pyside_abi_dll(self) -> None:
-        """pyside2.abi3.dll 归 shared（绑定层，始终保留）。."""
+        """pyside2.abi3.dll 归 shared（绑定层，始终保留）."""
         assert classify_entry("PySide2/pyside2.abi3.dll", "PySide2") == ("shared", None)
 
     def test_qt_exe_excluded(self) -> None:
-        """Qt 自带开发工具 exe 归 exclude（运行时不需要）。."""
+        """Qt 自带开发工具 exe 归 exclude（运行时不需要）."""
         assert classify_entry("PySide2/designer.exe", "PySide2") == ("exclude", None)
 
     def test_subdir_platforms(self) -> None:
-        """plugins/platforms 始终保留（窗口系统必需）。."""
+        """plugins/platforms 始终保留（窗口系统必需）."""
         assert classify_entry("PySide2/plugins/platforms/qwindows.dll", "PySide2") == ("shared", None)
 
     def test_subdir_imageformats(self) -> None:
-        """plugins/imageformats 始终保留。."""
+        """plugins/imageformats 始终保留."""
         assert classify_entry("PySide2/plugins/imageformats/qsvg.dll", "PySide2") == ("shared", None)
 
     def test_subdir_mediaservice_no_dep(self) -> None:
-        """plugins/mediaservice 无 Multimedia 依赖时剥离。."""
+        """plugins/mediaservice 无 Multimedia 依赖时剥离."""
         assert classify_entry("PySide2/plugins/mediaservice/wmfengine.dll", "PySide2") == ("exclude", None)
 
     def test_subdir_mediaservice_with_dep(self) -> None:
-        """plugins/mediaservice 有 Multimedia 依赖时保留。."""
+        """plugins/mediaservice 有 Multimedia 依赖时保留."""
         result = classify_entry("PySide2/plugins/mediaservice/wmfengine.dll", "PySide2", {"Multimedia"})
         assert result == ("shared", None)
 
     def test_subdir_sqldrivers_with_dep(self) -> None:
-        """plugins/sqldrivers 有 Sql 依赖时保留。."""
+        """plugins/sqldrivers 有 Sql 依赖时保留."""
         result = classify_entry("PySide2/plugins/sqldrivers/qsqlite.dll", "PySide2", {"Sql"})
         assert result == ("shared", None)
 
     def test_subdir_unknown_plugin_excluded(self) -> None:
-        """未知 plugins 子目录白名单制剥离。."""
+        """未知 plugins 子目录白名单制剥离."""
         assert classify_entry("PySide2/plugins/unknown/x.dll", "PySide2") == ("exclude", None)
 
     def test_examples_excluded(self) -> None:
-        """examples 目录始终剥离。."""
+        """examples 目录始终剥离."""
         assert classify_entry("PySide2/examples/charts/linechart.py", "PySide2") == ("exclude", None)
 
     def test_translations_excluded(self) -> None:
-        """translations 目录始终剥离。."""
+        """translations 目录始终剥离."""
         assert classify_entry("PySide2/translations/qtbase_ar.qm", "PySide2") == ("exclude", None)
 
     def test_include_excluded(self) -> None:
-        """include 目录（C 头文件）始终剥离。."""
+        """include 目录（C 头文件）始终剥离."""
         assert classify_entry("PySide2/include/QtGui/qguiapplication.h", "PySide2") == ("exclude", None)
 
     def test_resources_no_dep_excluded(self) -> None:
-        """resources 目录无 WebEngine 依赖时剥离。."""
+        """resources 目录无 WebEngine 依赖时剥离."""
         assert classify_entry("PySide2/resources/icudtl.dat", "PySide2") == ("exclude", None)
 
     def test_resources_with_dep_kept(self) -> None:
-        """resources 目录有 WebEngine 依赖时保留。."""
+        """resources 目录有 WebEngine 依赖时保留."""
         result = classify_entry("PySide2/resources/icudtl.dat", "PySide2", {"WebEngineCore"})
         assert result == ("shared", None)
 
     def test_qml_no_dep_excluded(self) -> None:
-        """qml 目录无 Qml/Quick 依赖时剥离。."""
+        """qml 目录无 Qml/Quick 依赖时剥离."""
         assert classify_entry("PySide2/qml/QtQuick.2/qmldir", "PySide2") == ("exclude", None)
 
     def test_qml_with_dep_kept(self) -> None:
-        """qml 目录有 Quick 依赖时保留。."""
+        """qml 目录有 Quick 依赖时保留."""
         result = classify_entry("PySide2/qml/QtQuick.2/qmldir", "PySide2", {"Quick"})
         assert result == ("shared", None)
 
@@ -125,13 +125,13 @@ class TestClassifyEntry:
         assert classify_entry("PySide2/py.typed", "PySide2") == ("shared", None)
 
     def test_non_qt_pyd(self) -> None:
-        """非 Qt 库的 .pyd 按原始文件名归类（不归一化）。."""
+        """非 Qt 库的 .pyd 按原始文件名归类（不归一化）."""
         assert classify_entry("numpy/_core/multiarray.pyd", "numpy") == ("shared", None)
         assert classify_entry("mypkg/core.pyd", "mypkg") == ("submodule", "core")
 
 
 class TestQtModuleClosure:
-    """Qt 模块依赖闭包计算（归一化名）。."""
+    """Qt 模块依赖闭包计算（归一化名）."""
 
     def test_core_only(self) -> None:
         from fspack.slim import _qt_module_closure
@@ -139,20 +139,20 @@ class TestQtModuleClosure:
         assert _qt_module_closure({"Core"}) == {"Core"}
 
     def test_widgets_closure(self) -> None:
-        """QtWidgets → Gui → Core（C 层链接依赖链）。."""
+        """QtWidgets → Gui → Core（C 层链接依赖链）."""
         from fspack.slim import _qt_module_closure
 
         assert _qt_module_closure({"Widgets"}) == {"Widgets", "Gui", "Core"}
 
     def test_quick_transitive(self) -> None:
-        """QtQuick → QtQml → QtNetwork → QtCore + QtGui。."""
+        """QtQuick → QtQml → QtNetwork → QtCore + QtGui."""
         from fspack.slim import _qt_module_closure
 
         result = _qt_module_closure({"Quick"})
         assert {"Quick", "Qml", "Network", "Gui", "Core"}.issubset(result)
 
     def test_qt3d_extras_transitive(self) -> None:
-        """Qt3DExtras 闭包含 3DRender/3DInput/3DLogic/3DCore/Core/Gui/Network。."""
+        """Qt3DExtras 闭包含 3DRender/3DInput/3DLogic/3DCore/Core/Gui/Network."""
         from fspack.slim import _qt_module_closure
 
         result = _qt_module_closure({"3DExtras"})
@@ -168,13 +168,13 @@ class TestQtModuleClosure:
         }
 
     def test_unknown_module_kept(self) -> None:
-        """未知模块名原样保留，不触发额外依赖推导。."""
+        """未知模块名原样保留，不触发额外依赖推导."""
         from fspack.slim import _qt_module_closure
 
         assert _qt_module_closure({"UnknownMod"}) == {"UnknownMod"}
 
     def test_mixed_known_unknown(self) -> None:
-        """已知与未知模块混合时，已知模块触发闭包，未知模块原样保留。."""
+        """已知与未知模块混合时，已知模块触发闭包，未知模块原样保留."""
         from fspack.slim import _qt_module_closure
 
         result = _qt_module_closure({"Widgets", "Foo"})
@@ -186,7 +186,7 @@ class TestQtModuleClosure:
         assert _qt_module_closure(set()) == set()
 
     def test_idempotent(self) -> None:
-        """闭包计算幂等：对已闭包集合再次计算结果不变。."""
+        """闭包计算幂等：对已闭包集合再次计算结果不变."""
         from fspack.slim import _qt_module_closure
 
         once = _qt_module_closure({"Widgets"})
@@ -195,7 +195,7 @@ class TestQtModuleClosure:
 
 
 class TestQtDllClassification:
-    """Qt5/Qt6*.dll 文件名与 Qt 子模块名归一化。."""
+    """Qt5/Qt6*.dll 文件名与 Qt 子模块名归一化."""
 
     def test_qt5core_to_core(self) -> None:
         from fspack.slim import _qt_dll_submodule
@@ -208,7 +208,7 @@ class TestQtDllClassification:
         assert _qt_dll_submodule("Qt6Widgets") == "Widgets"
 
     def test_qt5_3d_animation(self) -> None:
-        """Qt53DAnimation.dll → 3DAnimation（去掉 5 后保留 3DAnimation）。."""
+        """Qt53DAnimation.dll → 3DAnimation（去掉 5 后保留 3DAnimation）."""
         from fspack.slim import _qt_dll_submodule
 
         assert _qt_dll_submodule("Qt53DAnimation") == "3DAnimation"
@@ -228,13 +228,13 @@ class TestQtDllClassification:
         assert _normalize_qt_sub("Qt6Core") == "Core"
 
     def test_normalize_qt3dcore(self) -> None:
-        """Qt3DCore 归一化为 3DCore。."""
+        """Qt3DCore 归一化为 3DCore."""
         from fspack.slim import _normalize_qt_sub
 
         assert _normalize_qt_sub("Qt3DCore") == "3DCore"
 
     def test_normalize_non_qt(self) -> None:
-        """非 Qt 前缀原样返回。."""
+        """非 Qt 前缀原样返回."""
         from fspack.slim import _normalize_qt_sub
 
         assert _normalize_qt_sub("requests") == "requests"
@@ -242,14 +242,14 @@ class TestQtDllClassification:
 
 
 def _make_wheel(whl: Path, entries: dict[str, bytes]) -> None:
-    """构造测试用 wheel 文件。."""
+    """构造测试用 wheel 文件."""
     with zipfile.ZipFile(whl, "w") as zf:
         for name, content in entries.items():
             zf.writestr(name, content)
 
 
 class TestSlimUnpack:
-    """按需解压 wheel。."""
+    """按需解压 wheel."""
 
     def test_selective_unpack(self, tmp_path: Path) -> None:
         whl = tmp_path / "wh" / "PySide2-5.15.2.1-cp39-none-win_amd64.whl"
@@ -377,7 +377,7 @@ class TestSlimUnpack:
             slim_unpack([whl], dest, {"PySide2": frozenset({"QtCore"})})
 
     def test_no_matching_pkg_full_unpack(self, tmp_path: Path) -> None:
-        """submodule_usage 有 numpy 但 wheel 是 PySide2 → 全量解压。."""
+        """submodule_usage 有 numpy 但 wheel 是 PySide2 → 全量解压."""
         whl = tmp_path / "wh" / "PySide2-5.15.2.1-cp39-none-win_amd64.whl"
         whl.parent.mkdir()
         _make_wheel(whl, {"PySide2/QtGui.pyd": b"gui"})
@@ -387,7 +387,7 @@ class TestSlimUnpack:
         assert (dest / "PySide2" / "QtGui.pyd").is_file()
 
     def test_full_unpack_bad_zip_no_usage(self, tmp_path: Path) -> None:
-        """无 submodule_usage 时坏 zip 走 _full_unpack 路径抛错。."""
+        """无 submodule_usage 时坏 zip 走 _full_unpack 路径抛错."""
         whl = tmp_path / "wh" / "PySide2-5.15.2.1-cp39-none-win_amd64.whl"
         whl.parent.mkdir()
         whl.write_bytes(b"not a zip")
@@ -395,7 +395,7 @@ class TestSlimUnpack:
             slim_unpack([whl], tmp_path / "sp")
 
     def test_slim_extract_with_dir_entries(self, tmp_path: Path) -> None:
-        """wheel 含目录条目时正确提取目录与文件。."""
+        """wheel 含目录条目时正确提取目录与文件."""
         whl = tmp_path / "wh" / "PySide2-5.15.2.1-cp39-none-win_amd64.whl"
         whl.parent.mkdir()
         with zipfile.ZipFile(whl, "w") as zf:
@@ -410,7 +410,7 @@ class TestSlimUnpack:
         assert (dest / "PySide2" / "plugins" / "platforms" / "qwindows.dll").is_file()
 
     def test_slim_extract_no_skip(self, tmp_path: Path) -> None:
-        """所有子模块都在保留集合中时不跳过任何文件。."""
+        """所有子模块都在保留集合中时不跳过任何文件."""
         whl = tmp_path / "wh" / "PySide2-5.15.2.1-cp39-none-win_amd64.whl"
         whl.parent.mkdir()
         _make_wheel(whl, {"PySide2/QtCore.pyd": b"core", "PySide2/QtGui.pyd": b"gui"})
@@ -421,7 +421,7 @@ class TestSlimUnpack:
         assert (dest / "PySide2" / "QtGui.pyd").is_file()
 
     def test_detect_top_pkg_skips_non_matching(self, tmp_path: Path) -> None:
-        """_detect_top_pkg 跳过不匹配的顶层目录后找到匹配项。."""
+        """_detect_top_pkg 跳过不匹配的顶层目录后找到匹配项."""
         whl = tmp_path / "wh" / "PySide2-5.15.2.1-cp39-none-win_amd64.whl"
         whl.parent.mkdir()
         with zipfile.ZipFile(whl, "w") as zf:
@@ -434,7 +434,7 @@ class TestSlimUnpack:
         assert (dest / "PySide2" / "QtCore.pyd").is_file()
 
     def test_detect_top_pkg_no_match_full_unpack(self, tmp_path: Path) -> None:
-        """wheel 顶层目录与包名不匹配时全量解压。."""
+        """wheel 顶层目录与包名不匹配时全量解压."""
         whl = tmp_path / "wh" / "numpy-1.0-cp39-none-win_amd64.whl"
         whl.parent.mkdir()
         _make_wheel(whl, {"different_pkg/core.pyd": b"core"})
@@ -444,7 +444,7 @@ class TestSlimUnpack:
         assert (dest / "different_pkg" / "core.pyd").is_file()
 
     def test_keep_module_without_dot_skipped(self, tmp_path: Path) -> None:
-        """keep_modules 中无 '.' 的条目被跳过，走全量解压。."""
+        """keep_modules 中无 '.' 的条目被跳过，走全量解压."""
         whl = tmp_path / "wh" / "PySide2-5.15.2.1-cp39-none-win_amd64.whl"
         whl.parent.mkdir()
         _make_wheel(whl, {"PySide2/QtGui.pyd": b"gui"})
@@ -454,7 +454,7 @@ class TestSlimUnpack:
         assert (dest / "PySide2" / "QtGui.pyd").is_file()
 
     def test_slim_extract_bad_zip(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """_slim_extract 遇到坏 zip 抛 DependencyError。."""
+        """_slim_extract 遇到坏 zip 抛 DependencyError."""
         whl = tmp_path / "wh" / "PySide2-5.15.2.1-cp39-none-win_amd64.whl"
         whl.parent.mkdir()
         _make_wheel(whl, {"PySide2/QtCore.pyd": b"core"})
@@ -472,7 +472,7 @@ class TestSlimUnpack:
             slim_unpack([whl], tmp_path / "sp", {"PySide2": frozenset({"QtCore"})})
 
     def test_qt_multimedia_dynamic_expansion(self, tmp_path: Path) -> None:
-        """import PySide2.QtMultimedia 时联动保留 mediaservice plugins 与 Qt5Multimedia.dll。."""
+        """import PySide2.QtMultimedia 时联动保留 mediaservice plugins 与 Qt5Multimedia.dll."""
         whl = tmp_path / "wh" / "PySide2-5.15.2.1-cp39-none-win_amd64.whl"
         whl.parent.mkdir()
         _make_wheel(
@@ -520,7 +520,7 @@ class TestSlimUnpack:
         assert (dest / "PySide2-5.15.2.1.dist-info" / "METADATA").is_file()
 
     def test_qt_webengine_dynamic_expansion(self, tmp_path: Path) -> None:
-        """import PySide2.QtWebEngineWidgets 时联动保留 resources 与 qtwebengine plugins。."""
+        """import PySide2.QtWebEngineWidgets 时联动保留 resources 与 qtwebengine plugins."""
         whl = tmp_path / "wh" / "PySide2-5.15.2.1-cp39-none-win_amd64.whl"
         whl.parent.mkdir()
         _make_wheel(
@@ -556,7 +556,7 @@ class TestSlimUnpack:
         assert not (dest / "PySide2" / "translations" / "qtbase_ar.qm").exists()
 
     def test_qt_qml_dynamic_expansion(self, tmp_path: Path) -> None:
-        """import PySide2.QtQml 与 PySide2.QtQuick 时保留 qml 目录与 scenegraph plugins。."""
+        """import PySide2.QtQml 与 PySide2.QtQuick 时保留 qml 目录与 scenegraph plugins."""
         whl = tmp_path / "wh" / "PySide2-5.15.2.1-cp39-none-win_amd64.whl"
         whl.parent.mkdir()
         _make_wheel(

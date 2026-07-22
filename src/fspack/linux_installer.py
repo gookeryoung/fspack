@@ -1,4 +1,4 @@
-"""Linux 安装包生成：tar.gz 便携包 + .deb 安装包。."""
+"""Linux 安装包生成：tar.gz 便携包 + .deb 安装包."""
 
 from __future__ import annotations
 
@@ -94,7 +94,7 @@ def build_linux_installer(
     no_build: bool = False,
     dist_dir: Path | None = None,
 ) -> Path:
-    """编排：可选 build → tar.gz 便携包 → .deb 安装包，返回 .deb 路径。."""
+    """编排：可选 build → tar.gz 便携包 → .deb 安装包，返回 .deb 路径."""
     project_dir = Path(project_dir).resolve()
     dist = dist_dir or project_dir / "dist"
     if no_build:

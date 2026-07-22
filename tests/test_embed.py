@@ -1,4 +1,4 @@
-"""embed python 下载/解压/_pth 测试。."""
+"""embed python 下载/解压/_pth 测试."""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ def test_download_embed_cache_hit(tmp_path: Path) -> None:
 
 
 class _FakeResp:
-    """支持分块 read(n) 的 urlopen 响应 mock。."""
+    """支持分块 read(n) 的 urlopen 响应 mock."""
 
     def __init__(self, data: bytes, block_size: int = 64) -> None:
         self._buf = io.BytesIO(data)
@@ -79,7 +79,7 @@ def test_download_embed_network_error(tmp_path: Path, monkeypatch: pytest.Monkey
 
 
 def test_download_embed_cache_hit_calls_stage(tmp_path: Path) -> None:
-    """缓存命中时调 stage.hit_cache()。."""
+    """缓存命中时调 stage.hit_cache()."""
     cache = tmp_path / "cache"
     cache.mkdir()
     (cache / "python-3.11.9-embed-amd64.zip").write_bytes(b"old")
@@ -91,7 +91,7 @@ def test_download_embed_cache_hit_calls_stage(tmp_path: Path) -> None:
 
 
 def test_download_embed_fetches_records_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """下载成功时 stage.add_bytes 被调用。."""
+    """下载成功时 stage.add_bytes 被调用."""
     monkeypatch.setattr(
         "fspack.progress.urllib.request.urlopen",
         lambda req, timeout, **kw: _FakeResp(b"ZIPDATA"),

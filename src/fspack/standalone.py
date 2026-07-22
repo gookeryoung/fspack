@@ -1,4 +1,4 @@
-"""python-build-standalone 便携式 CPython 下载与解压（Linux 运行时）。."""
+"""python-build-standalone 便携式 CPython 下载与解压（Linux 运行时）."""
 
 from __future__ import annotations
 
@@ -26,12 +26,12 @@ STANDALONE_RELEASE_TAG = "20241016"
 
 
 def standalone_tarball_name(version: str, release_tag: str) -> str:
-    """返回 python-build-standalone tarball 文件名。."""
+    """返回 python-build-standalone tarball 文件名."""
     return f"cpython-{version}+{release_tag}-x86_64-unknown-linux-gnu-install_only.tar.gz"
 
 
 def standalone_url(version: str, release_tag: str) -> str:
-    """返回完整下载 URL。."""
+    """返回完整下载 URL."""
     return f"{STANDALONE_BASE_URL}/{release_tag}/{standalone_tarball_name(version, release_tag)}"
 
 
@@ -71,7 +71,7 @@ def download_standalone(
 
 
 def extract_standalone(tar_path: Path, runtime_dir: Path) -> None:
-    """解压 tar.gz 到 runtime_dir，解压后 runtime_dir/python/ 为 Python 根目录。."""
+    """解压 tar.gz 到 runtime_dir，解压后 runtime_dir/python/ 为 Python 根目录."""
     runtime_dir.mkdir(parents=True, exist_ok=True)
     try:
         with tarfile.open(tar_path, "r:gz") as tf:

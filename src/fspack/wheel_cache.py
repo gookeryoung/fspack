@@ -1,4 +1,4 @@
-"""Wheel 缓存：fspack 自有缓存目录的 wheel 文件名解析工具。."""
+"""Wheel 缓存：fspack 自有缓存目录的 wheel 文件名解析工具."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ _WHEEL_RE = re.compile(
 
 @dataclass(frozen=True)
 class WheelInfo:
-    """解析后的 wheel 元信息。."""
+    """解析后的 wheel 元信息."""
 
     name: str
     version: str
@@ -33,7 +33,7 @@ class WheelInfo:
 
     @classmethod
     def from_filename(cls, filename: str) -> WheelInfo | None:
-        """从 wheel 文件名构造实例，无法解析返回 None。."""
+        """从 wheel 文件名构造实例，无法解析返回 None."""
         m = _WHEEL_RE.match(filename)
         if m is None:
             return None
@@ -47,7 +47,7 @@ class WheelInfo:
 
 
 def normalize_name(name: str) -> str:
-    """PEP 503 名称归一化：小写，连续的 ``-_.`` 合并为 ``-``。."""
+    """PEP 503 名称归一化：小写，连续的 ``-_.`` 合并为 ``-``."""
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
@@ -60,5 +60,5 @@ def parse_wheel_filename(filename: str) -> WheelInfo | None:
 
 
 def fspack_wheel_cache_dir() -> Path:
-    """返回 fspack wheel 缓存目录 ``~/.fspack/cache/wheels/``。."""
+    """返回 fspack wheel 缓存目录 ``~/.fspack/cache/wheels/``."""
     return Path.home() / ".fspack" / "cache" / "wheels"

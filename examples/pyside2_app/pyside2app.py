@@ -17,7 +17,7 @@ from pathlib import Path
 
 
 def main() -> None:
-    """创建 QApplication 显示窗口，并验证 QtMultimedia 可用。."""
+    """创建 QApplication 显示窗口，并验证 QtMultimedia 可用."""
     import PySide2
 
     # Windows 默认不搜索 .pyd 所在目录的依赖 DLL，需注册 Qt5*.dll 所在目录

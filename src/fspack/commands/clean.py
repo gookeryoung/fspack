@@ -1,4 +1,4 @@
-"""fsp c —— 清理 dist/，保留 installer.nsi 便于改代码后重新打包分发。."""
+"""fsp c —— 清理 dist/，保留 installer.nsi 便于改代码后重新打包分发."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ _KEEP_NSI = "installer.nsi"
 
 
 def run(project: Path) -> None:
-    """清理项目下的 dist 目录，保留 installer.nsi 便于重新打包分发。."""
+    """清理项目下的 dist 目录，保留 installer.nsi 便于重新打包分发."""
     dist = Path(project) / "dist"
     if not dist.is_dir():
         _logger.info("无 dist 目录可清理: %s", dist)

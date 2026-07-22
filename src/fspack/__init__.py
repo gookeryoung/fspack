@@ -1,4 +1,4 @@
-"""fspack - 极速 Python 项目打包器。."""
+"""fspack - 极速 Python 项目打包器."""
 
 from __future__ import annotations
 

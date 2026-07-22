@@ -1,4 +1,4 @@
-"""fsp b —— 打包项目。."""
+"""fsp b —— 打包项目."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ def run(  # noqa: PLR0913
     keep_modules: set[str] | None = None,
     icon: Path | None = None,
 ) -> None:
-    """执行项目构建。."""
+    """执行项目构建."""
     mirror_cfg = get_mirror(mirror)
     resolved_target = target or detect_platform()
     build(project, mirror_cfg, py_version, target=resolved_target, keep_modules=keep_modules, icon=icon)

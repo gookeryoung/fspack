@@ -1,4 +1,4 @@
-"""cli 子命令分发测试。."""
+"""cli 子命令分发测试."""
 
 from __future__ import annotations
 
@@ -128,7 +128,7 @@ def test_build_keep_module_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
 
 def test_build_icon_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """`fspack b <project> --icon <path>` 解析为绝对路径并传递给 build_cmd.run。."""
+    """`fspack b <project> --icon <path>` 解析为绝对路径并传递给 build_cmd.run."""
     called: dict[str, Any] = {}
 
     def fake_run(  # noqa: PLR0913
@@ -149,7 +149,7 @@ def test_build_icon_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_build_no_icon_passes_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """未指定 --icon 时传递 None（由 builder 回退到默认 app.ico）。."""
+    """未指定 --icon 时传递 None（由 builder 回退到默认 app.ico）."""
     called: dict[str, Any] = {}
 
     def fake_run(  # noqa: PLR0913
@@ -212,7 +212,7 @@ def test_run_debug_flag_after_project(tmp_path: Path, monkeypatch: pytest.Monkey
 
 
 def test_run_entry_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """`fspack r <project> --entry cli` 解析 entry 参数。."""
+    """`fspack r <project> --entry cli` 解析 entry 参数."""
     called: dict[str, Any] = {}
 
     def fake_run(
