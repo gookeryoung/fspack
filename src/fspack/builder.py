@@ -279,6 +279,139 @@ def _find_pip_python() -> str:
     raise DependencyError("未找到可用的 pip，请在当前 venv 执行 `uv pip install pip`，或在系统安装 python3-pip 包")
 
 
+def _find_uv() -> str | None:
+    """查找 ``uv`` 可执行文件，未找到返回 ``None``。
+
+    用于在线依赖解析（``uv pip compile``），避免 pip 的 backtracking resolver
+    在复杂依赖图上报 ``resolution-too-deep``。uv 用 PubGrub 算法，能高效解析。
+    """
+    return shutil.which("uv")
+
+
+# uv pip compile 输出中匹配 ``name==version`` 的行（忽略注释/空行）
+_UV_RESOLVED_LINE_RE = re.compile(r"^([A-Za-z0-9_.-]+)==([A-Za-z0-9_.!+*-]+)")
+
+
+def _resolve_with_uv(
+    packages: Sequence[str],
+    py_version: str,
+    platform_tags: Sequence[str],
+    pypi_index: str,
+) -> list[str]:
+    """用 ``uv pip compile`` 解析依赖图，返回精确版本需求列表。
+
+    uv 用 PubGrub 算法（SAT solver 系），能解析 pip backtracking resolver
+    无法处理的复杂依赖图（避免 ``resolution-too-deep``）。解析结果为
+    ``name==version`` 列表，供 ``pip download --no-deps`` 逐个下载。
+
+    ``--python-version``/``--python-platform`` 让 uv 按目标环境解析；
+    ``--no-header`` 去除注释头部，便于解析。输出经 stdout 捕获后逐行提取
+    ``name==version`` 对。
+    """
+    uv = _find_uv()
+    if uv is None:
+        raise DependencyError("未找到 uv，无法执行在线依赖解析")
+    major, minor = py_version.split(".")[:2]
+    # uv 的 --python-platform 只有 windows/linux/mac 粗粒度
+    py_platform = "windows" if any("win" in t for t in platform_tags) else "linux"
+    cmd: list[str] = [
+        uv,
+        "pip",
+        "compile",
+        "--python-version",
+        f"{major}.{minor}",
+        "--python-platform",
+        py_platform,
+        "--no-header",
+        "--index-url",
+        pypi_index,
+        "-",
+    ]
+    # uv pip compile 从 stdin 读取需求列表
+    stdin_data = "\n".join(packages) + "\n"
+    _logger.info("uv pip compile 解析依赖图: %s", " ".join(packages))
+    result = subprocess.run(cmd, input=stdin_data, check=True, capture_output=True, text=True)
+    resolved: list[str] = []
+    for line in result.stdout.splitlines():
+        m = _UV_RESOLVED_LINE_RE.match(line.strip())
+        if m:
+            resolved.append(f"{m.group(1)}=={m.group(2)}")
+    if not resolved:
+        raise DependencyError(f"uv pip compile 未解析出任何依赖:\n{result.stderr}")
+    _logger.info("uv 解析出 %d 个依赖（含传递依赖）", len(resolved))
+    return resolved
+
+
+def _download_online(  # noqa: PLR0913
+    filtered: list[str],
+    base_args: list[str],
+    py: str,
+    py_version: str,
+    platform_tags: Sequence[str],
+    pypi_index: str,
+    cache_dir: Path,
+) -> subprocess.CompletedProcess[str]:
+    """在线解析并下载依赖 wheel。
+
+    优先用 ``uv pip compile`` 解析依赖图（PubGrub 算法，避免 pip 的
+    ``resolution-too-deep``），再用 ``pip download --no-deps`` 逐个下载已解析
+    的精确版本 wheel（不触发 pip 的 resolver）。``--progress-bar on`` 强制
+    pip 输出进度条到 stderr（即使被管道捕获），通过 ``_stream_subprocess``
+    实时流式输出到终端。
+
+    uv 不可用或解析失败时回退到 ``pip download`` 完整解析+下载（stream=True），
+    保留 sdist 回退（``pip wheel --no-deps`` 从 sdist 构建纯 Python wheel）。
+    """
+    # 尝试用 uv 解析依赖图
+    resolved: list[str] | None = None
+    if _find_uv() is not None:
+        try:
+            resolved = _resolve_with_uv(filtered, py_version, platform_tags, pypi_index)
+        except (DependencyError, subprocess.CalledProcessError) as e:
+            _logger.warning("uv 解析失败，回退到 pip 完整解析: %s", e)
+
+    if resolved is not None:
+        # uv 解析成功：用 pip download --no-deps 逐个下载已解析的精确版本
+        # --progress-bar on 强制显示进度条（即使 stderr 被管道捕获）
+        _logger.info("用 pip download --no-deps 下载 %d 个已解析依赖", len(resolved))
+        req_file = cache_dir / ".requirements-resolved.txt"
+        req_file.write_text("\n".join(resolved) + "\n", encoding="utf-8")
+        try:
+            result = _run_pip(
+                [*base_args, "--no-deps", "--progress-bar", "on", "-r", str(req_file)],
+                f"pip download {len(resolved)} 个已解析依赖",
+                stream=True,
+            )
+            assert result is not None  # suppress_error=False，不会返回 None
+            return result
+        finally:
+            req_file.unlink(missing_ok=True)
+
+    # uv 不可用或解析失败：回退到 pip 完整解析+下载
+    try:
+        result = _run_pip(
+            [*base_args, "-i", pypi_index, *filtered],
+            f"pip download {len(filtered)} 个依赖",
+            stream=True,
+        )
+        assert result is not None  # suppress_error=False，不会返回 None
+        return result
+    except DependencyError as e:
+        # sdist 回退：解析无 wheel 的包，用 pip wheel 从 sdist 构建后重试
+        missing = _parse_missing_packages(str(e))
+        if not missing:
+            raise
+        _logger.info("尝试用 pip wheel 构建无 wheel 的包: %s", ", ".join(missing))
+        _build_sdist_wheels(missing, py, pypi_index, cache_dir)
+        result = _run_pip(
+            [*base_args, "-i", pypi_index, *filtered],
+            f"pip download 重试 {len(filtered)} 个依赖",
+            stream=True,
+        )
+        assert result is not None  # suppress_error=False，不会返回 None
+        return result
+
+
 # 匹配 pip download stderr 中的 "Could not find a version that satisfies the requirement <pkg>"
 _MISSING_PKG_RE = re.compile(r"Could not find a version that satisfies the requirement (.+?) \(from versions:")
 
@@ -380,7 +513,7 @@ def _build_sdist_wheels(packages: list[str], py: str, pypi_index: str, cache_dir
             raise DependencyError(f"未找到 pip: {cmd[0]}") from e
 
 
-def download_wheels(  # noqa: PLR0912, PLR0913
+def download_wheels(  # noqa: PLR0913
     packages: tuple[str, ...] | list[str],
     py_version: str,
     pypi_index: str,
@@ -463,29 +596,12 @@ def download_wheels(  # noqa: PLR0912, PLR0913
     _logger.info("下载依赖 wheel: %s", " ".join(filtered))
     before = {f.name for f in cache_dir.glob("*.whl")}
 
-    # 先用 --no-index 从本地缓存解析，命中则跳过网络查询；
-    # 缓存不完整或条件依赖未满足时回退到带 index 的完整下载
+    # 先用 --no-index 从本地缓存解析（离线模式），命中则跳过网络查询；
+    # 缓存不完整或条件依赖未满足时回退到在线解析+下载
     result = _run_pip([*base_args, "--no-index", *filtered], f"检查缓存 {len(filtered)} 个依赖", suppress_error=True)
     if result is None:
-        _logger.info("缓存解析失败，回退到索引下载")
-        try:
-            result = _run_pip(
-                [*base_args, "-i", pypi_index, *filtered],
-                f"pip download {len(filtered)} 个依赖",
-                stream=True,
-            )
-        except DependencyError as e:
-            # sdist 回退：解析无 wheel 的包，用 pip wheel 从 sdist 构建后重试
-            missing = _parse_missing_packages(str(e))
-            if not missing:
-                raise
-            _logger.info("尝试用 pip wheel 构建无 wheel 的包: %s", ", ".join(missing))
-            _build_sdist_wheels(missing, py, pypi_index, cache_dir)
-            result = _run_pip(
-                [*base_args, "-i", pypi_index, *filtered],
-                f"pip download 重试 {len(filtered)} 个依赖",
-                stream=True,
-            )
+        _logger.info("缓存解析失败，回退到在线解析下载")
+        result = _download_online(filtered, base_args, py, py_version, platform_tags, pypi_index, cache_dir)
     else:
         _logger.info("缓存解析成功，跳过网络查询")
     assert result is not None  # 回退路径 suppress_error=False，要么返回结果要么抛异常

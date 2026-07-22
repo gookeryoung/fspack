@@ -16,13 +16,16 @@ from fspack.builder import (
     _PIP_PYTHON_NAMES,
     _build_sdist_wheels,
     _deps_cache_key,
+    _download_online,
     _eval_python_version_marker,
     _eval_single_marker,
     _filter_by_python_version,
     _find_pip_python,
+    _find_uv,
     _load_deps_cache,
     _parse_missing_packages,
     _parse_pip_download_wheels,
+    _resolve_with_uv,
     _run_pip,
     _save_deps_cache,
     _site_packages_has_deps,
@@ -101,7 +104,7 @@ def test_download_wheels_cmd_construction(tmp_path: Path, monkeypatch: pytest.Mo
 
 
 def test_download_wheels_fallback_cmd_has_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """--no-index 失败时回退到带 -i index 的命令。."""
+    """--no-index 失败且 uv 不可用时回退到带 -i index 的命令。."""
     calls: list[list[str]] = []
 
     def fake_run(cmd: list[str], **kw: Any) -> _Completed:
@@ -116,6 +119,7 @@ def test_download_wheels_fallback_cmd_has_index(tmp_path: Path, monkeypatch: pyt
     monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
     monkeypatch.setattr("fspack.builder._stream_subprocess", fake_stream)
     monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
+    monkeypatch.setattr("fspack.builder._find_uv", lambda: None)
     download_wheels(("numpy",), "3.11.9", "https://idx/simple", tmp_path / "cache")
     assert len(calls) == 2
     assert "--no-index" in calls[0]
@@ -185,6 +189,7 @@ def test_download_wheels_pip_error(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
     monkeypatch.setattr("fspack.builder._stream_subprocess", fake_stream)
     monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
+    monkeypatch.setattr("fspack.builder._find_uv", lambda: None)
     with pytest.raises(DependencyError, match="依赖下载失败"):
         download_wheels(("numpy",), "3.11.9", "https://idx", tmp_path / "cache")
 
@@ -1346,6 +1351,7 @@ def test_download_wheels_sdist_fallback_retry(tmp_path: Path, monkeypatch: pytes
     monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
     monkeypatch.setattr("fspack.builder._stream_subprocess", fake_stream)
     monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
+    monkeypatch.setattr("fspack.builder._find_uv", lambda: None)
     result = download_wheels(("odfpy>=1.4.1",), "3.8.10", "https://idx/simple", cache)
     assert call_count["index_download"] == 2
     assert call_count["pip_wheel"] == 1
@@ -1367,8 +1373,234 @@ def test_download_wheels_sdist_fallback_no_missing_reraises(tmp_path: Path, monk
     monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
     monkeypatch.setattr("fspack.builder._stream_subprocess", fake_stream)
     monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
+    monkeypatch.setattr("fspack.builder._find_uv", lambda: None)
     with pytest.raises(DependencyError, match="依赖下载失败"):
         download_wheels(("numpy",), "3.8.10", "https://idx/simple", tmp_path / "cache")
+
+
+# ---------- _find_uv / _resolve_with_uv / _download_online ----------
+
+
+def test_find_uv_returns_path_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    """uv 可用时返回路径。."""
+    monkeypatch.setattr("fspack.builder.shutil.which", lambda name: "/usr/local/bin/uv")
+    assert _find_uv() == "/usr/local/bin/uv"
+
+
+def test_find_uv_returns_none_when_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    """uv 不可用时返回 None。."""
+    monkeypatch.setattr("fspack.builder.shutil.which", lambda name: None)
+    assert _find_uv() is None
+
+
+def test_resolve_with_uv_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    """uv pip compile 成功时返回 name==version 列表。."""
+    monkeypatch.setattr("fspack.builder._find_uv", lambda: "/usr/bin/uv")
+    # uv pip compile 输出格式：每行 "name==version"，含注释行（# 开头）
+    fake_output = "numpy==1.24.0\n  # via -r -\nrequests==2.31.0\n  # via -r -\n"
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+        captured["cmd"] = cmd
+        captured["input"] = kw.get("input")
+        return subprocess.CompletedProcess(cmd, 0, stdout=fake_output, stderr="")
+
+    monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
+    result = _resolve_with_uv(("numpy>=1.0", "requests"), "3.11.9", ("win_amd64",), "https://idx/simple")
+    assert result == ["numpy==1.24.0", "requests==2.31.0"]
+    # 验证命令含 uv pip compile 和目标参数
+    assert "pip" in captured["cmd"]
+    assert "compile" in captured["cmd"]
+    assert "--python-version" in captured["cmd"]
+    assert "3.11" in captured["cmd"]
+    assert "--python-platform" in captured["cmd"]
+    assert "windows" in captured["cmd"]
+    assert "--index-url" in captured["cmd"]
+    # stdin 传入需求列表
+    assert "numpy>=1.0" in captured["input"]
+    assert "requests" in captured["input"]
+
+
+def test_resolve_with_uv_linux_platform(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Linux 平台标签映射到 --python-platform linux。."""
+    monkeypatch.setattr("fspack.builder._find_uv", lambda: "/usr/bin/uv")
+    captured: dict[str, list[str]] = {}
+
+    def fake_run(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, stdout="pkg==1.0\n", stderr="")
+
+    monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
+    _resolve_with_uv(("pkg",), "3.11.9", ("manylinux2014_x86_64",), "https://idx/simple")
+    assert "linux" in captured["cmd"]
+
+
+def test_resolve_with_uv_no_uv_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """uv 不可用时抛 DependencyError。."""
+    monkeypatch.setattr("fspack.builder._find_uv", lambda: None)
+    with pytest.raises(DependencyError, match="未找到 uv"):
+        _resolve_with_uv(("numpy",), "3.11.9", ("win_amd64",), "https://idx/simple")
+
+
+def test_resolve_with_uv_empty_output_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """uv 输出无匹配行时抛 DependencyError。."""
+    monkeypatch.setattr("fspack.builder._find_uv", lambda: "/usr/bin/uv")
+
+    def fake_run(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(cmd, 0, stdout="only comments\n# no packages\n", stderr="")
+
+    monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
+    with pytest.raises(DependencyError, match="未解析出任何依赖"):
+        _resolve_with_uv(("numpy",), "3.11.9", ("win_amd64",), "https://idx/simple")
+
+
+def test_resolve_with_uv_calledprocess_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """uv pip compile 非零退出时抛 CalledProcessError（供 _download_online 捕获回退）。."""
+    monkeypatch.setattr("fspack.builder._find_uv", lambda: "/usr/bin/uv")
+
+    def fake_run(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+        raise subprocess.CalledProcessError(1, cmd, output="", stderr="resolution failed")
+
+    monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
+    with pytest.raises(subprocess.CalledProcessError):
+        _resolve_with_uv(("numpy",), "3.11.9", ("win_amd64",), "https://idx/simple")
+
+
+def test_download_online_uv_resolved_uses_no_deps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """uv 解析成功时用 pip download --no-deps -r 下载，含 --progress-bar on。."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setattr("fspack.builder._find_uv", lambda: "/usr/bin/uv")
+    monkeypatch.setattr(
+        "fspack.builder._resolve_with_uv",
+        lambda pkgs, pv, pt, idx: ["numpy==1.24.0", "requests==2.31.0"],
+    )
+    captured: dict[str, list[str]] = {}
+
+    def fake_stream(cmd: list[str]) -> _Completed:
+        captured["cmd"] = cmd
+        return _Completed()
+
+    monkeypatch.setattr("fspack.builder._stream_subprocess", fake_stream)
+    base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
+    _download_online(["numpy>=1.0"], base_args, "/py/python", "3.11.9", ("win_amd64",), "https://idx/simple", cache)
+    cmd = captured["cmd"]
+    assert "--no-deps" in cmd
+    assert "--progress-bar" in cmd
+    assert "on" in cmd
+    assert "-r" in cmd
+    # 临时 requirements 文件已删除
+    assert not (cache / ".requirements-resolved.txt").exists()
+
+
+def test_download_online_uv_fails_falls_back_to_pip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """uv 解析失败时回退到 pip 完整解析+下载。."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setattr("fspack.builder._find_uv", lambda: "/usr/bin/uv")
+    monkeypatch.setattr(
+        "fspack.builder._resolve_with_uv",
+        lambda pkgs, pv, pt, idx: (_ for _ in ()).throw(subprocess.CalledProcessError(1, "uv", stderr="fail")),
+    )
+    captured: dict[str, list[str]] = {}
+
+    def fake_stream(cmd: list[str]) -> _Completed:
+        captured["cmd"] = cmd
+        return _Completed()
+
+    monkeypatch.setattr("fspack.builder._stream_subprocess", fake_stream)
+    base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
+    _download_online(["numpy"], base_args, "/py/python", "3.11.9", ("win_amd64",), "https://idx/simple", cache)
+    cmd = captured["cmd"]
+    assert "--no-deps" not in cmd
+    assert "-i" in cmd
+    assert "https://idx/simple" in cmd
+
+
+def test_download_online_no_uv_uses_pip_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """uv 不可用时直接用 pip 完整解析+下载。."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setattr("fspack.builder._find_uv", lambda: None)
+    captured: dict[str, list[str]] = {}
+
+    def fake_stream(cmd: list[str]) -> _Completed:
+        captured["cmd"] = cmd
+        return _Completed()
+
+    monkeypatch.setattr("fspack.builder._stream_subprocess", fake_stream)
+    base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
+    _download_online(["numpy"], base_args, "/py/python", "3.11.9", ("win_amd64",), "https://idx/simple", cache)
+    cmd = captured["cmd"]
+    assert "--no-deps" not in cmd
+    assert "-i" in cmd
+    assert "https://idx/simple" in cmd
+
+
+def test_download_online_sdist_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """pip 下载失败且含 missing 包时走 sdist 回退。."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setattr("fspack.builder._find_uv", lambda: None)
+    call_count = {"index_download": 0, "pip_wheel": 0}
+    whl_name = "odfpy-1.4.1-py3-none-any.whl"
+
+    class _Result:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_stream(cmd: list[str]) -> _Result:
+        if "wheel" in cmd and "--no-deps" in cmd:
+            call_count["pip_wheel"] += 1
+            (cache / whl_name).write_bytes(b"odfpy")
+            return _Result()
+        call_count["index_download"] += 1
+        if call_count["index_download"] == 1:
+            raise subprocess.CalledProcessError(
+                1,
+                cmd,
+                stderr="ERROR: Could not find a version that satisfies the requirement odfpy>=1.4.1 (from versions: none)\n"
+                "ERROR: No matching distribution found for odfpy>=1.4.1",
+            )
+        r = _Result()
+        r.stdout = f"Saved {whl_name}\n"
+        return r
+
+    monkeypatch.setattr("fspack.builder._stream_subprocess", fake_stream)
+    base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
+    _download_online(["odfpy>=1.4.1"], base_args, "/py/python", "3.8.10", ("win_amd64",), "https://idx/simple", cache)
+    assert call_count["index_download"] == 2
+    assert call_count["pip_wheel"] == 1
+
+
+def test_download_wheels_uv_path_integration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """download_wheels 集成测试：--no-index 失败 → uv 解析 → pip --no-deps 下载。."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    whl_name = "numpy-1.24.0-cp311-cp311-win_amd64.whl"
+    monkeypatch.setattr("fspack.builder._find_pip_python", lambda: "/py/python")
+    monkeypatch.setattr("fspack.builder._find_uv", lambda: "/usr/bin/uv")
+    monkeypatch.setattr(
+        "fspack.builder._resolve_with_uv",
+        lambda pkgs, pv, pt, idx: ["numpy==1.24.0"],
+    )
+
+    # --no-index 走 subprocess.run 失败，pip --no-deps 走 _stream_subprocess 成功
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        raise subprocess.CalledProcessError(1, cmd, stderr="not in cache")
+
+    def fake_stream(cmd: list[str]) -> _Completed:
+        # pip download --no-deps 下载成功
+        (cache / whl_name).write_bytes(b"numpy")
+        r = _Completed()
+        r.stdout = f"Saved {whl_name}\n"
+        return r
+
+    monkeypatch.setattr("fspack.builder.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.builder._stream_subprocess", fake_stream)
+    result = download_wheels(("numpy>=1.0",), "3.11.9", "https://idx/simple", cache)
+    assert any(p.name == whl_name for p in result)
 
 
 # ---------- _stream_subprocess ----------
