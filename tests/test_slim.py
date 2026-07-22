@@ -471,6 +471,45 @@ class TestSlimUnpack:
         with pytest.raises(DependencyError, match="wheel 损坏"):
             slim_unpack([whl], tmp_path / "sp", {"PySide2": frozenset({"QtCore"})})
 
+    def test_default_unpack_excludes_runtime_dirs(self, tmp_path: Path) -> None:
+        """非 Qt 库的 examples/docs/tests 子目录在精简模式下剥离。."""
+        whl = tmp_path / "wh" / "mypkg-1.0-cp39-none-win_amd64.whl"
+        whl.parent.mkdir()
+        _make_wheel(
+            whl,
+            {
+                "mypkg/__init__.py": b"",
+                "mypkg/core.pyd": b"core",
+                "mypkg/utils.py": b"u",
+                # 非必要子目录 → 剥离
+                "mypkg/examples/demo.py": b"demo",
+                "mypkg/examples/nested/deep.py": b"deep",
+                "mypkg/docs/index.md": b"docs",
+                "mypkg/tests/test_core.py": b"test",
+                "mypkg/testing/helper.py": b"helper",
+                # 运行时子目录 → 保留
+                "mypkg/sub/x.py": b"sub",
+                "mypkg-1.0.dist-info/METADATA": b"meta",
+            },
+        )
+        dest = tmp_path / "sp"
+        # 保留集合非空 → 进入 _slim_extract 路径
+        count = slim_unpack([whl], dest, {"mypkg": frozenset({"core"})})
+        assert count == 1
+        # 保留子模块 .pyd 与顶层文件
+        assert (dest / "mypkg" / "core.pyd").is_file()
+        assert (dest / "mypkg" / "__init__.py").is_file()
+        assert (dest / "mypkg" / "utils.py").is_file()
+        # 运行时子目录保留
+        assert (dest / "mypkg" / "sub" / "x.py").is_file()
+        # 非必要子目录剥离
+        assert not (dest / "mypkg" / "examples").exists()
+        assert not (dest / "mypkg" / "docs").exists()
+        assert not (dest / "mypkg" / "tests").exists()
+        assert not (dest / "mypkg" / "testing").exists()
+        # 元数据保留
+        assert (dest / "mypkg-1.0.dist-info" / "METADATA").is_file()
+
     def test_qt_multimedia_dynamic_expansion(self, tmp_path: Path) -> None:
         """import PySide2.QtMultimedia 时联动保留 mediaservice plugins 与 Qt5Multimedia.dll."""
         whl = tmp_path / "wh" / "PySide2-5.15.2.1-cp39-none-win_amd64.whl"
@@ -653,7 +692,7 @@ class TestDefaultSlimSpec:
         assert DefaultSlimSpec.classify_entry("mypkg/fft.so", "mypkg", set()) == ("submodule", "fft")
 
     def test_classify_subdir_shared(self) -> None:
-        """子目录默认归 shared（不细分子模块）。."""
+        """非剥离子目录归 shared（不细分子模块）。."""
         from fspack.slim.default import DefaultSlimSpec
 
         assert DefaultSlimSpec.classify_entry("numpy/core/multiarray.pyd", "numpy", set()) == (
@@ -661,6 +700,33 @@ class TestDefaultSlimSpec:
             None,
         )
         assert DefaultSlimSpec.classify_entry("mypkg/sub/x.py", "mypkg", set()) == ("shared", None)
+
+    def test_classify_excluded_subdirs(self) -> None:
+        """示例/文档/测试等非必要子目录归 exclude 始终剥离。."""
+        from fspack.slim.default import DefaultSlimSpec
+
+        for subdir in ("examples", "docs", "doc", "tests", "test", "testing"):
+            assert DefaultSlimSpec.classify_entry(f"mypkg/{subdir}/dummy.py", "mypkg", set()) == ("exclude", None), (
+                f"{subdir} 应当剥离"
+            )
+            # 嵌套子目录同样剥离
+            assert DefaultSlimSpec.classify_entry(f"mypkg/{subdir}/nested/deep.py", "mypkg", set()) == (
+                "exclude",
+                None,
+            ), f"{subdir}/nested 应当剥离"
+
+    def test_classify_runtime_subdir_kept(self) -> None:
+        """运行时子目录（如 numpy/core、pandas/io）归 shared 始终保留。."""
+        from fspack.slim.default import DefaultSlimSpec
+
+        assert DefaultSlimSpec.classify_entry("numpy/core/_internal.py", "numpy", set()) == (
+            "shared",
+            None,
+        )
+        assert DefaultSlimSpec.classify_entry("pandas/io/formats.py", "pandas", set()) == (
+            "shared",
+            None,
+        )
 
 
 class TestSlimSpecRegistry:
