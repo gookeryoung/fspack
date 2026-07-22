@@ -31,6 +31,18 @@ _SUBMODULE_EXTS = frozenset({".pyd", ".pyi", ".so"})
 # Qt 库归一化包名集合
 _QT_PACKAGES = frozenset({"pyside2", "pyside6", "pyqt5", "pyqt6"})
 
+# 含 ABI 绑定 DLL（pyside2.abi3.dll/pyside6.abi3.dll）的 Qt 包。
+# 这些绑定层归 shared 始终保留，但其 C 层依赖 Qt5Qml.dll/Qt6Qml.dll（AST 无法发现），
+# 而 Qml 运行时又依赖 Network/Core。这些是 PySide2/PySide6 的基础 C 层依赖，
+# 故对这类包自动把 Qml/Network 加入保留集合，闭包会传递加入 Core。
+# PyQt5/PyQt6 的绑定层（sip）不依赖 Qml/Network，无需处理。
+_QT_ABI_DLL_PACKAGES = frozenset({"pyside2", "pyside6"})
+
+# PySide2/PySide6 的 abi3.dll 基础 C 层依赖子模块（归一化名）。
+# 参考 fspacker 的 PySide2Packer.PATTERNS：基础依赖含 Core/Gui/Widgets/Network/Qml，
+# 其中 Core/Gui/Widgets 由用户 import 触发保留，Network/Qml 是 abi3.dll 的隐式依赖。
+_QT_ABI_DLL_BASE_DEPS = frozenset({"Qml", "Network"})
+
 # Qt 库始终剥离的二级子目录（非必要文件）
 _QT_EXCLUDE_SUBDIRS = frozenset(
     {
@@ -407,6 +419,11 @@ def slim_unpack(  # noqa: PLR0912
     # 用户无需在代码中显式 import PySide2.QtGui/QtCore 或 --keep-module 声明 C 层依赖
     for pkg, subs in merged.items():
         if pkg in _QT_PACKAGES:
+            # PySide2/PySide6 的 abi3.dll（绑定层，shared 始终保留）C 层依赖
+            # Qt5Qml.dll/Qt6Qml.dll 与 Qt5Network.dll/Qt6Network.dll（AST 无法发现），
+            # 故自动加入基础依赖集合，闭包会传递加入 Core
+            if pkg in _QT_ABI_DLL_PACKAGES:
+                subs.update(_QT_ABI_DLL_BASE_DEPS)
             subs.update(_qt_module_closure(subs))
 
     sorted_wheels = sorted(wheels)
