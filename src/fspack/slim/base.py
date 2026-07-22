@@ -181,20 +181,28 @@ def _full_unpack(whl: Path, dest: Path) -> None:
 
 
 def _slim_extract(whl: Path, dest: Path, top_pkg: str, keep_subs: set[str]) -> None:
-    """按需解压 wheel，跳过未保留子模块文件与非必要文件."""
+    """按需解压 wheel，剥离 ``exclude`` 类文件与未保留子模块文件。
+
+    - 始终剥离 ``exclude`` 类条目（如 examples/docs/tests 子目录、Qt 开发工具 exe）
+    - ``keep_subs`` 非空时按子模块选择性保留（``submodule`` 类仅保留 ``keep_subs`` 中）
+    - ``keep_subs`` 为空时 ``submodule`` 类视作 ``shared`` 保留（等价于全量解压，
+      但仍应用剥离规则）——用于源码仅 ``import <top_pkg>`` 顶层导入、AST 未
+      收集到子模块使用信息的场景
+    """
     spec = get_spec(normalize_name(top_pkg))
     skipped = 0
     try:
         with zipfile.ZipFile(whl) as zf:
             for info in zf.infolist():
+                category, sub = spec.classify_entry(info.filename, top_pkg, keep_subs)
+                if category == "exclude":
+                    # 剥离文件与剥离目录的目录条目均跳过，避免遗留空目录
+                    continue
                 if info.is_dir():
                     zf.extract(info, dest)
                     continue
-                category, sub = spec.classify_entry(info.filename, top_pkg, keep_subs)
-                if category == "exclude":
-                    skipped += 1
-                    continue
-                if category == "submodule" and sub not in keep_subs:
+                # keep_subs 为空时不应用子模块选择性剥离（全量保留 .pyd 等）
+                if category == "submodule" and keep_subs and sub not in keep_subs:
                     skipped += 1
                     continue
                 zf.extract(info, dest)
@@ -254,21 +262,23 @@ def slim_unpack(
     for whl in iter_with_progress(sorted_wheels, "解压 wheel", stage=stage):
         info = WheelInfo.from_filename(whl.name)
         if info is None:
+            # wheel 文件名无法解析，无法确定 top_pkg → 兜底全量解压
             _full_unpack(whl, site_packages_dir)
             count += 1
             continue
         whl_pkg = normalize_name(info.name)
-        keep_subs = merged.get(whl_pkg)
-        if not keep_subs:
-            _full_unpack(whl, site_packages_dir)
-            count += 1
-            continue
+        keep_subs = merged.get(whl_pkg, set())
         top_pkg = _detect_top_pkg(whl, whl_pkg)
         if top_pkg is None:
+            # wheel 顶层目录与归一化包名不匹配 → 兜底全量解压
             _full_unpack(whl, site_packages_dir)
             count += 1
             continue
-        _logger.info("精简解压 %s: 保留子模块 %s", whl.name, ", ".join(sorted(keep_subs)))
+        if keep_subs:
+            _logger.info("精简解压 %s: 保留子模块 %s", whl.name, ", ".join(sorted(keep_subs)))
+        else:
+            # keep_subs 为空：仅应用剥离规则（examples/docs/tests 等），子模块文件全保留
+            _logger.info("解压 %s（应用剥离规则）", whl.name)
         _slim_extract(whl, site_packages_dir, top_pkg, keep_subs)
         count += 1
     if stage is not None and count:

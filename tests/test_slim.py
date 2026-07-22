@@ -510,6 +510,79 @@ class TestSlimUnpack:
         # 元数据保留
         assert (dest / "mypkg-1.0.dist-info" / "METADATA").is_file()
 
+    def test_no_usage_still_excludes_dirs(self, tmp_path: Path) -> None:
+        """无 submodule_usage 时仍剥离 examples/docs/tests（顶层 import 场景）.
+
+        回归：源码 ``import pygame`` 顶层导入时 AST 不收集子模块使用信息，
+        ``keep_subs`` 为空集，``_slim_extract`` 应剥离非必要子目录但保留
+        所有运行时文件（等价于全量解压 + 应用剥离规则）。
+        """
+        whl = tmp_path / "wh" / "mypkg-1.0-cp39-none-win_amd64.whl"
+        whl.parent.mkdir()
+        _make_wheel(
+            whl,
+            {
+                "mypkg/__init__.py": b"",
+                "mypkg/core.pyd": b"core",
+                "mypkg/utils.py": b"u",
+                # 非必要子目录 → 应剥离
+                "mypkg/examples/demo.py": b"demo",
+                "mypkg/docs/index.md": b"docs",
+                "mypkg/tests/test_core.py": b"test",
+                # 运行时子目录 → 保留
+                "mypkg/sub/x.py": b"sub",
+                "mypkg-1.0.dist-info/METADATA": b"meta",
+            },
+        )
+        dest = tmp_path / "sp"
+        # 不传 submodule_usage：keep_subs 为空集 → 走 _slim_extract 应用剥离规则
+        count = slim_unpack([whl], dest)
+        assert count == 1
+        # 运行时文件全保留（含子模块 .pyd）
+        assert (dest / "mypkg" / "__init__.py").is_file()
+        assert (dest / "mypkg" / "core.pyd").is_file()
+        assert (dest / "mypkg" / "utils.py").is_file()
+        assert (dest / "mypkg" / "sub" / "x.py").is_file()
+        # 非必要子目录剥离
+        assert not (dest / "mypkg" / "examples").exists()
+        assert not (dest / "mypkg" / "docs").exists()
+        assert not (dest / "mypkg" / "tests").exists()
+        # 元数据保留
+        assert (dest / "mypkg-1.0.dist-info" / "METADATA").is_file()
+
+    def test_no_usage_qt_still_excludes_dirs(self, tmp_path: Path) -> None:
+        """Qt 库无 submodule_usage 时仍剥离 examples/translations/include 等。."""
+        whl = tmp_path / "wh" / "PySide2-5.15.2.1-cp39-none-win_amd64.whl"
+        whl.parent.mkdir()
+        _make_wheel(
+            whl,
+            {
+                "PySide2/__init__.py": b"",
+                "PySide2/QtGui.pyd": b"gui",
+                "PySide2/Qt5Gui.dll": b"qt5gui",
+                "PySide2/examples/dummy.py": b"ex",
+                "PySide2/translations/qtbase_ar.qm": b"tr",
+                "PySide2/include/QtGui/qguiapplication.h": b"h",
+                "PySide2/designer.exe": b"tool",
+                "PySide2-5.15.2.1.dist-info/METADATA": b"meta",
+            },
+        )
+        dest = tmp_path / "sp"
+        # 不传 submodule_usage → keep_subs 为空集，应用 Qt 剥离规则
+        count = slim_unpack([whl], dest)
+        assert count == 1
+        # 运行时文件保留
+        assert (dest / "PySide2" / "__init__.py").is_file()
+        assert (dest / "PySide2" / "QtGui.pyd").is_file()
+        assert (dest / "PySide2" / "Qt5Gui.dll").is_file()
+        # Qt 剥离目录/工具始终剥离（无 usage 时也应用）
+        assert not (dest / "PySide2" / "examples").exists()
+        assert not (dest / "PySide2" / "translations").exists()
+        assert not (dest / "PySide2" / "include").exists()
+        assert not (dest / "PySide2" / "designer.exe").exists()
+        # 元数据保留
+        assert (dest / "PySide2-5.15.2.1.dist-info" / "METADATA").is_file()
+
     def test_qt_multimedia_dynamic_expansion(self, tmp_path: Path) -> None:
         """import PySide2.QtMultimedia 时联动保留 mediaservice plugins 与 Qt5Multimedia.dll."""
         whl = tmp_path / "wh" / "PySide2-5.15.2.1-cp39-none-win_amd64.whl"
