@@ -5,9 +5,8 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from fspack.installer import build_installer
-from fspack.linux_installer import build_linux_installer
 from fspack.mirror import get_mirror
+from fspack.packaging.installer import build_installer, build_linux_installer
 from fspack.platform import Platform, detect_platform
 
 __all__ = ["run"]

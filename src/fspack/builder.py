@@ -17,14 +17,21 @@ from typing import Sequence
 
 from fspack.config import BuildConfig, DependencyReport, MirrorConfig, ProjectInfo
 from fspack.console import success
-from fspack.embed import download_embed, embed_dirname, extract_embed, write_pth
 from fspack.entry_wrapper import dotted_module_name, generate_wrapper_source
 from fspack.exceptions import DependencyError
-from fspack.loader import compile_loader, generate_loader_source
+from fspack.packaging.loader import compile_loader, generate_loader_source
+from fspack.packaging.runtime import (
+    STANDALONE_RELEASE_TAG,
+    download_embed,
+    download_standalone,
+    embed_dirname,
+    extract_embed,
+    extract_standalone,
+    write_pth,
+)
 from fspack.platform import Platform, detect_platform, wheel_platform_tags
 from fspack.progress import BuildTracker, StageRecorder, spinner
 from fspack.project import DEFAULT_LINUX_PY_VERSION, DEFAULT_PY_VERSION, resolve_py_version
-from fspack.standalone import STANDALONE_RELEASE_TAG, download_standalone, extract_standalone
 from fspack.wheel_cache import fspack_wheel_cache_dir
 
 __all__ = ["DEFAULT_PY_VERSION", "build", "copy_source", "default_icon_path", "download_wheels", "unpack_wheels"]

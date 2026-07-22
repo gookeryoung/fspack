@@ -12,8 +12,8 @@ import pytest
 
 from fspack.config import AppType, ProjectInfo
 from fspack.exceptions import InstallerError
-from fspack.linux_installer import build_deb, build_linux_installer, build_tarball
 from fspack.mirror import get_mirror
+from fspack.packaging.installer import build_deb, build_linux_installer, build_tarball
 
 
 class _Completed:
@@ -126,7 +126,7 @@ def test_build_deb_creates_deb(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
         deb_path.write_bytes(b"fake deb")
         return _Completed()
 
-    monkeypatch.setattr("fspack.linux_installer.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.installer.subprocess.run", fake_run)
 
     out = build_deb(dist, info, release)
     assert out == release / "app_1.0_amd64.deb"
@@ -145,7 +145,7 @@ def test_build_deb_dpkg_deb_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     def fake_run(cmd: list[str], **kw: Any) -> object:
         raise FileNotFoundError()
 
-    monkeypatch.setattr("fspack.linux_installer.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.installer.subprocess.run", fake_run)
     with pytest.raises(InstallerError, match="未找到 dpkg-deb"):
         build_deb(dist, info, release)
 
@@ -161,7 +161,7 @@ def test_build_deb_dpkg_deb_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     def fake_run(cmd: list[str], **kw: Any) -> object:
         raise err
 
-    monkeypatch.setattr("fspack.linux_installer.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.installer.subprocess.run", fake_run)
     with pytest.raises(InstallerError, match="dpkg-deb 构建失败"):
         build_deb(dist, info, release)
 
@@ -196,8 +196,8 @@ def test_build_linux_installer_no_build_success(tmp_path: Path, monkeypatch: pyt
         captured["deb"] = info
         return release_dir / "app_1.0_amd64.deb"
 
-    monkeypatch.setattr("fspack.linux_installer.build_tarball", fake_build_tarball)
-    monkeypatch.setattr("fspack.linux_installer.build_deb", fake_build_deb)
+    monkeypatch.setattr("fspack.packaging.installer.build_tarball", fake_build_tarball)
+    monkeypatch.setattr("fspack.packaging.installer.build_deb", fake_build_deb)
 
     result = build_linux_installer(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=True)
     assert result == dist / "release" / "app_1.0_amd64.deb"
@@ -222,9 +222,9 @@ def test_build_linux_installer_with_build(tmp_path: Path, monkeypatch: pytest.Mo
         (d / "app").write_bytes(b"")
         return None
 
-    monkeypatch.setattr("fspack.linux_installer.build", fake_build)
-    monkeypatch.setattr("fspack.linux_installer.build_tarball", lambda *a, **kw: tmp_path / "x.tar.gz")
-    monkeypatch.setattr("fspack.linux_installer.build_deb", lambda *a, **kw: dist / "release" / "app_1.0_amd64.deb")
+    monkeypatch.setattr("fspack.packaging.installer.build", fake_build)
+    monkeypatch.setattr("fspack.packaging.installer.build_tarball", lambda *a, **kw: tmp_path / "x.tar.gz")
+    monkeypatch.setattr("fspack.packaging.installer.build_deb", lambda *a, **kw: dist / "release" / "app_1.0_amd64.deb")
 
     result = build_linux_installer(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=False)
     assert result == dist / "release" / "app_1.0_amd64.deb"

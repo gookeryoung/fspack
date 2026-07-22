@@ -10,8 +10,8 @@ import pytest
 
 from fspack.config import AppType, ProjectInfo
 from fspack.exceptions import InstallerError
-from fspack.installer import build_installer, compile_installer, generate_nsis_script
 from fspack.mirror import get_mirror
+from fspack.packaging.installer import build_installer, compile_installer, generate_nsis_script
 
 
 class _Completed:
@@ -110,7 +110,7 @@ def test_compile_installer_makensis_missing(tmp_path: Path, monkeypatch: pytest.
     def fake_run(cmd: list[str], **kw: Any) -> object:
         raise FileNotFoundError()
 
-    monkeypatch.setattr("fspack.installer.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.installer.subprocess.run", fake_run)
     with pytest.raises(InstallerError, match="未找到 makensis"):
         compile_installer(tmp_path / "x.nsi", tmp_path / "out.exe")
 
@@ -121,13 +121,13 @@ def test_compile_installer_makensis_error(tmp_path: Path, monkeypatch: pytest.Mo
     def fake_run(cmd: list[str], **kw: Any) -> object:
         raise err
 
-    monkeypatch.setattr("fspack.installer.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.installer.subprocess.run", fake_run)
     with pytest.raises(InstallerError, match="makensis 编译失败"):
         compile_installer(tmp_path / "x.nsi", tmp_path / "out.exe")
 
 
 def test_compile_installer_no_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("fspack.installer.subprocess.run", lambda cmd, **kw: _Completed())
+    monkeypatch.setattr("fspack.packaging.installer.subprocess.run", lambda cmd, **kw: _Completed())
     with pytest.raises(InstallerError, match="未产出安装包"):
         compile_installer(tmp_path / "x.nsi", tmp_path / "out.exe")
 
@@ -139,7 +139,7 @@ def test_compile_installer_success(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         out.write_bytes(b"")
         return _Completed()
 
-    monkeypatch.setattr("fspack.installer.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.installer.subprocess.run", fake_run)
     result = compile_installer(tmp_path / "x.nsi", out)
     assert result == out
     assert out.is_file()
@@ -171,7 +171,7 @@ def test_build_installer_no_build_success(tmp_path: Path, monkeypatch: pytest.Mo
         out_setup.write_bytes(b"")
         return _Completed()
 
-    monkeypatch.setattr("fspack.installer.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.installer.subprocess.run", fake_run)
     result = build_installer(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True)
     assert result == out_setup
     assert (dist / "installer.nsi").is_file()
@@ -196,14 +196,14 @@ def test_build_installer_with_build(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         (d / "app.exe").write_bytes(b"")
         return None
 
-    monkeypatch.setattr("fspack.installer.build", fake_build)
+    monkeypatch.setattr("fspack.packaging.installer.build", fake_build)
 
     def fake_run(cmd: list[str], **kw: Any) -> _Completed:
         out_setup.parent.mkdir(parents=True, exist_ok=True)
         out_setup.write_bytes(b"")
         return _Completed()
 
-    monkeypatch.setattr("fspack.installer.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.installer.subprocess.run", fake_run)
     result = build_installer(tmp_path, get_mirror("huawei"), "3.11.9", no_build=False)
     assert result == out_setup
     assert (dist / "app.exe").is_file()

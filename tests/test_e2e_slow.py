@@ -35,8 +35,8 @@ def _build_and_run(  # noqa: PLR0913
         用于 pygame 等改为 GUI 后无控制台输出的场景。
     """
     from fspack.builder import build
-    from fspack.loader import mingw_available
     from fspack.mirror import get_mirror
+    from fspack.packaging.loader import mingw_available
     from fspack.platform import Platform
 
     if not mingw_available():
@@ -95,8 +95,8 @@ def test_build_and_run_guicalc(tmp_path: Path) -> None:
     缺 ICU 时仅验证构建（下载/解包/_pth/exe），跳过运行断言。
     """
     from fspack.builder import build
-    from fspack.loader import mingw_available
     from fspack.mirror import get_mirror
+    from fspack.packaging.loader import mingw_available
     from fspack.platform import Platform
 
     if not mingw_available():
@@ -158,8 +158,8 @@ def test_build_and_run_pyside2app(tmp_path: Path) -> None:
     PySide2 的 Qt DLL 在 wine 上可能缺系统 DLL，缺时跳过运行断言。
     """
     from fspack.builder import build
-    from fspack.loader import mingw_available
     from fspack.mirror import get_mirror
+    from fspack.packaging.loader import mingw_available
     from fspack.platform import Platform
 
     if not mingw_available():
@@ -192,8 +192,8 @@ def test_build_and_run_pyqt5_cli(tmp_path: Path) -> None:
     PyQt5 的 Qt DLL 在 wine 上可能缺系统 DLL，缺时跳过运行断言。
     """
     from fspack.builder import build
-    from fspack.loader import mingw_available
     from fspack.mirror import get_mirror
+    from fspack.packaging.loader import mingw_available
     from fspack.platform import Platform
 
     if not mingw_available():
@@ -247,8 +247,8 @@ def test_build_and_run_multi_entry(tmp_path: Path) -> None:
     GUI 入口（PySide2）在 wine 上可能缺系统 DLL，缺时 skip GUI 运行断言。
     """
     from fspack.builder import build
-    from fspack.loader import mingw_available
     from fspack.mirror import get_mirror
+    from fspack.packaging.loader import mingw_available
     from fspack.platform import Platform
 
     if not mingw_available():
@@ -303,8 +303,8 @@ def test_build_and_run_linux_helloworld(tmp_path: Path) -> None:
     故 Linux 目标使用 3.11.10。
     """
     from fspack.builder import build
-    from fspack.loader import gcc_available
     from fspack.mirror import get_mirror
+    from fspack.packaging.loader import gcc_available
     from fspack.platform import Platform
 
     if not gcc_available():
@@ -327,8 +327,8 @@ def test_build_and_run_linux_helloworld(tmp_path: Path) -> None:
 def test_build_and_run_linux_clitool(tmp_path: Path) -> None:
     """Linux 平台端到端：有库 CLI（requests），验证依赖打包与运行."""
     from fspack.builder import build
-    from fspack.loader import gcc_available
     from fspack.mirror import get_mirror
+    from fspack.packaging.loader import gcc_available
     from fspack.platform import Platform
 
     if not gcc_available():
@@ -354,9 +354,9 @@ def test_build_installer_helloworld_slow(tmp_path: Path) -> None:
     需 mingw-w64（Windows loader 编译）与 makensis（NSIS 安装包编译）。
     验证 dist/installer.nsi 生成正确、dist/release/cli_helloworld-setup.exe 产出为合法 PE 文件且非空。
     """
-    from fspack.installer import build_installer
-    from fspack.loader import mingw_available
     from fspack.mirror import get_mirror
+    from fspack.packaging.installer import build_installer
+    from fspack.packaging.loader import mingw_available
 
     if not mingw_available():
         pytest.skip("mingw-w64 未安装")
@@ -390,9 +390,9 @@ def test_build_linux_installer_helloworld_slow(tmp_path: Path) -> None:
     验证 dist/release/cli_helloworld_0.1.0_amd64.deb 为合法 ar 归档，
     dist/release/cli_helloworld-0.1.0-linux.tar.gz 为合法 gzip。
     """
-    from fspack.linux_installer import build_linux_installer
-    from fspack.loader import gcc_available
     from fspack.mirror import get_mirror
+    from fspack.packaging.installer import build_linux_installer
+    from fspack.packaging.loader import gcc_available
 
     if not gcc_available():
         pytest.skip("gcc 未安装")

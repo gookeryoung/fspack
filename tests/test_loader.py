@@ -10,7 +10,7 @@ import pytest
 
 from fspack.config import AppType
 from fspack.exceptions import LoaderError
-from fspack.loader import (
+from fspack.packaging.loader import (
     MINGW_GCC,
     MINGW_WINDRES,
     _compile_icon_resource,
@@ -63,7 +63,7 @@ def test_compile_loader_cli_invokes_mingw(tmp_path: Path, monkeypatch: pytest.Mo
         _touch_out(cmd)
         return _Completed()
 
-    monkeypatch.setattr("fspack.loader.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
     out = tmp_path / "app.exe"
     compile_loader("int wmain(){return 0;}", out, AppType.CLI, tmp_path / "w", cache_dir=tmp_path / "cache")
     assert out.is_file()
@@ -80,7 +80,7 @@ def test_compile_loader_gui_adds_mwindows(tmp_path: Path, monkeypatch: pytest.Mo
         _touch_out(cmd)
         return _Completed()
 
-    monkeypatch.setattr("fspack.loader.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
     out = tmp_path / "app.exe"
     compile_loader("x", out, AppType.GUI, tmp_path / "w", cache_dir=tmp_path / "cache")
     assert "-mwindows" in captured["cmd"]
@@ -90,7 +90,7 @@ def test_compile_loader_mingw_missing(tmp_path: Path, monkeypatch: pytest.Monkey
     def fake_run(cmd: list[str], **kw: Any) -> object:
         raise FileNotFoundError("no mingw")
 
-    monkeypatch.setattr("fspack.loader.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
     with pytest.raises(LoaderError, match=r"请安装 mingw-w64"):
         compile_loader("x", tmp_path / "app.exe", AppType.CLI, tmp_path / "w", cache_dir=tmp_path / "cache")
 
@@ -101,7 +101,7 @@ def test_compile_loader_compile_error(tmp_path: Path, monkeypatch: pytest.Monkey
     def fake_run(cmd: list[str], **kw: Any) -> object:
         raise err
 
-    monkeypatch.setattr("fspack.loader.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
     with pytest.raises(LoaderError, match="loader 编译失败"):
         compile_loader("x", tmp_path / "app.exe", AppType.CLI, tmp_path / "w", cache_dir=tmp_path / "cache")
 
@@ -150,7 +150,7 @@ def test_compile_loader_linux_uses_gcc(tmp_path: Path, monkeypatch: pytest.Monke
         _touch_out(cmd)
         return _Completed()
 
-    monkeypatch.setattr("fspack.loader.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
     out = tmp_path / "app"
     compile_loader(
         "int main(){return 0;}", out, AppType.CLI, tmp_path / "w", Platform.LINUX, cache_dir=tmp_path / "cache"
@@ -166,7 +166,7 @@ def test_compile_loader_linux_gcc_missing(tmp_path: Path, monkeypatch: pytest.Mo
     def fake_run(cmd: list[str], **kw: Any) -> object:
         raise FileNotFoundError()
 
-    monkeypatch.setattr("fspack.loader.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
     with pytest.raises(LoaderError, match=r"请安装 gcc"):
         compile_loader("x", tmp_path / "app", AppType.CLI, tmp_path / "w", Platform.LINUX, cache_dir=tmp_path / "cache")
 
@@ -183,7 +183,7 @@ def test_compile_loader_cache_hit_copies_without_compiling(tmp_path: Path, monke
     def fake_run(cmd: list[str], **kw: Any) -> object:
         raise AssertionError("缓存命中不应调用编译器")
 
-    monkeypatch.setattr("fspack.loader.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
     out = tmp_path / "app.exe"
     work_dir = tmp_path / "build"
     stage = StageRecorder("生成 C loader")
@@ -206,7 +206,7 @@ def test_compile_loader_cache_miss_writes_back(tmp_path: Path, monkeypatch: pyte
         out_path.write_bytes(b"compiled-exe")
         return _Completed()
 
-    monkeypatch.setattr("fspack.loader.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
     out = tmp_path / "app.exe"
     compile_loader(source, out, AppType.CLI, tmp_path / "w", Platform.WINDOWS, cache_dir=cache)
     assert out.read_bytes() == b"compiled-exe"
@@ -227,7 +227,7 @@ def test_compile_loader_second_call_hits_cache(tmp_path: Path, monkeypatch: pyte
         out_path.write_bytes(b"compiled")
         return _Completed()
 
-    monkeypatch.setattr("fspack.loader.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
     cache = tmp_path / "cache"
     source = "int wmain(){return 0;}"
     out1 = tmp_path / "app1.exe"
@@ -250,7 +250,7 @@ def test_compile_loader_cache_key_differs_by_app_type(tmp_path: Path, monkeypatc
         out_path.write_bytes(b"exe")
         return _Completed()
 
-    monkeypatch.setattr("fspack.loader.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
     compile_loader(source, tmp_path / "cli.exe", AppType.CLI, tmp_path / "w1", Platform.WINDOWS, cache_dir=cache)
     compile_loader(source, tmp_path / "gui.exe", AppType.GUI, tmp_path / "w2", Platform.WINDOWS, cache_dir=cache)
     assert len(calls) == 2
@@ -268,7 +268,7 @@ def test_compile_loader_cache_linux_no_suffix(tmp_path: Path, monkeypatch: pytes
     def fake_run(cmd: list[str], **kw: Any) -> object:
         raise AssertionError("缓存命中不应调用编译器")
 
-    monkeypatch.setattr("fspack.loader.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
     out = tmp_path / "app"
     work_dir = tmp_path / "build"
     compile_loader(source, out, AppType.CLI, work_dir, Platform.LINUX, cache_dir=cache)
@@ -289,7 +289,7 @@ def test_compile_loader_compile_path_sets_stage_detail(tmp_path: Path, monkeypat
         out_path.write_bytes(b"exe")
         return _Completed()
 
-    monkeypatch.setattr("fspack.loader.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
     stage = StageRecorder("生成 C loader")
     compile_loader(
         "x",
@@ -316,8 +316,8 @@ def test_compile_loader_cache_writeback_failure_logged(tmp_path: Path, monkeypat
     def fake_copy2(src: Path, dst: Path) -> None:
         raise OSError("disk full")
 
-    monkeypatch.setattr("fspack.loader.subprocess.run", fake_run)
-    monkeypatch.setattr("fspack.loader.shutil.copy2", fake_copy2)
+    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.loader.shutil.copy2", fake_copy2)
     compile_loader(
         "x", tmp_path / "app.exe", AppType.CLI, tmp_path / "w", Platform.WINDOWS, cache_dir=tmp_path / "cache"
     )
@@ -350,7 +350,7 @@ def test_find_windres_prefers_mingw_prefix(monkeypatch: pytest.MonkeyPatch) -> N
             return "/usr/bin/windres"
         return None
 
-    monkeypatch.setattr("fspack.loader.shutil.which", fake_which)
+    monkeypatch.setattr("fspack.packaging.loader.shutil.which", fake_which)
     assert _find_windres() == MINGW_WINDRES
 
 
@@ -362,13 +362,13 @@ def test_find_windres_fallback_plain(monkeypatch: pytest.MonkeyPatch) -> None:
             return "/usr/bin/windres"
         return None
 
-    monkeypatch.setattr("fspack.loader.shutil.which", fake_which)
+    monkeypatch.setattr("fspack.packaging.loader.shutil.which", fake_which)
     assert _find_windres() == "windres"
 
 
 def test_find_windres_missing_returns_default(monkeypatch: pytest.MonkeyPatch) -> None:
     """两者都不存在时返回默认 mingw 名，让后续 subprocess 报错."""
-    monkeypatch.setattr("fspack.loader.shutil.which", lambda name: None)
+    monkeypatch.setattr("fspack.packaging.loader.shutil.which", lambda name: None)
     assert _find_windres() == MINGW_WINDRES
 
 
@@ -385,7 +385,7 @@ def test_compile_icon_resource_no_windres_returns_none(
     """windres 不可用时返回 None 并记录警告."""
     icon = tmp_path / "icon.ico"
     icon.write_bytes(b"ico")
-    monkeypatch.setattr("fspack.loader.shutil.which", lambda name: None)
+    monkeypatch.setattr("fspack.packaging.loader.shutil.which", lambda name: None)
     result = _compile_icon_resource(icon, tmp_path / "w")
     assert result is None
     assert "未找到 windres" in caplog.text
@@ -407,8 +407,8 @@ def test_compile_icon_resource_windres_filenotfound_returns_none(
     def fake_run(cmd: list[str], **kw: Any) -> object:
         raise FileNotFoundError("no windres in PATH")
 
-    monkeypatch.setattr("fspack.loader.shutil.which", fake_which)
-    monkeypatch.setattr("fspack.loader.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.loader.shutil.which", fake_which)
+    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
     result = _compile_icon_resource(icon, work)
     assert result is None
     assert "windres 不可用" in caplog.text
@@ -430,8 +430,8 @@ def test_compile_icon_resource_windres_failure_returns_none(
     def fake_run(cmd: list[str], **kw: Any) -> object:
         raise err
 
-    monkeypatch.setattr("fspack.loader.shutil.which", fake_which)
-    monkeypatch.setattr("fspack.loader.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.loader.shutil.which", fake_which)
+    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
     result = _compile_icon_resource(icon, work)
     assert result is None
     assert "icon 资源编译失败" in caplog.text
@@ -453,8 +453,8 @@ def test_compile_icon_resource_success_returns_obj_path(tmp_path: Path, monkeypa
         output.write_bytes(b"coff-obj")
         return _Completed()
 
-    monkeypatch.setattr("fspack.loader.shutil.which", fake_which)
-    monkeypatch.setattr("fspack.loader.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.loader.shutil.which", fake_which)
+    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
     result = _compile_icon_resource(icon, work)
     assert result is not None
     assert result.name == "icon.o"
@@ -484,8 +484,8 @@ def test_compile_loader_with_icon_appends_obj_to_cmd(tmp_path: Path, monkeypatch
             out_path.write_bytes(b"exe")
         return _Completed()
 
-    monkeypatch.setattr("fspack.loader.shutil.which", fake_which)
-    monkeypatch.setattr("fspack.loader.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.loader.shutil.which", fake_which)
+    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
 
     icon = tmp_path / "icon.ico"
     icon.write_bytes(b"ico")
@@ -513,7 +513,7 @@ def test_compile_loader_linux_ignores_icon(tmp_path: Path, monkeypatch: pytest.M
         _touch_out(cmd)
         return _Completed()
 
-    monkeypatch.setattr("fspack.loader.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
 
     icon = tmp_path / "icon.ico"
     icon.write_bytes(b"ico")
@@ -558,8 +558,8 @@ def test_compile_loader_with_icon_second_call_hits_cache(tmp_path: Path, monkeyp
             out_path.write_bytes(b"exe")
         return _Completed()
 
-    monkeypatch.setattr("fspack.loader.shutil.which", fake_which)
-    monkeypatch.setattr("fspack.loader.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.loader.shutil.which", fake_which)
+    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
 
     icon = tmp_path / "icon.ico"
     icon.write_bytes(b"ico-content")
@@ -605,8 +605,8 @@ def test_compile_loader_different_icon_misses_cache(tmp_path: Path, monkeypatch:
             out_path.write_bytes(b"exe")
         return _Completed()
 
-    monkeypatch.setattr("fspack.loader.shutil.which", fake_which)
-    monkeypatch.setattr("fspack.loader.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.loader.shutil.which", fake_which)
+    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
 
     icon1 = tmp_path / "icon1.ico"
     icon1.write_bytes(b"ico-1")

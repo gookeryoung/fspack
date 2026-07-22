@@ -9,7 +9,8 @@ from pathlib import Path
 import pytest
 
 from fspack.config import MirrorConfig
-from fspack.embed import (
+from fspack.exceptions import EmbedError
+from fspack.packaging.runtime import (
     download_embed,
     embed_dirname,
     embed_zip_name,
@@ -17,7 +18,6 @@ from fspack.embed import (
     extract_embed,
     write_pth,
 )
-from fspack.exceptions import EmbedError
 from fspack.progress import StageRecorder
 
 _MIRROR = MirrorConfig(name="t", python_base="https://x/py", pypi_index="https://x/s")
@@ -141,7 +141,7 @@ def test_ensure_embed_skips_when_dll_present(tmp_path: Path, monkeypatch: pytest
     runtime.mkdir()
     (runtime / "python311.dll").write_bytes(b"")
     called = {"download": False}
-    monkeypatch.setattr("fspack.embed.download_embed", lambda *a, **k: called.__setitem__("download", True))
+    monkeypatch.setattr("fspack.packaging.runtime.download_embed", lambda *a, **k: called.__setitem__("download", True))
     ensure_embed("3.11.9", _MIRROR, tmp_path / "cache", runtime)
     assert not called["download"]
     assert (runtime / "Lib" / "site-packages").is_dir()
@@ -152,7 +152,7 @@ def test_ensure_embed_downloads_when_missing(tmp_path: Path, monkeypatch: pytest
     zip_path = tmp_path / "fake.zip"
     with zipfile.ZipFile(zip_path, "w") as zf:
         zf.writestr("python311.dll", b"")
-    monkeypatch.setattr("fspack.embed.download_embed", lambda *a, **k: zip_path)
+    monkeypatch.setattr("fspack.packaging.runtime.download_embed", lambda *a, **k: zip_path)
     ensure_embed("3.11.9", _MIRROR, tmp_path / "cache", runtime)
     assert (runtime / "python311.dll").is_file()
     assert (runtime / "Lib" / "site-packages").is_dir()
