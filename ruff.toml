@@ -33,4 +33,4 @@ select = [
 ]
 
 [lint.per-file-ignores]
-"**/tests/**" = ["ARG001", "ARG002"]
+"**/tests/**" = ["ARG001", "ARG002", "ARG005"]
