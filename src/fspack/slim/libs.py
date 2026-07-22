@@ -135,10 +135,14 @@ class MatplotlibSlimSpec(SlimSpec):
     - ``sphinxext``：matplotlib 二级目录，Sphinx 文档构建扩展（运行时不需要）
     - ``tests``（嵌套）：剥离 ``mpl_toolkits/<sub>/tests/``、
       ``matplotlib/tests/``（后者与 COMMON_EXCLUDE_SUBDIRS 冗余但无害）
+    - 顶层 C 扩展始终保留：``ft2font.pyd`` 是 ``__init__._check_versions()``
+      硬依赖（``from . import ft2font``），剥离即 ImportError。通过
+      ``top_ext_always_shared=True`` 将顶层 ``.pyd``/``.pyi``/``.so`` 归
+      shared 始终保留，不做子模块选择性剥离。
 
     运行时保留：``matplotlib/mpl-data/``（字体/样式）、``matplotlib/backends/``、
     ``matplotlib.libs/``（共享 DLL）、``mpl_toolkits/``（非 tests 部分）、
-    ``pylab.py``。
+    ``pylab.py``、所有顶层 C 扩展（``ft2font``/``_image``/``_path`` 等）。
     """
 
     _EXTRA_EXCLUDES = frozenset(
@@ -173,8 +177,12 @@ class MatplotlibSlimSpec(SlimSpec):
         top_pkg: str,
         keep_subs: set[str],
     ) -> tuple[str, str | None]:
-        """matplotlib 条目分类，委托 :meth:`_default_classify` + 库专属剥离集合."""
-        return cls._default_classify(entry, top_pkg, keep_subs, cls._EXTRA_EXCLUDES, _NESTED_TEST_DIRS)
+        """matplotlib 条目分类，委托 :meth:`_default_classify` + 库专属剥离集合.
+
+        ``top_ext_always_shared=True``：顶层 C 扩展（ft2font 等）始终保留，
+        不做子模块选择性剥离。
+        """
+        return cls._default_classify(entry, top_pkg, keep_subs, cls._EXTRA_EXCLUDES, _NESTED_TEST_DIRS, True)
 
 
 class ScipySlimSpec(SlimSpec):

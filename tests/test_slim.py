@@ -1083,6 +1083,37 @@ class TestMatplotlibSlimSpec:
             None,
         )
 
+    def test_classify_top_pyd_always_shared(self) -> None:
+        """matplotlib 顶层 .pyd（ft2font 等）归 shared 始终保留，不按子模块剥离.
+
+        ft2font.pyd 是 __init__._check_versions() 硬依赖（from . import ft2font），
+        剥离即 ImportError。top_ext_always_shared=True 确保始终保留。
+        """
+        from fspack.slim.libs import MatplotlibSlimSpec
+
+        # keep_subs 为空（用户只 import matplotlib.pyplot）时 ft2font 仍归 shared
+        assert MatplotlibSlimSpec.classify_entry(
+            "matplotlib/ft2font.cp311-win_amd64.pyd", "matplotlib", {"pyplot"}
+        ) == ("shared", None)
+        # keep_subs 含 ft2font 时也归 shared（不归 submodule）
+        assert MatplotlibSlimSpec.classify_entry(
+            "matplotlib/ft2font.cp311-win_amd64.pyd", "matplotlib", {"ft2font"}
+        ) == ("shared", None)
+        # 其他顶层 .pyd 同理
+        for pyd in ("_image.cp311-win_amd64.pyd", "_path.cp311-win_amd64.pyd", "_tri.cp311-win_amd64.pyd"):
+            assert MatplotlibSlimSpec.classify_entry(f"matplotlib/{pyd}", "matplotlib", set()) == ("shared", None), (
+                f"{pyd} 应当归 shared"
+            )
+
+    def test_classify_top_pyi_always_shared(self) -> None:
+        """matplotlib 顶层 .pyi 归 shared（top_ext_always_shared 覆盖所有 SUBMODULE_EXTS）."""
+        from fspack.slim.libs import MatplotlibSlimSpec
+
+        assert MatplotlibSlimSpec.classify_entry("matplotlib/pyplot.pyi", "matplotlib", set()) == (
+            "shared",
+            None,
+        )
+
 
 class TestScipySlimSpec:
     """scipy 精简规则：剥离各子模块下的嵌套 tests 目录。."""
@@ -1216,6 +1247,53 @@ class TestNestedExcludesBehavior:
             "shared",
             None,
         )
+
+
+class TestTopExtAlwaysSharedBehavior:
+    """_default_classify 的 top_ext_always_shared 参数行为。."""
+
+    def test_default_top_pyd_as_submodule(self) -> None:
+        """默认（top_ext_always_shared=False）顶层 .pyd 归 submodule（向后兼容）."""
+        from fspack.slim.base import SlimSpec
+
+        assert SlimSpec._default_classify("numpy/ft2font.cp311-win_amd64.pyd", "numpy", set()) == (
+            "submodule",
+            "ft2font.cp311-win_amd64",  # Path.stem 只去最后后缀
+        )
+
+    def test_top_ext_always_shared_pyd_to_shared(self) -> None:
+        """top_ext_always_shared=True 时顶层 .pyd 归 shared（不归 submodule）."""
+        from fspack.slim.base import SlimSpec
+
+        assert SlimSpec._default_classify(
+            "matplotlib/ft2font.cp311-win_amd64.pyd",
+            "matplotlib",
+            set(),
+            frozenset(),
+            frozenset(),
+            True,
+        ) == ("shared", None)
+
+    def test_top_ext_always_shared_not_affect_private(self) -> None:
+        """top_ext_always_shared 不影响 _ 前缀文件（本就归 shared）."""
+        from fspack.slim.base import SlimSpec
+
+        # _ 前缀无论 top_ext_always_shared 与否都归 shared
+        assert SlimSpec._default_classify(
+            "matplotlib/_image.pyd", "matplotlib", set(), frozenset(), frozenset(), True
+        ) == ("shared", None)
+        assert SlimSpec._default_classify(
+            "matplotlib/_image.pyd", "matplotlib", set(), frozenset(), frozenset(), False
+        ) == ("shared", None)
+
+    def test_top_ext_always_shared_not_affect_subdir_pyd(self) -> None:
+        """top_ext_always_shared 仅影响顶层 .pyd，子目录 .pyd 仍归 shared（子目录本就 shared）."""
+        from fspack.slim.base import SlimSpec
+
+        # 子目录下的 .pyd 归 shared（子目录逻辑，不受 top_ext_always_shared 影响）
+        assert SlimSpec._default_classify(
+            "matplotlib/backends/_backend_agg.pyd", "matplotlib", set(), frozenset(), frozenset(), True
+        ) == ("shared", None)
 
 
 class TestSlimSpecRegistry:

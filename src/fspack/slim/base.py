@@ -123,13 +123,14 @@ class SlimSpec(abc.ABC):
         return None
 
     @classmethod
-    def _default_classify(  # noqa: PLR0911
+    def _default_classify(  # noqa: PLR0911, PLR0913
         cls,
         entry: str,
         top_pkg: str,
         keep_subs: set[str],  # noqa: ARG003
         extra_excludes: frozenset[str] = frozenset(),
         nested_excludes: frozenset[str] = frozenset(),
+        top_ext_always_shared: bool = False,
     ) -> tuple[str, str | None]:
         """默认分类逻辑（供 ``DefaultSlimSpec`` 与简单 spec 复用）。
 
@@ -138,14 +139,18 @@ class SlimSpec(abc.ABC):
           → exclude（用于 ``scipy/<sub>/tests/``、``mpl_toolkits/tests/``）
         - 跨包文件 → shared
         - ``__init__.*``/``_*`` → shared
-        - 顶层 ``.pyd``/``.pyi``/``.so`` → submodule（按原文件名 stem）
+        - 顶层 ``.pyd``/``.pyi``/``.so`` → submodule（按原文件名 stem）；
+          ``top_ext_always_shared=True`` 时改归 shared（用于顶层 C 扩展是
+          ``__init__`` 硬依赖的库，如 matplotlib 的 ``ft2font.pyd``）
         - 其他文件 → shared
         - 子目录在 ``COMMON_EXCLUDE_SUBDIRS`` 或 ``extra_excludes`` 中 → exclude
         - 其他子目录 → shared
 
         ``extra_excludes`` 用于库专属二级剥离目录（如 numpy 的 f2py/distutils、
         lxml 的 includes）；``nested_excludes`` 用于任意层级剥离（含跨包，
-        如 scipy 各子模块下的 tests、matplotlib 跨包 mpl_toolkits 下的 tests）。
+        如 scipy 各子模块下的 tests、matplotlib 跨包 mpl_toolkits 下的 tests）；
+        ``top_ext_always_shared`` 用于顶层 C 扩展不可选择性剥离的库（matplotlib
+        的 ``ft2font`` 是 ``__init__._check_versions()`` 硬依赖，剥离即 ImportError）。
         Qt 等复杂 spec 不用此方法。
         """
         parts = entry.split("/")
@@ -170,6 +175,9 @@ class SlimSpec(abc.ABC):
             suffix = Path(filename).suffix.lower()
             stem = Path(filename).stem
             if suffix in cls.SUBMODULE_EXTS:
+                if top_ext_always_shared:
+                    # 顶层 C 扩展是 __init__ 硬依赖，始终保留（如 matplotlib ft2font）
+                    return ("shared", None)
                 # 非归一化，按原文件名归类
                 return ("submodule", stem)
             return ("shared", None)
