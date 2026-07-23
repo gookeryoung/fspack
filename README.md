@@ -115,10 +115,11 @@ fsp p [project] [--mirror <name>] [--py-version <ver>] [--target <plat>] [--no-b
 1. **解析** `pyproject.toml`，识别项目名、版本、入口模块、CLI/GUI 类型
 2. **下载运行时**：Windows 下载 embed python zip 并解压到 `dist/runtime/`；Linux 下载 python-build-standalone tar.gz 并解压到 `dist/runtime/python/`
 3. **分析依赖**：AST 扫描源码 import，分类标准库/本地/第三方，与 `pyproject.toml` 声明依赖比对
-4. **下载 wheel**：用 dev python 的 `pip download` 拉取目标平台 wheel，解包到 `dist/runtime/Lib/site-packages/`（Windows）或 `dist/runtime/python/lib/python3.X/site-packages/`（Linux）
-5. **写 _pth**（仅 Windows）：覆盖 `runtime/python3X._pth`，注册 site-packages 与 `..\src` 路径
-6. **复制源码**：项目源码复制到 `dist/src/`，排除 dist/build/.venv 等构建产物
-7. **生成 C loader**：按平台模板生成 C 源码（烧入入口脚本相对路径），mingw（Windows）或 gcc（Linux）编译为可执行文件
+4. **补充内置库**（仅 Windows）：AST 检出 `tkinter` 使用时，从 python-build-standalone Windows 构建提取 tkinter 组件（纯 Python 包 + `_tkinter.pyd` + Tcl/Tk 运行时脚本）补充到 runtime，按版本缓存 zip 避免重复下载
+5. **下载 wheel**：用 dev python 的 `pip download` 拉取目标平台 wheel，解包到 `dist/runtime/Lib/site-packages/`（Windows）或 `dist/runtime/python/lib/python3.X/site-packages/`（Linux）
+6. **写 _pth**（仅 Windows）：覆盖 `runtime/python3X._pth`，注册 site-packages 与 `..\src` 路径
+7. **复制源码**：项目源码复制到 `dist/src/`，排除 dist/build/.venv 等构建产物
+8. **生成 C loader**：按平台模板生成 C 源码（烧入入口脚本相对路径），mingw（Windows）或 gcc（Linux）编译为可执行文件
 
 dist 布局：
 
@@ -193,23 +194,6 @@ fsp r --entry web     # 运行 web 入口
 Linux dev 机可交叉编译 Windows 包（`fsp b --target windows`），反之亦然。
 
 ## 已知限制
-
-### Windows 打包不支持 tkinter
-
-fspack Windows 运行时使用 [python.org 官方 embeddable package](https://www.python.org/downloads/windows/)
-（精简版，约 10MB），该发行版为控制体积裁剪了 tkinter 相关文件（`Lib/tkinter/`、
-`_tkinter.pyd`、`tcl/`、`tk/`）。因此 `import tkinter` 的应用在 Windows 打包后运行会报：
-
-```
-ModuleNotFoundError: No module named 'tkinter'
-```
-
-**替代方案**：
-
-- 改用 PySide2/PySide6/PyQt5/PyQt6 等 Qt 框架（fspack 已验证支持，见 `examples/gui_calc`、
-  `examples/pyside2_app`、`examples/pyqt5_cli`）
-- 在 Linux 打包（fspack Linux 运行时用 python-build-standalone，含完整标准库，含 tkinter）：
-  `fspack b --target linux`
 
 ### `missing` 依赖误报导入名≠包名
 

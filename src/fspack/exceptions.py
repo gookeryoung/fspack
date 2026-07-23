@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 __all__ = [
+    "BuiltinError",
     "DependencyError",
     "EmbedError",
     "FspackError",
@@ -34,3 +35,7 @@ class DependencyError(FspackError):
 
 class InstallerError(FspackError):
     """NSIS 脚本生成或安装包编译错误."""
+
+
+class BuiltinError(FspackError):
+    """内置库（tkinter 等）打包错误."""

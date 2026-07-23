@@ -205,3 +205,20 @@ def test_generate_wrapper_source_qt_plugin_paths() -> None:
         assert qt_pkg in source
     assert "QT_PLUGIN_PATH" in source
     assert "QT_QPA_PLATFORM_PLUGIN_PATH" in source
+
+
+def test_generate_wrapper_source_tkinter_disabled_by_default() -> None:
+    """has_tkinter 默认 False：wrapper 注入 `if False:` 跳过 Tcl/Tk 环境变量."""
+    source = EntryWrapper.generate_wrapper_source("app", None, "app.py")
+    assert "if False:" in source
+    assert "TCL_LIBRARY" in source  # 模板含代码但分支不执行
+    assert "TK_LIBRARY" in source
+
+
+def test_generate_wrapper_source_tkinter_enabled() -> None:
+    """has_tkinter=True：wrapper 注入 `if True:` 启用 Tcl/Tk 环境变量设置."""
+    source = EntryWrapper.generate_wrapper_source("app", None, "app.py", has_tkinter=True)
+    assert "if True:" in source
+    assert "TCL_LIBRARY" in source
+    assert "TK_LIBRARY" in source
+    assert "glob.glob" in source

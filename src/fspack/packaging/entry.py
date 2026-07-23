@@ -5,7 +5,9 @@ fspack 在 dist 根目录为每个入口生成 ``_entry_<name>.py`` 包装器，
 
 1. **设置 Qt 插件路径**：PySide2/PySide6/PyQt5/PyQt6 的 ``QT_PLUGIN_PATH``
    必须在 import 用户代码前设置，否则 ``QApplication`` 找不到平台插件。
-2. **包式入口支持**：若入口脚本位于包内（所在目录链直至首个包目录都有
+2. **设置 Tcl/Tk 环境变量**：embed python 缺失 tkinter，打包补充的 Tcl/Tk
+   脚本路径需通过 ``TCL_LIBRARY``/``TK_LIBRARY`` 显式指定。
+3. **包式入口支持**：若入口脚本位于包内（所在目录链直至首个包目录都有
    ``__init__.py``），用 :func:`runpy.run_module` 以包上下文运行，使相对导入
    （``from .conf import ...``）可用；否则用 :func:`runpy.run_path` 直接运行
    顶层脚本。
@@ -21,7 +23,7 @@ from pathlib import Path
 
 __all__ = ["EntryWrapper"]
 
-# wrapper 源码模板：{entry_name}/{module_dotted}/{pkg_root_rel}/{entry_rel} 由 format 填入。
+# wrapper 源码模板：{entry_name}/{module_dotted}/{pkg_root_rel}/{entry_rel}/{has_tkinter} 由 format 填入。
 # module_dotted 为 None 时走顶层模式（run_path），否则走包模式（run_module）。
 _WRAPPER_TEMPLATE = '''\
 """fspack 生成的入口包装器（{entry_name}）。
@@ -45,6 +47,17 @@ for _qt_pkg in ("PySide2", "PySide6", "PyQt5", "PyQt6"):
         os.environ.setdefault("QT_PLUGIN_PATH", _qt_plugins)
         os.environ.setdefault("QT_QPA_PLATFORM_PLUGIN_PATH", _qt_plugins)
         break
+
+# tkinter 环境变量（embed python 缺失 Tcl/Tk 脚本路径，需手动指定）
+_RUNTIME_DIR = os.path.join(_DIST_DIR, "runtime")
+if {has_tkinter}:
+    import glob
+    _tcl_lib = glob.glob(os.path.join(_RUNTIME_DIR, "tcl", "tcl*"))
+    if _tcl_lib:
+        os.environ.setdefault("TCL_LIBRARY", _tcl_lib[0])
+    _tk_lib = glob.glob(os.path.join(_RUNTIME_DIR, "tcl", "tk*"))
+    if _tk_lib:
+        os.environ.setdefault("TK_LIBRARY", _tk_lib[0])
 
 _ENTRY_MODULE = {module_dotted!r}
 _ENTRY_REL = {entry_rel!r}
@@ -162,6 +175,7 @@ class EntryWrapper:
         module_dotted: str | None,
         entry_rel: str,
         pkg_root_rel: str = ".",
+        has_tkinter: bool = False,
     ) -> str:
         """生成入口包装器源码。
 
@@ -173,10 +187,14 @@ class EntryWrapper:
         pkg_root_rel: 包根相对 dist 的 POSIX 路径（如 ``"."``、``"src"``、
             ``"src/src"``），包模式时 wrapper 将其加入 ``sys.path`` 使首层包
             可 import。顶层模式不使用此参数。
+        has_tkinter: 是否注入 ``TCL_LIBRARY``/``TK_LIBRARY`` 环境变量设置。
+            embed python 缺失 tkinter，打包补充后需在 wrapper 中显式指定
+            Tcl/Tk 脚本路径，否则 ``_tkinter.pyd`` 找不到 ``tcl8.6/``。
         """
         return EntryWrapper._TEMPLATE.format(
             entry_name=entry_name,
             module_dotted=module_dotted,
             entry_rel=entry_rel,
             pkg_root_rel=pkg_root_rel,
+            has_tkinter=has_tkinter,
         )

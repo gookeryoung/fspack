@@ -590,3 +590,81 @@ def test_build_orchestration_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     assert "dlopen" in calls["compile_source"]
     assert "libpython3.11.so" in calls["compile_source"]
     assert ".entry" in calls["compile_source"]
+
+
+def test_build_supplements_tkinter_when_needed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """AST 检出 tkinter 且目标 Windows 时触发 TkinterBundler.ensure，wrapper 注入 TCL/TK 环境变量."""
+    proj = tmp_path / "app"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (proj / "app.py").write_text("import tkinter\ndef main():\n    pass\n")
+
+    monkeypatch.setattr("fspack.builder.download_embed", lambda v, m, c, **kw: tmp_path / "fake.zip")
+    monkeypatch.setattr(
+        "fspack.builder.extract_embed",
+        lambda zip_path, runtime_dir: (
+            runtime_dir.mkdir(parents=True, exist_ok=True),
+            (runtime_dir / "python311.dll").write_bytes(b""),
+            (runtime_dir / "Lib" / "site-packages").mkdir(parents=True, exist_ok=True),
+        )[-1],
+    )
+    monkeypatch.setattr("fspack.builder.download_wheels", lambda *a, **k: [])
+    monkeypatch.setattr("fspack.builder.unpack_wheels", lambda *a, **k: 0)
+    monkeypatch.setattr(
+        "fspack.builder.compile_loader",
+        lambda source, out_exe, app_type, work_dir, platform, **kw: (
+            out_exe.parent.mkdir(parents=True, exist_ok=True),
+            out_exe.write_text(source),
+        )[-1],
+    )
+
+    ensure_called: dict[str, bool] = {}
+    monkeypatch.setattr(
+        "fspack.builder.TkinterBundler.ensure",
+        lambda runtime_dir, version, cache_dir, stage: ensure_called.__setitem__("called", True),
+    )
+
+    build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
+    assert ensure_called.get("called") is True
+    # wrapper 应注入 `if True:` 启用 Tcl/Tk 环境变量
+    wrapper = (proj / "dist" / "_entry_app.py").read_text(encoding="utf-8")
+    assert "if True:" in wrapper
+    assert "TCL_LIBRARY" in wrapper
+
+
+def test_build_skips_tkinter_when_not_used(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """AST 未检出 tkinter 时不触发 TkinterBundler.ensure，wrapper 注入 `if False:`."""
+    proj = tmp_path / "app"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (proj / "app.py").write_text("import os\ndef main():\n    pass\n")
+
+    monkeypatch.setattr("fspack.builder.download_embed", lambda v, m, c, **kw: tmp_path / "fake.zip")
+    monkeypatch.setattr(
+        "fspack.builder.extract_embed",
+        lambda zip_path, runtime_dir: (
+            runtime_dir.mkdir(parents=True, exist_ok=True),
+            (runtime_dir / "python311.dll").write_bytes(b""),
+            (runtime_dir / "Lib" / "site-packages").mkdir(parents=True, exist_ok=True),
+        )[-1],
+    )
+    monkeypatch.setattr("fspack.builder.download_wheels", lambda *a, **k: [])
+    monkeypatch.setattr("fspack.builder.unpack_wheels", lambda *a, **k: 0)
+    monkeypatch.setattr(
+        "fspack.builder.compile_loader",
+        lambda source, out_exe, app_type, work_dir, platform, **kw: (
+            out_exe.parent.mkdir(parents=True, exist_ok=True),
+            out_exe.write_text(source),
+        )[-1],
+    )
+
+    ensure_called: dict[str, bool] = {}
+    monkeypatch.setattr(
+        "fspack.builder.TkinterBundler.ensure",
+        lambda runtime_dir, version, cache_dir, stage: ensure_called.__setitem__("called", True),
+    )
+
+    build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
+    assert ensure_called.get("called") is None
+    wrapper = (proj / "dist" / "_entry_app.py").read_text(encoding="utf-8")
+    assert "if False:" in wrapper

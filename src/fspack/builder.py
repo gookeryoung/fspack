@@ -10,6 +10,7 @@ from typing import Sequence
 
 from fspack.config import BuildConfig, DependencyReport, MirrorConfig, ProjectInfo
 from fspack.console import console
+from fspack.packaging.builtin import TkinterBundler
 from fspack.packaging.entry import EntryWrapper
 from fspack.packaging.loader import compile_loader, generate_loader_source
 from fspack.packaging.runtime import (
@@ -197,6 +198,17 @@ def build(  # noqa: PLR0912, PLR0913
         st.processed(ast_count)
         st.set_detail(f"AST {ast_count} 个第三方")
 
+    # 补充内置库：embed python 缺失 tkinter（纯 Python 包 + _tkinter.pyd + Tcl/Tk 脚本），
+    # 若 AST 检测到 tkinter 使用则从 python-build-standalone Windows 构建提取并补充到 runtime。
+    # Linux standalone 已含全部 stdlib，无需补充。
+    has_tkinter = False
+    if TkinterBundler.is_needed(report.ast_stdlib, target):
+        builtin_cache = Path.home() / ".fspack" / "cache"
+        with tracker.stage("补充内置库") as st:
+            TkinterBundler.ensure(runtime_dir, info.py_version, builtin_cache, stage=st)
+            has_tkinter = True
+            st.set_detail("tkinter")
+
     # 下载用包名：优先 declared（pyproject.toml 声明的 PyPI 包名，权威），
     # declared 为空时回退到 ast_third_party（AST 扫描的导入名，best effort）。
     # 原因：导入名 ≠ PyPI 包名时（如 orderedset → ordered-set），用导入名 pip download 会失败。
@@ -249,7 +261,9 @@ def build(  # noqa: PLR0912, PLR0913
             wrapper_name = f"_entry_{ep.name}.py"
             wrapper_path = cfg.dist_dir / wrapper_name
             wrapper_path.write_text(
-                EntryWrapper.generate_wrapper_source(ep.name, module_dotted, entry_rel, pkg_root_rel),
+                EntryWrapper.generate_wrapper_source(
+                    ep.name, module_dotted, entry_rel, pkg_root_rel, has_tkinter=has_tkinter
+                ),
                 encoding="utf-8",
             )
             # .entry 指向 wrapper（loader 读 .entry 路径运行）

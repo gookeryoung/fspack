@@ -10,6 +10,7 @@
   封装 ``build → 校验 → build_package`` 编排流程（NSIS / tar.gz + .deb）
 - :mod:`fspack.packaging.wheels` —— :func:`download_wheels` wheel 下载与依赖解析
 - :mod:`fspack.packaging.net` —— :class:`Downloader` HTTP 下载器（SSL + 进度条）
+- :mod:`fspack.packaging.builtin` —— :class:`TkinterBundler` 内置库打包（为 embed python 补充 tkinter）
 - :mod:`fspack.packaging.entry` —— :class:`EntryWrapper` 入口包装器源码生成
 
 注意：``installer`` 模块依赖 ``fspack.builder``，为避免循环导入（builder →
@@ -19,6 +20,7 @@ packaging → installer → builder），本 ``__init__`` 不导出 ``installer`
 
 from __future__ import annotations
 
+from fspack.packaging.builtin import TkinterBundler
 from fspack.packaging.entry import EntryWrapper
 from fspack.packaging.loader import (
     LINUX_GCC,
@@ -65,6 +67,7 @@ __all__ = [
     "LoaderCompiler",
     "RuntimeDownloader",
     "StandaloneRuntime",
+    "TkinterBundler",
     "WindowsLoader",
     "compile_loader",
     "download_embed",
