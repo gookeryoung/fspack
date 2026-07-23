@@ -34,9 +34,7 @@ def main() -> None:
 
     print(f"scipy {scipy.__version__}")
     print(
-        "scipy demo ok: "
-        f"x=({x[0]:.3f},{x[1]:.3f}) residual={residual:.2e} "
-        f"min=({xmin[0]:.3f},{xmin[1]:.3f}) nnz={nnz}"
+        f"scipy demo ok: x=({x[0]:.3f},{x[1]:.3f}) residual={residual:.2e} min=({xmin[0]:.3f},{xmin[1]:.3f}) nnz={nnz}"
     )
 
 
