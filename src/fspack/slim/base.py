@@ -104,7 +104,35 @@ class SlimSpec(abc.ABC):
     # 子模块扩展名：仅这些文件按子模块名选择性保留
     SUBMODULE_EXTS: frozenset[str] = frozenset({".pyd", ".pyi", ".so"})
 
-    # 通用剥离子目录：示例代码、文档、测试代码非运行时必需，所有 spec 共享
+    # 通用剥离文件扩展名：编译时/调试/缓存文件，运行时不需要，所有 spec 共享
+    # - .h/.hpp/.hxx/.hh：C/C++ 头文件（编译 C 扩展用）
+    # - .cpp/.cc/.cxx/.c：C/C++ 源码
+    # - .lib/.a：静态库/导入库（链接时用）
+    # - .pdb/.exp/.ilk：Windows 链接/调试中间产物
+    # - .pyc/.pyo：字节码缓存（Python 自动重建）
+    # - .exe：辅助工具可执行文件（如 designer.exe，运行时不需要）
+    STRIP_EXTS: frozenset[str] = frozenset(
+        {
+            ".h",
+            ".hpp",
+            ".hxx",
+            ".hh",
+            ".cpp",
+            ".cc",
+            ".cxx",
+            ".c",
+            ".lib",
+            ".a",
+            ".pdb",
+            ".exp",
+            ".ilk",
+            ".pyc",
+            ".pyo",
+            ".exe",
+        }
+    )
+
+    # 通用剥离子目录：示例代码、文档、测试代码、基准测试、缓存目录非运行时必需
     COMMON_EXCLUDE_SUBDIRS: frozenset[str] = frozenset(
         {
             "examples",  # 示例代码
@@ -113,6 +141,8 @@ class SlimSpec(abc.ABC):
             "tests",  # 测试代码（多数包用复数）
             "test",  # 测试代码（少数包用单数）
             "testing",  # 测试辅助目录
+            "benchmarks",  # 性能基准测试
+            "__pycache__",  # 字节码缓存目录
         }
     )
 
@@ -159,14 +189,30 @@ class SlimSpec(abc.ABC):
     # ---- 通用分类辅助（供子类复用）----
 
     @classmethod
-    def _classify_top_or_meta(cls, entry: str, top_pkg: str) -> tuple[str, str | None] | None:
-        """通用 metadata 与跨包 shared 分类。
+    def _is_strip_ext(cls, entry: str) -> bool:
+        """检查条目是否为应剥离的编译时/调试/缓存文件扩展名。
 
-        返回 ``None`` 表示不属于这两类，需交由具体规则继续分类。
+        跳过目录条目（以 ``/`` 结尾），仅检查文件扩展名是否在
+        :attr:`STRIP_EXTS` 中。用于在 spec 分类逻辑的早期统一剥离
+        ``.h``/``.cpp``/``.lib``/``.pdb``/``.pyc``/``.exe`` 等非运行时文件。
+        """
+        if entry.endswith("/"):
+            return False
+        filename = entry.rsplit("/", 1)[-1]
+        return Path(filename).suffix.lower() in cls.STRIP_EXTS
+
+    @classmethod
+    def _classify_top_or_meta(cls, entry: str, top_pkg: str) -> tuple[str, str | None] | None:
+        """通用 metadata、STRIP_EXTS 剥离与跨包 shared 分类。
+
+        返回 ``None`` 表示不属于这三类，需交由具体规则继续分类。``STRIP_EXTS``
+        在此统一处理（含跨包），调用方（如 Qt spec）无需重复实现扩展名剥离。
         """
         parts = entry.split("/")
         if parts[0].endswith(".dist-info"):
             return ("metadata", None)
+        if cls._is_strip_ext(entry):
+            return ("exclude", None)
         if parts[0] != top_pkg:
             return ("shared", None)
         return None
@@ -184,6 +230,8 @@ class SlimSpec(abc.ABC):
         """默认分类逻辑（供 ``DefaultSlimSpec`` 与简单 spec 复用）。
 
         - ``*.dist-info/**`` → metadata
+        - 编译时/调试/缓存扩展名（:attr:`STRIP_EXTS`）→ exclude
+          （`.h`/`.cpp`/`.lib`/`.pdb`/`.pyc`/`.exe` 等运行时不需要）
         - 嵌套剥离：``nested_excludes`` 中目录名出现在任意层级（含跨包）
           → exclude（用于 ``scipy/<sub>/tests/``、``mpl_toolkits/tests/``）
         - 跨包文件 → shared
@@ -205,6 +253,10 @@ class SlimSpec(abc.ABC):
         parts = entry.split("/")
         if parts[0].endswith(".dist-info"):
             return ("metadata", None)
+
+        # 编译时/调试/缓存扩展名剥离（运行时不需要，含跨包/任意层级）
+        if cls._is_strip_ext(entry):
+            return ("exclude", None)
 
         # 嵌套剥离：任意层级（含跨包）匹配则剥离
         # 用于 scipy/<sub>/tests/、mpl_toolkits/<sub>/tests/ 等嵌套测试目录

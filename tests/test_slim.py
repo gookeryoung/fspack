@@ -1521,3 +1521,242 @@ class TestNormalizeName:
 
         assert normalize_name("my_pkg.name") == "my-pkg-name"
         assert normalize_name("multi__sep") == "multi-sep"
+
+
+class TestStripExts:
+    """STRIP_EXTS 扩展名剥离：编译时/调试/缓存文件运行时不需要。"""
+
+    def test_is_strip_ext_method(self) -> None:
+        """_is_strip_ext 识别 STRIP_EXTS 中的扩展名."""
+        from fspack.slim.base import SlimSpec
+
+        strip_exts = (
+            ".h",
+            ".hpp",
+            ".hxx",
+            ".hh",
+            ".cpp",
+            ".cc",
+            ".cxx",
+            ".c",
+            ".lib",
+            ".a",
+            ".pdb",
+            ".exp",
+            ".ilk",
+            ".pyc",
+            ".pyo",
+            ".exe",
+        )
+        for ext in strip_exts:
+            assert SlimSpec._is_strip_ext(f"foo{ext}") is True, f"{ext} 应当剥离"
+        # 不在 STRIP_EXTS 中的扩展名
+        for ext in (".py", ".pyd", ".pyi", ".dll", ".so", ".json", ".txt"):
+            assert SlimSpec._is_strip_ext(f"foo{ext}") is False, f"{ext} 不应剥离"
+
+    def test_is_strip_ext_case_insensitive(self) -> None:
+        """扩展名大小写不敏感."""
+        from fspack.slim.base import SlimSpec
+
+        assert SlimSpec._is_strip_ext("foo.H") is True
+        assert SlimSpec._is_strip_ext("foo.CPP") is True
+        assert SlimSpec._is_strip_ext("foo.Lib") is True
+        assert SlimSpec._is_strip_ext("foo.PDB") is True
+
+    def test_is_strip_ext_directory_not_affected(self) -> None:
+        """目录条目（以 / 结尾）不被剥离."""
+        from fspack.slim.base import SlimSpec
+
+        assert SlimSpec._is_strip_ext("mypkg/sub.h/") is False
+        assert SlimSpec._is_strip_ext("mypkg/") is False
+        assert SlimSpec._is_strip_ext("PySide2/include/") is False
+
+    def test_is_strip_ext_no_extension(self) -> None:
+        """无扩展名文件不被剥离."""
+        from fspack.slim.base import SlimSpec
+
+        assert SlimSpec._is_strip_ext("README") is False
+        assert SlimSpec._is_strip_ext("py.typed") is False
+        assert SlimSpec._is_strip_ext("LICENSE") is False
+
+    def test_default_spec_strip_h(self) -> None:
+        """默认 spec 顶层 .h 剥离."""
+        assert classify_entry("mypkg/foo.h", "mypkg") == ("exclude", None)
+
+    def test_default_spec_strip_cpp_in_subdir(self) -> None:
+        """默认 spec 子目录内 .cpp 剥离."""
+        assert classify_entry("mypkg/core/foo.cpp", "mypkg") == ("exclude", None)
+
+    def test_default_spec_strip_lib(self) -> None:
+        """默认 spec .lib 剥离."""
+        assert classify_entry("mypkg/foo.lib", "mypkg") == ("exclude", None)
+
+    def test_default_spec_strip_a_unix_static_lib(self) -> None:
+        """默认 spec .a（Unix 静态库）剥离."""
+        assert classify_entry("mypkg/foo.a", "mypkg") == ("exclude", None)
+
+    def test_default_spec_strip_pdb(self) -> None:
+        """默认 spec .pdb 剥离."""
+        assert classify_entry("mypkg/foo.pdb", "mypkg") == ("exclude", None)
+
+    def test_default_spec_strip_pyc(self) -> None:
+        """默认 spec .pyc 剥离."""
+        assert classify_entry("mypkg/foo.pyc", "mypkg") == ("exclude", None)
+
+    def test_default_spec_strip_pyc_in_subdir(self) -> None:
+        """默认 spec 子目录内 .pyc 剥离."""
+        assert classify_entry("mypkg/sub/foo.pyc", "mypkg") == ("exclude", None)
+
+    def test_default_spec_strip_exe(self) -> None:
+        """默认 spec 顶层 .exe 剥离（非 Qt 库也剥离辅助 exe）."""
+        assert classify_entry("mypkg/tool.exe", "mypkg") == ("exclude", None)
+
+    def test_default_spec_pyd_not_stripped(self) -> None:
+        """.pyd 不受 STRIP_EXTS 影响（仍归 submodule）."""
+        assert classify_entry("mypkg/core.pyd", "mypkg") == ("submodule", "core")
+
+    def test_default_spec_dll_not_stripped(self) -> None:
+        """非 Qt 库 .dll 不受 STRIP_EXTS 影响（仍归 shared）."""
+        assert classify_entry("mypkg/foo.dll", "mypkg") == ("shared", None)
+
+    def test_default_spec_py_not_stripped(self) -> None:
+        """.py 不受 STRIP_EXTS 影响."""
+        assert classify_entry("mypkg/foo.py", "mypkg") == ("shared", None)
+
+    def test_default_spec_pyi_not_stripped(self) -> None:
+        """.pyi 不受 STRIP_EXTS 影响（仍归 submodule）."""
+        assert classify_entry("mypkg/core.pyi", "mypkg") == ("submodule", "core")
+
+    def test_qt_spec_strip_h_in_subdir(self) -> None:
+        """Qt spec 子目录内 .h 剥离（如 PySide2/plugins/foo.h）."""
+        assert classify_entry("PySide2/plugins/foo.h", "PySide2") == ("exclude", None)
+
+    def test_qt_spec_strip_lib(self) -> None:
+        """Qt spec 顶层 .lib 剥离."""
+        assert classify_entry("PySide2/foo.lib", "PySide2") == ("exclude", None)
+
+    def test_qt_spec_exe_still_excluded(self) -> None:
+        """Qt spec 顶层 .exe 仍剥离（通过 STRIP_EXTS，不再需要专用分支）."""
+        assert classify_entry("PySide2/designer.exe", "PySide2") == ("exclude", None)
+
+    def test_qt_spec_pyd_not_stripped(self) -> None:
+        """Qt spec 顶层 .pyd 不受 STRIP_EXTS 影响（仍归 submodule）."""
+        assert classify_entry("PySide2/QtCore.pyd", "PySide2") == ("submodule", "Core")
+
+    def test_qt_spec_dll_not_stripped(self) -> None:
+        """Qt spec Qt5*.dll 不受 STRIP_EXTS 影响（仍归 submodule）."""
+        assert classify_entry("PySide2/Qt5Core.dll", "PySide2") == ("submodule", "Core")
+
+    def test_qt_spec_non_qt_dll_not_stripped(self) -> None:
+        """Qt spec 非 Qt5/6 前缀 DLL 不受 STRIP_EXTS 影响（VC++ 运行时归 shared）."""
+        assert classify_entry("PySide2/concrt140.dll", "PySide2") == ("shared", None)
+
+    def test_qt_spec_cross_pkg_h_stripped(self) -> None:
+        """Qt spec 跨包 .h 文件剥离（如 shiboken2 中的 .h）."""
+        assert classify_entry("shiboken2/foo.h", "PySide2") == ("exclude", None)
+
+    def test_qt_spec_cross_pkg_exe_stripped(self) -> None:
+        """Qt spec 跨包 .exe 文件剥离."""
+        assert classify_entry("shiboken2/tool.exe", "PySide2") == ("exclude", None)
+
+    def test_numpy_spec_strip_h_in_include(self) -> None:
+        """numpy spec 子目录内 .h 剥离（如 numpy/core/include/foo.h）."""
+        assert classify_entry("numpy/core/include/foo.h", "numpy") == ("exclude", None)
+
+    def test_numpy_spec_pyd_not_stripped(self) -> None:
+        """numpy spec _ 前缀 .pyd 不受 STRIP_EXTS 影响（仍归 shared）."""
+        assert classify_entry("numpy/_multiarray_umath.cp38-win_amd64.pyd", "numpy") == ("shared", None)
+
+    def test_lxml_spec_strip_h_outside_includes(self) -> None:
+        """lxml spec includes 目录外的 .h 也剥离（STRIP_EXTS 兜底）."""
+        assert classify_entry("lxml/foo.h", "lxml") == ("exclude", None)
+
+    def test_matplotlib_spec_strip_pdb(self) -> None:
+        """matplotlib spec .pdb 剥离."""
+        assert classify_entry("matplotlib/foo.pdb", "matplotlib") == ("exclude", None)
+
+    def test_scipy_spec_strip_cpp_in_subdir(self) -> None:
+        """scipy spec 子目录内 .cpp 剥离."""
+        assert classify_entry("scipy/_lib/foo.cpp", "scipy") == ("exclude", None)
+
+    def test_dist_info_not_stripped(self) -> None:
+        """.dist-info 内文件不受 STRIP_EXTS 影响（metadata 始终保留）."""
+        assert classify_entry("PySide2-5.15.2.1.dist-info/RECORD", "PySide2") == ("metadata", None)
+        assert classify_entry("mypkg-1.0.dist-info/METADATA", "mypkg") == ("metadata", None)
+
+    def test_strip_exts_end_to_end_unpack(self, tmp_path: Path) -> None:
+        """端到端：含 .h/.cpp/.lib/.pyc 的 wheel 解压后这些文件被剥离."""
+        whl = tmp_path / "wh" / "mypkg-1.0-cp39-none-win_amd64.whl"
+        whl.parent.mkdir()
+        _make_wheel(
+            whl,
+            {
+                "mypkg/__init__.py": b"",
+                "mypkg/core.pyd": b"core",
+                "mypkg/utils.py": b"u",
+                # 编译时/调试/缓存文件 → 剥离
+                "mypkg/foo.h": b"h",
+                "mypkg/sub/bar.cpp": b"cpp",
+                "mypkg/baz.lib": b"lib",
+                "mypkg/debug.pdb": b"pdb",
+                "mypkg/__pycache__/utils.cpython-38.pyc": b"pyc",
+                "mypkg/tool.exe": b"exe",
+                # 运行时文件 → 保留
+                "mypkg/sub/x.py": b"sub",
+                "mypkg-1.0.dist-info/METADATA": b"meta",
+            },
+        )
+        dest = tmp_path / "sp"
+        count = slim_unpack([whl], dest, {"mypkg": frozenset({"core"})})
+        assert count == 1
+        # 运行时文件保留
+        assert (dest / "mypkg" / "__init__.py").is_file()
+        assert (dest / "mypkg" / "core.pyd").is_file()
+        assert (dest / "mypkg" / "utils.py").is_file()
+        assert (dest / "mypkg" / "sub" / "x.py").is_file()
+        # 编译时/调试/缓存文件剥离
+        assert not (dest / "mypkg" / "foo.h").exists()
+        assert not (dest / "mypkg" / "sub" / "bar.cpp").exists()
+        assert not (dest / "mypkg" / "baz.lib").exists()
+        assert not (dest / "mypkg" / "debug.pdb").exists()
+        assert not (dest / "mypkg" / "__pycache__").exists()
+        assert not (dest / "mypkg" / "tool.exe").exists()
+        # 元数据保留
+        assert (dest / "mypkg-1.0.dist-info" / "METADATA").is_file()
+
+
+class TestCommonExcludeSubdirsExtended:
+    """COMMON_EXCLUDE_SUBDIRS 扩展：benchmarks/__pycache__ 目录剥离."""
+
+    def test_benchmarks_excluded_default_spec(self) -> None:
+        """默认 spec benchmarks 目录剥离."""
+        assert classify_entry("mypkg/benchmarks/bench.py", "mypkg") == ("exclude", None)
+        assert classify_entry("mypkg/benchmarks/nested/deep.py", "mypkg") == ("exclude", None)
+
+    def test_benchmarks_excluded_numpy_spec(self) -> None:
+        """numpy spec benchmarks 目录剥离."""
+        assert classify_entry("numpy/benchmarks/bench_core.py", "numpy") == ("exclude", None)
+
+    def test_pycache_excluded_default_spec(self) -> None:
+        """默认 spec __pycache__ 目录剥离."""
+        assert classify_entry("mypkg/__pycache__/foo.cpython-38.pyc", "mypkg") == ("exclude", None)
+
+    def test_pycache_excluded_numpy_spec(self) -> None:
+        """numpy spec __pycache__ 目录剥离."""
+        assert classify_entry("numpy/__pycache__/foo.cpython-38.pyc", "numpy") == ("exclude", None)
+
+    def test_qt_benchmarks_excluded(self) -> None:
+        """Qt spec benchmarks 目录剥离（Qt spec 现在也应用 COMMON_EXCLUDE_SUBDIRS）."""
+        assert classify_entry("PySide2/benchmarks/bench.py", "PySide2") == ("exclude", None)
+
+    def test_qt_pycache_excluded(self) -> None:
+        """Qt spec __pycache__ 目录剥离."""
+        assert classify_entry("PySide2/__pycache__/foo.cpython-38.pyc", "PySide2") == ("exclude", None)
+
+    def test_qt_tests_excluded(self) -> None:
+        """Qt spec tests 目录剥离（COMMON_EXCLUDE_SUBDIRS 现在也覆盖 Qt）."""
+        assert classify_entry("PySide2/tests/test_core.py", "PySide2") == ("exclude", None)
+
+    def test_qt_docs_excluded(self) -> None:
+        """Qt spec docs 目录剥离（COMMON_EXCLUDE_SUBDIRS 覆盖 Qt，与 _QT_EXCLUDE_SUBDIRS 的 doc 冗余但无害）."""
+        assert classify_entry("PySide2/docs/index.md", "PySide2") == ("exclude", None)

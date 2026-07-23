@@ -277,7 +277,8 @@ class QtSlimSpec(SlimSpec):
     ) -> tuple[str, str | None]:
         """Qt 库条目分类。
 
-        - 顶层 ``.exe`` → exclude（Qt 自带开发工具）
+        - ``.exe``/``.h``/``.cpp``/``.lib`` 等 STRIP_EXTS 扩展名 → exclude
+          （由 :meth:`_classify_top_or_meta` 统一处理，含跨包）
         - 顶层 ``.pyd``/``.pyi``/``.so`` → submodule（归一化子模块名）
         - 顶层 ``Qt5Xxx.dll``/``Qt6Xxx.dll`` → submodule（归一化子模块名）；
           PySide2/PySide6 的 abi3.dll 隐式依赖 Qml/Network DLL → 归 shared
@@ -303,9 +304,6 @@ class QtSlimSpec(SlimSpec):
                 return ("shared", None)
             suffix = Path(filename).suffix.lower()
             stem = Path(filename).stem
-            if suffix == ".exe":
-                # Qt 自带开发工具（designer.exe 等），运行时不需要
-                return ("exclude", None)
             if suffix in cls.SUBMODULE_EXTS:
                 # .pyd/.pyi/.so 按归一化子模块名选择性保留
                 return ("submodule", _normalize_qt_sub(stem))
@@ -323,7 +321,7 @@ class QtSlimSpec(SlimSpec):
 
         # 子目录（len(parts) >= 3）
         subdir = parts[1]
-        if subdir in _QT_EXCLUDE_SUBDIRS:
+        if subdir in cls.COMMON_EXCLUDE_SUBDIRS or subdir in _QT_EXCLUDE_SUBDIRS:
             return ("exclude", None)
         if subdir == "plugins" and len(parts) >= 4:
             plugin_type = parts[2]
