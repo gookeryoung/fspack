@@ -69,11 +69,11 @@ def test_find_favicon_priority_png_over_bmp(tmp_path: Path) -> None:
 
 def test_find_favicon_skips_excluded_dirs(tmp_path: Path) -> None:
     """跳过 dist/build/.venv 等排除目录下的 favicon."""
-    (tmp_path / "dist").mkdir(parents=True)
+    (tmp_path / "dist").mkdir()
     (tmp_path / "dist" / "favicon.ico").write_bytes(b"ico")
-    (tmp_path / "build").mkdir(parents=True)
+    (tmp_path / "build").mkdir()
     (tmp_path / "build" / "favicon.png").write_bytes(b"png")
-    (tmp_path / ".venv").mkdir(parents=True)
+    (tmp_path / ".venv").mkdir()
     (tmp_path / ".venv" / "favicon.ico").write_bytes(b"ico")
     # 排除目录下都不命中，返回 None
     assert find_favicon(tmp_path) is None
@@ -85,6 +85,28 @@ def test_find_favicon_finds_in_subdir(tmp_path: Path) -> None:
     (tmp_path / "assets" / "favicon.png").write_bytes(b"png")
     result = find_favicon(tmp_path)
     assert result == tmp_path / "assets" / "favicon.png"
+
+
+def test_find_favicon_shallow_dir_overrides_deep_ico(tmp_path: Path) -> None:
+    """浅层目录的 .png 优先于深层目录的 .ico.
+
+    项目根 favicon.png 优先于子目录 assets/favicon.ico，
+    因为用户通常将主 favicon 放在浅层位置。
+    """
+    (tmp_path / "favicon.png").write_bytes(b"png")
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "assets" / "favicon.ico").write_bytes(b"ico")
+    result = find_favicon(tmp_path)
+    assert result == tmp_path / "favicon.png"
+
+
+def test_find_favicon_shallow_ico_overrides_deep_png(tmp_path: Path) -> None:
+    """浅层目录的 .ico 优先于深层目录的 .png."""
+    (tmp_path / "favicon.ico").write_bytes(b"ico")
+    (tmp_path / "deep").mkdir()
+    (tmp_path / "deep" / "favicon.png").write_bytes(b"png")
+    result = find_favicon(tmp_path)
+    assert result == tmp_path / "favicon.ico"
 
 
 def test_find_favicon_ignores_non_favicon_files(tmp_path: Path) -> None:
@@ -113,18 +135,16 @@ def test_find_favicon_ignores_directory_named_favicon(tmp_path: Path) -> None:
 
 
 def test_find_favicon_case_insensitive_match(tmp_path: Path) -> None:
-    """扩展名大小写不敏感匹配（Windows 文件系统大小写不敏感场景）.
+    """文件名大小写不敏感匹配（favicon.ICO 等同 favicon.ico）.
 
-    在 Windows 上 rglob('favicon.ico') 会匹配 favicon.ICO；
-    二次校验确保 path.suffix.lower() == ext 后才返回。
-    大小写敏感系统 rglob 不匹配 favicon.ICO，返回 None。
+    os.walk + fname.lower() 比较在所有平台一致匹配，
+    不依赖文件系统大小写敏感性。
     """
     (tmp_path / "favicon.ICO").write_bytes(b"ico")
     result = find_favicon(tmp_path)
-    if result is not None:
-        # Windows：rglob 命中 favicon.ICO，二次校验通过
-        assert result.suffix.lower() == ".ico"
-    # 大小写敏感系统：rglob 未命中，result 为 None，不报错
+    assert result is not None
+    assert result.suffix.lower() == ".ico"
+    assert result.name.lower() == "favicon.ico"
 
 
 def test_supported_image_exts_contains_common_formats() -> None:

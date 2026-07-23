@@ -14,6 +14,7 @@ Pillow 作为 optional 依赖 ``fspack[image]`` 提供，未安装时不影响 `
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 __all__ = ["SUPPORTED_IMAGE_EXTS", "ensure_ico", "find_favicon"]
@@ -60,33 +61,34 @@ _FAVICON_SKIP_DIRS: frozenset[str] = frozenset(
 def find_favicon(project_dir: Path) -> Path | None:
     """递归搜索项目目录下的 ``favicon.*`` 文件，返回首个命中路径。
 
-    扫描规则：
+    扫描规则（按优先级）：
 
-    - 文件名匹配 ``favicon.*``（大小写不敏感，扩展名须在 :data:`SUPPORTED_IMAGE_EXTS` 内）
-    - 跳过构建产物、虚拟环境、缓存等目录（见 :data:`_FAVICON_SKIP_DIRS`）
-    - 同一目录内多种扩展名共存时按 :data:`_FAVICON_EXTS` 优先级返回
-      （.ico > .png > .bmp > .jpg > .jpeg > .gif > .webp）
-    - 多目录命中时返回 rglob 首个（按目录遍历顺序），不跨目录比较优先级
+    1. **浅层目录优先**：``os.walk`` 自顶向下遍历，项目根目录的 favicon 优先于
+       子目录（用户通常将主 favicon 放在浅层位置）
+    2. **同目录内按扩展名优先级**：``.ico`` > ``.png`` > ``.bmp`` > ``.jpg`` >
+       ``.jpeg`` > ``.gif`` > ``.webp``（避免不必要的图片转换）
+    3. **跳过排除目录**：不进入 :data:`_FAVICON_SKIP_DIRS` 中的目录子树
+       （dist/build/.venv 等构建产物与缓存）
 
+    文件名匹配大小写不敏感（``favicon.ICO`` 等同 ``favicon.ico``）。
     返回 ``None`` 表示未找到任何 favicon 文件。
     """
     project_dir = Path(project_dir)
     if not project_dir.is_dir():
         return None
 
-    # 按扩展名优先级逐档扫描，保证同目录 .ico 命中先于 .png
-    for ext in _FAVICON_EXTS:
-        for path in project_dir.rglob(f"favicon{ext}"):
-            if not path.is_file():
-                continue
-            # 跳过排除目录下的命中（rglob 无法直接排除目录）
-            if any(part in _FAVICON_SKIP_DIRS for part in path.relative_to(project_dir).parts[:-1]):
-                continue
-            # 二次校验扩展名（rglob 在大小写不敏感系统可能匹配 favicon.TXT）
-            if path.suffix.lower() != ext:
-                continue
-            _logger.info("发现 favicon: %s", path)
-            return path
+    # os.walk 自顶向下遍历：浅层目录优先于子目录
+    for root, dirs, files in os.walk(project_dir):
+        # 原地修改 dirs 跳过排除目录，避免进入其子树（os.walk 标准用法）
+        dirs[:] = [d for d in dirs if d not in _FAVICON_SKIP_DIRS]
+        # 同目录内按扩展名优先级查找
+        for ext in _FAVICON_EXTS:
+            target = f"favicon{ext}"
+            for fname in files:
+                if fname.lower() == target.lower():
+                    path = Path(root) / fname
+                    _logger.info("发现 favicon: %s", path)
+                    return path
     return None
 
 
@@ -104,11 +106,12 @@ def ensure_ico(src: Path, work_dir: Path) -> Path | None:
         _logger.warning("icon 文件不存在: %s", src)
         return None
 
-    if src.suffix.lower() == ".ico":
+    suffix = src.suffix.lower()
+    if suffix == ".ico":
         return src
 
-    if src.suffix.lower() not in SUPPORTED_IMAGE_EXTS:
-        _logger.warning("不支持的 icon 格式 %s，跳过: %s", src.suffix, src)
+    if suffix not in SUPPORTED_IMAGE_EXTS:
+        _logger.warning("不支持的 icon 格式 %s，跳过: %s", suffix, src)
         return None
 
     work_dir.mkdir(parents=True, exist_ok=True)
