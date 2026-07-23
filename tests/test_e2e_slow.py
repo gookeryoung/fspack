@@ -522,3 +522,33 @@ def test_build_and_run_sci_scipy(tmp_path: Path) -> None:
     assert not ((proj / "dist" / "runtime" / "Lib" / "site-packages" / "scipy" / "optimize" / "tests").is_dir())
     # 运行时内部库应保留
     assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "scipy" / "_lib").is_dir()
+
+
+@pytest.mark.slow
+def test_build_and_run_tk_app(tmp_path: Path) -> None:
+    """tk_app 示例：tkinter 内置库打包，验证 TkinterBundler 补充 tkinter 到 embed python。
+
+    AST 检出 ``import tkinter`` → TkinterBundler 从 python-build-standalone Windows
+    构建提取 tkinter 组件（Lib/tkinter/ + _tkinter.pyd + tcl/tcl8.6/ + tcl/tk8.6/）
+    补充到 runtime。wrapper 注入 TCL_LIBRARY/TK_LIBRARY 环境变量。
+
+    GUI 应用用 debug 模式（embed python + wrapper 直跑）使 print 输出可见。
+    root.after(1000) 定时退出避免 wine 下挂起。
+    """
+    _build_and_run("tk_app", "hello from tkinter", tmp_path, debug=True, timeout=300)
+    proj = tmp_path / "tk_app"
+    # tkinter 纯 Python 包应补充到 runtime/Lib/tkinter/
+    assert (proj / "dist" / "runtime" / "Lib" / "tkinter" / "__init__.py").is_file(), "tkinter 包未补充"
+    # _tkinter.pyd C 扩展应在 runtime 根目录
+    assert (proj / "dist" / "runtime" / "_tkinter.pyd").is_file(), "_tkinter.pyd 未补充"
+    # Tcl/Tk 运行时脚本应在 runtime/tcl/
+    assert (proj / "dist" / "runtime" / "tcl").is_dir(), "tcl 目录未补充"
+    tcl_dirs = list((proj / "dist" / "runtime" / "tcl").iterdir())
+    tcl_ver_dirs = [d for d in tcl_dirs if d.name.startswith("tcl") and d.is_dir()]
+    tk_ver_dirs = [d for d in tcl_dirs if d.name.startswith("tk") and d.is_dir()]
+    assert tcl_ver_dirs, f"未找到 tcl8.x/ 目录: {tcl_dirs}"
+    assert tk_ver_dirs, f"未找到 tk8.x/ 目录: {tcl_dirs}"
+    # wrapper 应注入 TCL_LIBRARY/TK_LIBRARY 环境变量设置
+    wrapper = (proj / "dist" / "_entry_tk_app.py").read_text(encoding="utf-8")
+    assert "if True:" in wrapper, "wrapper 未注入 tkinter 环境变量（has_tkinter 应为 True）"
+    assert "TCL_LIBRARY" in wrapper

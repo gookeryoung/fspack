@@ -179,6 +179,7 @@ fsp r --entry web     # 运行 web 入口
 | gui_calc | 有库 GUI | PySide6 依赖，验证 GUI 快捷方式与 DLL 搜索 |
 | pyside2_app | 有库 GUI | PySide2 依赖，验证 requires-python 版本自动解析 |
 | pyqt5_cli | 有库 GUI | PyQt5 依赖，验证 Python 3.12 兼容 |
+| tk_app | 有库 GUI | tkinter 内置库打包，验证 TkinterBundler 从 standalone 提取补充到 embed python |
 | pygame_cli | 有库 pygame | pygame 依赖，验证多媒体库打包 |
 | pygame_snake | 有库 pygame | pygame 贪吃蛇，验证 dummy 驱动运行 |
 | web_app | 有库 web | flask 依赖，验证 web 框架打包 |
