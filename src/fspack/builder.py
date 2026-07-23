@@ -8,7 +8,15 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Sequence
 
-from fspack.config import BuildConfig, DependencyReport, MirrorConfig, ProjectInfo
+from fspack.config import (
+    DEFAULT_LINUX_PY_VERSION,
+    DEFAULT_PY_VERSION,
+    BuildConfig,
+    DependencyReport,
+    MirrorConfig,
+    ProjectInfo,
+    resolve_py_version,
+)
 from fspack.console import console
 from fspack.packaging.builtin import TkinterBundler
 from fspack.packaging.entry import EntryWrapper
@@ -25,10 +33,16 @@ from fspack.packaging.runtime import (
 from fspack.packaging.wheels import download_wheels
 from fspack.platform import Platform, detect_platform, wheel_platform_tags
 from fspack.progress import BuildTracker, StageRecorder, spinner
-from fspack.project import DEFAULT_LINUX_PY_VERSION, DEFAULT_PY_VERSION, resolve_py_version
-from fspack.wheel_cache import fspack_wheel_cache_dir
 
-__all__ = ["DEFAULT_PY_VERSION", "build", "copy_source", "default_icon_path", "download_wheels", "unpack_wheels"]
+__all__ = [
+    "DEFAULT_PY_VERSION",
+    "build",
+    "copy_source",
+    "default_icon_path",
+    "download_wheels",
+    "fspack_wheel_cache_dir",
+    "unpack_wheels",
+]
 
 _logger = logging.getLogger(__name__)
 
@@ -39,6 +53,11 @@ _DEFAULT_ICON = Path(__file__).parent / "assets" / "icons" / "app.ico"
 def default_icon_path() -> Path:
     """返回 fspack 自带的默认 icon 路径（``assets/icons/app.ico``）."""
     return _DEFAULT_ICON
+
+
+def fspack_wheel_cache_dir() -> Path:
+    """返回 fspack wheel 缓存目录 ``~/.fspack/cache/wheels/``."""
+    return Path.home() / ".fspack" / "cache" / "wheels"
 
 
 # dist/src 仅保留应用运行所需源码与资源，剥离所有开发期文件。

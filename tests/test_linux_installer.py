@@ -10,9 +10,8 @@ from typing import Any
 
 import pytest
 
-from fspack.config import AppType, ProjectInfo
+from fspack.config import AppType, ProjectInfo, get_mirror
 from fspack.exceptions import InstallerError
-from fspack.mirror import get_mirror
 from fspack.packaging.installer import build_deb, build_linux_installer, build_tarball
 
 

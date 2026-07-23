@@ -10,8 +10,8 @@ from fspack.commands import build as build_cmd
 from fspack.commands import clean as clean_cmd
 from fspack.commands import package as package_cmd
 from fspack.commands import run as run_cmd
+from fspack.config import MIRRORS
 from fspack.console import console
-from fspack.mirror import MIRRORS
 from fspack.platform import Platform
 
 __all__ = ["build_parser", "main"]

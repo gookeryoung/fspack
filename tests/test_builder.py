@@ -13,11 +13,12 @@ from fspack.builder import (
     _site_packages_has_deps,
     build,
     copy_source,
+    fspack_wheel_cache_dir,
     unpack_wheels,
 )
+from fspack.config import get_mirror
 from fspack.console import console
 from fspack.exceptions import DependencyError
-from fspack.mirror import get_mirror
 from fspack.platform import Platform
 
 _EXAMPLES = Path(__file__).parent.parent / "examples"
@@ -668,3 +669,10 @@ def test_build_skips_tkinter_when_not_used(tmp_path: Path, monkeypatch: pytest.M
     assert ensure_called.get("called") is None
     wrapper = (proj / "dist" / "_entry_app.py").read_text(encoding="utf-8")
     assert "if False:" in wrapper
+
+
+def test_fspack_wheel_cache_dir_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """fspack wheel 缓存目录路径结构 ``~/.fspack/cache/wheels/``."""
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    result = fspack_wheel_cache_dir()
+    assert result == tmp_path / ".fspack" / "cache" / "wheels"

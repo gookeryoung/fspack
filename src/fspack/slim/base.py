@@ -17,14 +17,15 @@ from __future__ import annotations
 
 import abc
 import logging
+import re
 import sys
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
 from fspack.exceptions import DependencyError
 from fspack.progress import StageRecorder, iter_with_progress
-from fspack.wheel_cache import WheelInfo, normalize_name
 
 if sys.version_info >= (3, 12):  # pragma: no cover
     from typing import override
@@ -33,14 +34,62 @@ else:
 
 __all__ = [
     "SlimSpec",
+    "WheelInfo",
     "classify_entry",
     "get_spec",
+    "normalize_name",
     "override",
+    "parse_wheel_filename",
     "register_spec",
     "slim_unpack",
 ]
 
 _logger = logging.getLogger(__name__)
+
+# PEP 427 wheel 文件名正则：name-version(-build)?-py-abi-plat.whl
+_WHEEL_RE = re.compile(
+    r"^(?P<name>.+?)-(?P<ver>.+?)(-(?P<build>\d[^-]*?))?-"
+    r"(?P<py>[^-]+)-(?P<abi>[^-]+)-(?P<plat>[^-]+)\.whl$",
+    re.IGNORECASE,
+)
+
+
+@dataclass(frozen=True)
+class WheelInfo:
+    """解析后的 wheel 元信息."""
+
+    name: str
+    version: str
+    python_tags: tuple[str, ...]
+    abi_tag: str
+    platform_tags: tuple[str, ...]
+
+    @classmethod
+    def from_filename(cls, filename: str) -> WheelInfo | None:
+        """从 wheel 文件名构造实例，无法解析返回 None."""
+        m = _WHEEL_RE.match(filename)
+        if m is None:
+            return None
+        return cls(
+            name=m.group("name"),
+            version=m.group("ver"),
+            python_tags=tuple(m.group("py").split(".")),
+            abi_tag=m.group("abi"),
+            platform_tags=tuple(m.group("plat").split(".")),
+        )
+
+
+def normalize_name(name: str) -> str:
+    """PEP 503 名称归一化：小写，连续的 ``-_.`` 合并为 ``-``."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def parse_wheel_filename(filename: str) -> WheelInfo | None:
+    """解析 wheel 文件名为 WheelInfo，无法解析返回 None。
+
+    .. deprecated:: 向后兼容包装，内部委托 :meth:`WheelInfo.from_filename`。
+    """
+    return WheelInfo.from_filename(filename)
 
 
 class SlimSpec(abc.ABC):

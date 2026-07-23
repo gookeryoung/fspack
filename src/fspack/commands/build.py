@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 
 from fspack.builder import build
-from fspack.mirror import get_mirror
+from fspack.config import get_mirror
 from fspack.platform import Platform, detect_platform
 
 __all__ = ["run"]

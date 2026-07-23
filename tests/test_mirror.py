@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from fspack.mirror import DEFAULT_MIRROR, MIRRORS, get_mirror
+from fspack.config import DEFAULT_MIRROR, MIRRORS, get_mirror
 
 
 def test_default_mirror_is_aliyun() -> None:

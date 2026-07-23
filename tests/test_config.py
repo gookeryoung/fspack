@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fspack.config import AppType, BuildConfig, DependencyReport, EntryPoint, MirrorConfig, ProjectInfo
-from fspack.mirror import MIRRORS
+from fspack.config import MIRRORS, AppType, BuildConfig, DependencyReport, EntryPoint, MirrorConfig, ProjectInfo
 from fspack.platform import Platform
 
 _EXAMPLES = Path(__file__).parent.parent / "examples"

@@ -17,8 +17,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fspack.slim.base import SlimSpec, override
-from fspack.wheel_cache import normalize_name
+from fspack.slim.base import SlimSpec, normalize_name, override
 
 __all__ = [
     "QT_PACKAGES",

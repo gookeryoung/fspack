@@ -11,9 +11,8 @@ from fspack.commands.clean import run as clean_run
 from fspack.commands.package import run as package_run
 from fspack.commands.run import _build_cmd, _find_exe, _select_entry
 from fspack.commands.run import run as run_run
-from fspack.config import AppType, EntryPoint, ProjectInfo
+from fspack.config import AppType, EntryPoint, ProjectInfo, get_mirror
 from fspack.exceptions import FspackError
-from fspack.mirror import get_mirror
 from fspack.platform import Platform, detect_platform
 
 

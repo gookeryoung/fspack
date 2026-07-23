@@ -1,4 +1,4 @@
-"""project pyproject.toml 解析与入口识别测试."""
+"""pyproject.toml 解析与入口识别测试（逻辑现位于 fspack.config）."""
 
 from __future__ import annotations
 
@@ -6,9 +6,16 @@ from pathlib import Path
 
 import pytest
 
-from fspack.config import AppType, EntryPoint
+from fspack.config import (
+    DEFAULT_PY_VERSION,
+    AppType,
+    EntryPoint,
+    detect_entry,
+    infer_app_type,
+    parse_project,
+    resolve_py_version,
+)
 from fspack.exceptions import ProjectError
-from fspack.project import DEFAULT_PY_VERSION, detect_entry, infer_app_type, parse_project, resolve_py_version
 
 _EXAMPLES = Path(__file__).parent.parent / "examples"
 
@@ -151,7 +158,7 @@ def test_resolve_py_version_explicit_overrides_requires_python(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """显式版本不满足 requires-python 时告警但仍使用."""
-    with caplog.at_level("WARNING", logger="fspack.project"):
+    with caplog.at_level("WARNING", logger="fspack.config"):
         result = resolve_py_version(tmp_path, "3.12.0", ">=3.8,<3.11")
     assert result == "3.12.0"
     assert "不满足 requires-python" in caplog.text
@@ -180,7 +187,7 @@ def test_resolve_py_version_python_version_violates_requires_python(
 ) -> None:
     """.python-version 不满足 requires-python 时告警并自动选择."""
     (tmp_path / ".python-version").write_text("3.12")
-    with caplog.at_level("WARNING", logger="fspack.project"):
+    with caplog.at_level("WARNING", logger="fspack.config"):
         result = resolve_py_version(tmp_path, None, ">=3.8,<3.11")
     assert result == "3.10.11"
     assert "不满足 requires-python" in caplog.text
@@ -303,7 +310,7 @@ def test_entry_point_entry_rel(tmp_path: Path) -> None:
 
 def test_resolve_icon_none_returns_none(tmp_path: Path) -> None:
     """icon_rel 为 None/空时返回 None."""
-    from fspack.project import _resolve_icon
+    from fspack.config import _resolve_icon
 
     assert _resolve_icon(tmp_path, None) is None
     assert _resolve_icon(tmp_path, "") is None
@@ -311,7 +318,7 @@ def test_resolve_icon_none_returns_none(tmp_path: Path) -> None:
 
 def test_resolve_icon_invalid_type_raises(tmp_path: Path) -> None:
     """icon_rel 非字符串时报错."""
-    from fspack.project import _resolve_icon
+    from fspack.config import _resolve_icon
 
     with pytest.raises(ProjectError, match="icon 配置无效"):
         _resolve_icon(tmp_path, 123)
@@ -319,7 +326,7 @@ def test_resolve_icon_invalid_type_raises(tmp_path: Path) -> None:
 
 def test_resolve_icon_blank_string_raises(tmp_path: Path) -> None:
     """icon_rel 为纯空白字符串时报错."""
-    from fspack.project import _resolve_icon
+    from fspack.config import _resolve_icon
 
     with pytest.raises(ProjectError, match="icon 配置无效"):
         _resolve_icon(tmp_path, "   ")
@@ -327,7 +334,7 @@ def test_resolve_icon_blank_string_raises(tmp_path: Path) -> None:
 
 def test_resolve_icon_missing_file_raises(tmp_path: Path) -> None:
     """icon 文件不存在时报错."""
-    from fspack.project import _resolve_icon
+    from fspack.config import _resolve_icon
 
     with pytest.raises(ProjectError, match="icon 文件不存在"):
         _resolve_icon(tmp_path, "missing.ico")
@@ -335,7 +342,7 @@ def test_resolve_icon_missing_file_raises(tmp_path: Path) -> None:
 
 def test_resolve_icon_valid_returns_absolute(tmp_path: Path) -> None:
     """icon 文件存在时返回绝对路径."""
-    from fspack.project import _resolve_icon
+    from fspack.config import _resolve_icon
 
     icon = tmp_path / "custom.ico"
     icon.write_bytes(b"ico")
@@ -347,7 +354,7 @@ def test_resolve_icon_valid_returns_absolute(tmp_path: Path) -> None:
 
 def test_resolve_icon_strips_whitespace(tmp_path: Path) -> None:
     """icon 路径两侧空白被剥离."""
-    from fspack.project import _resolve_icon
+    from fspack.config import _resolve_icon
 
     icon = tmp_path / "custom.ico"
     icon.write_bytes(b"ico")
