@@ -343,6 +343,11 @@ _EXCLUDED_DIRS = frozenset(
         ".pytest_cache",
         ".ruff_cache",
         ".mypy_cache",
+        # 开发期目录：非运行时代码，扫描会导致误报依赖
+        "examples",
+        "tests",
+        "docs",
+        "templates",
     }
 )
 

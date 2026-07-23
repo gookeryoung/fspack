@@ -114,6 +114,31 @@ def test_analyze_dependencies_excludes_build_artifacts(tmp_path: Path) -> None:
     assert r.ast_third_party == ()
 
 
+def test_analyze_dependencies_excludes_dev_directories(tmp_path: Path) -> None:
+    """examples/tests/docs/templates 等开发期目录不应被扫描，避免误报依赖."""
+    (tmp_path / "main.py").write_text("import os\n")
+    # examples 下含 tkinter/PySide2 等 import（非项目自身依赖）
+    (tmp_path / "examples").mkdir()
+    (tmp_path / "examples" / "tk_app.py").write_text("import tkinter\n")
+    (tmp_path / "examples" / "gui.py").write_text("import PySide2\n")
+    # tests 下含 pytest import
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_main.py").write_text("import pytest\n")
+    # docs 下含 sphinx import
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "conf.py").write_text("import sphinx\n")
+    # templates 下含 yaml import
+    (tmp_path / "templates").mkdir()
+    (tmp_path / "templates" / "gen.py").write_text("import yaml\n")
+    r = analyze_dependencies(tmp_path, "main", ())
+    assert "tkinter" not in r.ast_stdlib
+    assert "PySide2" not in r.ast_third_party
+    assert "pytest" not in r.ast_third_party
+    assert "sphinx" not in r.ast_third_party
+    assert "yaml" not in r.ast_third_party
+    assert r.ast_third_party == ()
+
+
 def test_analyze_dependencies_submodules(tmp_path: Path) -> None:
     """第三方包的子模块 import 被收集到 ast_submodules."""
     (tmp_path / "main.py").write_text("from PySide2.QtCore import QTimer\nfrom PySide2.QtWidgets import QApplication\n")
