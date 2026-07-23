@@ -26,19 +26,21 @@ __all__ = [
 
 
 class NumpySlimSpec(SlimSpec):
-    """numpy 精简规则：剥离 Fortran 编译工具与 PyInstaller hook 子目录。
+    """numpy 精简规则：剥离已弃用构建工具与 PyInstaller hook 子目录。
 
     通用剥离（examples/docs/tests 等）由 :meth:`_default_classify` 处理，
     本规则扩展剥离 numpy 专属非运行时目录：
 
-    - ``f2py``：Fortran 编译工具（运行时不需要，仅构建时用）
     - ``distutils``：已弃用的构建工具（NumPy 2.0+ 不再随包分发）
     - ``_pyinstaller``：PyInstaller hook（fspack 不依赖 PyInstaller）
+
+    注意：``f2py`` 和 ``testing`` 不能剥离——scipy 的 ``array_api_compat``
+    运行时执行 ``from numpy import *``，触发 ``numpy.__getattr__`` 导入
+    ``numpy.f2py`` 和 ``numpy.testing``，剥离会导致 ``ModuleNotFoundError``。
     """
 
     _EXTRA_EXCLUDES = frozenset(
         {
-            "f2py",  # Fortran 编译工具
             "distutils",  # 已弃用构建工具
             "_pyinstaller",  # PyInstaller hook
         }
@@ -70,7 +72,16 @@ class NumpySlimSpec(SlimSpec):
         top_pkg: str,
         keep_subs: set[str],
     ) -> tuple[str, str | None]:
-        """numpy 条目分类，委托 :meth:`_default_classify` + 库专属剥离集合."""
+        """numpy 条目分类：保留 ``testing`` 子目录，其余委托 :meth:`_default_classify`。
+
+        ``numpy/testing/`` 是 ``numpy.testing`` 公共 API 模块（非测试代码），
+        scipy 通过 ``from numpy import *`` 触发 ``numpy.__getattr__("testing")``
+        导入，不能被 ``COMMON_EXCLUDE_SUBDIRS`` 的 ``"testing"`` 剥离。
+        ``numpy/tests/``（复数）是真正的测试代码，仍由通用规则剥离。
+        """
+        parts = entry.split("/")
+        if len(parts) >= 2 and parts[0] == top_pkg and parts[1] == "testing":
+            return ("shared", None)
         return cls._default_classify(entry, top_pkg, keep_subs, cls._EXTRA_EXCLUDES)
 
 

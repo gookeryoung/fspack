@@ -4,8 +4,9 @@
 
 - :class:`fspack.slim.qt.QtSlimSpec`：Qt 库（PySide2/PySide6/PyQt5/PyQt6）白名单 +
   子模块依赖闭包（``import QtWidgets`` 自动加入 ``Gui``/``Core``）
-- :class:`fspack.slim.libs.NumpySlimSpec`：numpy 剥离 ``f2py``/``distutils``/
-  ``_pyinstaller`` 等编译工具与 PyInstaller hook 子目录
+- :class:`fspack.slim.libs.NumpySlimSpec`：numpy 剥离 ``distutils``/
+  ``_pyinstaller`` 等已弃用构建工具与 PyInstaller hook 子目录（``f2py`` 保留，
+  scipy 运行时通过 ``from numpy import *`` 触发导入）
 - :class:`fspack.slim.libs.MatplotlibSlimSpec`：matplotlib 剥离 ``sphinxext``
   文档扩展与跨包/嵌套 ``tests`` 目录（含 ``mpl_toolkits/tests/``）
 - :class:`fspack.slim.libs.ScipySlimSpec`：scipy 剥离各子模块下的嵌套

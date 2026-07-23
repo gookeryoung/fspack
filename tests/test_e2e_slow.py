@@ -476,14 +476,15 @@ def test_build_and_run_sci_numpy(tmp_path: Path) -> None:
     """sci_numpy 示例：numpy 数组运算，验证科学库精简打包与运行.
 
     numpy 顶层 C 扩展（_multiarray_umath 等）归 shared 始终保留；
-    f2py/distutils/_pyinstaller 由 NumpySlimSpec 剥离。timeout 加大以
+    distutils/_pyinstaller 由 NumpySlimSpec 剥离。timeout 加大以
     适应 numpy wheel 下载与解压。
     """
     _build_and_run("sci_numpy", "numpy demo ok", tmp_path, timeout=600)
     proj = tmp_path / "sci_numpy"
     assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "numpy").is_dir()
     # numpy 专属剥离目录不应解包
-    assert not (proj / "dist" / "runtime" / "Lib" / "site-packages" / "numpy" / "f2py").is_dir()
+    assert not (proj / "dist" / "runtime" / "Lib" / "site-packages" / "numpy" / "distutils").is_dir()
+    assert not (proj / "dist" / "runtime" / "Lib" / "site-packages" / "numpy" / "_pyinstaller").is_dir()
 
 
 @pytest.mark.slow

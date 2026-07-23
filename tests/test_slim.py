@@ -803,7 +803,7 @@ class TestDefaultSlimSpec:
 
 
 class TestNumpySlimSpec:
-    """numpy 精简规则：通用剥离 + 库专属剥离（f2py/distutils/_pyinstaller）。."""
+    """numpy 精简规则：通用剥离 + 库专属剥离（distutils/_pyinstaller）。."""
 
     def test_match_numpy_only(self) -> None:
         from fspack.slim.libs import NumpySlimSpec
@@ -846,19 +846,19 @@ class TestNumpySlimSpec:
             )
 
     def test_classify_common_excluded(self) -> None:
-        """numpy 的通用剥离目录（examples/docs/tests/testing 等）归 exclude."""
+        """numpy 的通用剥离目录（examples/docs/tests 等）归 exclude。."""
         from fspack.slim.libs import NumpySlimSpec
 
-        for subdir in ("examples", "docs", "doc", "tests", "test", "testing"):
+        for subdir in ("examples", "docs", "doc", "tests", "test"):
             assert NumpySlimSpec.classify_entry(f"numpy/{subdir}/dummy.py", "numpy", set()) == ("exclude", None), (
                 f"{subdir} 应当剥离"
             )
 
     def test_classify_numpy_extra_excluded(self) -> None:
-        """numpy 专属剥离目录：f2py/distutils/_pyinstaller 归 exclude."""
+        """numpy 专属剥离目录：distutils/_pyinstaller 归 exclude。."""
         from fspack.slim.libs import NumpySlimSpec
 
-        for subdir in ("f2py", "distutils", "_pyinstaller"):
+        for subdir in ("distutils", "_pyinstaller"):
             assert NumpySlimSpec.classify_entry(f"numpy/{subdir}/dummy.py", "numpy", set()) == ("exclude", None), (
                 f"{subdir} 应当剥离"
             )
@@ -867,6 +867,25 @@ class TestNumpySlimSpec:
                 "exclude",
                 None,
             ), f"{subdir}/nested 应当剥离"
+
+    def test_classify_numpy_f2py_kept(self) -> None:
+        """numpy f2py 不剥离（scipy 运行时通过 from numpy import * 触发导入）."""
+        from fspack.slim.libs import NumpySlimSpec
+
+        # f2py 目录文件归 shared（始终保留），不归 exclude
+        assert NumpySlimSpec.classify_entry("numpy/f2py/__init__.py", "numpy", set()) == ("shared", None)
+        assert NumpySlimSpec.classify_entry("numpy/f2py/auxfuncs.py", "numpy", set()) == ("shared", None)
+        assert NumpySlimSpec.classify_entry("numpy/f2py/f90mod_rules.py", "numpy", set()) == ("shared", None)
+
+    def test_classify_numpy_testing_kept(self) -> None:
+        """numpy testing 不剥离（numpy.testing 是运行时公共 API，非测试代码）."""
+        from fspack.slim.libs import NumpySlimSpec
+
+        # numpy/testing/ 是 numpy.testing 公共 API 模块，归 shared 保留
+        assert NumpySlimSpec.classify_entry("numpy/testing/__init__.py", "numpy", set()) == ("shared", None)
+        assert NumpySlimSpec.classify_entry("numpy/testing/assertions.py", "numpy", set()) == ("shared", None)
+        # numpy/tests/（复数）是真正的测试代码，仍剥离
+        assert NumpySlimSpec.classify_entry("numpy/tests/test_core.py", "numpy", set()) == ("exclude", None)
 
     def test_classify_top_pyd_as_submodule(self) -> None:
         """numpy 顶层 .pyd 分类：``_`` 前缀私有 C 扩展归 shared 始终保留。
