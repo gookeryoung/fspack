@@ -280,20 +280,16 @@ def classify_entry(
 # ---- 解压实现 ----
 
 
-def _detect_top_pkg(whl: Path, whl_pkg: str) -> str | None:
-    """从 wheel 条目中找出与 whl_pkg 归一化名匹配的顶层目录名。
+def _detect_top_pkg(zf: zipfile.ZipFile, whl_pkg: str) -> str | None:
+    """从已打开的 ZipFile 中找出与 whl_pkg 归一化名匹配的顶层目录名。
 
     遍历 wheel 条目，返回第一个 ``normalize_name`` 后等于 ``whl_pkg`` 的目录名。
     无匹配时返回 None（调用方走全量解压）。
     """
-    try:
-        with zipfile.ZipFile(whl) as zf:
-            for name in zf.namelist():
-                top = name.split("/")[0]
-                if not top.endswith(".dist-info") and normalize_name(top) == whl_pkg:
-                    return top
-    except zipfile.BadZipFile as e:
-        raise DependencyError(f"wheel 损坏: {whl}") from e
+    for name in zf.namelist():
+        top = name.split("/")[0]
+        if not top.endswith(".dist-info") and normalize_name(top) == whl_pkg:
+            return top
     return None
 
 
@@ -306,8 +302,8 @@ def _full_unpack(whl: Path, dest: Path) -> None:
         raise DependencyError(f"wheel 损坏: {whl}") from e
 
 
-def _slim_extract(whl: Path, dest: Path, top_pkg: str, keep_subs: set[str]) -> None:
-    """按需解压 wheel，剥离 ``exclude`` 类文件与未保留子模块文件。
+def _slim_extract(zf: zipfile.ZipFile, dest: Path, top_pkg: str, keep_subs: set[str]) -> None:
+    """从已打开的 ZipFile 按需解压，剥离 ``exclude`` 类文件与未保留子模块文件。
 
     - 始终剥离 ``exclude`` 类条目（如 examples/docs/tests 子目录、Qt 开发工具 exe）
     - ``keep_subs`` 非空时按子模块选择性保留（``submodule`` 类仅保留 ``keep_subs`` 中）
@@ -317,25 +313,45 @@ def _slim_extract(whl: Path, dest: Path, top_pkg: str, keep_subs: set[str]) -> N
     """
     spec = get_spec(normalize_name(top_pkg))
     skipped = 0
+    for info in zf.infolist():
+        category, sub = spec.classify_entry(info.filename, top_pkg, keep_subs)
+        if category == "exclude":
+            # 剥离文件与剥离目录的目录条目均跳过，避免遗留空目录
+            continue
+        if info.is_dir():
+            zf.extract(info, dest)
+            continue
+        # keep_subs 为空时不应用子模块选择性剥离（全量保留 .pyd 等）
+        if category == "submodule" and keep_subs and sub not in keep_subs:
+            skipped += 1
+            continue
+        zf.extract(info, dest)
+    if skipped:
+        assert zf.filename is not None  # 从文件路径打开的 ZipFile 必有 filename
+        _logger.info("精简 %s: 跳过 %d 个未用子模块文件", Path(zf.filename).name, skipped)
+
+
+def _unpack_one_wheel(whl: Path, dest: Path, whl_pkg: str, keep_subs: set[str]) -> None:
+    """解压单个可解析文件名的 wheel：检测 top_pkg 后选择全量或精简解压。
+
+    单次 ``zipfile.ZipFile`` 打开同时完成 top_pkg 检测与解压，避免重复打开。
+    坏 zip 抛 :class:`DependencyError`。
+    """
     try:
         with zipfile.ZipFile(whl) as zf:
-            for info in zf.infolist():
-                category, sub = spec.classify_entry(info.filename, top_pkg, keep_subs)
-                if category == "exclude":
-                    # 剥离文件与剥离目录的目录条目均跳过，避免遗留空目录
-                    continue
-                if info.is_dir():
-                    zf.extract(info, dest)
-                    continue
-                # keep_subs 为空时不应用子模块选择性剥离（全量保留 .pyd 等）
-                if category == "submodule" and keep_subs and sub not in keep_subs:
-                    skipped += 1
-                    continue
-                zf.extract(info, dest)
+            top_pkg = _detect_top_pkg(zf, whl_pkg)
+            if top_pkg is None:
+                # wheel 顶层目录与归一化包名不匹配 → 兜底全量解压
+                zf.extractall(dest)
+                return
+            if keep_subs:
+                _logger.info("精简解压 %s: 保留子模块 %s", whl.name, ", ".join(sorted(keep_subs)))
+            else:
+                # keep_subs 为空：仅应用剥离规则（examples/docs/tests 等），子模块文件全保留
+                _logger.info("解压 %s（应用剥离规则）", whl.name)
+            _slim_extract(zf, dest, top_pkg, keep_subs)
     except zipfile.BadZipFile as e:
         raise DependencyError(f"wheel 损坏: {whl}") from e
-    if skipped:
-        _logger.info("精简 %s: 跳过 %d 个未用子模块文件", whl.name, skipped)
 
 
 def slim_unpack(
@@ -390,22 +406,10 @@ def slim_unpack(
         if info is None:
             # wheel 文件名无法解析，无法确定 top_pkg → 兜底全量解压
             _full_unpack(whl, site_packages_dir)
-            count += 1
-            continue
-        whl_pkg = normalize_name(info.name)
-        keep_subs = merged.get(whl_pkg, set())
-        top_pkg = _detect_top_pkg(whl, whl_pkg)
-        if top_pkg is None:
-            # wheel 顶层目录与归一化包名不匹配 → 兜底全量解压
-            _full_unpack(whl, site_packages_dir)
-            count += 1
-            continue
-        if keep_subs:
-            _logger.info("精简解压 %s: 保留子模块 %s", whl.name, ", ".join(sorted(keep_subs)))
         else:
-            # keep_subs 为空：仅应用剥离规则（examples/docs/tests 等），子模块文件全保留
-            _logger.info("解压 %s（应用剥离规则）", whl.name)
-        _slim_extract(whl, site_packages_dir, top_pkg, keep_subs)
+            whl_pkg = normalize_name(info.name)
+            keep_subs = merged.get(whl_pkg, set())
+            _unpack_one_wheel(whl, site_packages_dir, whl_pkg, keep_subs)
         count += 1
     if stage is not None and count:
         stage.set_detail(f"{count} wheels 解压")

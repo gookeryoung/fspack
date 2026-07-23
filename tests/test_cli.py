@@ -40,7 +40,7 @@ def test_build_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
         called["project"] = project
         called["mirror"] = mirror
 
-    monkeypatch.setattr(cli.build_cmd, "run", fake_run)
+    monkeypatch.setattr("fspack.commands.build.run", fake_run)
     cli.main(["b", str(tmp_path), "--mirror", "aliyun"])
     assert called["project"] == tmp_path.resolve()
     assert called["mirror"] == "aliyun"
@@ -49,8 +49,7 @@ def test_build_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
 def test_build_default_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     called: dict[str, Path] = {}
     monkeypatch.setattr(
-        cli.build_cmd,
-        "run",
+        "fspack.commands.build.run",
         lambda project, mirror=None, py_version=None, target=None, keep_modules=None, icon=None: called.__setitem__(
             "p", project
         ),
@@ -63,8 +62,7 @@ def test_build_default_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 def test_build_custom_py_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     called: dict[str, Any] = {}
     monkeypatch.setattr(
-        cli.build_cmd,
-        "run",
+        "fspack.commands.build.run",
         lambda project, mirror=None, py_version=None, target=None, keep_modules=None, icon=None: called.__setitem__(
             "pv", py_version
         ),
@@ -86,7 +84,7 @@ def test_build_target_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     ) -> None:
         called["target"] = target
 
-    monkeypatch.setattr(cli.build_cmd, "run", fake_run)
+    monkeypatch.setattr("fspack.commands.build.run", fake_run)
     cli.main(["b", str(tmp_path), "--target", "linux"])
     assert called["target"] is Platform.LINUX
 
@@ -104,7 +102,7 @@ def test_build_target_windows_dispatch(tmp_path: Path, monkeypatch: pytest.Monke
     ) -> None:
         called["target"] = target
 
-    monkeypatch.setattr(cli.build_cmd, "run", fake_run)
+    monkeypatch.setattr("fspack.commands.build.run", fake_run)
     cli.main(["b", str(tmp_path), "--target", "windows"])
     assert called["target"] is Platform.WINDOWS
 
@@ -122,7 +120,7 @@ def test_build_keep_module_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     ) -> None:
         called["keep_modules"] = keep_modules
 
-    monkeypatch.setattr(cli.build_cmd, "run", fake_run)
+    monkeypatch.setattr("fspack.commands.build.run", fake_run)
     cli.main(["b", str(tmp_path), "--keep-module", "PySide2.QtGui", "--keep-module", "PySide2.QtNetwork"])
     assert called["keep_modules"] == {"PySide2.QtGui", "PySide2.QtNetwork"}
 
@@ -141,7 +139,7 @@ def test_build_icon_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     ) -> None:
         called["icon"] = icon
 
-    monkeypatch.setattr(cli.build_cmd, "run", fake_run)
+    monkeypatch.setattr("fspack.commands.build.run", fake_run)
     # 用绝对路径避免 CWD 依赖
     icon_abs = tmp_path / "custom.ico"
     cli.main(["b", str(tmp_path), "--icon", str(icon_abs)])
@@ -162,7 +160,7 @@ def test_build_no_icon_passes_none(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     ) -> None:
         called["icon"] = icon
 
-    monkeypatch.setattr(cli.build_cmd, "run", fake_run)
+    monkeypatch.setattr("fspack.commands.build.run", fake_run)
     cli.main(["b", str(tmp_path)])
     assert called["icon"] is None
 
@@ -181,7 +179,7 @@ def test_run_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         called["debug"] = debug
         called["entry"] = entry
 
-    monkeypatch.setattr(cli.run_cmd, "run", fake_run)
+    monkeypatch.setattr("fspack.commands.run.run", fake_run)
     cli.main(["r", str(tmp_path), "--", "--foo", "bar"])
     assert called["rest"] == ["--foo", "bar"]
 
@@ -205,7 +203,7 @@ def test_run_debug_flag_after_project(tmp_path: Path, monkeypatch: pytest.Monkey
         called["debug"] = debug
         called["entry"] = entry
 
-    monkeypatch.setattr(cli.run_cmd, "run", fake_run)
+    monkeypatch.setattr("fspack.commands.run.run", fake_run)
     cli.main(["r", str(tmp_path), "--debug"])
     assert called["debug"] is True
     assert called["rest"] == []
@@ -223,14 +221,14 @@ def test_run_entry_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
     ) -> None:
         called["entry"] = entry
 
-    monkeypatch.setattr(cli.run_cmd, "run", fake_run)
+    monkeypatch.setattr("fspack.commands.run.run", fake_run)
     cli.main(["r", str(tmp_path), "--entry", "cli"])
     assert called["entry"] == "cli"
 
 
 def test_clean_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     called: dict[str, Path] = {}
-    monkeypatch.setattr(cli.clean_cmd, "run", lambda project: called.__setitem__("p", project))
+    monkeypatch.setattr("fspack.commands.clean.run", lambda project: called.__setitem__("p", project))
     cli.main(["c", str(tmp_path)])
     assert called["p"] == tmp_path.resolve()
 
@@ -249,7 +247,7 @@ def test_package_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
         called["mirror"] = mirror
         called["no_build"] = no_build
 
-    monkeypatch.setattr(cli.package_cmd, "run", fake_run)
+    monkeypatch.setattr("fspack.commands.package.run", fake_run)
     cli.main(["p", str(tmp_path), "--mirror", "aliyun", "--no-build"])
     assert called["project"] == tmp_path.resolve()
     assert called["mirror"] == "aliyun"

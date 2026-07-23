@@ -6,10 +6,6 @@ import argparse
 from pathlib import Path
 
 from fspack import __version__
-from fspack.commands import build as build_cmd
-from fspack.commands import clean as clean_cmd
-from fspack.commands import package as package_cmd
-from fspack.commands import run as run_cmd
 from fspack.config import MIRRORS
 from fspack.console import console
 from fspack.platform import Platform
@@ -81,6 +77,8 @@ def main(argv: list[str] | None = None) -> None:
 
     project = Path(ns.project).resolve()
     if command in ("build", "b"):
+        from fspack.commands import build as build_cmd
+
         build_cmd.run(
             project,
             mirror=ns.mirror,
@@ -90,10 +88,16 @@ def main(argv: list[str] | None = None) -> None:
             icon=Path(ns.icon).resolve() if ns.icon else None,
         )
     elif command in ("run", "r"):
+        from fspack.commands import run as run_cmd
+
         run_cmd.run(project, rest_args=_drop_separator(ns.rest), debug=ns.debug, entry=ns.entry)
     elif command in ("clean", "c"):
+        from fspack.commands import clean as clean_cmd
+
         clean_cmd.run(project)
     elif command in ("package", "p"):
+        from fspack.commands import package as package_cmd
+
         package_cmd.run(
             project, mirror=ns.mirror, py_version=ns.py_version, no_build=ns.no_build, target=_parse_target(ns.target)
         )

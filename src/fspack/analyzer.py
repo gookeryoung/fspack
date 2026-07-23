@@ -8,7 +8,13 @@ from pathlib import Path
 
 from fspack.config import DependencyReport
 
-__all__ = ["STDLIB_FALLBACK", "analyze_dependencies", "collect_imports", "collect_submodule_imports"]
+__all__ = [
+    "STDLIB_FALLBACK",
+    "analyze_dependencies",
+    "collect_imports",
+    "collect_imports_and_submodules",
+    "collect_submodule_imports",
+]
 
 # Python 3.8/3.9 没有 sys.stdlib_module_names，用 curate 的集合回退
 STDLIB_FALLBACK: frozenset[str] = frozenset(
@@ -233,6 +239,38 @@ STDLIB_FALLBACK: frozenset[str] = frozenset(
 _STDLIB: frozenset[str] = getattr(sys, "stdlib_module_names", STDLIB_FALLBACK)
 
 
+def collect_imports_and_submodules(tree: ast.AST) -> tuple[list[str], dict[str, frozenset[str]]]:
+    """单次 ``ast.walk`` 同时收集顶层导入与子模块导入。
+
+    返回 ``(顶层导入列表, 子模块字典)``，语义分别与 :func:`collect_imports` /
+    :func:`collect_submodule_imports` 一致。合并单次遍历避免对同一棵 AST
+    走两遍的开销（大项目数百 .py 文件时收益明显）。
+
+    只需顶层导入（如 :func:`infer_app_type`）或只需子模块的场景应直接用
+    对应的独立函数，避免多余计算。
+    """
+    top_result: list[str] = []
+    top_seen: set[str] = set()
+    sub_result: dict[str, set[str]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                parts = alias.name.split(".")
+                _push(parts[0], top_result, top_seen)
+                if len(parts) >= 2:
+                    sub_result.setdefault(parts[0], set()).add(parts[1])
+        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            parts = node.module.split(".")
+            _push(parts[0], top_result, top_seen)
+            if len(parts) >= 2:
+                sub_result.setdefault(parts[0], set()).add(parts[1])
+            elif len(parts) == 1:
+                for alias in node.names:
+                    if alias.name != "*":
+                        sub_result.setdefault(parts[0], set()).add(alias.name)
+    return top_result, {pkg: frozenset(subs) for pkg, subs in sub_result.items()}
+
+
 def collect_imports(tree: ast.AST) -> list[str]:
     """收集 AST 中所有 import 的顶层模块名，去重保序."""
     result: list[str] = []
@@ -330,9 +368,10 @@ def analyze_dependencies(src_dir: Path, project_name: str, declared: tuple[str, 
             tree = ast.parse(py.read_text(encoding="utf-8"))
         except (SyntaxError, OSError):
             continue
-        all_imports.extend(collect_imports(tree))
-        for pkg, subs in collect_submodule_imports(tree).items():
-            all_submodules.setdefault(pkg, set()).update(subs)
+        tops, subs = collect_imports_and_submodules(tree)
+        all_imports.extend(tops)
+        for pkg, sub_set in subs.items():
+            all_submodules.setdefault(pkg, set()).update(sub_set)
 
     local = _local_packages(src_dir, project_name)
     stdlib: list[str] = []

@@ -453,21 +453,11 @@ class TestSlimUnpack:
         assert count == 1
         assert (dest / "PySide2" / "QtGui.pyd").is_file()
 
-    def test_slim_extract_bad_zip(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """_slim_extract 遇到坏 zip 抛 DependencyError."""
+    def test_slim_extract_bad_zip(self, tmp_path: Path) -> None:
+        """精简解压路径遇到坏 zip 抛 DependencyError."""
         whl = tmp_path / "wh" / "PySide2-5.15.2.1-cp39-none-win_amd64.whl"
         whl.parent.mkdir()
-        _make_wheel(whl, {"PySide2/QtCore.pyd": b"core"})
-        original_zipfile = zipfile.ZipFile
-        call_count = [0]
-
-        def fake_zipfile(file: Path) -> zipfile.ZipFile:
-            call_count[0] += 1
-            if call_count[0] >= 2:
-                raise zipfile.BadZipFile("corrupt on second open")
-            return original_zipfile(file)
-
-        monkeypatch.setattr("fspack.slim.zipfile.ZipFile", fake_zipfile)
+        whl.write_bytes(b"not a zip")
         with pytest.raises(DependencyError, match="wheel 损坏"):
             slim_unpack([whl], tmp_path / "sp", {"PySide2": frozenset({"QtCore"})})
 
