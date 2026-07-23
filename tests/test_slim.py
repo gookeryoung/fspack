@@ -1680,9 +1680,62 @@ class TestStripExts:
         assert classify_entry("scipy/_lib/foo.cpp", "scipy") == ("exclude", None)
 
     def test_dist_info_not_stripped(self) -> None:
-        """.dist-info 内文件不受 STRIP_EXTS 影响（metadata 始终保留）."""
-        assert classify_entry("PySide2-5.15.2.1.dist-info/RECORD", "PySide2") == ("metadata", None)
-        assert classify_entry("mypkg-1.0.dist-info/METADATA", "mypkg") == ("metadata", None)
+        """.dist-info 内运行时无用文件剥离，必要文件保留."""
+        # RECORD/WHEEL/entry_points.txt/top_level.txt 等运行时无用 → exclude
+        assert classify_entry("PySide2-5.15.2.1.dist-info/RECORD", "PySide2") == ("exclude", None)
+        assert classify_entry("PySide2-5.15.2.1.dist-info/WHEEL", "PySide2") == ("exclude", None)
+        assert classify_entry("PySide2-5.15.2.1.dist-info/entry_points.txt", "PySide2") == ("exclude", None)
+        assert classify_entry("PySide2-5.15.2.1.dist-info/top_level.txt", "PySide2") == ("exclude", None)
+        assert classify_entry("PySide2-5.15.2.1.dist-info/INSTALLER", "PySide2") == ("exclude", None)
+        assert classify_entry("PySide2-5.15.2.1.dist-info/REQUESTED", "PySide2") == ("exclude", None)
+        # METADATA/LICENSE 等必要文件 → metadata（保留）
+        assert classify_entry("PySide2-5.15.2.1.dist-info/METADATA", "PySide2") == ("metadata", None)
+        assert classify_entry("PySide2-5.15.2.1.dist-info/LICENSE", "PySide2") == ("metadata", None)
+        assert classify_entry("PySide2-5.15.2.1.dist-info/LICENSE.GPLv3", "PySide2") == ("metadata", None)
+        assert classify_entry("mypkg-1.0.dist-info/PKG-INFO", "mypkg") == ("metadata", None)
+        assert classify_entry("mypkg-1.0.dist-info/COPYING.txt", "mypkg") == ("metadata", None)
+        assert classify_entry("mypkg-1.0.dist-info/NOTICE", "mypkg") == ("metadata", None)
+        # 未知文件兜底保留（避免误剥离）
+        assert classify_entry("mypkg-1.0.dist-info/UNKNOWN_FILE", "mypkg") == ("metadata", None)
+        # dist-info 目录自身条目保留（zip 中目录条目可能以 / 结尾或为纯目录名）
+        assert classify_entry("PySide2-5.15.2.1.dist-info/", "PySide2") == ("metadata", None)
+        assert classify_entry("PySide2-5.15.2.1.dist-info", "PySide2") == ("metadata", None)
+
+    def test_dist_info_stripped_across_specs(self) -> None:
+        """dist-info 精简在所有 spec（Qt/Default/numpy/lxml/matplotlib/scipy）中一致生效."""
+        # Qt spec（_classify_top_or_meta 路径）
+        from fspack.slim.qt import QtSlimSpec
+
+        assert QtSlimSpec.classify_entry("PySide2-5.15.2.1.dist-info/RECORD", "PySide2", set()) == (
+            "exclude",
+            None,
+        )
+        assert QtSlimSpec.classify_entry("PySide2-5.15.2.1.dist-info/METADATA", "PySide2", set()) == (
+            "metadata",
+            None,
+        )
+        # Default spec（_default_classify 路径）
+        from fspack.slim.default import DefaultSlimSpec
+
+        assert DefaultSlimSpec.classify_entry("mypkg-1.0.dist-info/RECORD", "mypkg", set()) == (
+            "exclude",
+            None,
+        )
+        assert DefaultSlimSpec.classify_entry("mypkg-1.0.dist-info/METADATA", "mypkg", set()) == (
+            "metadata",
+            None,
+        )
+        # 库专属 spec（numpy 走 _default_classify）
+        from fspack.slim.libs import NumpySlimSpec
+
+        assert NumpySlimSpec.classify_entry("numpy-1.24.4.dist-info/WHEEL", "numpy", set()) == (
+            "exclude",
+            None,
+        )
+        assert NumpySlimSpec.classify_entry("numpy-1.24.4.dist-info/LICENSE.txt", "numpy", set()) == (
+            "metadata",
+            None,
+        )
 
     def test_strip_exts_end_to_end_unpack(self, tmp_path: Path) -> None:
         """端到端：含 .h/.cpp/.lib/.pyc 的 wheel 解压后这些文件被剥离."""
@@ -1723,6 +1776,46 @@ class TestStripExts:
         assert not (dest / "mypkg" / "tool.exe").exists()
         # 元数据保留
         assert (dest / "mypkg-1.0.dist-info" / "METADATA").is_file()
+
+    def test_dist_info_end_to_end_unpack(self, tmp_path: Path) -> None:
+        """端到端：dist-info 中 RECORD/WHEEL 等剥离，METADATA/LICENSE 保留."""
+        whl = tmp_path / "wh" / "mypkg-1.0-cp39-none-win_amd64.whl"
+        whl.parent.mkdir()
+        _make_wheel(
+            whl,
+            {
+                "mypkg/__init__.py": b"",
+                "mypkg/core.pyd": b"core",
+                # dist-info 运行时无用文件 → 应剥离
+                "mypkg-1.0.dist-info/RECORD": b"r" * 1024,
+                "mypkg-1.0.dist-info/WHEEL": b"w",
+                "mypkg-1.0.dist-info/entry_points.txt": b"e",
+                "mypkg-1.0.dist-info/top_level.txt": b"t",
+                "mypkg-1.0.dist-info/INSTALLER": b"i",
+                "mypkg-1.0.dist-info/REQUESTED": b"",
+                # dist-info 必要文件 → 应保留
+                "mypkg-1.0.dist-info/METADATA": b"meta",
+                "mypkg-1.0.dist-info/LICENSE": b"lic",
+                "mypkg-1.0.dist-info/LICENSE.GPLv3": b"gpl",
+                "mypkg-1.0.dist-info/NOTICE": b"n",
+            },
+        )
+        dest = tmp_path / "sp"
+        count = slim_unpack([whl], dest, {"mypkg": frozenset({"core"})})
+        assert count == 1
+        dist_info = dest / "mypkg-1.0.dist-info"
+        # 运行时无用的元数据文件剥离
+        assert not (dist_info / "RECORD").exists()
+        assert not (dist_info / "WHEEL").exists()
+        assert not (dist_info / "entry_points.txt").exists()
+        assert not (dist_info / "top_level.txt").exists()
+        assert not (dist_info / "INSTALLER").exists()
+        assert not (dist_info / "REQUESTED").exists()
+        # 必要文件保留
+        assert (dist_info / "METADATA").is_file()
+        assert (dist_info / "LICENSE").is_file()
+        assert (dist_info / "LICENSE.GPLv3").is_file()
+        assert (dist_info / "NOTICE").is_file()
 
 
 class TestCommonExcludeSubdirsExtended:

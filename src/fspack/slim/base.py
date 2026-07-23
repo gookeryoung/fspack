@@ -146,6 +146,31 @@ class SlimSpec(abc.ABC):
         }
     )
 
+    # dist-info 中显式剥离的文件名（运行时无用途，仅安装工具/构建工具用）
+    # - RECORD：wheel 文件清单（pip uninstall 与 importlib.metadata.files() 用，
+    #   应用运行时不需要；单文件常占 dist-info 60%+ 体积）
+    # - RECORD.jws/RECORD.p7s：RECORD 的数字签名
+    # - WHEEL：wheel 构建格式信息（仅安装工具用）
+    # - entry_points.txt：console_scripts/gui_scripts 入口点（开发工具命令，
+    #   应用运行时不需要）
+    # - top_level.txt：顶层包名（仅安装工具用）
+    # - INSTALLER：记录安装器名称（无运行时用途）
+    # - REQUESTED：标记手动安装（无运行时用途）
+    # 保留 METADATA/PKG-INFO（importlib.metadata.version/metadata 兜底）、
+    # LICENSE/COPYING/NOTICE（法律合规）与其他未知文件（兜底保留避免误剥离）
+    _DIST_INFO_STRIP_FILES: frozenset[str] = frozenset(
+        {
+            "RECORD",
+            "RECORD.jws",
+            "RECORD.p7s",
+            "WHEEL",
+            "entry_points.txt",
+            "top_level.txt",
+            "INSTALLER",
+            "REQUESTED",
+        }
+    )
+
     @classmethod
     @abc.abstractmethod
     def match(cls, whl_pkg: str) -> bool:
@@ -202,6 +227,28 @@ class SlimSpec(abc.ABC):
         return Path(filename).suffix.lower() in cls.STRIP_EXTS
 
     @classmethod
+    def _classify_dist_info(cls, entry: str) -> tuple[str, str | None]:
+        """精简 ``*.dist-info`` 条目：剥离运行时无用的元数据文件。
+
+        - 目录条目（``Xxx.dist-info/``）→ metadata（保留目录自身）
+        - :attr:`_DIST_INFO_STRIP_FILES` 中文件（RECORD/WHEEL/entry_points.txt
+          /top_level.txt/INSTALLER/REQUESTED 等）→ exclude（运行时无用途）
+        - 其他文件（METADATA/PKG-INFO/LICENSE/COPYING/NOTICE 及未知文件）
+          → metadata（保留 importlib.metadata 兜底与法律合规文件，未知文件
+          兜底保留避免误剥离）
+
+        RECORD 单文件常占 dist-info 60%+ 体积（含全 wheel 文件 hash 清单），
+        剥离后保留法律合规与版本查询能力，节省显著空间。
+        """
+        parts = entry.split("/")
+        # dist-info 目录自身条目（如 "PySide2-5.15.2.1.dist-info/"）
+        if len(parts) == 1:
+            return ("metadata", None)
+        if parts[1] in cls._DIST_INFO_STRIP_FILES:
+            return ("exclude", None)
+        return ("metadata", None)
+
+    @classmethod
     def _classify_top_or_meta(cls, entry: str, top_pkg: str) -> tuple[str, str | None] | None:
         """通用 metadata、STRIP_EXTS 剥离与跨包 shared 分类。
 
@@ -210,7 +257,7 @@ class SlimSpec(abc.ABC):
         """
         parts = entry.split("/")
         if parts[0].endswith(".dist-info"):
-            return ("metadata", None)
+            return cls._classify_dist_info(entry)
         if cls._is_strip_ext(entry):
             return ("exclude", None)
         if parts[0] != top_pkg:
@@ -229,7 +276,9 @@ class SlimSpec(abc.ABC):
     ) -> tuple[str, str | None]:
         """默认分类逻辑（供 ``DefaultSlimSpec`` 与简单 spec 复用）。
 
-        - ``*.dist-info/**`` → metadata
+        - ``*.dist-info/**`` → 经 :meth:`_classify_dist_info` 精简分类
+          （剥离 RECORD/WHEEL/entry_points.txt 等运行时无用文件，
+          保留 METADATA/LICENSE 等）
         - 编译时/调试/缓存扩展名（:attr:`STRIP_EXTS`）→ exclude
           （`.h`/`.cpp`/`.lib`/`.pdb`/`.pyc`/`.exe` 等运行时不需要）
         - 嵌套剥离：``nested_excludes`` 中目录名出现在任意层级（含跨包）
@@ -252,7 +301,7 @@ class SlimSpec(abc.ABC):
         """
         parts = entry.split("/")
         if parts[0].endswith(".dist-info"):
-            return ("metadata", None)
+            return cls._classify_dist_info(entry)
 
         # 编译时/调试/缓存扩展名剥离（运行时不需要，含跨包/任意层级）
         if cls._is_strip_ext(entry):
