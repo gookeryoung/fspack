@@ -20,6 +20,7 @@ from fspack.config import (
 from fspack.console import console
 from fspack.packaging.builtin import TkinterBundler
 from fspack.packaging.entry import EntryWrapper
+from fspack.packaging.icon import ensure_ico, find_favicon
 from fspack.packaging.loader import compile_loader, generate_loader_source
 from fspack.packaging.runtime import (
     STANDALONE_RELEASE_TAG,
@@ -141,9 +142,10 @@ def build(  # noqa: PLR0912, PLR0913
 ) -> ProjectInfo:
     """执行完整构建流水线，返回项目信息。
 
-    ``icon`` 为 exe 图标路径，``None`` 时用项目 ``[tool.fspack] icon`` 声明，
-    项目未声明则用 fspack 默认 ``assets/icons/app.ico``。仅 Windows 目标生效，
-    Linux 忽略（ELF 无图标资源概念）。
+    icon 优先级：CLI ``--icon`` > 项目 ``[tool.fspack] icon`` > 自动搜索
+    ``favicon.*`` > 默认 ``assets/icons/app.ico``。非 ``.ico`` 格式（如
+    ``.png``/``.jpg``）通过 Pillow 转换为 ``.ico``（需安装 ``fspack[image]``），
+    转换失败回退到默认 icon。仅 Windows 目标生效，Linux 忽略（ELF 无图标资源概念）。
     """
     tracker = BuildTracker()
     project_dir = Path(project_dir).resolve()
@@ -264,8 +266,9 @@ def build(  # noqa: PLR0912, PLR0913
         with spinner(f"复制 {info.name} 源码"):
             copy_source(project_dir, src_dst)
 
-    # icon 优先级：CLI --icon > 项目 [tool.fspack] icon > 默认 app.ico（仅 Windows）
-    resolved_icon = icon if icon is not None else (info.icon if info.icon is not None else _DEFAULT_ICON)
+    # icon 优先级：CLI --icon > 项目 [tool.fspack] icon > 自动搜索 favicon.* > 默认 app.ico（仅 Windows）
+    # Linux 目标无图标资源概念，统一传 None
+    resolved_icon = _resolve_project_icon(icon, info.icon, project_dir, cfg.dist_dir / "build", target)
 
     exes: list[Path] = []
     with tracker.stage("生成 C loader") as st:
@@ -320,6 +323,48 @@ def copy_source(project_dir: Path, src_dst: Path) -> None:
     if src_dst.exists():
         shutil.rmtree(src_dst)
     shutil.copytree(project_dir, src_dst, ignore=_EXCLUDE)
+
+
+def _resolve_project_icon(
+    cli_icon: Path | None,
+    project_icon: Path | None,
+    project_dir: Path,
+    work_dir: Path,
+    target: Platform,
+) -> Path | None:
+    """按优先级解析最终 icon 路径，非 .ico 格式自动转换。
+
+    优先级：``cli_icon`` > ``project_icon`` > 自动搜索 ``favicon.*`` > 默认 ``app.ico``。
+
+    - Linux 目标：始终返回 ``None``（ELF 无图标资源概念）
+    - 非 ``.ico`` 格式（``.png``/``.jpg`` 等）：调用 :func:`ensure_ico` 转换，
+      转换失败（如 Pillow 未安装）回退到默认 ``app.ico``
+    - 默认 ``app.ico`` 是 fspack 自带资源，必定存在，无需转换
+
+    ``work_dir`` 为图片转换的临时目录（通常是 ``dist/build``）。
+    """
+    if target is Platform.LINUX:
+        return None
+
+    # 选定候选 icon：CLI > 项目配置 > favicon 自动搜索
+    candidate = cli_icon
+    if candidate is None:
+        candidate = project_icon
+    if candidate is None:
+        candidate = find_favicon(project_dir)
+        if candidate is not None:
+            _logger.info("使用 favicon 作为 icon: %s", candidate)
+
+    # 无任何候选 → 默认 icon（.ico，无需转换）
+    if candidate is None:
+        return _DEFAULT_ICON
+
+    # 转换为 .ico（.ico 原样返回，其他格式用 Pillow 转换，失败回退默认）
+    resolved = ensure_ico(candidate, work_dir)
+    if resolved is not None:
+        return resolved
+    _logger.warning("icon 转换失败，回退到默认 icon: %s", _DEFAULT_ICON)
+    return _DEFAULT_ICON
 
 
 def _site_packages_has_deps(site_packages: Path) -> bool:

@@ -39,7 +39,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_build.add_argument(
         "--icon",
         default=None,
-        help="exe 图标文件路径（.ico），覆盖 [tool.fspack] icon；未指定用默认 app.ico",
+        help=(
+            "exe 图标文件路径（.ico/.png/.jpg 等），覆盖 [tool.fspack] icon；"
+            "未指定时按 [tool.fspack] icon > 自动搜索 favicon.* > 默认 app.ico 解析"
+        ),
     )
 
     p_run = sub.add_parser("run", aliases=["r"], help="运行已打包项目")

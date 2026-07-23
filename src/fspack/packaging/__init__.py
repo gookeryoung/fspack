@@ -12,6 +12,8 @@
 - :mod:`fspack.packaging.net` —— :class:`Downloader` HTTP 下载器（SSL + 进度条）
 - :mod:`fspack.packaging.builtin` —— :class:`TkinterBundler` 内置库打包（为 embed python 补充 tkinter）
 - :mod:`fspack.packaging.entry` —— :class:`EntryWrapper` 入口包装器源码生成
+- :mod:`fspack.packaging.icon` —— :func:`find_favicon` 自动搜索 favicon 与
+  :func:`ensure_ico` 图片格式转换（Pillow 可选）
 
 注意：``installer`` 模块依赖 ``fspack.builder``，为避免循环导入（builder →
 packaging → installer → builder），本 ``__init__`` 不导出 ``installer`` 的 API。
@@ -22,6 +24,7 @@ from __future__ import annotations
 
 from fspack.packaging.builtin import TkinterBundler
 from fspack.packaging.entry import EntryWrapper
+from fspack.packaging.icon import SUPPORTED_IMAGE_EXTS, ensure_ico, find_favicon
 from fspack.packaging.loader import (
     LINUX_GCC,
     MINGW_GCC,
@@ -60,6 +63,7 @@ __all__ = [
     "MINGW_GCC",
     "STANDALONE_BASE_URL",
     "STANDALONE_RELEASE_TAG",
+    "SUPPORTED_IMAGE_EXTS",
     "Downloader",
     "EmbedRuntime",
     "EntryWrapper",
@@ -76,9 +80,11 @@ __all__ = [
     "embed_dirname",
     "embed_zip_name",
     "ensure_embed",
+    "ensure_ico",
     "ensure_standalone",
     "extract_embed",
     "extract_standalone",
+    "find_favicon",
     "gcc_available",
     "generate_loader_source",
     "loader_cache_dir",
