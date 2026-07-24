@@ -77,6 +77,11 @@ jobs:
       - name: Sync dependencies
         run: uv sync --frozen
 
+      # fspack 的 download_wheels 用 `pip download` 拉 wheel，但 uv 管理的 venv 默认不含 pip，
+      # 且 CI runner 上 PATH 中可能没有带 pip 的系统 python，故显式安装 pip 到 venv。
+      - name: Install pip
+        run: uv pip install pip
+
       - name: Cache fspack assets
         uses: actions/cache@v4
         with:
@@ -139,6 +144,11 @@ jobs:
 
       - name: Sync dependencies
         run: uv sync --frozen
+
+      # fspack 的 download_wheels 用 `pip download` 拉 wheel，但 uv 管理的 venv 默认不含 pip，
+      # 且 CI runner 上 PATH 中可能没有带 pip 的系统 python，故显式安装 pip 到 venv。
+      - name: Install pip
+        run: uv pip install pip
 
       - name: Cache fspack assets
         uses: actions/cache@v4
