@@ -61,4 +61,4 @@ fsp = "src/fspack/cli.py"
 fspack = "src/fspack/cli.py"
 
 [dependency-groups]
-dev = ["fspack[dev,docs]"]
+dev = ["fspack[dev,docs,image]"]
