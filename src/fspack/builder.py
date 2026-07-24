@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import shutil
@@ -128,6 +129,39 @@ def _trim_stdlib(runtime_dir: Path, py_version: str, target: Platform, stage: St
     stage.set_detail(f"剥离 {removed} 目录")
 
 
+def _site_packages_fingerprint(sp: Path) -> str:
+    """site-packages 指纹：``dist-info`` 目录名排序后哈希，快速检测依赖变化。
+
+    用 :meth:`Path.glob` 直接匹配 ``*.dist-info``，避免 ``iterdir`` 遍历
+    site-packages 中数千个文件（如 PySide2）时的 stat 开销。
+    """
+    if not sp.is_dir():
+        return ""
+    h = hashlib.sha256()
+    for d in sorted(sp.glob("*.dist-info")):
+        h.update(d.name.encode())
+    return h.hexdigest()
+
+
+def _pyc_stamp_path(dist_dir: Path) -> Path:
+    """预编译 stamp 文件路径：``dist/.pyc_stamp``。"""
+    return dist_dir / ".pyc_stamp"
+
+
+def _pyc_stamp_key(src_dir: Path, site_packages: Path, strip_py: bool) -> str:
+    """计算预编译 stamp 键：src 指纹 + site-packages 指纹 + strip_py。
+
+    ``copy_source`` 在预编译前已将 ``.py`` 同步到 ``dist/src``（``strip_py`` 模式下
+    也会重新复制），故 ``src_fp`` 始终反映完整源码状态，无需特殊处理 ``strip_py``
+    的 ``.py`` 缺失场景。stamp 键在检查与写入时复用，避免重复计算指纹。
+    """
+    from fspack.analyzer import source_fingerprint
+
+    src_fp = source_fingerprint(src_dir) if src_dir.is_dir() else ""
+    sp_fp = _site_packages_fingerprint(site_packages)
+    return f"{src_fp}|{sp_fp}|{strip_py}"
+
+
 def _precompile_pyc(  # noqa: PLR0913
     dist_dir: Path,
     runtime_dir: Path,
@@ -145,6 +179,9 @@ def _precompile_pyc(  # noqa: PLR0913
     ``strip_py=True`` 时额外删除非 ``__init__.py`` 的 ``.py`` 源码（保留包标识，
     避免 PEP 420 命名空间包导致 ``.pyc`` 不被加载）。docstring/assert 保留，
     剥离需运行时 ``PYTHONOPTIMIZE=2`` 配合，作为未来增强。
+
+    重复构建时用 ``dist/.pyc_stamp``（src 指纹 + site-packages 指纹 + strip_py）
+    跳过 compileall，避免 subprocess 启动与文件遍历开销。
     """
     if target is Platform.WINDOWS:
         py_exe = runtime_dir / "python.exe"
@@ -158,6 +195,18 @@ def _precompile_pyc(  # noqa: PLR0913
         _logger.warning("预编译跳过: runtime python 未就绪 %s", py_exe)
         stage.set_detail("runtime python 未就绪，跳过")
         return
+
+    # stamp 检查：命中则跳过 compileall，stamp_key 留待未命中时写入
+    stamp_key = _pyc_stamp_key(src_dir, site_packages, strip_py)
+    stamp = _pyc_stamp_path(dist_dir)
+    try:
+        if stamp.is_file() and stamp.read_text(encoding="utf-8") == stamp_key:
+            stage.hit_cache()
+            stage.set_detail("缓存命中，跳过编译")
+            return
+    except OSError:
+        pass
+
     targets = [d for d in (src_dir, site_packages) if d.is_dir()]
     compiled = 0
     for d in targets:
@@ -172,18 +221,32 @@ def _precompile_pyc(  # noqa: PLR0913
         else:
             compiled += 1
         stage.processed()
-    stripped = 0
-    if strip_py:
-        for d in targets:
-            for py in d.rglob("*.py"):
-                if py.name == "__init__.py":
-                    continue  # 保留包标识，避免命名空间包导致 .pyc 不加载
-                py.unlink()
-                stripped += 1
+
+    # 写 stamp（编译后、strip 前写入，存编译前的 src_fp）
+    stamp.parent.mkdir(parents=True, exist_ok=True)
+    stamp.write_text(stamp_key, encoding="utf-8")
+
+    stripped = _strip_py_sources(targets) if strip_py else 0
+    if stripped:
         stage.skip(stripped)
         stage.set_detail(f"编译 {compiled} 目录，剥离 {stripped} 个 .py")
     else:
         stage.set_detail(f"编译 {compiled} 目录")
+
+
+def _strip_py_sources(targets: list[Path]) -> int:
+    """删除 targets 中非 ``__init__.py`` 的 ``.py`` 源码，返回剥离数量。
+
+    保留 ``__init__.py`` 维持包标识，避免 PEP 420 命名空间包导致 ``.pyc`` 不被加载。
+    """
+    stripped = 0
+    for d in targets:
+        for py in d.rglob("*.py"):
+            if py.name == "__init__.py":
+                continue
+            py.unlink()
+            stripped += 1
+    return stripped
 
 
 # dist/src 仅保留应用运行所需源码与资源，剥离所有开发期文件。
@@ -491,7 +554,8 @@ def _sync_tree(src: Path, dst: Path, ignore_fn: Callable[..., set[str]]) -> None
     """增量同步 src 到 dst，保留 dst 中的 ``__pycache__`` 以复用 .pyc 缓存。
 
     1. 删除 dst 中 src 没有的文件/目录（``__pycache__`` 除外）；
-    2. 用 ``copy2`` 覆盖复制 src 中的文件（保留 mtime 供 compileall 增量判断）。
+    2. 复制 src 中的文件——mtime_ns + size 相同时跳过 ``copy2``（避免重复磁盘写），
+       否则用 ``copy2`` 覆盖（保留 mtime 供 compileall 增量判断）。
     """
     src_names = [p.name for p in src.iterdir()]
     ignored = ignore_fn(str(src), src_names) if ignore_fn else set()
@@ -512,6 +576,13 @@ def _sync_tree(src: Path, dst: Path, ignore_fn: Callable[..., set[str]]) -> None
         if src_item.is_dir():
             dst_item.mkdir(exist_ok=True)
             _sync_tree(src_item, dst_item, ignore_fn)
+        elif dst_item.is_file():
+            # mtime_ns + size 相同视为未改动，跳过 copy2 避免不必要的磁盘写
+            src_st = src_item.stat()
+            dst_st = dst_item.stat()
+            if src_st.st_mtime_ns == dst_st.st_mtime_ns and src_st.st_size == dst_st.st_size:
+                continue
+            shutil.copy2(src_item, dst_item)
         else:
             shutil.copy2(src_item, dst_item)
 

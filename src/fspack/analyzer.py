@@ -412,13 +412,22 @@ def source_fingerprint(src_dir: Path) -> str:
 
     遍历 ``src_dir`` 下所有不被排除的 ``.py`` 文件，以 ``相对路径|mtime_ns|size``
     拼接后求 SHA-256。与 :func:`analyze_dependencies` 使用相同的排除逻辑
-    （``_is_excluded``），保证指纹只反映被分析的源码变化。
+    （``_EXCLUDED_DIRS``），保证指纹只反映被分析的源码变化。
+
+    用 :func:`os.walk` + ``dirs[:]`` 剪枝提前排除 ``.venv``/``dist`` 等目录，
+    避免 rglob 枚举数千个无关 ``.py`` 文件（如虚拟环境 site-packages）导致耗时。
     """
+    import os
+
     h = hashlib.sha256()
-    for py in sorted(src_dir.rglob("*.py")):
-        if _is_excluded(py, src_dir):
-            continue
-        rel = py.relative_to(src_dir).as_posix()
-        st = py.stat()
-        h.update(f"{rel}|{st.st_mtime_ns}|{st.st_size}\n".encode())
+    for root, dirs, files in os.walk(src_dir):
+        # 剪枝：移除排除目录，阻止 os.walk 递归进入
+        dirs[:] = [d for d in dirs if d not in _EXCLUDED_DIRS and not d.endswith(".egg-info")]
+        for f in sorted(files):
+            if not f.endswith(".py"):
+                continue
+            py = Path(root) / f
+            rel = py.relative_to(src_dir).as_posix()
+            st = py.stat()
+            h.update(f"{rel}|{st.st_mtime_ns}|{st.st_size}\n".encode())
     return h.hexdigest()
