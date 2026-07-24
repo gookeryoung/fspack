@@ -232,7 +232,7 @@ KNOWN_EMBED_VERSIONS: dict[str, str] = {
     "3.10": "3.10.11",
     "3.11": "3.11.9",
     "3.12": "3.12.0",
-    "3.13": "3.13.0",
+    "3.13": "3.13.14",
     "3.14": "3.14.0",
 }
 
@@ -383,11 +383,11 @@ def _normalize_py_version(version: str) -> str | None:
     """将版本号规范化为完整版本（``major.minor.micro``）。
 
     短版本号（``major.minor``，如 ``"3.13"``）查 :data:`KNOWN_EMBED_VERSIONS`
-    映射得到完整版本号（如 ``"3.13.0"``）；完整版本号（>=3 段）原样返回；
+    映射得到完整版本号（如 ``"3.13.14"``）；完整版本号（>=3 段）原样返回；
     未知短版本号（无映射）告警并返回 ``None``，避免拼出错误下载 URL。
 
     Args:
-        version: 用户输入的版本号，可能为短版本（``"3.13"``）或完整版本（``"3.13.0"``）。
+        version: 用户输入的版本号，可能为短版本（``"3.13"``）或完整版本（``"3.13.14"``）。
 
     Returns:
         完整版本号字符串，或 ``None``（未知短版本号）。
@@ -415,7 +415,7 @@ def resolve_py_version(
     4. ``default``
 
     ``explicit`` 与 ``.python-version`` 均支持短版本号（如 ``"3.13"``），通过
-    :data:`KNOWN_EMBED_VERSIONS` 映射为完整版本号（如 ``"3.13.0"``），避免拼出
+    :data:`KNOWN_EMBED_VERSIONS` 映射为完整版本号（如 ``"3.13.14"``），避免拼出
     不存在的下载 URL。
     """
     if explicit:

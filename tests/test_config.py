@@ -360,11 +360,11 @@ def test_resolve_py_version_explicit(tmp_path: Path) -> None:
 
 
 def test_resolve_py_version_explicit_short_maps_to_full(tmp_path: Path) -> None:
-    """显式短版本号（如 3.13）映射到完整版本号（如 3.13.0）.
+    """显式短版本号（如 3.13）映射到完整版本号（如 3.13.14）.
 
     避免拼出 ``python/3.13/python-3.13-embed-amd64.zip`` 这样不存在的 URL。
     """
-    assert resolve_py_version(tmp_path, "3.13", None) == "3.13.0"
+    assert resolve_py_version(tmp_path, "3.13", None) == "3.13.14"
     assert resolve_py_version(tmp_path, "3.11", None) == "3.11.9"
 
 
@@ -425,9 +425,9 @@ def test_resolve_py_version_python_version_file_full_version(tmp_path: Path) -> 
 
 
 def test_resolve_py_version_python_version_313_mapping(tmp_path: Path) -> None:
-    """.python-version=3.13 映射到 3.13.0（KNOWN_EMBED_VERSIONS 已收录）."""
+    """.python-version=3.13 映射到 3.13.14（KNOWN_EMBED_VERSIONS 已收录）."""
     (tmp_path / ".python-version").write_text("3.13")
-    assert resolve_py_version(tmp_path, None, None) == "3.13.0"
+    assert resolve_py_version(tmp_path, None, None) == "3.13.14"
 
 
 def test_resolve_py_version_python_version_314_mapping(tmp_path: Path) -> None:
