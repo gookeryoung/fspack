@@ -1059,6 +1059,8 @@ def test_build_includes_new_stages_in_summary(tmp_path: Path, monkeypatch: pytes
     # 覆盖 download_wheels 返回非空列表，触发「解压 wheel(精简)」阶段
     monkeypatch.setattr("fspack.builder.download_wheels", lambda *a, **k: [tmp_path / "fake.whl"])
     monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
+    # 模拟同平台构建（CI 可能在 Linux 上跑 Windows 目标测试，交叉构建会跳过预编译）
+    monkeypatch.setattr("fspack.builder.detect_platform", lambda: Platform.WINDOWS)
 
     stage_names = _capture_stage_names(monkeypatch)
     build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
@@ -1094,6 +1096,8 @@ def test_build_no_stdlib_trim_skips_trim_stage(tmp_path: Path, monkeypatch: pyte
 
     _setup_embed_mocks(tmp_path, monkeypatch, "3.11.9")
     monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
+    # 模拟同平台构建（CI 可能在 Linux 上跑 Windows 目标测试，交叉构建会跳过预编译）
+    monkeypatch.setattr("fspack.builder.detect_platform", lambda: Platform.WINDOWS)
 
     stage_names = _capture_stage_names(monkeypatch)
     build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, no_stdlib_trim=True)
@@ -1115,6 +1119,8 @@ def test_build_pyc_strip_deletes_non_init_py(tmp_path: Path, monkeypatch: pytest
     runtime.mkdir(parents=True, exist_ok=True)
     (runtime / "python.exe").write_bytes(b"")
     monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
+    # 模拟同平台构建（CI 可能在 Linux 上跑 Windows 目标测试，交叉构建会跳过预编译）
+    monkeypatch.setattr("fspack.builder.detect_platform", lambda: Platform.WINDOWS)
 
     build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, pyc_strip=True)
 
