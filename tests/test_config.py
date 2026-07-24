@@ -427,10 +427,10 @@ def test_resolve_py_version_complex_specifier(tmp_path: Path) -> None:
 
 
 def test_resolve_py_version_pyside2app_example() -> None:
-    """pyside2app 示例：.python-version=3.9 + requires-python 解析到 3.9.13."""
+    """pyside2app 示例：.python-version=3.11 不满足 requires-python<3.11，自动选择 3.10.11."""
     info = parse_project(_EXAMPLES / "pyside2_app")
     resolved = resolve_py_version(_EXAMPLES / "pyside2_app", None, info.requires_python)
-    assert resolved == "3.9.13"
+    assert resolved == "3.10.11"
 
 
 # --- 多入口解析测试 ---

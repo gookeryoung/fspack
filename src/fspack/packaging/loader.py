@@ -162,7 +162,10 @@ int wmain(int argc, wchar_t **argv) {{
     }}
     _snwprintf(entry_full, sizeof(entry_full)/sizeof(entry_full[0]), L"%s\\%s", dir, entry);
 
-    HMODULE h = LoadLibraryW(dll);
+    /* LOAD_WITH_ALTERED_SEARCH_PATH：让 Windows 在 python3X.dll 所在目录（runtime\）
+       搜索其依赖 DLL（如 api-ms-win-core-path-l1-1-0.dll），而非 exe 所在目录。
+       否则 Win7 上 python3X.dll 的依赖在 runtime\ 中却找不到。 */
+    HMODULE h = LoadLibraryExW(dll, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
     if (!h) {{
         fwprintf(stderr, L"加载 Python DLL 失败: %s\n", dll);
         return 1;
