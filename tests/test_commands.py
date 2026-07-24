@@ -365,72 +365,81 @@ def test_run_run_linux_native(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
 def test_package_run_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
-    def fake_build_installer(project: Path, mirror: object, py_version: str | None, no_build: bool = False) -> Path:
+    def fake_build_release(  # noqa: PLR0913
+        project: Path,
+        mirror: object,
+        py_version: str | None,
+        no_build: bool = False,
+        dist_dir: Path | None = None,
+        target: object = None,
+        fmt: str = "auto",
+    ) -> list[Path]:
         captured["mirror"] = mirror
         captured["py_version"] = py_version
         captured["no_build"] = no_build
-        captured["branch"] = "windows"
-        return tmp_path / "app-setup.exe"
+        captured["target"] = target
+        captured["fmt"] = fmt
+        return [tmp_path / "app-setup.exe"]
 
-    def fake_build_linux_installer(
-        project: Path, mirror: object, py_version: str | None, no_build: bool = False
-    ) -> Path:
-        captured["mirror"] = mirror
-        captured["py_version"] = py_version
-        captured["no_build"] = no_build
-        captured["branch"] = "linux"
-        return tmp_path / "app.deb"
-
-    monkeypatch.setattr("fspack.commands.package.build_installer", fake_build_installer)
-    monkeypatch.setattr("fspack.commands.package.build_linux_installer", fake_build_linux_installer)
+    monkeypatch.setattr("fspack.commands.package.build_release", fake_build_release)
     package_run(tmp_path)
     assert captured["mirror"] == get_mirror("tsinghua")
     assert captured["py_version"] is None
     assert captured["no_build"] is False
-    expected_branch = "linux" if detect_platform() is Platform.LINUX else "windows"
-    assert captured["branch"] == expected_branch
+    assert captured["fmt"] == "auto"
+    assert captured["target"] is detect_platform()
 
 
 def test_package_run_explicit_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
-    def fake_build_installer(project: Path, mirror: object, py_version: str, no_build: bool = False) -> Path:
+    def fake_build_release(  # noqa: PLR0913
+        project: Path,
+        mirror: object,
+        py_version: str | None,
+        no_build: bool = False,
+        dist_dir: Path | None = None,
+        target: object = None,
+        fmt: str = "auto",
+    ) -> list[Path]:
         captured["py_version"] = py_version
         captured["no_build"] = no_build
-        captured["branch"] = "windows"
-        return Path("out.exe")
+        captured["target"] = target
+        captured["fmt"] = fmt
+        return [Path("out.exe")]
 
-    def fake_build_linux_installer(project: Path, mirror: object, py_version: str, no_build: bool = False) -> Path:
-        captured["branch"] = "linux"
-        return Path("out.deb")
-
-    monkeypatch.setattr("fspack.commands.package.build_installer", fake_build_installer)
-    monkeypatch.setattr("fspack.commands.package.build_linux_installer", fake_build_linux_installer)
-    package_run(tmp_path, mirror="aliyun", py_version="3.10.0", no_build=True, target=Platform.WINDOWS)
+    monkeypatch.setattr("fspack.commands.package.build_release", fake_build_release)
+    package_run(tmp_path, mirror="aliyun", py_version="3.10.0", no_build=True, target=Platform.WINDOWS, fmt="zip")
     assert captured["py_version"] == "3.10.0"
     assert captured["no_build"] is True
-    assert captured["branch"] == "windows"
+    assert captured["target"] is Platform.WINDOWS
+    assert captured["fmt"] == "zip"
 
 
 def test_package_run_explicit_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
-    def fake_build_installer(project: Path, mirror: object, py_version: str, no_build: bool = False) -> Path:
-        captured["branch"] = "windows"
-        return Path("out.exe")
-
-    def fake_build_linux_installer(project: Path, mirror: object, py_version: str, no_build: bool = False) -> Path:
+    def fake_build_release(  # noqa: PLR0913
+        project: Path,
+        mirror: object,
+        py_version: str | None,
+        no_build: bool = False,
+        dist_dir: Path | None = None,
+        target: object = None,
+        fmt: str = "auto",
+    ) -> list[Path]:
         captured["py_version"] = py_version
         captured["no_build"] = no_build
-        captured["branch"] = "linux"
-        return Path("out.deb")
+        captured["target"] = target
+        captured["fmt"] = fmt
+        return [Path("out.deb")]
 
-    monkeypatch.setattr("fspack.commands.package.build_installer", fake_build_installer)
-    monkeypatch.setattr("fspack.commands.package.build_linux_installer", fake_build_linux_installer)
-    package_run(tmp_path, mirror="aliyun", py_version="3.11.10", no_build=True, target=Platform.LINUX)
+    monkeypatch.setattr("fspack.commands.package.build_release", fake_build_release)
+    package_run(tmp_path, mirror="aliyun", py_version="3.11.10", no_build=True, target=Platform.LINUX, fmt="all")
     assert captured["py_version"] == "3.11.10"
     assert captured["no_build"] is True
-    assert captured["branch"] == "linux"
+    assert captured["target"] is Platform.LINUX
+    assert captured["fmt"] == "all"
 
 
 # --- 多入口 _select_entry 测试 ---

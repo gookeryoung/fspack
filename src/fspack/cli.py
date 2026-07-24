@@ -58,12 +58,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_clean = sub.add_parser("clean", aliases=["c"], help="清理 dist/")
     p_clean.add_argument("project", nargs="?", default=".", help="项目目录")
 
-    p_pkg = sub.add_parser("package", aliases=["p"], help="生成安装包")
+    p_pkg = sub.add_parser("package", aliases=["p"], help="生成发行包")
     p_pkg.add_argument("project", nargs="?", default=".", help="项目目录")
     p_pkg.add_argument("--mirror", default=None, choices=list(MIRRORS), help="镜像源")
     p_pkg.add_argument("--py-version", default=None, help="embed python 版本，如 3.11.9")
     p_pkg.add_argument("--target", default=None, choices=["windows", "linux"], help="目标平台（默认当前平台）")
     p_pkg.add_argument("--no-build", action="store_true", help="跳过重建，直接打包已有 dist")
+    p_pkg.add_argument(
+        "--format",
+        default="auto",
+        choices=["auto", "zip", "nsis", "tar.gz", "deb", "all"],
+        help=(
+            "发行包格式：auto=平台默认（Win=nsis，Linux=tar.gz+deb），"
+            "zip=跨平台便携包，nsis=Windows 安装包，tar.gz/deb=Linux，all=平台全部"
+        ),
+    )
     return parser
 
 
@@ -102,7 +111,12 @@ def main(argv: list[str] | None = None) -> None:
         from fspack.commands import package as package_cmd
 
         package_cmd.run(
-            project, mirror=ns.mirror, py_version=ns.py_version, no_build=ns.no_build, target=_parse_target(ns.target)
+            project,
+            mirror=ns.mirror,
+            py_version=ns.py_version,
+            no_build=ns.no_build,
+            target=_parse_target(ns.target),
+            fmt=ns.format,
         )
 
 

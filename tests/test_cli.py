@@ -236,12 +236,13 @@ def test_clean_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
 def test_package_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     called: dict[str, Any] = {}
 
-    def fake_run(
+    def fake_run(  # noqa: PLR0913
         project: Path,
         mirror: str | None = None,
         py_version: str | None = None,
         no_build: bool = False,
         target: object = None,
+        fmt: str = "auto",
     ) -> None:
         called["project"] = project
         called["mirror"] = mirror
