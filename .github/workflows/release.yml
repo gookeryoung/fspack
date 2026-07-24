@@ -1,5 +1,16 @@
 name: Release
 
+# 触发：push v*.*.* tag
+#
+# 三个并行 job：
+#   - pypi        : uv build → uv publish（OIDC）→ 上传 sdist/wheel artifact
+#   - pack-windows: windows-latest 原生打包 fspack 自身（mingw + NSIS）
+#   - pack-linux   : ubuntu-latest  原生打包 fspack 自身（gcc + dpkg-dev）
+#
+# release job 依赖以上三个 job，收集构建产物（exe/deb/tar.gz/zip）+
+# PyPI 产物（whl/sdist），统一上传到 GitHub Release。
+# 任一前置 job 失败时 release 仍尝试发布已成功产物，但最终标记 workflow 失败。
+
 on:
   push:
     tags: ['v*.*.*']
@@ -13,8 +24,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: Build & Publish
+  # ===== PyPI 发布 =====
+  pypi:
+    name: Build & Publish PyPI
     runs-on: ubuntu-latest
     environment: pypi
     timeout-minutes: 10
@@ -33,7 +45,167 @@ jobs:
       - name: Publish to PyPI (OIDC)
         run: uv publish
 
-      - name: Create GitHub Release
+      - name: Upload sdist & wheel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pypi-dist
+          path: dist/*
+          retention-days: 7
+          if-no-files-found: error
+
+  # ===== Windows 原生打包（用 fspack 打包 fspack 自身）=====
+  pack-windows:
+    name: Pack (Windows native)
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      # windows-2025 镜像移除了 NSIS；mingw-w64 提供 x86_64-w64-mingw32-gcc 前缀的交叉编译器
+      - name: Install NSIS & mingw-w64
+        run: |
+          choco install nsis mingw -y --no-progress
+          echo "C:\Program Files (x86)\NSIS" >> $GITHUB_PATH
+          echo "C:\Program Files\mingw-w64\mingw64\bin" >> $GITHUB_PATH
+
+      - name: Sync dependencies
+        run: uv sync --frozen
+
+      - name: Cache fspack assets
+        uses: actions/cache@v4
+        with:
+          path: ~/.fspack/cache/
+          key: fspack-windows-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            fspack-windows-
+            fspack-
+
+      - name: Build fspack with fspack
+        run: uv run fspack b . --target windows
+
+      - name: Generate installer
+        run: uv run fspack p . --target windows --format all --no-build
+
+      - name: Smoke test (version)
+        run: ./dist/fspack.exe -V
+
+      - name: Assert artifacts
+        shell: bash
+        run: |
+          test -f dist/release/fspack-*-windows-*-setup.exe
+          test -f dist/release/fspack-*-windows-*.zip
+
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pack-windows-failure
+          path: dist/
+          retention-days: 3
+
+      - name: Upload release artifacts
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: dist/release/
+          retention-days: 7
+          if-no-files-found: error
+
+  # ===== Linux 原生打包（用 fspack 打包 fspack 自身）=====
+  pack-linux:
+    name: Pack (Linux native)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc dpkg-dev
+
+      - name: Sync dependencies
+        run: uv sync --frozen
+
+      - name: Cache fspack assets
+        uses: actions/cache@v4
+        with:
+          path: ~/.fspack/cache/
+          key: fspack-linux-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            fspack-linux-
+            fspack-
+
+      - name: Build fspack with fspack
+        run: uv run fspack b . --target linux
+
+      - name: Generate installer
+        run: uv run fspack p . --target linux --format all --no-build
+
+      - name: Smoke test (version)
+        run: ./dist/fspack -V
+
+      - name: Assert artifacts
+        run: |
+          test -f dist/release/fspack-*-linux-*.tar.gz
+          test -f dist/release/fspack_*-slim_amd64.deb
+          test -f dist/release/fspack-*-linux-*.zip
+
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pack-linux-failure
+          path: dist/
+          retention-days: 3
+
+      - name: Upload release artifacts
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-linux
+          path: dist/release/
+          retention-days: 7
+          if-no-files-found: error
+
+  # ===== 收集产物并上传到 GitHub Release =====
+  release:
+    name: Upload to GitHub Release
+    needs: [pypi, pack-windows, pack-linux]
+    runs-on: ubuntu-latest
+    if: always() && !cancelled()
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets/
+
+      - name: Collect release files
+        run: |
+          mkdir -p release-files/
+          # 构建产物（exe/deb/tar.gz/zip）+ PyPI 产物（whl/sdist）
+          # sdist 也是 .tar.gz，但命名 fspack-<version>.tar.gz 不与 Linux 便携包冲突
+          find release-assets/ -type f \
+            \( -name "*.exe" -o -name "*.deb" -o -name "*.tar.gz" -o -name "*.zip" -o -name "*.whl" \) \
+            -exec cp {} release-files/ \;
+          echo "::group::Release files"
+          ls -la release-files/
+          echo "::endgroup::"
+
+      - name: Create GitHub Release & Upload
         env:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ github.ref_name }}
@@ -41,4 +213,10 @@ jobs:
           gh release create "$TAG_NAME" \
             --title "Release $TAG_NAME" \
             --generate-notes \
-            dist/*
+            release-files/*
+
+      - name: Report failure (if any upstream job failed)
+        if: contains(needs.pypi.result, 'failure') || contains(needs.pack-windows.result, 'failure') || contains(needs.pack-linux.result, 'failure')
+        run: |
+          echo "::error::部分 job 失败（pypi=${{ needs.pypi.result }} windows=${{ needs.pack-windows.result }} linux=${{ needs.pack-linux.result }}），已成功的产物已上传到 Release。"
+          exit 1
