@@ -387,6 +387,12 @@ def test_resolve_py_version_python_version_313_mapping(tmp_path: Path) -> None:
     assert resolve_py_version(tmp_path, None, None) == "3.13.0"
 
 
+def test_resolve_py_version_python_version_314_mapping(tmp_path: Path) -> None:
+    """.python-version=3.14 映射到 3.14.0（Python 3.14.0 于 2025-10 发布）."""
+    (tmp_path / ".python-version").write_text("3.14")
+    assert resolve_py_version(tmp_path, None, None) == "3.14.0"
+
+
 def test_resolve_py_version_python_version_unknown_short_falls_back(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -398,7 +404,7 @@ def test_resolve_py_version_python_version_unknown_short_falls_back(
     with caplog.at_level("WARNING", logger="fspack.config"):
         result = resolve_py_version(tmp_path, None, ">=3.8")
     # 回退到自动选择最高兼容已知版本
-    assert result == "3.13.0"
+    assert result == "3.14.0"
     assert "不在已知 embed 版本映射中" in caplog.text
 
 
@@ -422,7 +428,7 @@ def test_resolve_py_version_python_version_violates_requires_python(
 def test_resolve_py_version_auto_select_highest_compatible(tmp_path: Path) -> None:
     """无 .python-version 时按 requires-python 自动选最高兼容版本."""
     assert resolve_py_version(tmp_path, None, ">=3.8,<3.11") == "3.10.11"
-    assert resolve_py_version(tmp_path, None, ">=3.8") == "3.13.0"
+    assert resolve_py_version(tmp_path, None, ">=3.8") == "3.14.0"
     assert resolve_py_version(tmp_path, None, "<3.10") == "3.9.13"
 
 

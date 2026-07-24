@@ -694,6 +694,7 @@ def test_fspack_wheel_cache_dir_path(monkeypatch: pytest.MonkeyPatch, tmp_path: 
         ("3.11.9", True),
         ("3.12.0", True),
         ("3.13.0", True),
+        ("3.14.0", True),
     ],
 )
 def test_needs_win7_compat_dll(version: str, expected: bool) -> None:

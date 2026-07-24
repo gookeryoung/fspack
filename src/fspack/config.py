@@ -223,7 +223,8 @@ DEFAULT_PY_VERSION = "3.11.9"
 DEFAULT_LINUX_PY_VERSION = "3.11.10"
 
 # 已知 embed python 版本映射：major.minor → 完整版本号
-# Python 3.13.0 于 2024-10 发布，清华镜像与 python.org 均已提供 embed 包
+# Python 3.14.0 于 2025-10 发布，python.org embed 已提供
+# 注：Linux 端 python-build-standalone release_tag 升级为独立工作（见 STANDALONE_RELEASE_TAG）
 KNOWN_EMBED_VERSIONS: dict[str, str] = {
     "3.8": "3.8.10",
     "3.9": "3.9.13",
@@ -231,6 +232,7 @@ KNOWN_EMBED_VERSIONS: dict[str, str] = {
     "3.11": "3.11.9",
     "3.12": "3.12.0",
     "3.13": "3.13.0",
+    "3.14": "3.14.0",
 }
 
 
