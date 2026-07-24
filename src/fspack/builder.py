@@ -45,6 +45,7 @@ __all__ = [
     "default_icon_path",
     "download_wheels",
     "fspack_wheel_cache_dir",
+    "resolve_project_info",
     "unpack_wheels",
 ]
 
@@ -318,6 +319,22 @@ _EXCLUDE = shutil.ignore_patterns(
 )
 
 
+def resolve_project_info(project_dir: Path, py_version: str | None, target: Platform) -> ProjectInfo:
+    """解析项目信息并自动选择 Python 版本，返回带已解析版本的 ``ProjectInfo``。
+
+    优先级见 :func:`resolve_py_version`：``--py-version`` > ``.python-version``
+    > ``requires-python`` > 平台默认。用于 :func:`build` 与安装包编排共享版本
+    解析逻辑，确保 ``no_build`` 模式下发行包文件名也使用正确的 Python 版本。
+    """
+    info = ProjectInfo.from_dir(project_dir, py_version)
+    default_ver = DEFAULT_LINUX_PY_VERSION if target is Platform.LINUX else DEFAULT_PY_VERSION
+    resolved = resolve_py_version(project_dir, py_version, info.requires_python, default_ver)
+    if resolved != info.py_version:
+        _logger.info("自动选择 Python 版本: %s", resolved)
+        info = replace(info, py_version=resolved)
+    return info
+
+
 def build(  # noqa: PLR0912, PLR0913
     project_dir: Path,
     mirror: MirrorConfig,
@@ -346,12 +363,7 @@ def build(  # noqa: PLR0912, PLR0913
     cfg = BuildConfig(project_dir=project_dir, dist_dir=dist, embed_cache_dir=cache, mirror=mirror, target=target)
 
     with tracker.stage("解析项目") as st:
-        info = ProjectInfo.from_dir(project_dir, py_version)
-        default_ver = DEFAULT_LINUX_PY_VERSION if target is Platform.LINUX else DEFAULT_PY_VERSION
-        resolved = resolve_py_version(project_dir, py_version, info.requires_python, default_ver)
-        if resolved != info.py_version:
-            _logger.info("自动选择 Python 版本: %s", resolved)
-            info = replace(info, py_version=resolved)
+        info = resolve_project_info(project_dir, py_version, target)
         _logger.info("项目: %s %s (%s) 目标: %s", info.name, info.version, info.app_type.value, target.value)
         st.set_detail(f"{info.name} {info.version} ({info.app_type.value})")
 

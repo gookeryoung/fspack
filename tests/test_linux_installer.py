@@ -217,11 +217,20 @@ def test_build_linux_installer_with_build(tmp_path: Path, monkeypatch: pytest.Mo
         dist_dir: Path | None = None,
         embed_cache: Path | None = None,
         target: object = None,
-    ) -> object:
+    ) -> ProjectInfo:
         d = dist_dir or project_dir / "dist"
         d.mkdir(parents=True, exist_ok=True)
         (d / "app").write_bytes(b"")
-        return None
+        return ProjectInfo(
+            name="app",
+            version="1.0",
+            src_dir=project_dir,
+            entry_module="app",
+            entry_file=project_dir / "app.py",
+            app_type=AppType.CLI,
+            dependencies=(),
+            py_version=py_version,
+        )
 
     monkeypatch.setattr("fspack.packaging.installer.build", fake_build)
     monkeypatch.setattr("fspack.packaging.installer.build_tarball", lambda *a, **kw: tmp_path / "x.tar.gz")

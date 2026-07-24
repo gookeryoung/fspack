@@ -22,7 +22,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from fspack.builder import build
+from fspack.builder import build, resolve_project_info
 from fspack.config import MirrorConfig, ProjectInfo
 from fspack.console import console
 from fspack.exceptions import InstallerError
@@ -121,9 +121,9 @@ def _prepare_dist(  # noqa: PLR0913
     if no_build:
         if not dist.is_dir():
             raise InstallerError(f"未找到 dist 目录: {dist}（请先执行 fsp b）")
+        info = resolve_project_info(project_dir, py_version, target)
     else:
-        build(project_dir, mirror, py_version, dist_dir=dist, target=target)
-    info = ProjectInfo.from_dir(project_dir, py_version)
+        info = build(project_dir, mirror, py_version, dist_dir=dist, target=target)
     return dist, info
 
 

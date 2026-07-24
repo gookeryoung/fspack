@@ -201,11 +201,20 @@ def test_build_installer_with_build(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         py_version: str,
         dist_dir: Path | None = None,
         target: object = None,
-    ) -> object:
+    ) -> ProjectInfo:
         d = dist_dir or project_dir / "dist"
         d.mkdir(parents=True, exist_ok=True)
         (d / "app.exe").write_bytes(b"")
-        return None
+        return ProjectInfo(
+            name="app",
+            version="1.0",
+            src_dir=project_dir,
+            entry_module="app",
+            entry_file=project_dir / "app.py",
+            app_type=AppType.CLI,
+            dependencies=(),
+            py_version=py_version,
+        )
 
     monkeypatch.setattr("fspack.packaging.installer.build", fake_build)
 
@@ -374,11 +383,20 @@ def test_build_zip_with_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
         target: object = None,
         keep_modules: set[str] | None = None,
         icon: Path | None = None,
-    ) -> object:
+    ) -> ProjectInfo:
         d = dist_dir or project_dir / "dist"
         d.mkdir(parents=True, exist_ok=True)
         (d / "app.exe").write_bytes(b"")
-        return None
+        return ProjectInfo(
+            name="app",
+            version="1.0",
+            src_dir=project_dir,
+            entry_module="app",
+            entry_file=project_dir / "app.py",
+            app_type=AppType.CLI,
+            dependencies=(),
+            py_version=py_version,
+        )
 
     monkeypatch.setattr("fspack.packaging.installer.build", fake_build)
     result = build_zip(tmp_path, get_mirror("huawei"), "3.11.9", no_build=False)
