@@ -24,13 +24,9 @@
 - :func:`classify_entry`：分类 wheel 条目归属
 - :class:`SlimSpec`：精简规则抽象基类
 - :func:`register_spec`/``get_spec``：注册表接口
-
-``zipfile`` 暴露在模块命名空间供外部 monkeypatch 使用。
 """
 
 from __future__ import annotations
-
-import zipfile  # noqa: F401  暴露在 fspack.slim 命名空间，供外部 monkeypatch 使用
 
 from fspack.slim.base import (
     SlimSpec,
