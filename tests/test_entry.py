@@ -222,3 +222,19 @@ def test_generate_wrapper_source_tkinter_enabled() -> None:
     assert "TCL_LIBRARY" in source
     assert "TK_LIBRARY" in source
     assert "glob.glob" in source
+
+
+def test_generate_wrapper_source_includes_site_packages_detection() -> None:
+    """wrapper 自动检测 site-packages 路径并加入 sys.path.
+
+    Linux standalone python 在 PYTHONHOME 模式下默认不启用 site-packages，
+    wrapper 须显式扫描 runtime/python/lib/python3.*/site-packages 并加入 sys.path，
+    否则 rich 等第三方依赖 ModuleNotFoundError（CI v0.2.5 Linux 自打包失败根因）。
+    """
+    source = EntryWrapper.generate_wrapper_source("app", None, "app.py")
+    # Windows 路径：runtime/Lib/site-packages
+    assert '"Lib", "site-packages"' in source
+    # Linux 路径：runtime/python/lib/python3.*/site-packages（glob 自动检测）
+    assert '"python", "lib", "python3.*", "site-packages"' in source
+    # 显式加入 sys.path
+    assert "sys.path.insert(0, _SITE_PACKAGES)" in source

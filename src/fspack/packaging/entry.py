@@ -3,11 +3,15 @@
 fspack 在 dist 根目录为每个入口生成 ``_entry_<name>.py`` 包装器，由 C loader
 通过 ``.entry`` 文件加载运行。包装器负责：
 
-1. **设置 Qt 插件路径**：PySide2/PySide6/PyQt5/PyQt6 的 ``QT_PLUGIN_PATH``
+1. **设置 site-packages 到 sys.path**：Windows embed python 通过 ``python3XX._pth``
+   控制 sys.path（含 site-packages），但 Linux standalone python 在 ``PYTHONHOME``
+   模式下默认不启用 site-packages，需显式 ``sys.path.insert`` 才能找到 rich 等
+   第三方依赖。
+2. **设置 Qt 插件路径**：PySide2/PySide6/PyQt5/PyQt6 的 ``QT_PLUGIN_PATH``
    必须在 import 用户代码前设置，否则 ``QApplication`` 找不到平台插件。
-2. **设置 Tcl/Tk 环境变量**：embed python 缺失 tkinter，打包补充的 Tcl/Tk
+3. **设置 Tcl/Tk 环境变量**：embed python 缺失 tkinter，打包补充的 Tcl/Tk
    脚本路径需通过 ``TCL_LIBRARY``/``TK_LIBRARY`` 显式指定。
-3. **包式入口支持**：若入口脚本位于包内（所在目录链直至首个包目录都有
+4. **包式入口支持**：若入口脚本位于包内（所在目录链直至首个包目录都有
    ``__init__.py``），用 :func:`runpy.run_module` 以包上下文运行，使相对导入
    （``from .conf import ...``）可用；否则用 :func:`runpy.run_path` 直接运行
    顶层脚本。
@@ -28,16 +32,30 @@ __all__ = ["EntryWrapper"]
 _WRAPPER_TEMPLATE = '''\
 """fspack 生成的入口包装器（{entry_name}）。
 
-设置 Qt 插件路径后以包上下文运行用户入口，使相对导入可用。
+设置 site-packages 与 Qt 插件路径后以包上下文运行用户入口，使相对导入可用。
 此文件由 fspack 构建时生成，不要手动编辑。
 """
+import glob
 import os
 import runpy
 import sys
 
 _DIST_DIR = os.path.dirname(os.path.abspath(__file__))
-_SRC_DIR = os.path.join(_DIST_DIR, "src")
-_SITE_PACKAGES = os.path.join(_DIST_DIR, "runtime", "Lib", "site-packages")
+_RUNTIME_DIR = os.path.join(_DIST_DIR, "runtime")
+
+# site-packages 路径按平台构造：
+#   Windows embed python → runtime/Lib/site-packages
+#   Linux standalone python → runtime/python/lib/python3.X/site-packages
+# 显式加入 sys.path 是因为 Linux standalone 在 PYTHONHOME 模式下默认不启用
+# site-packages（site.py 不会被自动调用），不显式添加会导致 rich 等
+# 第三方依赖 ModuleNotFoundError。
+_SITE_PACKAGES = os.path.join(_RUNTIME_DIR, "Lib", "site-packages")
+if not os.path.isdir(_SITE_PACKAGES):
+    _candidates = glob.glob(os.path.join(_RUNTIME_DIR, "python", "lib", "python3.*", "site-packages"))
+    if _candidates:
+        _SITE_PACKAGES = _candidates[0]
+if os.path.isdir(_SITE_PACKAGES) and _SITE_PACKAGES not in sys.path:
+    sys.path.insert(0, _SITE_PACKAGES)
 
 # Qt 插件路径（PySide2/PySide6/PyQt5/PyQt6）——必须在 import 用户代码前设置，
 # 否则 QApplication 启动时报 "Failed to load platform plugin windows"
@@ -49,9 +67,7 @@ for _qt_pkg in ("PySide2", "PySide6", "PyQt5", "PyQt6"):
         break
 
 # tkinter 环境变量（embed python 缺失 Tcl/Tk 脚本路径，需手动指定）
-_RUNTIME_DIR = os.path.join(_DIST_DIR, "runtime")
 if {has_tkinter}:
-    import glob
     _tcl_lib = glob.glob(os.path.join(_RUNTIME_DIR, "tcl", "tcl*"))
     if _tcl_lib:
         os.environ.setdefault("TCL_LIBRARY", _tcl_lib[0])
@@ -59,6 +75,7 @@ if {has_tkinter}:
     if _tk_lib:
         os.environ.setdefault("TK_LIBRARY", _tk_lib[0])
 
+_SRC_DIR = os.path.join(_DIST_DIR, "src")
 _ENTRY_MODULE = {module_dotted!r}
 _ENTRY_REL = {entry_rel!r}
 _PKG_ROOT_REL = {pkg_root_rel!r}
