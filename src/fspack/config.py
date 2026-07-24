@@ -278,7 +278,7 @@ def parse_project(project_dir: Path, py_version: str | None = None) -> ProjectIn
     icon_path = _resolve_icon(project_dir, icon_rel)
 
     if entries_tbl:
-        entries = _parse_entries(project_dir, entries_tbl, deps)
+        entries = _parse_entries(project_dir, entries_tbl)
         first = entries[0]
         return ProjectInfo(
             name=name,
@@ -312,7 +312,6 @@ def parse_project(project_dir: Path, py_version: str | None = None) -> ProjectIn
 def _parse_entries(
     project_dir: Path,
     entries_tbl: dict[str, Any],
-    deps: tuple[str, ...],
 ) -> tuple[EntryPoint, ...]:
     """解析 ``[tool.fspack.entries]`` 表为 EntryPoint 元组。
 
@@ -320,11 +319,9 @@ def _parse_entries(
     项目目录的路径。脚本路径不存在或为空时报错。Python 字典保持插入序，
     首个入口作为主入口（保持向后兼容）。
 
-    ``deps`` 仅用于校验（保留参数兼容签名），多入口模式下每个入口的
-    ``app_type`` 按脚本自身 import 推断，不看项目级 declared（不同入口
-    可能是不同类型，如 cli/gui/web 混合）。
+    多入口模式下每个入口的 ``app_type`` 按脚本自身 import 推断，不看项目级
+    declared（不同入口可能是不同类型，如 cli/gui/web 混合）。
     """
-    _ = deps  # 保留签名兼容，多入口模式不用 declared 推断 app_type
     if not entries_tbl:
         raise ProjectError("[tool.fspack.entries] 为空，请删除该表或至少声明一个入口")
     entries: list[EntryPoint] = []

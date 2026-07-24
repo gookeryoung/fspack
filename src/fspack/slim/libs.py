@@ -6,7 +6,8 @@
 
 新增库精简规则时只需：
 
-1. 继承 ``SlimSpec``，实现 ``match``/``normalize_submodule``/``expand_closure``
+1. 继承 ``SlimSpec``，实现 ``match``/``classify_entry``；
+   ``normalize_submodule``/``expand_closure`` 用基类默认实现即可
 2. ``classify_entry`` 委托 :meth:`SlimSpec._default_classify`，传入库专属
    剥离集合作为 ``extra_excludes``（二级目录）与 ``nested_excludes``
    （任意层级，含跨包）
@@ -15,7 +16,14 @@
 
 from __future__ import annotations
 
-from fspack.slim.base import SlimSpec, override
+import sys
+
+from fspack.slim.base import SlimSpec
+
+if sys.version_info >= (3, 12):  # pragma: no cover
+    from typing import override
+else:
+    from typing_extensions import override  # type: ignore[import-not-found]
 
 __all__ = [
     "LxmlSlimSpec",
@@ -51,18 +59,6 @@ class NumpySlimSpec(SlimSpec):
     def match(cls, whl_pkg: str) -> bool:
         """匹配归一化包名 ``numpy``."""
         return whl_pkg == "numpy"
-
-    @classmethod
-    @override
-    def normalize_submodule(cls, sub: str) -> str:
-        """numpy 不做子模块归一化，原样返回."""
-        return sub
-
-    @classmethod
-    @override
-    def expand_closure(cls, subs: set[str]) -> set[str]:
-        """numpy 子模块无显式依赖闭包，返回输入集合的副本."""
-        return set(subs)
 
     @classmethod
     @override
@@ -106,18 +102,6 @@ class LxmlSlimSpec(SlimSpec):
     def match(cls, whl_pkg: str) -> bool:
         """匹配归一化包名 ``lxml``."""
         return whl_pkg == "lxml"
-
-    @classmethod
-    @override
-    def normalize_submodule(cls, sub: str) -> str:
-        """lxml 不做子模块归一化，原样返回."""
-        return sub
-
-    @classmethod
-    @override
-    def expand_closure(cls, subs: set[str]) -> set[str]:
-        """lxml 子模块无显式依赖闭包，返回输入集合的副本."""
-        return set(subs)
 
     @classmethod
     @override
@@ -170,18 +154,6 @@ class MatplotlibSlimSpec(SlimSpec):
 
     @classmethod
     @override
-    def normalize_submodule(cls, sub: str) -> str:
-        """matplotlib 不做子模块归一化，原样返回."""
-        return sub
-
-    @classmethod
-    @override
-    def expand_closure(cls, subs: set[str]) -> set[str]:
-        """matplotlib 子模块无显式依赖闭包，返回输入集合的副本."""
-        return set(subs)
-
-    @classmethod
-    @override
     def classify_entry(
         cls,
         entry: str,
@@ -215,18 +187,6 @@ class ScipySlimSpec(SlimSpec):
     def match(cls, whl_pkg: str) -> bool:
         """匹配归一化包名 ``scipy``."""
         return whl_pkg == "scipy"
-
-    @classmethod
-    @override
-    def normalize_submodule(cls, sub: str) -> str:
-        """scipy 不做子模块归一化，原样返回."""
-        return sub
-
-    @classmethod
-    @override
-    def expand_closure(cls, subs: set[str]) -> set[str]:
-        """scipy 子模块无显式依赖闭包，返回输入集合的副本."""
-        return set(subs)
 
     @classmethod
     @override

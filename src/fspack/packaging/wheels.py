@@ -293,11 +293,7 @@ def _download_online(  # noqa: PLR0913
         except DependencyError as e:
             # sdist 回退：uv 解析出的某些包可能只有 sdist 无 wheel
             # （如 win-unicode-console==0.5），--only-binary=:all: 无法下载
-            missing = _parse_missing_packages(str(e))
-            if not missing:
-                raise
-            _logger.info("尝试用 pip wheel 构建无 wheel 的包: %s", ", ".join(missing))
-            _build_sdist_wheels(missing, py, pypi_index, cache_dir)
+            _handle_sdist_fallback(e, py, pypi_index, cache_dir)
             # 构建后用 -i index 重试：sdist 构建的 wheel 在本地缓存（--find-links），
             # 其他包从网络下载（第一次整体失败可能未下载到缓存）
             result = _run_pip(
@@ -321,11 +317,7 @@ def _download_online(  # noqa: PLR0913
         return result
     except DependencyError as e:
         # sdist 回退：解析无 wheel 的包，用 pip wheel 从 sdist 构建后重试
-        missing = _parse_missing_packages(str(e))
-        if not missing:
-            raise
-        _logger.info("尝试用 pip wheel 构建无 wheel 的包: %s", ", ".join(missing))
-        _build_sdist_wheels(missing, py, pypi_index, cache_dir)
+        _handle_sdist_fallback(e, py, pypi_index, cache_dir)
         result = _run_pip(
             [*base_args, "-i", pypi_index, *filtered],
             f"pip download 重试 {len(filtered)} 个依赖",
@@ -407,6 +399,24 @@ def _parse_missing_packages(stderr: str) -> list[str]:
             seen.add(req)
             result.append(req)
     return result
+
+
+def _handle_sdist_fallback(
+    e: DependencyError,
+    py: str,
+    pypi_index: str,
+    cache_dir: Path,
+) -> list[str]:
+    """处理 sdist 回退：解析缺失包并构建无 wheel 的包，返回缺失包列表。
+
+    无缺失包时重新抛出原异常（无法用 sdist 回退解决）。调用方据此重试下载。
+    """
+    missing = _parse_missing_packages(str(e))
+    if not missing:
+        raise e from None
+    _logger.info("尝试用 pip wheel 构建无 wheel 的包: %s", ", ".join(missing))
+    _build_sdist_wheels(missing, py, pypi_index, cache_dir)
+    return missing
 
 
 def _build_sdist_wheels(packages: list[str], py: str, pypi_index: str, cache_dir: Path) -> None:

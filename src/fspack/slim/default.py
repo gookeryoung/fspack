@@ -15,7 +15,14 @@
 
 from __future__ import annotations
 
-from fspack.slim.base import SlimSpec, override
+import sys
+
+from fspack.slim.base import SlimSpec
+
+if sys.version_info >= (3, 12):  # pragma: no cover
+    from typing import override
+else:
+    from typing_extensions import override  # type: ignore[import-not-found]
 
 __all__ = ["DefaultSlimSpec"]
 
@@ -30,21 +37,9 @@ class DefaultSlimSpec(SlimSpec):
 
     @classmethod
     @override
-    def match(cls, whl_pkg: str) -> bool:  # noqa: ARG003
+    def match(cls, whl_pkg: str) -> bool:
         """兜底匹配：始终返回 ``True``."""
         return True
-
-    @classmethod
-    @override
-    def normalize_submodule(cls, sub: str) -> str:
-        """非 Qt 库不做归一化，原样返回."""
-        return sub
-
-    @classmethod
-    @override
-    def expand_closure(cls, subs: set[str]) -> set[str]:
-        """无依赖闭包扩展，返回输入集合的副本（不就地修改）."""
-        return set(subs)
 
     @classmethod
     @override

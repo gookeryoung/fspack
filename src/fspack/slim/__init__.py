@@ -25,8 +25,7 @@
 - :class:`SlimSpec`：精简规则抽象基类
 - :func:`register_spec`/``get_spec``：注册表接口
 
-向后兼容：``_qt_module_closure``/``_qt_dll_submodule``/``_normalize_qt_sub``
-从 :mod:`fspack.slim.qt` 重新导出；``zipfile`` 暴露在模块命名空间供外部 monkeypatch。
+``zipfile`` 暴露在模块命名空间供外部 monkeypatch 使用。
 """
 
 from __future__ import annotations
@@ -47,13 +46,7 @@ from fspack.slim.libs import (
     NumpySlimSpec,
     ScipySlimSpec,
 )
-from fspack.slim.qt import (
-    QT_PACKAGES,
-    QtSlimSpec,
-    _normalize_qt_sub,
-    _qt_dll_submodule,
-    _qt_module_closure,
-)
+from fspack.slim.qt import QT_PACKAGES, QtSlimSpec
 
 # 显式按顺序注册内置 spec：
 # - QtSlimSpec：match 限定为 Qt 包名，优先匹配
@@ -77,9 +70,6 @@ __all__ = [
     "QtSlimSpec",
     "ScipySlimSpec",
     "SlimSpec",
-    "_normalize_qt_sub",
-    "_qt_dll_submodule",
-    "_qt_module_closure",
     "classify_entry",
     "get_spec",
     "register_spec",

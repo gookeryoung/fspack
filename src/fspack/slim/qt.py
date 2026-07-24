@@ -15,9 +15,15 @@ AST 无法发现），无需用户显式声明或 ``--keep-module``。
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
-from fspack.slim.base import SlimSpec, normalize_name, override
+from fspack.slim.base import SlimSpec, normalize_name
+
+if sys.version_info >= (3, 12):  # pragma: no cover
+    from typing import override
+else:
+    from typing_extensions import override  # type: ignore[import-not-found]
 
 __all__ = [
     "QT_PACKAGES",

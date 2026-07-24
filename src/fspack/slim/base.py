@@ -6,8 +6,9 @@
 
 新增包精简规则时只需：
 
-1. 继承 ``SlimSpec``，实现 ``match``/``classify_entry``/``normalize_submodule``/
-   ``expand_closure``
+1. 继承 ``SlimSpec``，实现 ``match``/``classify_entry``；
+   ``normalize_submodule``/``expand_closure`` 有默认实现（原样返回/返回副本），
+   仅需在有归一化或依赖闭包需求时覆盖（如 Qt 库）
 2. 用 ``@register_spec`` 注册（``DefaultSlimSpec`` 兜底，必须最后注册）
 
 无需修改 ``slim_unpack`` 与 ``classify_entry`` 的分发逻辑。
@@ -18,7 +19,6 @@ from __future__ import annotations
 import abc
 import logging
 import re
-import sys
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,19 +27,12 @@ from typing import Sequence
 from fspack.exceptions import DependencyError
 from fspack.progress import StageRecorder, iter_with_progress
 
-if sys.version_info >= (3, 12):  # pragma: no cover
-    from typing import override
-else:
-    from typing_extensions import override  # type: ignore[import-not-found]
-
 __all__ = [
     "SlimSpec",
     "WheelInfo",
     "classify_entry",
     "get_spec",
     "normalize_name",
-    "override",
-    "parse_wheel_filename",
     "register_spec",
     "slim_unpack",
 ]
@@ -84,21 +77,13 @@ def normalize_name(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
-def parse_wheel_filename(filename: str) -> WheelInfo | None:
-    """解析 wheel 文件名为 WheelInfo，无法解析返回 None。
-
-    .. deprecated:: 向后兼容包装，内部委托 :meth:`WheelInfo.from_filename`。
-    """
-    return WheelInfo.from_filename(filename)
-
-
 class SlimSpec(abc.ABC):
     """精简规则基类：定义如何分类 wheel 条目。
 
-    每个具体子类描述一组包（如 Qt 库、普通库）的精简规则。子类通过
-    :meth:`match` 声明匹配的包名集合，:meth:`classify_entry` 实现条目分类逻辑，
-    :meth:`expand_closure` 计算子模块依赖闭包，:meth:`normalize_submodule`
-    归一化子模块名。
+    每个具体子类描述一组包（如 Qt 库、普通库）的精简规则。子类必须实现
+    :meth:`match` 声明匹配的包名集合与 :meth:`classify_entry` 实现条目分类逻辑。
+    :meth:`normalize_submodule` 与 :meth:`expand_closure` 有默认实现（原样返回/
+    返回副本），仅需在有归一化或依赖闭包需求时覆盖（如 Qt 库）。
     """
 
     # 子模块扩展名：仅这些文件按子模块名选择性保留
@@ -181,21 +166,23 @@ class SlimSpec(abc.ABC):
         """
 
     @classmethod
-    @abc.abstractmethod
     def normalize_submodule(cls, sub: str) -> str:
         """归一化子模块名（如 Qt 库统一 ``QtCore``/``Qt5Core`` → ``Core``）。
 
-        无归一化需求的库原样返回 ``sub``。
+        无归一化需求的库原样返回 ``sub``（默认实现）。Qt 库等需要归一化的
+        子类覆盖此方法。
         """
+        return sub
 
     @classmethod
-    @abc.abstractmethod
     def expand_closure(cls, subs: set[str]) -> set[str]:
         """计算子模块集合的传递依赖闭包。
 
         返回的集合应包含输入子模块及其所有传递依赖。无依赖映射的子类
-        直接返回输入集合的副本（不就地修改 ``subs``）。
+        直接返回输入集合的副本（不就地修改 ``subs``，默认实现）。Qt 库等
+        有显式依赖映射的子类覆盖此方法。
         """
+        return set(subs)
 
     @classmethod
     @abc.abstractmethod

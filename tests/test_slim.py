@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import zipfile
 from pathlib import Path
 
@@ -9,6 +10,11 @@ import pytest
 
 from fspack.exceptions import DependencyError
 from fspack.slim import classify_entry, slim_unpack
+
+if sys.version_info >= (3, 12):  # pragma: no cover
+    from typing import override
+else:
+    from typing_extensions import override  # type: ignore[import-not-found]
 
 
 class TestClassifyEntry:
@@ -134,26 +140,26 @@ class TestQtModuleClosure:
     """Qt 模块依赖闭包计算（归一化名）."""
 
     def test_core_only(self) -> None:
-        from fspack.slim import _qt_module_closure
+        from fspack.slim.qt import _qt_module_closure
 
         assert _qt_module_closure({"Core"}) == {"Core"}
 
     def test_widgets_closure(self) -> None:
         """QtWidgets → Gui → Core（C 层链接依赖链）."""
-        from fspack.slim import _qt_module_closure
+        from fspack.slim.qt import _qt_module_closure
 
         assert _qt_module_closure({"Widgets"}) == {"Widgets", "Gui", "Core"}
 
     def test_quick_transitive(self) -> None:
         """QtQuick → QtQml → QtNetwork → QtCore + QtGui."""
-        from fspack.slim import _qt_module_closure
+        from fspack.slim.qt import _qt_module_closure
 
         result = _qt_module_closure({"Quick"})
         assert {"Quick", "Qml", "Network", "Gui", "Core"}.issubset(result)
 
     def test_qt3d_extras_transitive(self) -> None:
         """Qt3DExtras 闭包含 3DRender/3DInput/3DLogic/3DCore/Core/Gui/Network."""
-        from fspack.slim import _qt_module_closure
+        from fspack.slim.qt import _qt_module_closure
 
         result = _qt_module_closure({"3DExtras"})
         assert result == {
@@ -169,25 +175,25 @@ class TestQtModuleClosure:
 
     def test_unknown_module_kept(self) -> None:
         """未知模块名原样保留，不触发额外依赖推导."""
-        from fspack.slim import _qt_module_closure
+        from fspack.slim.qt import _qt_module_closure
 
         assert _qt_module_closure({"UnknownMod"}) == {"UnknownMod"}
 
     def test_mixed_known_unknown(self) -> None:
         """已知与未知模块混合时，已知模块触发闭包，未知模块原样保留."""
-        from fspack.slim import _qt_module_closure
+        from fspack.slim.qt import _qt_module_closure
 
         result = _qt_module_closure({"Widgets", "Foo"})
         assert result == {"Widgets", "Gui", "Core", "Foo"}
 
     def test_empty_set(self) -> None:
-        from fspack.slim import _qt_module_closure
+        from fspack.slim.qt import _qt_module_closure
 
         assert _qt_module_closure(set()) == set()
 
     def test_idempotent(self) -> None:
         """闭包计算幂等：对已闭包集合再次计算结果不变."""
-        from fspack.slim import _qt_module_closure
+        from fspack.slim.qt import _qt_module_closure
 
         once = _qt_module_closure({"Widgets"})
         twice = _qt_module_closure(once)
@@ -198,30 +204,30 @@ class TestQtDllClassification:
     """Qt5/Qt6*.dll 文件名与 Qt 子模块名归一化."""
 
     def test_qt5core_to_core(self) -> None:
-        from fspack.slim import _qt_dll_submodule
+        from fspack.slim.qt import _qt_dll_submodule
 
         assert _qt_dll_submodule("Qt5Core") == "Core"
 
     def test_qt6widgets_to_widgets(self) -> None:
-        from fspack.slim import _qt_dll_submodule
+        from fspack.slim.qt import _qt_dll_submodule
 
         assert _qt_dll_submodule("Qt6Widgets") == "Widgets"
 
     def test_qt5_3d_animation(self) -> None:
         """Qt53DAnimation.dll → 3DAnimation（去掉 5 后保留 3DAnimation）."""
-        from fspack.slim import _qt_dll_submodule
+        from fspack.slim.qt import _qt_dll_submodule
 
         assert _qt_dll_submodule("Qt53DAnimation") == "3DAnimation"
 
     def test_non_qt_dll_returns_none(self) -> None:
-        from fspack.slim import _qt_dll_submodule
+        from fspack.slim.qt import _qt_dll_submodule
 
         assert _qt_dll_submodule("pyside2.abi3") is None
         assert _qt_dll_submodule("concrt140") is None
         assert _qt_dll_submodule("msvcp140") is None
 
     def test_normalize_qtcore(self) -> None:
-        from fspack.slim import _normalize_qt_sub
+        from fspack.slim.qt import _normalize_qt_sub
 
         assert _normalize_qt_sub("QtCore") == "Core"
         assert _normalize_qt_sub("Qt5Core") == "Core"
@@ -229,13 +235,13 @@ class TestQtDllClassification:
 
     def test_normalize_qt3dcore(self) -> None:
         """Qt3DCore 归一化为 3DCore."""
-        from fspack.slim import _normalize_qt_sub
+        from fspack.slim.qt import _normalize_qt_sub
 
         assert _normalize_qt_sub("Qt3DCore") == "3DCore"
 
     def test_normalize_non_qt(self) -> None:
         """非 Qt 前缀原样返回."""
-        from fspack.slim import _normalize_qt_sub
+        from fspack.slim.qt import _normalize_qt_sub
 
         assert _normalize_qt_sub("requests") == "requests"
         assert _normalize_qt_sub("os") == "os"
@@ -1363,7 +1369,7 @@ class TestSlimSpecRegistry:
     def test_register_spec_custom(self) -> None:
         """自定义 spec 注册后能被 get_spec 命中。."""
         from fspack.slim import get_spec
-        from fspack.slim.base import SlimSpec, override
+        from fspack.slim.base import SlimSpec
 
         class MySpec(SlimSpec):
             @classmethod
@@ -1385,9 +1391,9 @@ class TestSlimSpecRegistry:
             @override
             def classify_entry(
                 cls,
-                entry: str,  # noqa: ARG003
-                top_pkg: str,  # noqa: ARG003
-                keep_subs: set[str],  # noqa: ARG003
+                entry: str,
+                top_pkg: str,
+                keep_subs: set[str],
             ) -> tuple[str, str | None]:
                 return ("shared", None)
 
@@ -1481,30 +1487,6 @@ class TestWheelInfoFromFilename:
 
         assert WheelInfo.from_filename("not-a-wheel.txt") is None
         assert WheelInfo.from_filename("missing-tags-1.0.whl") is None
-
-
-class TestParseWheelFilenameCompat:
-    """parse_wheel_filename 向后兼容包装，行为与 WheelInfo.from_filename 一致."""
-
-    def test_standard_wheel(self) -> None:
-        from fspack.slim.base import parse_wheel_filename
-
-        info = parse_wheel_filename("requests-2.31.0-py3-none-any.whl")
-        assert info is not None
-        assert info.name == "requests"
-        assert info.version == "2.31.0"
-
-    def test_invalid_filename(self) -> None:
-        from fspack.slim.base import parse_wheel_filename
-
-        assert parse_wheel_filename("not-a-wheel.txt") is None
-
-    def test_delegates_to_classmethod(self) -> None:
-        """兼容包装返回值与类方法一致."""
-        from fspack.slim.base import WheelInfo, parse_wheel_filename
-
-        filename = "numpy-1.24.0-cp39-cp39-manylinux2014_x86_64.whl"
-        assert parse_wheel_filename(filename) == WheelInfo.from_filename(filename)
 
 
 class TestNormalizeName:
