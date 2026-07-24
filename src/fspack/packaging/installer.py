@@ -134,6 +134,21 @@ def _check_exe(dist: Path, info: ProjectInfo, target: Platform) -> None:
         raise InstallerError(f"未找到已构建的可执行文件: {dist / exe_name}（请先执行 fsp b）")
 
 
+def _py_tag(info: ProjectInfo) -> str:
+    """返回 Python 版本标签，如 ``py3.11``，用于发行包文件名标识运行时版本。"""
+    major, minor = info.py_version.split(".")[:2]
+    return f"py{major}.{minor}"
+
+
+def _release_base(info: ProjectInfo, platform_suffix: str) -> str:
+    """生成发行包基础名：``<name>-<version>-<py_tag>-<platform>-slim``。
+
+    slim 标识体现 wheel 精简解压（slim_unpack 按需解压 + Qt 闭包），
+    是 fspack 默认且唯一的打包策略，故始终体现在文件名中。
+    """
+    return f"{info.name}-{info.version}-{_py_tag(info)}-{platform_suffix}-slim"
+
+
 # ---- NSIS 安装包（Windows）----
 
 
@@ -192,7 +207,7 @@ class NsisInstaller(Installer):
         """生成 NSIS 脚本并编译为安装包。"""
         console.step("生成 NSIS 脚本")
         nsi = generate_nsis_script(info, dist_dir, release_dir)
-        out_setup = release_dir / f"{info.name}-{info.version}-setup.exe"
+        out_setup = release_dir / f"{_release_base(info, 'windows')}-setup.exe"
         console.step("编译 NSIS 安装包")
         result = compile_installer(nsi, out_setup)
         console.success(f"安装包已生成: {result}")
@@ -205,7 +220,7 @@ def generate_nsis_script(project: ProjectInfo, dist_dir: Path, release_dir: Path
     release_dir 必须是 dist_dir 的子目录，OutFile 路径相对 dist_dir 计算。
     """
     release_dir.mkdir(parents=True, exist_ok=True)
-    out_setup_rel = release_dir.relative_to(dist_dir) / f"{project.name}-{project.version}-setup.exe"
+    out_setup_rel = release_dir.relative_to(dist_dir) / f"{_release_base(project, 'windows')}-setup.exe"
     out_setup_win = str(out_setup_rel).replace("/", "\\")
     content = _NSIS_TEMPLATE.format(
         name=project.name,
@@ -312,21 +327,21 @@ class LinuxInstaller(Installer):
     def build_package(cls, dist_dir: Path, info: ProjectInfo, release_dir: Path) -> Path:
         """生成 tar.gz 便携包与 .deb 安装包，返回 .deb 路径。"""
         console.step("生成 tar.gz 便携包")
-        build_tarball(dist_dir, info.name, info.version, release_dir)
+        build_tarball(dist_dir, info, release_dir)
         console.step("构造 .deb 安装包")
         result = build_deb(dist_dir, info, release_dir)
         console.success(f"安装包已生成: {result}")
         return result
 
 
-def build_tarball(dist_dir: Path, name: str, version: str, release_dir: Path) -> Path:
+def build_tarball(dist_dir: Path, info: ProjectInfo, release_dir: Path) -> Path:
     """打包 dist 为 tar.gz 便携包，返回包路径。
 
-    tar.gz 内顶层目录为 ``<name>-<version>-linux``，解压后即可运行。
+    tar.gz 内顶层目录为 ``<name>-<version>-<py_tag>-linux-slim``，解压后即可运行。
     排除 dist/release/ 避免安装包递归打包自身。
     """
     release_dir.mkdir(parents=True, exist_ok=True)
-    base = f"{name}-{version}-linux"
+    base = _release_base(info, "linux")
     staging = release_dir / base
     if staging.exists():
         shutil.rmtree(staging)
@@ -345,7 +360,7 @@ def build_deb(dist_dir: Path, info: ProjectInfo, release_dir: Path) -> Path:
     排除 dist/release/ 避免安装包递归打包自身。
     """
     release_dir.mkdir(parents=True, exist_ok=True)
-    deb_base = f"{info.name}_{info.version}_amd64"
+    deb_base = f"{info.name}_{info.version}-{_py_tag(info)}-slim_amd64"
     staging = release_dir / deb_base
 
     if staging.exists():
@@ -439,12 +454,12 @@ def build_zip(  # noqa: PLR0913
 def _make_zip(dist_dir: Path, info: ProjectInfo, release_dir: Path, target: Platform) -> Path:
     """打包 dist 为 zip 便携包，返回 zip 路径。
 
-    顶层目录 ``<name>-<version>-<platform>``，排除 ``release/`` 子目录。
+    顶层目录 ``<name>-<version>-<py_tag>-<platform>-slim``，排除 ``release/`` 子目录。
     用 staging 目录 + ``shutil.make_archive`` 实现，与 :func:`build_tarball` 风格一致。
     """
     release_dir.mkdir(parents=True, exist_ok=True)
     platform_suffix = "windows" if target is Platform.WINDOWS else "linux"
-    base = f"{info.name}-{info.version}-{platform_suffix}"
+    base = _release_base(info, platform_suffix)
     staging = release_dir / base
     if staging.exists():
         shutil.rmtree(staging)
@@ -471,7 +486,7 @@ def build_tarball_release(
     _check_exe(dist, info, Platform.LINUX)
     release = dist / "release"
     console.step("生成 tar.gz 便携包")
-    result = build_tarball(dist, info.name, info.version, release)
+    result = build_tarball(dist, info, release)
     console.success(f"tar.gz 便携包已生成: {result}")
     return result
 

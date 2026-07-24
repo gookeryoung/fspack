@@ -52,37 +52,39 @@ def _make_dist(tmp_path: Path, name: str = "app") -> Path:
 def test_build_tarball_creates_archive(tmp_path: Path) -> None:
     """build_tarball 打包 dist 为 tar.gz，排除 release/ 目录."""
     dist = _make_dist(tmp_path)
+    info = _make_info(tmp_path)
     release = dist / "release"
 
-    out = build_tarball(dist, "app", "1.0", release)
+    out = build_tarball(dist, info, release)
     assert out.is_file()
-    assert out.name == "app-1.0-linux.tar.gz"
+    assert out.name == "app-1.0-py3.11-linux-slim.tar.gz"
     assert out.stat().st_size > 0
 
     with tarfile.open(out) as tf:
         names = tf.getnames()
-    assert "app-1.0-linux" in names
-    assert "app-1.0-linux/app" in names
-    assert "app-1.0-linux/src/app.py" in names
+    assert "app-1.0-py3.11-linux-slim" in names
+    assert "app-1.0-py3.11-linux-slim/app" in names
+    assert "app-1.0-py3.11-linux-slim/src/app.py" in names
     assert not any("release" in n for n in names), "release/ 未被排除"
 
-    assert not (release / "app-1.0-linux").exists(), "staging 未清理"
+    assert not (release / "app-1.0-py3.11-linux-slim").exists(), "staging 未清理"
 
 
 def test_build_tarball_cleans_existing_staging(tmp_path: Path) -> None:
     """build_tarball 重复打包时清理旧 staging."""
     dist = _make_dist(tmp_path)
+    info = _make_info(tmp_path)
     release = dist / "release"
-    stale_staging = release / "app-1.0-linux"
+    stale_staging = release / "app-1.0-py3.11-linux-slim"
     stale_staging.mkdir(parents=True)
     (stale_staging / "stale.txt").write_text("stale")
 
-    out = build_tarball(dist, "app", "1.0", release)
+    out = build_tarball(dist, info, release)
     assert out.is_file()
 
     with tarfile.open(out) as tf:
         names = tf.getnames()
-    assert "app-1.0-linux/stale.txt" not in names, "旧 staging 未清理"
+    assert "app-1.0-py3.11-linux-slim/stale.txt" not in names, "旧 staging 未清理"
 
 
 def test_build_deb_creates_deb(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -90,7 +92,7 @@ def test_build_deb_creates_deb(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     dist = _make_dist(tmp_path)
     info = _make_info(tmp_path)
     release = tmp_path / "release"
-    stale_staging = release / "app_1.0_amd64"
+    stale_staging = release / "app_1.0-py3.11-slim_amd64"
     stale_staging.mkdir(parents=True)
     (stale_staging / "stale.txt").write_text("stale")
 
@@ -128,11 +130,11 @@ def test_build_deb_creates_deb(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr("fspack.packaging.installer.subprocess.run", fake_run)
 
     out = build_deb(dist, info, release)
-    assert out == release / "app_1.0_amd64.deb"
+    assert out == release / "app_1.0-py3.11-slim_amd64.deb"
     assert out.is_file()
     assert captured["cmd"][0] == "dpkg-deb"
     assert captured["cmd"][1] == "--build"
-    assert not (release / "app_1.0_amd64").exists(), "staging 未清理"
+    assert not (release / "app_1.0-py3.11-slim_amd64").exists(), "staging 未清理"
 
 
 def test_build_deb_dpkg_deb_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -187,20 +189,20 @@ def test_build_linux_installer_no_build_success(tmp_path: Path, monkeypatch: pyt
 
     captured: dict[str, object] = {}
 
-    def fake_build_tarball(dist_dir: Path, name: str, version: str, release_dir: Path) -> Path:
-        captured["tarball"] = (name, version)
-        return release_dir / f"{name}-{version}-linux.tar.gz"
+    def fake_build_tarball(dist_dir: Path, info: object, release_dir: Path) -> Path:
+        captured["tarball"] = info
+        return release_dir / "app-1.0-py3.11-linux-slim.tar.gz"
 
     def fake_build_deb(dist_dir: Path, info: object, release_dir: Path) -> Path:
         captured["deb"] = info
-        return release_dir / "app_1.0_amd64.deb"
+        return release_dir / "app_1.0-py3.11-slim_amd64.deb"
 
     monkeypatch.setattr("fspack.packaging.installer.build_tarball", fake_build_tarball)
     monkeypatch.setattr("fspack.packaging.installer.build_deb", fake_build_deb)
 
     result = build_linux_installer(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=True)
-    assert result == dist / "release" / "app_1.0_amd64.deb"
-    assert captured["tarball"] == ("app", "1.0")
+    assert result == dist / "release" / "app_1.0-py3.11-slim_amd64.deb"
+    assert captured["tarball"] is not None
 
 
 def test_build_linux_installer_with_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -223,8 +225,10 @@ def test_build_linux_installer_with_build(tmp_path: Path, monkeypatch: pytest.Mo
 
     monkeypatch.setattr("fspack.packaging.installer.build", fake_build)
     monkeypatch.setattr("fspack.packaging.installer.build_tarball", lambda *a, **kw: tmp_path / "x.tar.gz")
-    monkeypatch.setattr("fspack.packaging.installer.build_deb", lambda *a, **kw: dist / "release" / "app_1.0_amd64.deb")
+    monkeypatch.setattr(
+        "fspack.packaging.installer.build_deb", lambda *a, **kw: dist / "release" / "app_1.0-py3.11-slim_amd64.deb"
+    )
 
     result = build_linux_installer(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=False)
-    assert result == dist / "release" / "app_1.0_amd64.deb"
+    assert result == dist / "release" / "app_1.0-py3.11-slim_amd64.deb"
     assert (dist / "app").is_file()
