@@ -3,6 +3,33 @@
 fspack 可集成到其他 Python 项目的 CI/CD 工作流，实现自动打包与打包成功验证。
 本文介绍三种集成模式、测试反馈机制，并提供可复用的 GitHub Actions workflow 模板。
 
+## fspack 自身的发布流程
+
+fspack 自身通过 [.github/workflows/release.yml](https://github.com/gookeryoung/fspack/blob/main/.github/workflows/release.yml)
+在 `git push v*.*.*` tag 时，用**各平台原生 runner 打包自身**发布到 GitHub Release：
+
+| job | runner | 工具链 | 产物 |
+|-----|--------|--------|------|
+| `pypi` | ubuntu-latest | uv | sdist + wheel（PyPI 发布） |
+| `pack-windows` | windows-latest | mingw-w64 + NSIS | NSIS 安装包 `.exe` + 跨平台便携包 `.zip` |
+| `pack-linux` | ubuntu-latest | gcc + dpkg-dev | tar.gz 便携包 + `.deb` 安装包 + 跨平台便携包 `.zip` |
+| `release` | ubuntu-latest | gh | 收集以上所有产物统一上传到 GitHub Release |
+
+**原生平台打包**而非 ubuntu 交叉编译的原因：
+
+- pyc 预编译仅在 `target is detect_platform()` 时执行（避免跨版本字节码不兼容）
+- loader 用本机 gcc/mingw 原生编译，无需 wine 兼容层
+- Windows Server 2025 runner 已移除 NSIS 预装，workflow 中显式 `choco install nsis mingw`
+
+任一前置 job 失败时 `release` job 仍尝试发布已成功产物（`if: always() && !cancelled()`），
+但最终通过 `Report failure` 步骤标记 workflow 失败，便于追踪问题。
+
+**工具链安装要点**：
+
+- Windows runner：`choco install nsis mingw -y` 安装 NSIS 与带 `x86_64-w64-mingw32-gcc` 前缀的 mingw-w64，
+  并将路径追加到 `$GITHUB_PATH`
+- Linux runner：`apt-get install -y gcc dpkg-dev`，gcc 与 dpkg-deb 均为标准包
+
 ## 集成架构
 
 ```text
