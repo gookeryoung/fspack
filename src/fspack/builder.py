@@ -501,7 +501,10 @@ def build(  # noqa: PLR0912, PLR0913
 
     # icon 优先级：CLI --icon > 项目 [tool.fspack] icon > 自动搜索 favicon.* > 默认 app.ico（仅 Windows）
     # Linux 目标无图标资源概念，统一传 None
-    resolved_icon = _resolve_project_icon(icon, info.icon, project_dir, cfg.dist_dir / "build", target)
+    with tracker.stage("解析图标") as st:
+        resolved_icon = _resolve_project_icon(icon, info.icon, project_dir, cfg.dist_dir / "build", target)
+        if resolved_icon is not None:
+            st.set_detail(str(resolved_icon.name))
 
     exes: list[Path] = []
     with tracker.stage("生成 C loader") as st:

@@ -68,13 +68,10 @@ def test_find_favicon_priority_png_over_bmp(tmp_path: Path) -> None:
 
 
 def test_find_favicon_skips_excluded_dirs(tmp_path: Path) -> None:
-    """跳过 dist/build/.venv 等排除目录下的 favicon."""
-    (tmp_path / "dist").mkdir()
-    (tmp_path / "dist" / "favicon.ico").write_bytes(b"ico")
-    (tmp_path / "build").mkdir()
-    (tmp_path / "build" / "favicon.png").write_bytes(b"png")
-    (tmp_path / ".venv").mkdir()
-    (tmp_path / ".venv" / "favicon.ico").write_bytes(b"ico")
+    """跳过 dist/build/.venv/.tox/.trae 等排除目录下的 favicon."""
+    for skip_dir in ("dist", "build", ".venv", ".tox", ".trae", ".mypy_cache", ".uv-cache"):
+        (tmp_path / skip_dir).mkdir()
+        (tmp_path / skip_dir / "favicon.ico").write_bytes(b"ico")
     # 排除目录下都不命中，返回 None
     assert find_favicon(tmp_path) is None
 

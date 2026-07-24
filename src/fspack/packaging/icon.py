@@ -36,7 +36,7 @@ _FAVICON_EXTS: tuple[str, ...] = (
 # 对外暴露：支持的图片扩展名集合（用于文档/校验）
 SUPPORTED_IMAGE_EXTS: frozenset[str] = frozenset(_FAVICON_EXTS)
 
-# favicon 搜索时排除的目录名（避免扫描构建产物/虚拟环境等）
+# favicon 搜索时排除的目录名（避免扫描构建产物/虚拟环境/IDE 配置等）
 _FAVICON_SKIP_DIRS: frozenset[str] = frozenset(
     {
         "dist",
@@ -54,6 +54,10 @@ _FAVICON_SKIP_DIRS: frozenset[str] = frozenset(
         ".pytest_cache",
         ".ruff_cache",
         ".pyrefly_cache",
+        ".mypy_cache",
+        ".uv-cache",
+        ".tox",
+        ".trae",
     }
 )
 
@@ -68,7 +72,7 @@ def find_favicon(project_dir: Path) -> Path | None:
     2. **同目录内按扩展名优先级**：``.ico`` > ``.png`` > ``.bmp`` > ``.jpg`` >
        ``.jpeg`` > ``.gif`` > ``.webp``（避免不必要的图片转换）
     3. **跳过排除目录**：不进入 :data:`_FAVICON_SKIP_DIRS` 中的目录子树
-       （dist/build/.venv 等构建产物与缓存）
+       （dist/build/.venv/.tox 等构建产物与缓存）
 
     文件名匹配大小写不敏感（``favicon.ICO`` 等同 ``favicon.ico``）。
     返回 ``None`` 表示未找到任何 favicon 文件。
@@ -81,14 +85,15 @@ def find_favicon(project_dir: Path) -> Path | None:
     for root, dirs, files in os.walk(project_dir):
         # 原地修改 dirs 跳过排除目录，避免进入其子树（os.walk 标准用法）
         dirs[:] = [d for d in dirs if d not in _FAVICON_SKIP_DIRS]
-        # 同目录内按扩展名优先级查找
+        # 同目录内按扩展名优先级查找：构建小写文件名→原始名映射，O(exts+files)
+        lower_map = {fname.lower(): fname for fname in files}
         for ext in _FAVICON_EXTS:
             target = f"favicon{ext}"
-            for fname in files:
-                if fname.lower() == target.lower():
-                    path = Path(root) / fname
-                    _logger.info("发现 favicon: %s", path)
-                    return path
+            fname = lower_map.get(target)
+            if fname is not None:
+                path = Path(root) / fname
+                _logger.info("发现 favicon: %s", path)
+                return path
     return None
 
 
