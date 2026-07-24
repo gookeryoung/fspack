@@ -31,13 +31,13 @@ _EXAMPLES = Path(__file__).parent.parent / "examples"
 # --- 镜像源测试 ---
 
 
-def test_default_mirror_is_aliyun() -> None:
-    assert DEFAULT_MIRROR == "aliyun"
+def test_default_mirror_is_tsinghua() -> None:
+    assert DEFAULT_MIRROR == "tsinghua"
     assert {"huawei", "aliyun", "tsinghua"} <= set(MIRRORS)
 
 
 def test_get_mirror_default() -> None:
-    assert get_mirror().name == "阿里云"
+    assert get_mirror().name == "清华"
 
 
 def test_get_mirror_by_name() -> None:
@@ -86,7 +86,7 @@ def test_project_info_from_dir_with_explicit_py_version(tmp_path: Path) -> None:
 def test_project_info_from_dir_pyside2_app() -> None:
     """from_dir 解析 GUI 示例并读取 requires-python 约束."""
     info = ProjectInfo.from_dir(_EXAMPLES / "pyside2_app")
-    assert info.requires_python == ">=3.8,<3.11"
+    assert info.requires_python == ">=3.8,<=3.14"
     assert info.app_type is AppType.GUI
 
 
@@ -244,7 +244,7 @@ def test_parse_project_helloworld() -> None:
 def test_parse_project_pyside2app_requires_python() -> None:
     """pyside2app 示例的 requires-python 约束正确解析."""
     info = parse_project(_EXAMPLES / "pyside2_app")
-    assert info.requires_python == ">=3.8,<3.11"
+    assert info.requires_python == ">=3.8,<=3.14"
     assert info.app_type is AppType.GUI
 
 
@@ -427,10 +427,10 @@ def test_resolve_py_version_complex_specifier(tmp_path: Path) -> None:
 
 
 def test_resolve_py_version_pyside2app_example() -> None:
-    """pyside2app 示例：.python-version=3.11 不满足 requires-python<3.11，自动选择 3.10.11."""
+    """pyside2app 示例：.python-version=3.11 + requires-python<=3.14 解析到 3.13."""
     info = parse_project(_EXAMPLES / "pyside2_app")
     resolved = resolve_py_version(_EXAMPLES / "pyside2_app", None, info.requires_python)
-    assert resolved == "3.10.11"
+    assert resolved == "3.13"
 
 
 # --- 多入口解析测试 ---
