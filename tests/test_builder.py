@@ -10,17 +10,21 @@ from typing import Any
 import pytest
 
 from fspack.builder import (
+    _dep_cache_load,
+    _dep_cache_path,
+    _dep_cache_save,
     _inject_win7_compat_dll,
     _needs_win7_compat_dll,
     _precompile_pyc,
     _site_packages_has_deps,
+    _sync_tree,
     _trim_stdlib,
     build,
     copy_source,
     fspack_wheel_cache_dir,
     unpack_wheels,
 )
-from fspack.config import get_mirror
+from fspack.config import DependencyReport, get_mirror
 from fspack.console import console
 from fspack.exceptions import DependencyError
 from fspack.platform import Platform
@@ -1137,3 +1141,158 @@ def test_build_default_keeps_py_source(tmp_path: Path, monkeypatch: pytest.Monke
 
     # app.py 保留
     assert (proj / "dist" / "src" / "app.py").is_file()
+
+
+# ---- 增量同步（copy_source 保留 __pycache__）----
+
+
+def test_copy_source_preserves_pycache(tmp_path: Path) -> None:
+    """copy_source 增量同步时保留 dst 的 __pycache__ 目录以复用 .pyc 缓存."""
+    src = tmp_path / "proj"
+    src.mkdir()
+    (src / "app.py").write_text("print('v1')\n")
+    dst = tmp_path / "out" / "src"
+    dst.mkdir(parents=True)
+    (dst / "old.py").write_text("old")
+    pycache = dst / "__pycache__"
+    pycache.mkdir()
+    (pycache / "app.cpython-311.pyc").write_bytes(b"\x00\x00")
+
+    copy_source(src, dst)
+
+    # __pycache__ 保留
+    assert pycache.is_dir()
+    assert (pycache / "app.cpython-311.pyc").is_file()
+    # old.py（src 中不存在）被删除
+    assert not (dst / "old.py").exists()
+    # app.py 覆盖复制
+    assert (dst / "app.py").read_text() == "print('v1')\n"
+
+
+def test_sync_tree_recursive_preserves_nested_pycache(tmp_path: Path) -> None:
+    """_sync_tree 递归保留子目录中的 __pycache__."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "pkg").mkdir()
+    (src / "pkg" / "mod.py").write_text("x=1\n")
+    dst = tmp_path / "dst"
+    dst.mkdir()
+    (dst / "pkg").mkdir()
+    (dst / "pkg" / "__pycache__").mkdir()
+    (dst / "pkg" / "__pycache__" / "mod.cpython-311.pyc").write_bytes(b"\x00")
+    (dst / "pkg" / "stale.py").write_text("stale")
+
+    import shutil
+
+    _sync_tree(src, dst, shutil.ignore_patterns())
+
+    assert (dst / "pkg" / "__pycache__" / "mod.cpython-311.pyc").is_file()
+    assert not (dst / "pkg" / "stale.py").exists()
+    assert (dst / "pkg" / "mod.py").read_text() == "x=1\n"
+
+
+def test_copy_source_syncs_deleted_files(tmp_path: Path) -> None:
+    """src 删除文件后 copy_source 同步删除 dst 中对应文件（保留 __pycache__）."""
+    src = tmp_path / "proj"
+    src.mkdir()
+    (src / "app.py").write_text("v1")
+    dst = tmp_path / "out" / "src"
+
+    # 第一次复制
+    copy_source(src, dst)
+    assert (dst / "app.py").is_file()
+
+    # src 删除 app.py，添加 main.py
+    (src / "app.py").unlink()
+    (src / "main.py").write_text("v2")
+
+    # 第二次同步
+    copy_source(src, dst)
+    assert not (dst / "app.py").exists(), "src 已删除的文件应从 dst 移除"
+    assert (dst / "main.py").is_file()
+
+
+# ---- 依赖分析缓存 ----
+
+
+def _make_report() -> DependencyReport:
+    """构造测试用 DependencyReport."""
+    return DependencyReport(
+        declared=("rich",),
+        ast_third_party=("rich",),
+        ast_stdlib=("os", "sys"),
+        ast_local=("app",),
+        ast_submodules={"PySide2": frozenset({"QtCore", "QtWidgets"})},
+    )
+
+
+def test_dep_cache_save_and_load_roundtrip(tmp_path: Path) -> None:
+    """缓存保存后加载应返回等价的 DependencyReport."""
+    report = _make_report()
+    fingerprint = "abc123"
+
+    _dep_cache_save(tmp_path, fingerprint, report)
+    loaded = _dep_cache_load(tmp_path, fingerprint, ("rich",))
+
+    assert loaded is not None
+    assert loaded.declared == report.declared
+    assert loaded.ast_third_party == report.ast_third_party
+    assert loaded.ast_stdlib == report.ast_stdlib
+    assert loaded.ast_local == report.ast_local
+    assert loaded.ast_submodules == report.ast_submodules
+
+
+def test_dep_cache_load_miss_on_fingerprint_change(tmp_path: Path) -> None:
+    """指纹变化时缓存失效返回 None."""
+    report = _make_report()
+    _dep_cache_save(tmp_path, "fp1", report)
+    assert _dep_cache_load(tmp_path, "fp2", ("rich",)) is None
+
+
+def test_dep_cache_load_miss_on_declared_change(tmp_path: Path) -> None:
+    """声明依赖变化时缓存失效返回 None."""
+    report = _make_report()
+    _dep_cache_save(tmp_path, "fp1", report)
+    assert _dep_cache_load(tmp_path, "fp1", ("rich", "click")) is None
+
+
+def test_dep_cache_load_miss_on_no_cache(tmp_path: Path) -> None:
+    """缓存文件不存在时返回 None."""
+    assert _dep_cache_load(tmp_path, "fp", ()) is None
+
+
+def test_dep_cache_load_miss_on_corrupt_json(tmp_path: Path) -> None:
+    """损坏的 JSON 文件返回 None 而非抛异常."""
+    cache = _dep_cache_path(tmp_path)
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text("{invalid json", encoding="utf-8")
+    assert _dep_cache_load(tmp_path, "fp", ()) is None
+
+
+def test_build_dep_cache_hit_skips_ast_analysis(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """重复构建时分析依赖缓存命中，跳过 AST 分析."""
+    proj = tmp_path / "app"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\ndependencies = ["rich"]\n')
+    (proj / "app.py").write_text("import rich\n\ndef main():\n    pass\n")
+
+    _setup_embed_mocks(tmp_path, monkeypatch, "3.11.9")
+    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
+
+    # 第一次构建：生成缓存
+    build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
+    cache = _dep_cache_path(proj / "dist")
+    assert cache.is_file(), "第一次构建应生成 .dep_cache.json"
+
+    # 第二次构建：缓存命中
+    analyze_called = False
+    original_from_src = DependencyReport.from_src.__func__  # type: ignore[attr-defined]
+
+    def tracking_from_src(cls: object, *args: object, **kwargs: object) -> DependencyReport:
+        nonlocal analyze_called
+        analyze_called = True
+        return original_from_src(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("fspack.config.DependencyReport.from_src", classmethod(tracking_from_src))
+    build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
+    assert not analyze_called, "缓存命中时不应调用 AST 分析"

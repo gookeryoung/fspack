@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import sys
 from pathlib import Path
 
@@ -14,6 +15,7 @@ __all__ = [
     "collect_imports",
     "collect_imports_and_submodules",
     "collect_submodule_imports",
+    "source_fingerprint",
 ]
 
 # Python 3.8/3.9 没有 sys.stdlib_module_names，用 curate 的集合回退
@@ -403,3 +405,20 @@ def analyze_dependencies(src_dir: Path, project_name: str, declared: tuple[str, 
         ast_local=tuple(local_imports),
         ast_submodules=ast_submodules,
     )
+
+
+def source_fingerprint(src_dir: Path) -> str:
+    """计算源码指纹用于依赖分析缓存键。
+
+    遍历 ``src_dir`` 下所有不被排除的 ``.py`` 文件，以 ``相对路径|mtime_ns|size``
+    拼接后求 SHA-256。与 :func:`analyze_dependencies` 使用相同的排除逻辑
+    （``_is_excluded``），保证指纹只反映被分析的源码变化。
+    """
+    h = hashlib.sha256()
+    for py in sorted(src_dir.rglob("*.py")):
+        if _is_excluded(py, src_dir):
+            continue
+        rel = py.relative_to(src_dir).as_posix()
+        st = py.stat()
+        h.update(f"{rel}|{st.st_mtime_ns}|{st.st_size}\n".encode())
+    return h.hexdigest()

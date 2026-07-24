@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 import subprocess
 from dataclasses import replace
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
 
 from fspack.config import (
     DEFAULT_LINUX_PY_VERSION,
@@ -161,7 +162,7 @@ def _precompile_pyc(  # noqa: PLR0913
     compiled = 0
     for d in targets:
         result = subprocess.run(
-            [str(py_exe), "-m", "compileall", str(d), "-q", "-f", "-j", "0"],
+            [str(py_exe), "-m", "compileall", str(d), "-q", "-j", "0"],
             check=False,
             capture_output=True,
             text=True,
@@ -351,12 +352,23 @@ def build(  # noqa: PLR0912, PLR0913
             _trim_stdlib(runtime_dir, info.py_version, target, st)
 
     with tracker.stage("分析依赖") as st:
-        report = DependencyReport.from_src(project_dir, info.name, info.dependencies)
-        if report.missing:
-            _logger.info("AST 发现未声明依赖: %s", ", ".join(report.missing))
-        ast_count = len(report.ast_third_party)
-        st.processed(ast_count)
-        st.set_detail(f"AST {ast_count} 个第三方")
+        # 源码指纹缓存：源码未变时跳过 AST 分析，重复构建加速 ~478ms
+        from fspack.analyzer import source_fingerprint
+
+        fingerprint = source_fingerprint(project_dir)
+        report = _dep_cache_load(cfg.dist_dir, fingerprint, info.dependencies)
+        if report is not None:
+            st.hit_cache()
+            ast_count = len(report.ast_third_party)
+            st.set_detail(f"缓存命中，AST {ast_count} 个第三方")
+        else:
+            report = DependencyReport.from_src(project_dir, info.name, info.dependencies)
+            _dep_cache_save(cfg.dist_dir, fingerprint, report)
+            if report.missing:
+                _logger.info("AST 发现未声明依赖: %s", ", ".join(report.missing))
+            ast_count = len(report.ast_third_party)
+            st.processed(ast_count)
+            st.set_detail(f"AST {ast_count} 个第三方")
 
     # 补充内置库：embed python 缺失 tkinter（纯 Python 包 + _tkinter.pyd + Tcl/Tk 脚本），
     # 若 AST 检测到 tkinter 使用则从 python-build-standalone Windows 构建提取并补充到 runtime。
@@ -458,17 +470,94 @@ def build(  # noqa: PLR0912, PLR0913
 
 
 def copy_source(project_dir: Path, src_dst: Path) -> None:
-    """将项目源码复制到 dist/src，剥离开发期文件。
+    """将项目源码同步到 dist/src，剥离开发期文件。
 
     保留应用运行所需源码与资源（``.py``/数据文件/``LICENSE`` 等），
     排除构建产物、缓存、虚拟环境、工具配置、项目元数据（
     ``pyproject.toml``/``.python-version``/``uv.lock`` 等）、
     凭证（``.env``）、文档（``*.md``/``*.rst``/``docs``）与测试代码（``tests``）。
     详见 ``_EXCLUDE`` 模式列表。
+
+    增量同步：``src_dst`` 已存在时保留 ``__pycache__`` 目录以复用 ``.pyc`` 缓存，
+    仅删除源码中已不存在的文件、覆盖复制新增/改动的文件（``copy2`` 保留 mtime）。
     """
     if src_dst.exists():
-        shutil.rmtree(src_dst)
-    shutil.copytree(project_dir, src_dst, ignore=_EXCLUDE)
+        _sync_tree(project_dir, src_dst, _EXCLUDE)
+    else:
+        shutil.copytree(project_dir, src_dst, ignore=_EXCLUDE)
+
+
+def _sync_tree(src: Path, dst: Path, ignore_fn: Callable[..., set[str]]) -> None:
+    """增量同步 src 到 dst，保留 dst 中的 ``__pycache__`` 以复用 .pyc 缓存。
+
+    1. 删除 dst 中 src 没有的文件/目录（``__pycache__`` 除外）；
+    2. 用 ``copy2`` 覆盖复制 src 中的文件（保留 mtime 供 compileall 增量判断）。
+    """
+    src_names = [p.name for p in src.iterdir()]
+    ignored = ignore_fn(str(src), src_names) if ignore_fn else set()
+    keep = set(src_names) - ignored
+
+    for item in dst.iterdir():
+        if item.name == "__pycache__":
+            continue
+        if item.name not in keep:
+            if item.is_dir():
+                shutil.rmtree(item)
+            else:
+                item.unlink()
+
+    for name in keep:
+        src_item = src / name
+        dst_item = dst / name
+        if src_item.is_dir():
+            dst_item.mkdir(exist_ok=True)
+            _sync_tree(src_item, dst_item, ignore_fn)
+        else:
+            shutil.copy2(src_item, dst_item)
+
+
+def _dep_cache_path(dist_dir: Path) -> Path:
+    """依赖分析缓存文件路径：``dist/.dep_cache.json``。"""
+    return dist_dir / ".dep_cache.json"
+
+
+def _dep_cache_load(dist_dir: Path, fingerprint: str, declared: tuple[str, ...]) -> DependencyReport | None:
+    """加载依赖分析缓存，指纹或声明依赖不匹配时返回 ``None``。"""
+    cache = _dep_cache_path(dist_dir)
+    if not cache.is_file():
+        return None
+    try:
+        data = json.loads(cache.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    if data.get("fingerprint") != fingerprint or tuple(data.get("declared", [])) != declared:
+        return None
+    r = data["report"]
+    return DependencyReport(
+        declared=tuple(r["declared"]),
+        ast_third_party=tuple(r["ast_third_party"]),
+        ast_stdlib=tuple(r["ast_stdlib"]),
+        ast_local=tuple(r["ast_local"]),
+        ast_submodules={k: frozenset(v) for k, v in r["ast_submodules"].items()},
+    )
+
+
+def _dep_cache_save(dist_dir: Path, fingerprint: str, report: DependencyReport) -> None:
+    """保存依赖分析缓存。"""
+    cache = _dep_cache_path(dist_dir)
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "fingerprint": fingerprint,
+        "declared": list(report.declared),
+        "report": {
+            "declared": list(report.declared),
+            "ast_third_party": list(report.ast_third_party),
+            "ast_stdlib": list(report.ast_stdlib),
+            "ast_local": list(report.ast_local),
+            "ast_submodules": {k: sorted(v) for k, v in report.ast_submodules.items()},
+        },
+    }
+    cache.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
 def _resolve_project_icon(
