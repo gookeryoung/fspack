@@ -375,6 +375,27 @@ def test_resolve_py_version_python_version_file(tmp_path: Path) -> None:
     assert resolve_py_version(tmp_path, None, None) == "3.9.13"
 
 
+def test_resolve_py_version_python_version_file_utf8_bom(tmp_path: Path) -> None:
+    """.python-version 带 UTF-8 BOM 时正确解码."""
+    (tmp_path / ".python-version").write_bytes(b"\xef\xbb\xbf3.9\n")
+    assert resolve_py_version(tmp_path, None, None) == "3.9.13"
+
+
+def test_resolve_py_version_python_version_file_utf16_le_bom(tmp_path: Path) -> None:
+    """.python-version 为 UTF-16 LE（带 BOM）时正确解码.
+
+    某些 Windows 编辑器默认以 UTF-16 保存文件，需通过 BOM 自动识别。
+    """
+    (tmp_path / ".python-version").write_bytes(b"\xff\xfe" + "3.9\r\n".encode("utf-16-le"))
+    assert resolve_py_version(tmp_path, None, None) == "3.9.13"
+
+
+def test_resolve_py_version_python_version_file_utf16_be_bom(tmp_path: Path) -> None:
+    """.python-version 为 UTF-16 BE（带 BOM）时正确解码."""
+    (tmp_path / ".python-version").write_bytes(b"\xfe\xff" + "3.9\r\n".encode("utf-16-be"))
+    assert resolve_py_version(tmp_path, None, None) == "3.9.13"
+
+
 def test_resolve_py_version_python_version_file_full_version(tmp_path: Path) -> None:
     """.python-version 含完整版本号时直接使用."""
     (tmp_path / ".python-version").write_text("3.10.5")

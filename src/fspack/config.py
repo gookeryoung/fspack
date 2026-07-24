@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import ast
+import codecs
 import enum
 import logging
 import re
@@ -358,6 +359,26 @@ def _resolve_icon(project_dir: Path, icon_rel: object) -> Path | None:
     return icon_path
 
 
+def _read_python_version(path: Path) -> str:
+    """读取 ``.python-version`` 文件内容，自动识别 BOM 编码。
+
+    ``.python-version`` 可能由不同编辑器保存为 UTF-8（含/不含 BOM）或 UTF-16，
+    通过字节序标记自动选择解码方式，避免 ``UnicodeDecodeError``。
+
+    Args:
+        path: ``.python-version`` 文件路径。
+
+    Returns:
+        去除首尾空白后的版本字符串。
+    """
+    data = path.read_bytes()
+    if data.startswith(codecs.BOM_UTF8):
+        return data.decode("utf-8-sig").strip()
+    if data.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        return data.decode("utf-16").strip()
+    return data.decode("utf-8").strip()
+
+
 def resolve_py_version(
     project_dir: Path,
     explicit: str | None,
@@ -379,7 +400,7 @@ def resolve_py_version(
 
     pv_file = project_dir / ".python-version"
     if pv_file.is_file():
-        pv = pv_file.read_text(encoding="utf-8").strip()
+        pv = _read_python_version(pv_file)
         # 短版本号(major.minor)优先查 KNOWN_EMBED_VERSIONS 映射得到完整版本号,
         # 完整版本号(>=3 段,如 "3.13.0")直接使用,
         # 未知短版本号(无映射)告警并回退到自动选择,避免拼出错误下载 URL
