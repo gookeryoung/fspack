@@ -365,7 +365,7 @@ def test_resolve_py_version_explicit_short_maps_to_full(tmp_path: Path) -> None:
     避免拼出 ``python/3.13/python-3.13-embed-amd64.zip`` 这样不存在的 URL。
     """
     assert resolve_py_version(tmp_path, "3.13", None) == "3.13.14"
-    assert resolve_py_version(tmp_path, "3.11", None) == "3.11.9"
+    assert resolve_py_version(tmp_path, "3.11", None) == "3.11.15"
 
 
 def test_resolve_py_version_explicit_full_version_passes_through(tmp_path: Path) -> None:
@@ -431,9 +431,9 @@ def test_resolve_py_version_python_version_313_mapping(tmp_path: Path) -> None:
 
 
 def test_resolve_py_version_python_version_314_mapping(tmp_path: Path) -> None:
-    """.python-version=3.14 映射到 3.14.0（Python 3.14.0 于 2025-10 发布）."""
+    """.python-version=3.14 映射到 3.14.6（KNOWN_EMBED_VERSIONS 已收录）."""
     (tmp_path / ".python-version").write_text("3.14")
-    assert resolve_py_version(tmp_path, None, None) == "3.14.0"
+    assert resolve_py_version(tmp_path, None, None) == "3.14.6"
 
 
 def test_resolve_py_version_python_version_unknown_short_falls_back(
@@ -447,7 +447,7 @@ def test_resolve_py_version_python_version_unknown_short_falls_back(
     with caplog.at_level("WARNING", logger="fspack.config"):
         result = resolve_py_version(tmp_path, None, ">=3.8")
     # 回退到自动选择最高兼容已知版本
-    assert result == "3.14.0"
+    assert result == "3.14.6"
     assert "不在已知 embed 版本映射中" in caplog.text
 
 
@@ -464,14 +464,14 @@ def test_resolve_py_version_python_version_violates_requires_python(
     (tmp_path / ".python-version").write_text("3.12")
     with caplog.at_level("WARNING", logger="fspack.config"):
         result = resolve_py_version(tmp_path, None, ">=3.8,<3.11")
-    assert result == "3.10.11"
+    assert result == "3.10.20"
     assert "不满足 requires-python" in caplog.text
 
 
 def test_resolve_py_version_auto_select_highest_compatible(tmp_path: Path) -> None:
     """无 .python-version 时按 requires-python 自动选最高兼容版本."""
-    assert resolve_py_version(tmp_path, None, ">=3.8,<3.11") == "3.10.11"
-    assert resolve_py_version(tmp_path, None, ">=3.8") == "3.14.0"
+    assert resolve_py_version(tmp_path, None, ">=3.8,<3.11") == "3.10.20"
+    assert resolve_py_version(tmp_path, None, ">=3.8") == "3.14.6"
     assert resolve_py_version(tmp_path, None, "<3.10") == "3.9.13"
 
 
@@ -492,15 +492,15 @@ def test_resolve_py_version_unsatisfiable_requires_python(tmp_path: Path) -> Non
 
 
 def test_resolve_py_version_complex_specifier(tmp_path: Path) -> None:
-    """复杂规范符 >=3.9,<3.12 选 3.11.9."""
-    assert resolve_py_version(tmp_path, None, ">=3.9,<3.12") == "3.11.9"
+    """复杂规范符 >=3.9,<3.12 选 3.11.15."""
+    assert resolve_py_version(tmp_path, None, ">=3.9,<3.12") == "3.11.15"
 
 
 def test_resolve_py_version_pyside2app_example() -> None:
-    """pyside2app 示例：.python-version=3.10 + requires-python<3.11 解析到 3.10.11."""
+    """pyside2app 示例：.python-version=3.10 + requires-python<3.11 解析到 3.10.20."""
     info = parse_project(_EXAMPLES / "pyside2_app")
     resolved = resolve_py_version(_EXAMPLES / "pyside2_app", None, info.requires_python)
-    assert resolved == "3.10.11"
+    assert resolved == "3.10.20"
 
 
 # --- 多入口解析测试 ---

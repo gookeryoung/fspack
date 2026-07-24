@@ -440,6 +440,12 @@ class WindowsLoader(LoaderCompiler):
 
     @classmethod
     @override
+    def available(cls) -> bool:
+        """检测 mingw gcc 是否可用（带前缀或无前缀均可）。"""
+        return shutil.which(_find_mingw_gcc()) is not None
+
+    @classmethod
+    @override
     def generate_source(cls, py_xy: str) -> str:
         """生成 Windows loader 源码，加载 python3X.dll 并调用 Py_Main。"""
         python_dll = f"runtime\\\\{py_xy}.dll"
@@ -455,7 +461,7 @@ class WindowsLoader(LoaderCompiler):
         icon_obj: Path | None,
     ) -> list[str]:
         """构造 mingw 编译命令：GUI 加 -mwindows，icon 编译为 .o 链接。"""
-        cmd: list[str] = [MINGW_GCC, "-O2", "-municode", "-o", str(out_exe), str(c_file)]
+        cmd: list[str] = [_find_mingw_gcc(), "-O2", "-municode", "-o", str(out_exe), str(c_file)]
         if app_type is AppType.GUI:
             cmd.insert(1, "-mwindows")
         if icon_obj is not None:
@@ -582,6 +588,20 @@ def _find_windres() -> str:
         if shutil.which(name):
             return name
     return MINGW_WINDRES
+
+
+def _find_mingw_gcc() -> str:
+    """查找可用的 mingw gcc，优先交叉前缀，回退无前缀。
+
+    与 :func:`_find_windres` 同理：Windows 原生 mingw64 发行版（MSYS2、WinLibs、
+    chocolatey mingw 包）通常命名 ``gcc``（无前缀），Linux 交叉编译环境命名
+    ``x86_64-w64-mingw32-gcc``（带前缀）。两者都查找不到时返回默认名，让后续
+    subprocess 报 FileNotFoundError。
+    """
+    for name in (MINGW_GCC, "gcc"):
+        if shutil.which(name):
+            return name
+    return MINGW_GCC
 
 
 def _compile_icon_resource(icon: Path, work_dir: Path) -> Path | None:

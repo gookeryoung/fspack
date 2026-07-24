@@ -220,20 +220,20 @@ class BuildConfig:
 
 # ---- pyproject.toml 解析与项目入口识别 ----
 
-DEFAULT_PY_VERSION = "3.11.9"
-DEFAULT_LINUX_PY_VERSION = "3.11.10"
+DEFAULT_PY_VERSION = "3.11.15"
+DEFAULT_LINUX_PY_VERSION = "3.11.15"
 
 # 已知 embed python 版本映射：major.minor → 完整版本号
-# Python 3.14.0 于 2025-10 发布，python.org embed 已提供
-# 注：Linux 端 python-build-standalone release_tag 升级为独立工作（见 STANDALONE_RELEASE_TAG）
+# 版本号须与 STANDALONE_RELEASE_TAG（runtime.py）实际提供的版本号匹配，否则 Linux standalone 下载 404。
+# 3.8/3.9 已 EOL，python-build-standalone 不再发布，仅 Windows embed（python.org）可下载。
 KNOWN_EMBED_VERSIONS: dict[str, str] = {
     "3.8": "3.8.10",
     "3.9": "3.9.13",
-    "3.10": "3.10.11",
-    "3.11": "3.11.9",
-    "3.12": "3.12.0",
+    "3.10": "3.10.20",
+    "3.11": "3.11.15",
+    "3.12": "3.12.13",
     "3.13": "3.13.14",
-    "3.14": "3.14.0",
+    "3.14": "3.14.6",
 }
 
 

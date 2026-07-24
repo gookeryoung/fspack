@@ -183,16 +183,16 @@ def test_ensure_embed_downloads_when_missing(tmp_path: Path, monkeypatch: pytest
 
 def test_standalone_tarball_name() -> None:
     assert (
-        standalone_tarball_name("3.11.9", "20241016")
-        == "cpython-3.11.9+20241016-x86_64-unknown-linux-gnu-install_only.tar.gz"
+        standalone_tarball_name("3.13.14", "20260718")
+        == "cpython-3.13.14+20260718-x86_64-unknown-linux-gnu-install_only.tar.gz"
     )
 
 
 def test_standalone_url() -> None:
-    url = standalone_url("3.11.9", "20241016")
+    url = standalone_url("3.13.14", "20260718")
     assert url.startswith(STANDALONE_BASE_URL)
-    assert "20241016" in url
-    assert "3.11.9" in url
+    assert "20260718" in url
+    assert "3.13.14" in url
 
 
 def test_download_standalone_cache_hit(tmp_path: Path) -> None:
@@ -214,7 +214,7 @@ def test_download_standalone_fetches(tmp_path: Path, monkeypatch: pytest.MonkeyP
     monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", fake_urlopen)
     path = download_standalone("3.11.9", STANDALONE_RELEASE_TAG, tmp_path / "cache")
     assert path.read_bytes() == b"TARDATA"
-    assert "20241016" in captured["url"]
+    assert STANDALONE_RELEASE_TAG in captured["url"]
 
 
 def test_download_standalone_network_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -14,6 +14,7 @@ from fspack.packaging.loader import (
     MINGW_GCC,
     MINGW_WINDRES,
     _compile_icon_resource,
+    _find_mingw_gcc,
     _find_windres,
     _icon_hash,
     _loader_cache_key,
@@ -73,7 +74,7 @@ def test_compile_loader_cli_invokes_mingw(tmp_path: Path, monkeypatch: pytest.Mo
     assert out.is_file()
     assert "-municode" in captured["cmd"]
     assert "-mwindows" not in captured["cmd"]
-    assert captured["cmd"][0] == "x86_64-w64-mingw32-gcc"
+    assert captured["cmd"][0] == _find_mingw_gcc()
 
 
 def test_compile_loader_gui_adds_mwindows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
