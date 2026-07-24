@@ -10,6 +10,8 @@ from typing import Any
 import pytest
 
 from fspack.builder import (
+    _inject_win7_compat_dll,
+    _needs_win7_compat_dll,
     _site_packages_has_deps,
     build,
     copy_source,
@@ -676,3 +678,141 @@ def test_fspack_wheel_cache_dir_path(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     result = fspack_wheel_cache_dir()
     assert result == tmp_path / ".fspack" / "cache" / "wheels"
+
+
+# ---- Win7 兼容 DLL 注入测试 ----
+
+
+@pytest.mark.parametrize(
+    ("version", "expected"),
+    [
+        ("3.8.10", False),
+        ("3.8.20", False),
+        ("3.9.0", True),
+        ("3.9.13", True),
+        ("3.10.11", True),
+        ("3.11.9", True),
+        ("3.12.0", True),
+        ("3.13.0", True),
+    ],
+)
+def test_needs_win7_compat_dll(version: str, expected: bool) -> None:
+    """Python 3.9+ 需注入兼容 DLL，3.8 不需要."""
+    assert _needs_win7_compat_dll(version) is expected
+
+
+def test_inject_win7_compat_dll_copies_from_assets(tmp_path: Path) -> None:
+    """runtime 无 DLL 时从 fspack assets 复制到 runtime 根目录."""
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir()
+    _inject_win7_compat_dll(runtime_dir)
+    dll = runtime_dir / "api-ms-win-core-path-l1-1-0.dll"
+    assert dll.is_file()
+    # DLL 应为非空二进制（~114KB x64 构建）
+    assert dll.stat().st_size > 10000
+
+
+def test_inject_win7_compat_dll_skips_when_exists(tmp_path: Path) -> None:
+    """runtime 已有 DLL 时跳过复制，原文件内容不变."""
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir()
+    dest = runtime_dir / "api-ms-win-core-path-l1-1-0.dll"
+    dest.write_bytes(b"FAKE_EXISTING_DLL")
+    _inject_win7_compat_dll(runtime_dir)
+    # 内容应保持不变（未被覆盖）
+    assert dest.read_bytes() == b"FAKE_EXISTING_DLL"
+
+
+def test_inject_win7_compat_dll_warns_when_source_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """源 DLL 缺失时仅 warning 不报错（向后兼容旧 fspack 安装）."""
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir()
+    # 将模块级常量改为不存在的文件名，使源路径查找失败
+    monkeypatch.setattr("fspack.builder._WIN7_COMPAT_DLL_NAME", "nonexistent-dll.dll")
+    _inject_win7_compat_dll(runtime_dir)  # 不应抛异常
+    assert not (runtime_dir / "nonexistent-dll.dll").exists()
+    assert any("缺失" in r.message for r in caplog.records)
+
+
+def _setup_embed_mocks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, py_version: str) -> None:
+    """为 Windows embed 构建注入公共 mock（download/extract/wheels/loader）."""
+    monkeypatch.setattr("fspack.builder.download_embed", lambda v, m, c, **kw: tmp_path / "fake.zip")
+    parts = py_version.split(".", maxsplit=2)
+    pyxy = f"python{parts[0]}{parts[1]}"
+    monkeypatch.setattr(
+        "fspack.builder.extract_embed",
+        lambda zip_path, runtime_dir: (
+            runtime_dir.mkdir(parents=True, exist_ok=True),
+            (runtime_dir / f"{pyxy}.dll").write_bytes(b""),
+            (runtime_dir / "Lib" / "site-packages").mkdir(parents=True, exist_ok=True),
+        )[-1],
+    )
+    monkeypatch.setattr("fspack.builder.download_wheels", lambda *a, **k: [])
+    monkeypatch.setattr("fspack.builder.unpack_wheels", lambda *a, **k: 0)
+    monkeypatch.setattr(
+        "fspack.builder.compile_loader",
+        lambda source, out_exe, app_type, work_dir, platform, **kw: (
+            out_exe.parent.mkdir(parents=True, exist_ok=True),
+            out_exe.write_text(source),
+        )[-1],
+    )
+
+
+def test_build_injects_win7_compat_dll_for_py39_plus(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Python 3.11.9 + Windows 目标构建后 runtime 含 api-ms-win-core-path-l1-1-0.dll."""
+    proj = tmp_path / "app"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (proj / "app.py").write_text("def main():\n    pass\n")
+
+    _setup_embed_mocks(tmp_path, monkeypatch, "3.11.9")
+    build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
+    assert (proj / "dist" / "runtime" / "api-ms-win-core-path-l1-1-0.dll").is_file()
+
+
+def test_build_skips_win7_compat_dll_for_py38(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Python 3.8.10 + Windows 目标构建后 runtime 不含兼容 DLL（3.8 官方支持 Win7）."""
+    proj = tmp_path / "app"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (proj / "app.py").write_text("def main():\n    pass\n")
+
+    _setup_embed_mocks(tmp_path, monkeypatch, "3.8.10")
+    build(proj, get_mirror("huawei"), "3.8.10", target=Platform.WINDOWS)
+    assert not (proj / "dist" / "runtime" / "api-ms-win-core-path-l1-1-0.dll").exists()
+
+
+def test_build_skips_win7_compat_dll_for_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Python 3.11.9 + Linux 目标构建后 runtime 不含兼容 DLL（Linux 无此问题）."""
+    proj = tmp_path / "app"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (proj / "app.py").write_text("def main():\n    pass\n")
+
+    # Linux 用 standalone mock
+    monkeypatch.setattr("fspack.builder.download_standalone", lambda v, r, c, **kw: tmp_path / "fake.tar.gz")
+    monkeypatch.setattr(
+        "fspack.builder.extract_standalone",
+        lambda tar_path, runtime_dir: (
+            runtime_dir.mkdir(parents=True, exist_ok=True),
+            (runtime_dir / "python" / "bin").mkdir(parents=True, exist_ok=True),
+            (runtime_dir / "python" / "bin" / "python3.11").write_text(""),
+            (runtime_dir / "python" / "lib" / "python3.11" / "site-packages").mkdir(parents=True, exist_ok=True),
+        )[-1],
+    )
+    monkeypatch.setattr("fspack.builder.download_wheels", lambda *a, **k: [])
+    monkeypatch.setattr("fspack.builder.unpack_wheels", lambda *a, **k: 0)
+    monkeypatch.setattr(
+        "fspack.builder.compile_loader",
+        lambda source, out_exe, app_type, work_dir, platform, **kw: (
+            out_exe.parent.mkdir(parents=True, exist_ok=True),
+            out_exe.write_text(source),
+        )[-1],
+    )
+
+    build(proj, get_mirror("huawei"), "3.11.9", target=Platform.LINUX)
+    assert not (proj / "dist" / "runtime" / "api-ms-win-core-path-l1-1-0.dll").exists()

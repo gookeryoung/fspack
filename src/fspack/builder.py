@@ -61,6 +61,41 @@ def fspack_wheel_cache_dir() -> Path:
     return Path.home() / ".fspack" / "cache" / "wheels"
 
 
+# Win7 兼容性 DLL：Python 3.9+ 官方不再支持 Win7，需注入 api-ms-win-core-path-l1-1-0.dll。
+# DLL 来源 https://github.com/adang1345/api-ms-win-core-path（LGPL-2.1，基于 Wine 实现）。
+# 随 fspack 分发（assets/runtime/），无需网络下载。
+_WIN7_COMPAT_DLL_NAME = "api-ms-win-core-path-l1-1-0.dll"
+
+
+def _needs_win7_compat_dll(py_version: str) -> bool:
+    """Python 3.9+ 官方不再支持 Win7，需注入兼容 DLL。
+
+    Python 3.8 是最后官方支持 Win7 的版本；3.9+ 调用 ``PathCchSkipRoot`` 等
+    API，需 ``api-ms-win-core-path-l1-1-0.dll`` 提供（Win8+ 自带，Win7 缺失）。
+    """
+    parts = py_version.split(".")
+    return (int(parts[0]), int(parts[1])) >= (3, 9)
+
+
+def _inject_win7_compat_dll(runtime_dir: Path) -> None:
+    """将内置 ``api-ms-win-core-path-l1-1-0.dll`` 复制到 runtime 根目录。
+
+    Python 3.9+ 在 Win7 SP1 上启动时需此 DLL（提供 ``PathCchSkipRoot`` 等 API）。
+    DLL 随 fspack 分发（``assets/runtime/``），无需网络下载。重复构建时若
+    DLL 已存在则跳过。DLL 缺失时仅告警不报错（向后兼容旧 fspack 安装）。
+    """
+    dest = runtime_dir / _WIN7_COMPAT_DLL_NAME
+    if dest.is_file():
+        _logger.info("Win7 兼容 DLL 已就绪: %s", dest)
+        return
+    src = Path(__file__).parent / "assets" / "runtime" / _WIN7_COMPAT_DLL_NAME
+    if not src.is_file():
+        _logger.warning("Win7 兼容 DLL 缺失: %s，跳过注入", src)
+        return
+    shutil.copy2(src, dest)
+    _logger.info("注入 Win7 兼容 DLL: %s", dest)
+
+
 # dist/src 仅保留应用运行所需源码与资源，剥离所有开发期文件。
 # 向后兼容策略：未在下方显式列出的文件默认保留，避免误删项目特有运行时资源。
 # LICENSE 不排除：分发产物保留许可证文件满足 MIT/GPL 等开源协议「随附 LICENSE」要求。
@@ -210,6 +245,12 @@ def build(  # noqa: PLR0912, PLR0913
                 st.set_detail("embed python")
         site_packages = runtime_dir / "Lib" / "site-packages"
     site_packages.mkdir(parents=True, exist_ok=True)
+
+    # Win7 兼容性：Python 3.9+ 官方不再支持 Win7，注入 api-ms-win-core-path-l1-1-0.dll
+    # 使 embed python 3.9+ 在 Win7 SP1 / Server 2008 R2 SP1 上也能运行。
+    # 仅 Windows 目标需要（Linux standalone 不存在此问题）。
+    if target is Platform.WINDOWS and _needs_win7_compat_dll(info.py_version):
+        _inject_win7_compat_dll(runtime_dir)
 
     with tracker.stage("分析依赖") as st:
         report = DependencyReport.from_src(project_dir, info.name, info.dependencies)
