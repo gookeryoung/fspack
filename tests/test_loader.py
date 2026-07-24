@@ -34,10 +34,10 @@ def test_generate_loader_source_contains_dll_and_entry_reading() -> None:
     assert "wmain" in src
     assert ".entry" in src
     assert "read_entry" in src
-    # Win7 兼容：用 LoadLibraryExW + LOAD_WITH_ALTERED_SEARCH_PATH
-    # 让 Windows 在 python3X.dll 所在目录搜索依赖 DLL
-    assert "LoadLibraryExW" in src
-    assert "LOAD_WITH_ALTERED_SEARCH_PATH" in src
+    # Win7 兼容：用 SetDllDirectoryW 把 runtime\ 加入 DLL 搜索路径，
+    # 让 Windows 加载 python3X.dll 及其传递依赖时能在 runtime\ 中查找
+    assert "SetDllDirectoryW" in src
+    assert "LoadLibraryW" in src
 
 
 def test_generate_loader_source_no_entry_hardcoded() -> None:

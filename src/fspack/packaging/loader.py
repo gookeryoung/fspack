@@ -155,17 +155,25 @@ int wmain(int argc, wchar_t **argv) {{
     if (slash) *slash = L'\0';
 
     wchar_t dll[MAX_PATH], entry[MAX_ENTRY], entry_full[MAX_PATH + MAX_ENTRY];
+    wchar_t runtime_dir[MAX_PATH];
     _snwprintf(dll, MAX_PATH, L"%s\\%s", dir, PYTHON_DLL);
+    _snwprintf(runtime_dir, MAX_PATH, L"%s\\runtime", dir);
+
+    /* Win7 兼容：SetDllDirectoryW 把 runtime\ 加入 DLL 搜索路径。
+       python3X.dll 及其传递依赖（如 vcruntime140.dll → api-ms-win-core-path-l1-1-0.dll）
+       位于 runtime\，但默认搜索路径只看 loader.exe 所在目录与 system32，
+       找不到 runtime\ 中的依赖 DLL。SetDllDirectoryW 让 Windows 加载 DLL 及其
+       所有层级依赖时都在 runtime\ 中查找。
+       注：LOAD_WITH_ALTERED_SEARCH_PATH 仅影响第一级依赖，对传递依赖无效，
+       故必须用 SetDllDirectoryW 兜底。 */
+    SetDllDirectoryW(runtime_dir);
 
     if (read_entry(exe_path, entry, MAX_ENTRY) != 0) {{
         return 1;
     }}
     _snwprintf(entry_full, sizeof(entry_full)/sizeof(entry_full[0]), L"%s\\%s", dir, entry);
 
-    /* LOAD_WITH_ALTERED_SEARCH_PATH：让 Windows 在 python3X.dll 所在目录（runtime\）
-       搜索其依赖 DLL（如 api-ms-win-core-path-l1-1-0.dll），而非 exe 所在目录。
-       否则 Win7 上 python3X.dll 的依赖在 runtime\ 中却找不到。 */
-    HMODULE h = LoadLibraryExW(dll, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+    HMODULE h = LoadLibraryW(dll);
     if (!h) {{
         fwprintf(stderr, L"加载 Python DLL 失败: %s\n", dll);
         return 1;
