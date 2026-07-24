@@ -86,7 +86,7 @@ def test_project_info_from_dir_with_explicit_py_version(tmp_path: Path) -> None:
 def test_project_info_from_dir_pyside2_app() -> None:
     """from_dir 解析 GUI 示例并读取 requires-python 约束."""
     info = ProjectInfo.from_dir(_EXAMPLES / "pyside2_app")
-    assert info.requires_python == ">=3.8,<=3.14"
+    assert info.requires_python == ">=3.8,<3.11"
     assert info.app_type is AppType.GUI
 
 
@@ -244,7 +244,7 @@ def test_parse_project_helloworld() -> None:
 def test_parse_project_pyside2app_requires_python() -> None:
     """pyside2app 示例的 requires-python 约束正确解析."""
     info = parse_project(_EXAMPLES / "pyside2_app")
-    assert info.requires_python == ">=3.8,<=3.14"
+    assert info.requires_python == ">=3.8,<3.11"
     assert info.app_type is AppType.GUI
 
 
@@ -381,6 +381,27 @@ def test_resolve_py_version_python_version_file_full_version(tmp_path: Path) -> 
     assert resolve_py_version(tmp_path, None, None) == "3.10.5"
 
 
+def test_resolve_py_version_python_version_313_mapping(tmp_path: Path) -> None:
+    """.python-version=3.13 映射到 3.13.0（KNOWN_EMBED_VERSIONS 已收录）."""
+    (tmp_path / ".python-version").write_text("3.13")
+    assert resolve_py_version(tmp_path, None, None) == "3.13.0"
+
+
+def test_resolve_py_version_python_version_unknown_short_falls_back(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """.python-version 为未知短版本号（无映射）时告警并回退到自动选择.
+
+    防止返回短版本号（如 "3.99"）导致 embed 下载 URL 拼接错误。
+    """
+    (tmp_path / ".python-version").write_text("3.99")
+    with caplog.at_level("WARNING", logger="fspack.config"):
+        result = resolve_py_version(tmp_path, None, ">=3.8")
+    # 回退到自动选择最高兼容已知版本
+    assert result == "3.13.0"
+    assert "不在已知 embed 版本映射中" in caplog.text
+
+
 def test_resolve_py_version_python_version_satisfies_requires_python(tmp_path: Path) -> None:
     """.python-version 满足 requires-python 时直接使用."""
     (tmp_path / ".python-version").write_text("3.9")
@@ -401,7 +422,7 @@ def test_resolve_py_version_python_version_violates_requires_python(
 def test_resolve_py_version_auto_select_highest_compatible(tmp_path: Path) -> None:
     """无 .python-version 时按 requires-python 自动选最高兼容版本."""
     assert resolve_py_version(tmp_path, None, ">=3.8,<3.11") == "3.10.11"
-    assert resolve_py_version(tmp_path, None, ">=3.8") == "3.12.0"
+    assert resolve_py_version(tmp_path, None, ">=3.8") == "3.13.0"
     assert resolve_py_version(tmp_path, None, "<3.10") == "3.9.13"
 
 
@@ -427,10 +448,10 @@ def test_resolve_py_version_complex_specifier(tmp_path: Path) -> None:
 
 
 def test_resolve_py_version_pyside2app_example() -> None:
-    """pyside2app 示例：.python-version=3.11 + requires-python<=3.14 解析到 3.13."""
+    """pyside2app 示例：.python-version=3.10 + requires-python<3.11 解析到 3.10.11."""
     info = parse_project(_EXAMPLES / "pyside2_app")
     resolved = resolve_py_version(_EXAMPLES / "pyside2_app", None, info.requires_python)
-    assert resolved == "3.13"
+    assert resolved == "3.10.11"
 
 
 # --- 多入口解析测试 ---

@@ -223,12 +223,14 @@ DEFAULT_PY_VERSION = "3.11.9"
 DEFAULT_LINUX_PY_VERSION = "3.11.10"
 
 # 已知 embed python 版本映射：major.minor → 完整版本号
+# Python 3.13.0 于 2024-10 发布，清华镜像与 python.org 均已提供 embed 包
 KNOWN_EMBED_VERSIONS: dict[str, str] = {
     "3.8": "3.8.10",
     "3.9": "3.9.13",
     "3.10": "3.10.11",
     "3.11": "3.11.9",
     "3.12": "3.12.0",
+    "3.13": "3.13.0",
 }
 
 
@@ -376,11 +378,23 @@ def resolve_py_version(
     pv_file = project_dir / ".python-version"
     if pv_file.is_file():
         pv = pv_file.read_text(encoding="utf-8").strip()
-        full = KNOWN_EMBED_VERSIONS.get(pv, pv)
-        if requires_python and not _satisfies(full, requires_python):
-            _logger.warning(".python-version %s 不满足 requires-python: %s，自动选择兼容版本", full, requires_python)
+        # 短版本号(major.minor)优先查 KNOWN_EMBED_VERSIONS 映射得到完整版本号,
+        # 完整版本号(>=3 段,如 "3.13.0")直接使用,
+        # 未知短版本号(无映射)告警并回退到自动选择,避免拼出错误下载 URL
+        if pv in KNOWN_EMBED_VERSIONS:
+            full = KNOWN_EMBED_VERSIONS[pv]
+        elif len(pv.split(".")) >= 3:
+            full = pv
         else:
-            return full
+            _logger.warning(".python-version %s 不在已知 embed 版本映射中，自动选择兼容版本", pv)
+            full = None
+        if full is not None:
+            if requires_python and not _satisfies(full, requires_python):
+                _logger.warning(
+                    ".python-version %s 不满足 requires-python: %s，自动选择兼容版本", full, requires_python
+                )
+            else:
+                return full
 
     if requires_python:
         for ver in _KNOWN_FULL_VERSIONS:
