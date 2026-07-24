@@ -12,7 +12,9 @@ import pytest
 from fspack.builder import (
     _inject_win7_compat_dll,
     _needs_win7_compat_dll,
+    _precompile_pyc,
     _site_packages_has_deps,
+    _trim_stdlib,
     build,
     copy_source,
     fspack_wheel_cache_dir,
@@ -22,6 +24,7 @@ from fspack.config import get_mirror
 from fspack.console import console
 from fspack.exceptions import DependencyError
 from fspack.platform import Platform
+from fspack.progress import StageRecorder
 
 _EXAMPLES = Path(__file__).parent.parent / "examples"
 
@@ -252,6 +255,8 @@ def test_build_skips_runtime_when_already_prepared_linux(tmp_path: Path, monkeyp
             out_exe.write_text(source),
         )[-1],
     )
+    # mock 预编译阶段的 subprocess.run（Linux python3.11 二进制在 Windows 上无法执行）
+    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
 
     build(proj, get_mirror("huawei"), "3.11.9", target=Platform.LINUX)
     assert not download_called
@@ -580,6 +585,8 @@ def test_build_orchestration_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         return out_exe
 
     monkeypatch.setattr("fspack.builder.compile_loader", fake_compile)
+    # mock 预编译阶段的 subprocess.run（Linux python3.11 二进制在 Windows 上无法执行）
+    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
 
     info = build(proj, get_mirror("huawei"), "3.11.9", target=Platform.LINUX)
     assert info.name == "cli_helloworld"
@@ -814,6 +821,319 @@ def test_build_skips_win7_compat_dll_for_linux(tmp_path: Path, monkeypatch: pyte
             out_exe.write_text(source),
         )[-1],
     )
+    # mock 预编译阶段的 subprocess.run（Linux python3.11 二进制在 Windows 上无法执行）
+    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
 
     build(proj, get_mirror("huawei"), "3.11.9", target=Platform.LINUX)
     assert not (proj / "dist" / "runtime" / "api-ms-win-core-path-l1-1-0.dll").exists()
+
+
+# ---- _trim_stdlib 测试 ----
+
+
+def test_trim_stdlib_linux_strips_unwanted_dirs(tmp_path: Path) -> None:
+    """Linux 模式剥离 test/ensurepip/idlelib/pydoc_data/turtledemo 等无用目录，保留有用模块."""
+    runtime = tmp_path / "runtime"
+    stdlib = runtime / "python" / "lib" / "python3.11"
+    for d in ("test", "ensurepip", "idlelib", "pydoc_data", "turtledemo", "json"):
+        (stdlib / d).mkdir(parents=True)
+    (stdlib / "json" / "__init__.py").write_text("")  # 有用模块应保留
+
+    st = StageRecorder("精简标准库")
+    _trim_stdlib(runtime, "3.11.9", Platform.LINUX, st)
+
+    assert not (stdlib / "test").exists()
+    assert not (stdlib / "ensurepip").exists()
+    assert not (stdlib / "idlelib").exists()
+    assert not (stdlib / "pydoc_data").exists()
+    assert not (stdlib / "turtledemo").exists()
+    assert (stdlib / "json").exists()  # 保留有用模块
+
+
+def test_trim_stdlib_windows_skips(tmp_path: Path) -> None:
+    """Windows embed 标准库在 zip 内已精简，跳过不剥离."""
+    runtime = tmp_path / "runtime"
+    stdlib = runtime / "python" / "lib" / "python3.11"
+    (stdlib / "test").mkdir(parents=True)  # 构造验证跳过
+
+    st = StageRecorder("精简标准库")
+    _trim_stdlib(runtime, "3.11.9", Platform.WINDOWS, st)
+
+    # Windows 模式不剥离
+    assert (stdlib / "test").exists()
+
+
+def test_trim_stdlib_missing_stdlib_skips(tmp_path: Path) -> None:
+    """标准库目录不存在时不报错."""
+    runtime = tmp_path / "runtime"
+    # 不创建 stdlib 目录
+
+    st = StageRecorder("精简标准库")
+    _trim_stdlib(runtime, "3.11.9", Platform.LINUX, st)
+    # 不报错即通过
+
+
+def test_trim_stdlib_idempotent(tmp_path: Path) -> None:
+    """重复调用幂等：已剥离的目录不存在时跳过."""
+    runtime = tmp_path / "runtime"
+    stdlib = runtime / "python" / "lib" / "python3.11"
+    (stdlib / "test").mkdir(parents=True)
+
+    st = StageRecorder("精简标准库")
+    _trim_stdlib(runtime, "3.11.9", Platform.LINUX, st)
+    _trim_stdlib(runtime, "3.11.9", Platform.LINUX, st)  # 二次调用不报错
+    assert not (stdlib / "test").exists()
+
+
+# ---- _precompile_pyc 测试 ----
+
+
+class _CompileCompleted:
+    returncode = 0
+    stdout = ""
+    stderr = ""
+
+
+def test_precompile_pyc_windows_calls_compileall(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows 目标用 runtime/python.exe 调 compileall 预编译 src 与 site-packages."""
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    (runtime / "python.exe").write_bytes(b"")
+    (runtime / "Lib" / "site-packages").mkdir(parents=True)
+    dist = tmp_path / "dist"
+    (dist / "src").mkdir(parents=True)
+    (dist / "src" / "app.py").write_text("print('hi')")
+
+    captured: list[list[str]] = []
+    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: captured.append(cmd) or _CompileCompleted())
+
+    st = StageRecorder("预编译字节码")
+    _precompile_pyc(dist, runtime, "3.11.9", Platform.WINDOWS, strip_py=False, stage=st)
+
+    # 调用 2 次（src + site-packages）
+    assert len(captured) == 2
+    assert "compileall" in captured[0]
+    assert str(dist / "src") in captured[0]
+    assert str(runtime / "python.exe") in captured[0][0]
+
+
+def test_precompile_pyc_linux_uses_python3_bin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Linux 目标用 runtime/python/bin/python{ver} 调 compileall."""
+    runtime = tmp_path / "runtime"
+    (runtime / "python" / "bin").mkdir(parents=True)
+    (runtime / "python" / "bin" / "python3.11").write_bytes(b"")
+    (runtime / "python" / "lib" / "python3.11" / "site-packages").mkdir(parents=True)
+    dist = tmp_path / "dist"
+    (dist / "src").mkdir(parents=True)
+    (dist / "src" / "app.py").write_text("")
+
+    captured: list[list[str]] = []
+    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: captured.append(cmd) or _CompileCompleted())
+
+    st = StageRecorder("预编译字节码")
+    _precompile_pyc(dist, runtime, "3.11.9", Platform.LINUX, strip_py=False, stage=st)
+
+    assert "python3.11" in str(captured[0][0])
+
+
+def test_precompile_pyc_strip_deletes_non_init_py(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """strip_py=True 删除非 __init__.py 的 .py，保留 __init__.py 维持包结构."""
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    (runtime / "python.exe").write_bytes(b"")
+    (runtime / "Lib" / "site-packages").mkdir(parents=True)
+    dist = tmp_path / "dist"
+    src = dist / "src"
+    src.mkdir(parents=True)
+    (src / "__init__.py").write_text("")
+    (src / "app.py").write_text("print('hi')")
+    (src / "sub").mkdir()
+    (src / "sub" / "__init__.py").write_text("")
+    (src / "sub" / "mod.py").write_text("x")
+
+    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
+
+    st = StageRecorder("预编译字节码")
+    _precompile_pyc(dist, runtime, "3.11.9", Platform.WINDOWS, strip_py=True, stage=st)
+
+    # __init__.py 保留（包标识）
+    assert (src / "__init__.py").is_file()
+    assert (src / "sub" / "__init__.py").is_file()
+    # 非 __init__.py 被删
+    assert not (src / "app.py").exists()
+    assert not (src / "sub" / "mod.py").exists()
+
+
+def test_precompile_pyc_strip_keeps_init_py(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """strip_py=True 时不删 __init__.py（避免 PEP 420 命名空间包导致 .pyc 不加载）."""
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    (runtime / "python.exe").write_bytes(b"")
+    dist = tmp_path / "dist"
+    src = dist / "src"
+    src.mkdir(parents=True)
+    (src / "__init__.py").write_text("PKG = 1")
+    (src / "main.py").write_text("print('main')")
+
+    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
+
+    st = StageRecorder("预编译字节码")
+    _precompile_pyc(dist, runtime, "3.11.9", Platform.WINDOWS, strip_py=True, stage=st)
+
+    assert (src / "__init__.py").is_file()
+    assert not (src / "main.py").exists()
+
+
+def test_precompile_pyc_python_missing_skips(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """runtime python 未就绪时跳过 compileall，不调 subprocess."""
+    runtime = tmp_path / "runtime"
+    # 不创建 python.exe
+    dist = tmp_path / "dist"
+    (dist / "src").mkdir(parents=True)
+    (dist / "src" / "app.py").write_text("")
+
+    called: list[object] = []
+    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: called.append(cmd))
+
+    st = StageRecorder("预编译字节码")
+    _precompile_pyc(dist, runtime, "3.11.9", Platform.WINDOWS, strip_py=False, stage=st)
+
+    assert not called  # 未调 subprocess
+
+
+def test_precompile_pyc_compileall_failure_warns_not_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """compileall 非零退出码时仅 warning 不抛异常，继续处理后续目录."""
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    (runtime / "python.exe").write_bytes(b"")
+    (runtime / "Lib" / "site-packages").mkdir(parents=True)
+    dist = tmp_path / "dist"
+    (dist / "src").mkdir(parents=True)
+    (dist / "src" / "app.py").write_text("")
+
+    class _Failed:
+        returncode = 1
+        stderr = "syntax error"
+        stdout = ""
+
+    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _Failed())
+
+    st = StageRecorder("预编译字节码")
+    with caplog.at_level("WARNING", logger="fspack.builder"):
+        _precompile_pyc(dist, runtime, "3.11.9", Platform.WINDOWS, strip_py=False, stage=st)
+
+    assert any("compileall 失败" in r.message for r in caplog.records)
+
+
+# ---- build() 集成新阶段测试 ----
+
+
+def _capture_stage_names(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """包装 StageRecorder._finalize 记录所有阶段名."""
+    captured: list[str] = []
+    original_finalize = StageRecorder._finalize
+
+    def recording_finalize(self: StageRecorder) -> object:
+        rec = original_finalize(self)
+        captured.append(rec.name)
+        return rec
+
+    monkeypatch.setattr(StageRecorder, "_finalize", recording_finalize)
+    return captured
+
+
+def test_build_includes_new_stages_in_summary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """build() 阶段汇总含「精简标准库」「预编译字节码」「解压 wheel(精简)」."""
+    proj = tmp_path / "app"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\ndependencies = ["rich"]\n')
+    (proj / "app.py").write_text("import rich\n\ndef main():\n    pass\n")
+
+    _setup_embed_mocks(tmp_path, monkeypatch, "3.11.9")
+    # 覆盖 download_wheels 返回非空列表，触发「解压 wheel(精简)」阶段
+    monkeypatch.setattr("fspack.builder.download_wheels", lambda *a, **k: [tmp_path / "fake.whl"])
+    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
+
+    stage_names = _capture_stage_names(monkeypatch)
+    build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
+
+    assert "精简标准库" in stage_names
+    assert "预编译字节码" in stage_names
+    assert "解压 wheel(精简)" in stage_names
+
+
+def test_build_no_pyc_skips_precompile_stage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """no_pyc=True 时跳过「预编译字节码」阶段."""
+    proj = tmp_path / "app"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (proj / "app.py").write_text("def main():\n    pass\n")
+
+    _setup_embed_mocks(tmp_path, monkeypatch, "3.11.9")
+    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
+
+    stage_names = _capture_stage_names(monkeypatch)
+    build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, no_pyc=True)
+
+    assert "预编译字节码" not in stage_names
+    assert "精简标准库" in stage_names  # 精简标准库仍执行
+
+
+def test_build_no_stdlib_trim_skips_trim_stage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """no_stdlib_trim=True 时跳过「精简标准库」阶段."""
+    proj = tmp_path / "app"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (proj / "app.py").write_text("def main():\n    pass\n")
+
+    _setup_embed_mocks(tmp_path, monkeypatch, "3.11.9")
+    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
+
+    stage_names = _capture_stage_names(monkeypatch)
+    build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, no_stdlib_trim=True)
+
+    assert "精简标准库" not in stage_names
+    assert "预编译字节码" in stage_names  # 预编译仍执行
+
+
+def test_build_pyc_strip_deletes_non_init_py(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """pyc_strip=True 时 build() 调 _precompile_pyc 剥离非 __init__.py 源码."""
+    proj = tmp_path / "app"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (proj / "app.py").write_text("def main():\n    pass\n")
+
+    _setup_embed_mocks(tmp_path, monkeypatch, "3.11.9")
+    # 让 python.exe 就绪，使 _precompile_pyc 真正执行 strip
+    runtime = proj / "dist" / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    (runtime / "python.exe").write_bytes(b"")
+    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
+
+    build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, pyc_strip=True)
+
+    src = proj / "dist" / "src"
+    # app.py 被剥离
+    assert not (src / "app.py").exists()
+    # 但 _entry_app.py 是 wrapper（在 dist 根，非 src），不受影响
+
+
+def test_build_default_keeps_py_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """默认（无 pyc_strip）保留 .py 源码，仅生成 .pyc 加速."""
+    proj = tmp_path / "app"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (proj / "app.py").write_text("def main():\n    pass\n")
+
+    _setup_embed_mocks(tmp_path, monkeypatch, "3.11.9")
+    runtime = proj / "dist" / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    (runtime / "python.exe").write_bytes(b"")
+    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
+
+    build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
+
+    # app.py 保留
+    assert (proj / "dist" / "src" / "app.py").is_file()

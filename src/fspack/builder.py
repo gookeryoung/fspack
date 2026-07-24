@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 from typing import Sequence
@@ -96,6 +97,94 @@ def _inject_win7_compat_dll(runtime_dir: Path) -> None:
     _logger.info("注入 Win7 兼容 DLL: %s", dest)
 
 
+# Linux standalone 标准库精简：剥离运行时无用的模块目录。
+# Windows embed 标准库在 python3XX.zip 内（只读、官方已精简），无需处理。
+_STDLIB_TRIM_DIRS = ("test", "ensurepip", "idlelib", "pydoc_data", "turtledemo", "tkinter/test", "sqlite3/test")
+
+
+def _trim_stdlib(runtime_dir: Path, py_version: str, target: Platform, stage: StageRecorder) -> None:
+    """剥离 Linux standalone 标准库中运行时无用的模块目录。
+
+    Windows embed 标准库在 python3XX.zip 内（只读、官方已精简），跳过。
+    重复构建时已剥离的目录不存在则跳过，幂等。
+    """
+    if target is not Platform.LINUX:
+        stage.set_detail("embed zip 已精简，跳过")
+        return
+    major, minor = py_version.split(".")[:2]
+    stdlib = runtime_dir / "python" / "lib" / f"python{major}.{minor}"
+    if not stdlib.is_dir():
+        stage.set_detail("标准库目录不存在，跳过")
+        return
+    removed = 0
+    for name in _STDLIB_TRIM_DIRS:
+        d = stdlib / name
+        if d.is_dir():
+            shutil.rmtree(d)
+            removed += 1
+            _logger.info("精简标准库: 剥离 %s", d)
+    stage.skip(removed)
+    stage.set_detail(f"剥离 {removed} 目录")
+
+
+def _precompile_pyc(  # noqa: PLR0913
+    dist_dir: Path,
+    runtime_dir: Path,
+    py_version: str,
+    target: Platform,
+    *,
+    strip_py: bool,
+    stage: StageRecorder,
+) -> None:
+    """预编译 src 与 site-packages 的 .py 为 .pyc，加速首次启动。
+
+    用 runtime 自身的 python 调用 ``compileall``，保证 ABI 一致。生成
+    ``__pycache__/{name}.cpython-{ver}.pyc``（optimize=0），运行时默认加载。
+
+    ``strip_py=True`` 时额外删除非 ``__init__.py`` 的 ``.py`` 源码（保留包标识，
+    避免 PEP 420 命名空间包导致 ``.pyc`` 不被加载）。docstring/assert 保留，
+    剥离需运行时 ``PYTHONOPTIMIZE=2`` 配合，作为未来增强。
+    """
+    if target is Platform.WINDOWS:
+        py_exe = runtime_dir / "python.exe"
+        site_packages = runtime_dir / "Lib" / "site-packages"
+    else:
+        major, minor = py_version.split(".")[:2]
+        py_exe = runtime_dir / "python" / "bin" / f"python{major}.{minor}"
+        site_packages = runtime_dir / "python" / "lib" / f"python{major}.{minor}" / "site-packages"
+    src_dir = dist_dir / "src"
+    if not py_exe.is_file():
+        _logger.warning("预编译跳过: runtime python 未就绪 %s", py_exe)
+        stage.set_detail("runtime python 未就绪，跳过")
+        return
+    targets = [d for d in (src_dir, site_packages) if d.is_dir()]
+    compiled = 0
+    for d in targets:
+        result = subprocess.run(
+            [str(py_exe), "-m", "compileall", str(d), "-q", "-f", "-j", "0"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            _logger.warning("compileall 失败 %s: %s", d, result.stderr.strip())
+        else:
+            compiled += 1
+        stage.processed()
+    stripped = 0
+    if strip_py:
+        for d in targets:
+            for py in d.rglob("*.py"):
+                if py.name == "__init__.py":
+                    continue  # 保留包标识，避免命名空间包导致 .pyc 不加载
+                py.unlink()
+                stripped += 1
+        stage.skip(stripped)
+        stage.set_detail(f"编译 {compiled} 目录，剥离 {stripped} 个 .py")
+    else:
+        stage.set_detail(f"编译 {compiled} 目录")
+
+
 # dist/src 仅保留应用运行所需源码与资源，剥离所有开发期文件。
 # 向后兼容策略：未在下方显式列出的文件默认保留，避免误删项目特有运行时资源。
 # LICENSE 不排除：分发产物保留许可证文件满足 MIT/GPL 等开源协议「随附 LICENSE」要求。
@@ -174,6 +263,9 @@ def build(  # noqa: PLR0912, PLR0913
     target: Platform | None = None,
     keep_modules: set[str] | None = None,
     icon: Path | None = None,
+    no_stdlib_trim: bool = False,
+    no_pyc: bool = False,
+    pyc_strip: bool = False,
 ) -> ProjectInfo:
     """执行完整构建流水线，返回项目信息。
 
@@ -252,6 +344,12 @@ def build(  # noqa: PLR0912, PLR0913
     if target is Platform.WINDOWS and _needs_win7_compat_dll(info.py_version):
         _inject_win7_compat_dll(runtime_dir)
 
+    # 标准库精简：剥离 Linux standalone 中 test/ensurepip/idlelib 等运行时无用模块。
+    # Windows embed 标准库在 python3XX.zip 内（官方已精简），阶段内自动跳过。
+    if not no_stdlib_trim:
+        with tracker.stage("精简标准库") as st:
+            _trim_stdlib(runtime_dir, info.py_version, target, st)
+
     with tracker.stage("分析依赖") as st:
         report = DependencyReport.from_src(project_dir, info.name, info.dependencies)
         if report.missing:
@@ -294,7 +392,7 @@ def build(  # noqa: PLR0912, PLR0913
                     platform_tags=wheel_platform_tags(target),
                     stage=st,
                 )
-            with tracker.stage("解压 wheel") as st:
+            with tracker.stage("解压 wheel(精简)") as st:
                 unpack_wheels(wheels, site_packages, report.ast_submodules, keep_modules, stage=st)
     else:
         _logger.info("无第三方依赖，跳过 wheel 下载")
@@ -306,6 +404,13 @@ def build(  # noqa: PLR0912, PLR0913
         src_dst = cfg.dist_dir / "src"
         with spinner(f"复制 {info.name} 源码"):
             copy_source(project_dir, src_dst)
+
+    # 预编译字节码：用 runtime 自身 python 编译 src + site-packages 为 .pyc，加速首次启动。
+    # pyc_strip=True 时额外剥离非 __init__.py 源码（源码保护，保留包标识避免命名空间包问题）。
+    # 交叉构建时（构建机平台 ≠ 目标平台）runtime python 无法执行，跳过预编译。
+    if not no_pyc and target is detect_platform():
+        with tracker.stage("预编译字节码") as st:
+            _precompile_pyc(cfg.dist_dir, runtime_dir, info.py_version, target, strip_py=pyc_strip, stage=st)
 
     # icon 优先级：CLI --icon > 项目 [tool.fspack] icon > 自动搜索 favicon.* > 默认 app.ico（仅 Windows）
     # Linux 目标无图标资源概念，统一传 None

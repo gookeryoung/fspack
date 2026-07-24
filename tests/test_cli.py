@@ -36,6 +36,9 @@ def test_build_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
         target: object = None,
         keep_modules: set[str] | None = None,
         icon: Path | None = None,
+        no_stdlib_trim: bool = False,
+        no_pyc: bool = False,
+        pyc_strip: bool = False,
     ) -> None:
         called["project"] = project
         called["mirror"] = mirror
@@ -50,8 +53,8 @@ def test_build_default_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     called: dict[str, Path] = {}
     monkeypatch.setattr(
         "fspack.commands.build.run",
-        lambda project, mirror=None, py_version=None, target=None, keep_modules=None, icon=None: called.__setitem__(
-            "p", project
+        lambda project, mirror=None, py_version=None, target=None, keep_modules=None, icon=None, **kw: (
+            called.__setitem__("p", project)
         ),
     )
     monkeypatch.chdir(tmp_path)
@@ -63,8 +66,8 @@ def test_build_custom_py_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     called: dict[str, Any] = {}
     monkeypatch.setattr(
         "fspack.commands.build.run",
-        lambda project, mirror=None, py_version=None, target=None, keep_modules=None, icon=None: called.__setitem__(
-            "pv", py_version
+        lambda project, mirror=None, py_version=None, target=None, keep_modules=None, icon=None, **kw: (
+            called.__setitem__("pv", py_version)
         ),
     )
     cli.main(["b", str(tmp_path), "--py-version", "3.12.3"])
@@ -81,6 +84,9 @@ def test_build_target_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
         target: object = None,
         keep_modules: set[str] | None = None,
         icon: Path | None = None,
+        no_stdlib_trim: bool = False,
+        no_pyc: bool = False,
+        pyc_strip: bool = False,
     ) -> None:
         called["target"] = target
 
@@ -99,6 +105,9 @@ def test_build_target_windows_dispatch(tmp_path: Path, monkeypatch: pytest.Monke
         target: object = None,
         keep_modules: set[str] | None = None,
         icon: Path | None = None,
+        no_stdlib_trim: bool = False,
+        no_pyc: bool = False,
+        pyc_strip: bool = False,
     ) -> None:
         called["target"] = target
 
@@ -117,6 +126,9 @@ def test_build_keep_module_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         target: object = None,
         keep_modules: set[str] | None = None,
         icon: Path | None = None,
+        no_stdlib_trim: bool = False,
+        no_pyc: bool = False,
+        pyc_strip: bool = False,
     ) -> None:
         called["keep_modules"] = keep_modules
 
@@ -136,6 +148,9 @@ def test_build_icon_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
         target: object = None,
         keep_modules: set[str] | None = None,
         icon: Path | None = None,
+        no_stdlib_trim: bool = False,
+        no_pyc: bool = False,
+        pyc_strip: bool = False,
     ) -> None:
         called["icon"] = icon
 
@@ -157,12 +172,67 @@ def test_build_no_icon_passes_none(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         target: object = None,
         keep_modules: set[str] | None = None,
         icon: Path | None = None,
+        no_stdlib_trim: bool = False,
+        no_pyc: bool = False,
+        pyc_strip: bool = False,
     ) -> None:
         called["icon"] = icon
 
     monkeypatch.setattr("fspack.commands.build.run", fake_run)
     cli.main(["b", str(tmp_path)])
     assert called["icon"] is None
+
+
+def test_build_pyc_options_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`--no-pyc`/`--pyc-strip`/`--no-stdlib-trim` 解析并透传给 build_cmd.run."""
+    called: dict[str, Any] = {}
+
+    def fake_run(  # noqa: PLR0913
+        project: Path,
+        mirror: str | None = None,
+        py_version: str | None = None,
+        target: object = None,
+        keep_modules: set[str] | None = None,
+        icon: Path | None = None,
+        no_stdlib_trim: bool = False,
+        no_pyc: bool = False,
+        pyc_strip: bool = False,
+    ) -> None:
+        called["no_stdlib_trim"] = no_stdlib_trim
+        called["no_pyc"] = no_pyc
+        called["pyc_strip"] = pyc_strip
+
+    monkeypatch.setattr("fspack.commands.build.run", fake_run)
+    cli.main(["b", str(tmp_path), "--no-pyc", "--pyc-strip", "--no-stdlib-trim"])
+    assert called["no_pyc"] is True
+    assert called["pyc_strip"] is True
+    assert called["no_stdlib_trim"] is True
+
+
+def test_build_pyc_options_default_false(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """未指定 pyc 选项时 no_pyc/pyc_strip/no_stdlib_trim 均为 False（开启精简与预编译）."""
+    called: dict[str, Any] = {}
+
+    def fake_run(  # noqa: PLR0913
+        project: Path,
+        mirror: str | None = None,
+        py_version: str | None = None,
+        target: object = None,
+        keep_modules: set[str] | None = None,
+        icon: Path | None = None,
+        no_stdlib_trim: bool = False,
+        no_pyc: bool = False,
+        pyc_strip: bool = False,
+    ) -> None:
+        called["no_pyc"] = no_pyc
+        called["pyc_strip"] = pyc_strip
+        called["no_stdlib_trim"] = no_stdlib_trim
+
+    monkeypatch.setattr("fspack.commands.build.run", fake_run)
+    cli.main(["b", str(tmp_path)])
+    assert called["no_pyc"] is False
+    assert called["pyc_strip"] is False
+    assert called["no_stdlib_trim"] is False
 
 
 def test_run_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

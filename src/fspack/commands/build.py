@@ -21,8 +21,21 @@ def run(  # noqa: PLR0913
     target: Platform | None = None,
     keep_modules: set[str] | None = None,
     icon: Path | None = None,
+    no_stdlib_trim: bool = False,
+    no_pyc: bool = False,
+    pyc_strip: bool = False,
 ) -> None:
     """执行项目构建."""
     mirror_cfg = get_mirror(mirror)
     resolved_target = target or detect_platform()
-    build(project, mirror_cfg, py_version, target=resolved_target, keep_modules=keep_modules, icon=icon)
+    build(
+        project,
+        mirror_cfg,
+        py_version,
+        target=resolved_target,
+        keep_modules=keep_modules,
+        icon=icon,
+        no_stdlib_trim=no_stdlib_trim,
+        no_pyc=no_pyc,
+        pyc_strip=pyc_strip,
+    )

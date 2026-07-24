@@ -26,6 +26,9 @@ def test_build_run_default_mirror_and_py_version(tmp_path: Path, monkeypatch: py
         target: object = None,
         keep_modules: set[str] | None = None,
         icon: Path | None = None,
+        no_stdlib_trim: bool = False,
+        no_pyc: bool = False,
+        pyc_strip: bool = False,
     ) -> None:
         captured["mirror"] = mirror
         captured["py_version"] = py_version
@@ -50,6 +53,9 @@ def test_build_run_explicit_options(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         target: object = None,
         keep_modules: set[str] | None = None,
         icon: Path | None = None,
+        no_stdlib_trim: bool = False,
+        no_pyc: bool = False,
+        pyc_strip: bool = False,
     ) -> None:
         captured["mirror"] = mirror
         captured["py_version"] = py_version
@@ -76,12 +82,67 @@ def test_build_run_keep_modules(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
         target: object = None,
         keep_modules: set[str] | None = None,
         icon: Path | None = None,
+        no_stdlib_trim: bool = False,
+        no_pyc: bool = False,
+        pyc_strip: bool = False,
     ) -> None:
         captured["keep_modules"] = keep_modules
 
     monkeypatch.setattr("fspack.commands.build.build", fake_build)
     build_run(tmp_path, keep_modules={"PySide2.QtGui"})
     assert captured["keep_modules"] == {"PySide2.QtGui"}
+
+
+def test_build_run_pyc_options_passthrough(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """--no-pyc/--pyc-strip/--no-stdlib-trim 透传到 build()."""
+    captured: dict[str, object] = {}
+
+    def fake_build(  # noqa: PLR0913
+        project: Path,
+        mirror: object,
+        py_version: str | None,
+        target: object = None,
+        keep_modules: set[str] | None = None,
+        icon: Path | None = None,
+        no_stdlib_trim: bool = False,
+        no_pyc: bool = False,
+        pyc_strip: bool = False,
+    ) -> None:
+        captured["no_stdlib_trim"] = no_stdlib_trim
+        captured["no_pyc"] = no_pyc
+        captured["pyc_strip"] = pyc_strip
+
+    monkeypatch.setattr("fspack.commands.build.build", fake_build)
+    build_run(tmp_path, no_stdlib_trim=True, no_pyc=True, pyc_strip=True)
+    assert captured["no_stdlib_trim"] is True
+    assert captured["no_pyc"] is True
+    assert captured["pyc_strip"] is True
+
+
+def test_build_run_pyc_options_default_false(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """默认 no_stdlib_trim/no_pyc/pyc_strip 均为 False（即开启精简与预编译）."""
+    captured: dict[str, object] = {}
+
+    def fake_build(  # noqa: PLR0913
+        project: Path,
+        mirror: object,
+        py_version: str | None,
+        target: object = None,
+        keep_modules: set[str] | None = None,
+        icon: Path | None = None,
+        no_stdlib_trim: bool = False,
+        no_pyc: bool = False,
+        pyc_strip: bool = False,
+    ) -> None:
+        captured["no_stdlib_trim"] = no_stdlib_trim
+        captured["no_pyc"] = no_pyc
+        captured["pyc_strip"] = pyc_strip
+
+    monkeypatch.setattr("fspack.commands.build.build", fake_build)
+    build_run(tmp_path)
+    assert captured["no_stdlib_trim"] is False
+    assert captured["no_pyc"] is False
+    assert captured["pyc_strip"] is False
 
 
 def test_clean_run_removes_dist(tmp_path: Path) -> None:

@@ -44,6 +44,21 @@ def build_parser() -> argparse.ArgumentParser:
             "未指定时按 [tool.fspack] icon > 自动搜索 favicon.* > 默认 app.ico 解析"
         ),
     )
+    p_build.add_argument(
+        "--no-stdlib-trim",
+        action="store_true",
+        help="关闭标准库精简（默认剥离 Linux standalone 的 test/ensurepip/idlelib 等无用模块）",
+    )
+    p_build.add_argument(
+        "--no-pyc",
+        action="store_true",
+        help="关闭字节码预编译（默认预编译 src+site-packages 为 .pyc 加速首次启动）",
+    )
+    p_build.add_argument(
+        "--pyc-strip",
+        action="store_true",
+        help="剥离非 __init__.py 的 .py 源码（仅保留 .pyc，需配合预编译；保留包标识避免命名空间包问题）",
+    )
 
     p_run = sub.add_parser("run", aliases=["r"], help="运行已打包项目")
     p_run.add_argument("project", nargs="?", default=".", help="项目目录")
@@ -98,6 +113,9 @@ def main(argv: list[str] | None = None) -> None:
             target=_parse_target(ns.target),
             keep_modules=set(ns.keep_modules) if ns.keep_modules else None,
             icon=Path(ns.icon).resolve() if ns.icon else None,
+            no_stdlib_trim=ns.no_stdlib_trim,
+            no_pyc=ns.no_pyc,
+            pyc_strip=ns.pyc_strip,
         )
     elif command in ("run", "r"):
         from fspack.commands import run as run_cmd
