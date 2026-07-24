@@ -359,6 +359,28 @@ def test_resolve_py_version_explicit(tmp_path: Path) -> None:
     assert resolve_py_version(tmp_path, "3.10.0", None) == "3.10.0"
 
 
+def test_resolve_py_version_explicit_short_maps_to_full(tmp_path: Path) -> None:
+    """显式短版本号（如 3.13）映射到完整版本号（如 3.13.0）.
+
+    避免拼出 ``python/3.13/python-3.13-embed-amd64.zip`` 这样不存在的 URL。
+    """
+    assert resolve_py_version(tmp_path, "3.13", None) == "3.13.0"
+    assert resolve_py_version(tmp_path, "3.11", None) == "3.11.9"
+
+
+def test_resolve_py_version_explicit_full_version_passes_through(tmp_path: Path) -> None:
+    """显式完整版本号（>=3 段）原样使用."""
+    assert resolve_py_version(tmp_path, "3.13.1", None) == "3.13.1"
+
+
+def test_resolve_py_version_explicit_unknown_short_warns(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """显式未知短版本号告警并原样返回（向后兼容）."""
+    with caplog.at_level("WARNING", logger="fspack.config"):
+        result = resolve_py_version(tmp_path, "3.99", None)
+    assert result == "3.99"
+    assert "不在已知 embed 版本映射中" in caplog.text
+
+
 def test_resolve_py_version_explicit_overrides_requires_python(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:

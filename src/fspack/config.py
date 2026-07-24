@@ -379,6 +379,27 @@ def _read_python_version(path: Path) -> str:
     return data.decode("utf-8").strip()
 
 
+def _normalize_py_version(version: str) -> str | None:
+    """将版本号规范化为完整版本（``major.minor.micro``）。
+
+    短版本号（``major.minor``，如 ``"3.13"``）查 :data:`KNOWN_EMBED_VERSIONS`
+    映射得到完整版本号（如 ``"3.13.0"``）；完整版本号（>=3 段）原样返回；
+    未知短版本号（无映射）告警并返回 ``None``，避免拼出错误下载 URL。
+
+    Args:
+        version: 用户输入的版本号，可能为短版本（``"3.13"``）或完整版本（``"3.13.0"``）。
+
+    Returns:
+        完整版本号字符串，或 ``None``（未知短版本号）。
+    """
+    if version in KNOWN_EMBED_VERSIONS:
+        return KNOWN_EMBED_VERSIONS[version]
+    if len(version.split(".")) >= 3:
+        return version
+    _logger.warning("版本号 %s 不在已知 embed 版本映射中", version)
+    return None
+
+
 def resolve_py_version(
     project_dir: Path,
     explicit: str | None,
@@ -392,25 +413,22 @@ def resolve_py_version(
     2. ``.python-version`` 文件 —— 不满足 ``requires-python`` 时告警并回退到自动选择
     3. ``requires-python`` 约束 —— 自动选择最高兼容已知版本
     4. ``default``
+
+    ``explicit`` 与 ``.python-version`` 均支持短版本号（如 ``"3.13"``），通过
+    :data:`KNOWN_EMBED_VERSIONS` 映射为完整版本号（如 ``"3.13.0"``），避免拼出
+    不存在的下载 URL。
     """
     if explicit:
-        if requires_python and not _satisfies(explicit, requires_python):
-            _logger.warning("Python %s 不满足 requires-python: %s", explicit, requires_python)
-        return explicit
+        full = _normalize_py_version(explicit)
+        resolved = full if full is not None else explicit
+        if requires_python and not _satisfies(resolved, requires_python):
+            _logger.warning("Python %s 不满足 requires-python: %s", resolved, requires_python)
+        return resolved
 
     pv_file = project_dir / ".python-version"
     if pv_file.is_file():
         pv = _read_python_version(pv_file)
-        # 短版本号(major.minor)优先查 KNOWN_EMBED_VERSIONS 映射得到完整版本号,
-        # 完整版本号(>=3 段,如 "3.13.0")直接使用,
-        # 未知短版本号(无映射)告警并回退到自动选择,避免拼出错误下载 URL
-        if pv in KNOWN_EMBED_VERSIONS:
-            full = KNOWN_EMBED_VERSIONS[pv]
-        elif len(pv.split(".")) >= 3:
-            full = pv
-        else:
-            _logger.warning(".python-version %s 不在已知 embed 版本映射中，自动选择兼容版本", pv)
-            full = None
+        full = _normalize_py_version(pv)
         if full is not None:
             if requires_python and not _satisfies(full, requires_python):
                 _logger.warning(
