@@ -22,7 +22,7 @@ license         = "MIT"
 name            = "fspack"
 readme          = "README.md"
 requires-python = ">=3.8"
-version         = "0.2.4"
+version         = "0.2.5"
 
 [project.optional-dependencies]
 dev = [
