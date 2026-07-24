@@ -367,7 +367,7 @@ def test_build_installer_helloworld_slow(tmp_path: Path) -> None:
     shutil.copytree(_EXAMPLES / "cli_helloworld", proj)
 
     out = build_installer(proj, get_mirror("aliyun"), "3.11.9", no_build=False)
-    expected = proj / "dist" / "release" / "cli_helloworld-0.1.0-py3.11-windows-slim-setup.exe"
+    expected = proj / "dist" / "release" / "cli_helloworld-0.1.0-py3.11.9-windows-slim-setup.exe"
     assert out == expected
     assert expected.is_file(), f"未生成安装包: {expected}"
     assert expected.stat().st_size > 1024 * 1024, f"安装包过小: {expected.stat().st_size} bytes"
@@ -379,7 +379,7 @@ def test_build_installer_helloworld_slow(tmp_path: Path) -> None:
     assert nsi.is_file(), "未生成 installer.nsi"
     content = nsi.read_text(encoding="utf-8")
     assert 'Name "cli_helloworld 0.1.0"' in content
-    assert 'OutFile "release\\cli_helloworld-0.1.0-py3.11-windows-slim-setup.exe"' in content
+    assert 'OutFile "release\\cli_helloworld-0.1.0-py3.11.9-windows-slim-setup.exe"' in content
 
 
 @pytest.mark.slow
@@ -387,8 +387,8 @@ def test_build_linux_installer_helloworld_slow(tmp_path: Path) -> None:
     """Linux 安装包端到端：build cli_helloworld → tar.gz + .deb 真实产出。
 
     需 gcc（Linux loader 编译）与 dpkg-deb（.deb 构建）。
-    验证 dist/release/cli_helloworld_0.1.0-py3.11-slim_amd64.deb 为合法 ar 归档，
-    dist/release/cli_helloworld-0.1.0-py3.11-linux-slim.tar.gz 为合法 gzip。
+    验证 dist/release/cli_helloworld_0.1.0-py3.11.10-slim_amd64.deb 为合法 ar 归档，
+    dist/release/cli_helloworld-0.1.0-py3.11.10-linux-slim.tar.gz 为合法 gzip。
     """
     from fspack.config import get_mirror
     from fspack.packaging.installer import build_linux_installer
@@ -403,12 +403,12 @@ def test_build_linux_installer_helloworld_slow(tmp_path: Path) -> None:
     shutil.copytree(_EXAMPLES / "cli_helloworld", proj)
 
     out = build_linux_installer(proj, get_mirror("aliyun"), "3.11.10", no_build=False)
-    expected_deb = proj / "dist" / "release" / "cli_helloworld_0.1.0-py3.11-slim_amd64.deb"
+    expected_deb = proj / "dist" / "release" / "cli_helloworld_0.1.0-py3.11.10-slim_amd64.deb"
     assert out == expected_deb
     assert expected_deb.is_file(), f"未生成 .deb: {expected_deb}"
     assert expected_deb.stat().st_size > 1024 * 1024, f".deb 过小: {expected_deb.stat().st_size} bytes"
 
-    tarball = proj / "dist" / "release" / "cli_helloworld-0.1.0-py3.11-linux-slim.tar.gz"
+    tarball = proj / "dist" / "release" / "cli_helloworld-0.1.0-py3.11.10-linux-slim.tar.gz"
     assert tarball.is_file(), f"未生成 tar.gz: {tarball}"
     assert tarball.stat().st_size > 1024 * 1024, f"tar.gz 过小: {tarball.stat().st_size} bytes"
 

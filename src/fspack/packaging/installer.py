@@ -135,9 +135,8 @@ def _check_exe(dist: Path, info: ProjectInfo, target: Platform) -> None:
 
 
 def _py_tag(info: ProjectInfo) -> str:
-    """返回 Python 版本标签，如 ``py3.11``，用于发行包文件名标识运行时版本。"""
-    major, minor = info.py_version.split(".")[:2]
-    return f"py{major}.{minor}"
+    """返回 Python 完整版本标签，如 ``py3.11.9``，用于发行包文件名标识运行时完整版本。"""
+    return f"py{info.py_version}"
 
 
 def _release_base(info: ProjectInfo, platform_suffix: str) -> str:
