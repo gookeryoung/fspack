@@ -199,11 +199,10 @@ def test_compile_src_invokes_bootstrap_script_with_sys_path_injection(
         assert "--remove-output" in cmd
         assert "--show-progress" not in cmd
         assert "--quiet" not in cmd
-        # --python-for-scons 指定构建机 Python（runtime/python.exe 是 embed 无完整标准库）
-        assert "--python-for-scons" in cmd
-        scons_idx = cmd.index("--python-for-scons")
-        assert scons_idx + 1 < len(cmd)
-        assert cmd[scons_idx + 1] == sys.executable
+        # 不再使用 --python-for-scons：改用 standalone python（完整 CPython）运行 nuitka，
+        # scons 自动继承 sys.executable，无需另指定。embed runtime python 不完整会触发
+        # Nuitka reExecute fork bomb（详见 compile_with_stamp 文档）。
+        assert "--python-for-scons" not in cmd
         # --jobs=1 限制 C 编译并行度，避免 CPU 卡死
         assert "--jobs" in cmd
         jobs_idx = cmd.index("--jobs")
@@ -244,6 +243,51 @@ def test_compile_src_deletes_non_init_py(tmp_path: Path, monkeypatch: pytest.Mon
     # 非 __init__.py 被删
     assert not (src / "app.py").exists()
     assert not (src / "sub" / "mod.py").exists()
+
+
+def test_compile_src_prefers_standalone_python_over_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """compile_src 收到真实存在的 build_python_exe 时优先用它而非 runtime python.
+
+    验证 standalone python 接入生效：之前 compile_with_stamp 没传 build_python_exe，
+    导致 _ensure_build_python 成死代码，编译回退到 embed runtime python 触发
+    Nuitka reExecute fork bomb（Windows 反复衍生 python.exe 进程导致 CPU 卡死）。
+    """
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "python.exe").write_bytes(b"")  # embed runtime python（不应被使用）
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("print('hi')")
+    cache = _make_nuitka_cache(tmp_path / "cache")
+
+    # standalone python：真实存在的文件，compile_src 据此选用
+    standalone_py = tmp_path / "standalone" / "python.exe"
+    standalone_py.parent.mkdir(parents=True)
+    standalone_py.write_bytes(b"")
+
+    captured: list[list[str]] = []
+
+    def fake_stream(cmd: list[str]) -> tuple[int, str, str]:
+        captured.append(cmd)
+        return (0, "", "")
+
+    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(fake_stream))
+
+    st = StageRecorder("Nuitka 编译")
+    NuitkaCompiler.compile_src(
+        src,
+        runtime,
+        "3.11.9",
+        Platform.WINDOWS,
+        cache,
+        stage=st,
+        build_python_exe=standalone_py,
+    )
+
+    # 编译命令首参（python 可执行文件）必须是 standalone python 而非 runtime python
+    assert len(captured) == 1
+    assert captured[0][0] == str(standalone_py)
+    assert str(runtime / "python.exe") not in captured[0][0]
 
 
 def test_compile_src_failure_warns_continues(
@@ -723,7 +767,7 @@ def test_compile_with_stamp_cache_hit_skips_all(tmp_path: Path, monkeypatch: pyt
 
 
 def test_compile_with_stamp_writes_stamp_after_compile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """stamp 未命中时调用 ensure_env + compile_src 并写入 stamp."""
+    """stamp 未命中时调用 ensure_env + ensure_build_python + compile_src 并写入 stamp."""
     src = tmp_path / "src"
     src.mkdir()
     (src / "app.py").write_text("print('hi')")
@@ -734,6 +778,14 @@ def test_compile_with_stamp_writes_stamp_after_compile(tmp_path: Path, monkeypat
     cache_root = tmp_path / "nuitka_cache"
 
     monkeypatch.setattr(NuitkaCompiler, "ensure_env", classmethod(lambda cls, *a, **kw: "4.1.3"))
+    # mock standalone python 下载：返回占位路径（compile_src 也被 mock 不会真用到）
+    fake_py = tmp_path / "fake_python.exe"
+    fake_py.write_text("")
+    monkeypatch.setattr(
+        NuitkaCompiler,
+        "_ensure_build_python",
+        classmethod(lambda cls, *a, **kw: fake_py),
+    )
     monkeypatch.setattr(NuitkaCompiler, "compile_src", classmethod(lambda cls, *a, **kw: None))
 
     st = StageRecorder("Nuitka 编译")
@@ -750,7 +802,7 @@ def test_compile_with_stamp_writes_stamp_after_compile(tmp_path: Path, monkeypat
 
 
 def test_compile_with_stamp_invalidates_on_src_change(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """源码变化使 stamp 失效，重新调用 ensure_env + compile_src."""
+    """源码变化使 stamp 失效，重新调用 ensure_env + ensure_build_python + compile_src."""
     src = tmp_path / "src"
     src.mkdir()
     (src / "app.py").write_text("print('hi')")
@@ -765,11 +817,16 @@ def test_compile_with_stamp_invalidates_on_src_change(tmp_path: Path, monkeypatc
     old_key = f"{nuitka_ver}|3.11.9|old_fingerprint"
     NuitkaCompiler._stamp_path(dist).write_text(old_key, encoding="utf-8")
 
-    calls = {"ensure": 0, "compile": 0}
+    calls = {"ensure": 0, "build_python": 0, "compile": 0}
     monkeypatch.setattr(
         NuitkaCompiler,
         "ensure_env",
         classmethod(lambda cls, *a, **kw: calls.__setitem__("ensure", calls["ensure"] + 1) or "4.1.3"),
+    )
+    monkeypatch.setattr(
+        NuitkaCompiler,
+        "_ensure_build_python",
+        classmethod(lambda cls, *a, **kw: calls.__setitem__("build_python", calls["build_python"] + 1) or Path()),
     )
     monkeypatch.setattr(
         NuitkaCompiler,
@@ -782,9 +839,52 @@ def test_compile_with_stamp_invalidates_on_src_change(tmp_path: Path, monkeypatc
         src, dist, runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), cache_root, stage=st
     )
 
-    # stamp 不匹配，调用 ensure_env 与 compile_src
+    # stamp 不匹配，调用 ensure_env、_ensure_build_python 与 compile_src
     assert calls["ensure"] == 1
+    assert calls["build_python"] == 1
     assert calls["compile"] == 1
+
+
+def test_compile_with_stamp_passes_build_python_to_compile_src(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """compile_with_stamp 将 _ensure_build_python 返回的路径传给 compile_src.
+
+    验证 standalone python 接入闭环：之前该步骤被遗漏导致 _ensure_build_python
+    成死代码，编译回退到 embed runtime python 触发 Nuitka reExecute fork bomb
+    （Windows 下反复衍生 python.exe 进程导致 CPU 卡死）。
+    """
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("print('hi')")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    cache_root = tmp_path / "nuitka_cache"
+
+    monkeypatch.setattr(NuitkaCompiler, "ensure_env", classmethod(lambda cls, *a, **kw: "4.1.3"))
+    # standalone python 路径：mock 返回真实存在的文件路径
+    fake_py = tmp_path / "fake_standalone_python.exe"
+    fake_py.write_text("")
+    monkeypatch.setattr(
+        NuitkaCompiler,
+        "_ensure_build_python",
+        classmethod(lambda cls, *a, **kw: fake_py),
+    )
+
+    captured: dict[str, object] = {}
+
+    def _capture_compile(cls: Any, *a: Any, **kw: Any) -> None:
+        captured["build_python_exe"] = kw.get("build_python_exe")
+
+    monkeypatch.setattr(NuitkaCompiler, "compile_src", classmethod(_capture_compile))
+
+    st = StageRecorder("Nuitka 编译")
+    NuitkaCompiler.compile_with_stamp(
+        src, dist, runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), cache_root, stage=st
+    )
+
+    # 关键断言：compile_src 收到的 build_python_exe 正是 _ensure_build_python 的返回值
+    assert captured["build_python_exe"] == fake_py
 
 
 def test_stamp_key_includes_nuitka_version_py_version_src_fingerprint(

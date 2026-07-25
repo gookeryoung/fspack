@@ -72,14 +72,21 @@ def embed_zip_name(version: str) -> str:
     return f"python-{version}-embed-amd64.zip"
 
 
-def standalone_tarball_name(version: str, release_tag: str) -> str:
-    """返回 python-build-standalone tarball 文件名。"""
-    return f"cpython-{version}+{release_tag}-x86_64-unknown-linux-gnu-install_only.tar.gz"
+def standalone_tarball_name(version: str, release_tag: str, *, windows: bool = False) -> str:
+    """返回 python-build-standalone tarball 文件名.
+
+    Args:
+        version: Python 完整版本号（如 ``3.10.20``）。
+        release_tag: astral-sh release tag（如 ``20260718``）。
+        windows: True 返回 Windows (msvc) 平台 tarball，False 返回 Linux (gnu)。
+    """
+    platform = "x86_64-pc-windows-msvc" if windows else "x86_64-unknown-linux-gnu"
+    return f"cpython-{version}+{release_tag}-{platform}-install_only.tar.gz"
 
 
-def standalone_url(version: str, release_tag: str) -> str:
+def standalone_url(version: str, release_tag: str, *, windows: bool = False) -> str:
     """返回完整下载 URL。"""
-    return f"{STANDALONE_BASE_URL}/{release_tag}/{standalone_tarball_name(version, release_tag)}"
+    return f"{STANDALONE_BASE_URL}/{release_tag}/{standalone_tarball_name(version, release_tag, windows=windows)}"
 
 
 # ---- 基类 ----

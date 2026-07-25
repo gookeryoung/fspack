@@ -26,6 +26,17 @@ Nuitka 版本按目标 Python 版本锁定（:func:`nuitka_version_for`）：
 - Python 3.8/3.9 → nuitka 2.5.1（4.x 已不再维护 EOL 的 3.8）
 - Python 3.10+ → nuitka 4.1.3（当前最新稳定版）
 
+**编译 Python 环境**（:meth:`NuitkaCompiler._ensure_build_python`）：
+
+Nuitka 官方建议"用目标 Python 解释器运行 nuitka"。fspack 的 ``dist/runtime/python.exe``
+是 embed 版本（无完整标准库 .py 源码、_pth 限制 sys.path），Nuitka 的 reExecute
+机制 + scons 调用会反复衍生 ``python.exe`` 子进程导致 CPU 卡死。
+
+解决方案：下载 python-build-standalone Windows 版到 ``~/.fspack/cache/python/<py_version>/``
+作为 nuitka 编译环境（完整 Python，含 .py 源码）。版本按 :data:`KNOWN_STANDALONE_VERSIONS`
+查询（如 3.10 → 3.10.20），与 embed runtime 版本（3.10.11）可能不同但 ABI 兼容
+（CPython 按 major.minor 兼容）。编译出的 ``.pyd`` 可在 embed runtime 上运行。
+
 stamp 缓存（:meth:`NuitkaCompiler.compile_with_stamp`）：重复构建时若
 ``dist/.nuitka_compile_stamp``（含 ``nuitka_version|py_version|src_fingerprint``）
 匹配则跳过整个 Nuitka 阶段（含 ensure_env 与 compile_src），避免重复 subprocess
@@ -39,12 +50,13 @@ import os
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import threading
 import time
 from pathlib import Path
 
-from fspack.config import MirrorConfig, nuitka_version_for
+from fspack.config import KNOWN_STANDALONE_VERSIONS, MirrorConfig, nuitka_version_for
 from fspack.exceptions import NuitkaError
 from fspack.platform import Platform
 from fspack.progress import StageRecorder
@@ -61,8 +73,13 @@ class NuitkaCompiler:
     """Nuitka 编译器：将用户源码编译为本机 ``.pyd``/``.so``.
 
     nuitka 装到本地缓存 ``~/.fspack/cache/nuitka/<py_version>/site-packages/``，
-    不污染 ``dist/runtime`` 发行产物。编译时用 ``runtime/python.exe <bootstrap.py>``
-    注入 ``sys.path`` 指向缓存目录，绕过 ``python3X._pth`` 对 ``PYTHONPATH`` 的限制。
+    不污染 ``dist/runtime`` 发行产物。编译时用 **standalone python**（非 embed runtime）
+    运行 nuitka，避免 embed python 不完整导致 reExecute 进程衍生。
+
+    Windows 编译 Python 来源：python-build-standalone Windows 版（完整 CPython 发行版，
+    含 .py 源码），缓存到 ``~/.fspack/cache/python/<py_version>/python/python.exe``。
+    Linux 直接用 runtime 的 standalone python（已是完整发行版）。
+
     用临时脚本文件而非 ``-c``：Nuitka 的 ``reExecuteNuitka`` 无条件访问
     ``sys.modules["__main__"].__file__``，``-c`` 模式下该属性不存在会
     ``AttributeError``。
@@ -73,6 +90,143 @@ class NuitkaCompiler:
     - :meth:`compile_src`：编译 ``dist/src`` 下所有 ``.py`` 为本机模块
     - :meth:`compile_with_stamp`：整合 ensure_env + stamp 缓存 + compile_src 的入口
     """
+
+    @staticmethod
+    def _build_python_cache_dir(cache_root: Path, py_version: str) -> Path:
+        """返回 standalone python 缓存目录：``cache_root / py_version``.
+
+        解压后结构：``<cache>/<py_version>/python/python.exe``（Windows）或
+        ``<cache>/<py_version>/python/bin/python<major>.<minor>``（Linux）。
+        与 :meth:`_nuitka_cache_dir` 同根，按 py_version 隔离避免 ABI 冲突。
+        """
+        return cache_root / py_version
+
+    @staticmethod
+    def _build_python_exe(build_python_dir: Path, py_version: str, target: Platform) -> Path:
+        """返回 standalone python 可执行文件路径.
+
+        Windows: ``<dir>/python/python.exe``
+        Linux: ``<dir>/python/bin/python<major>.<minor>``
+        """
+        if target is Platform.WINDOWS:
+            return build_python_dir / "python" / "python.exe"
+        major, minor = py_version.split(".")[:2]
+        return build_python_dir / "python" / "bin" / f"python{major}.{minor}"
+
+    @classmethod
+    def _ensure_build_python(
+        cls,
+        cache_root: Path,
+        py_version: str,
+        target: Platform,
+        *,
+        stage: StageRecorder,
+    ) -> Path:
+        """确保本地缓存有 standalone python 用于运行 nuitka，返回 python 可执行文件路径.
+
+        embed runtime python 不完整（无 .py 源码、_pth 限制 sys.path），Nuitka 的
+        reExecute 机制 + scons 调用会反复衍生 ``python.exe`` 子进程导致 CPU 卡死。
+        改用 python-build-standalone 完整发行版运行 nuitka。
+
+        Windows 下载 standalone python 到 ``~/.fspack/cache/python/<py_version>/``；
+        Linux 直接用 runtime 的 standalone python（已是完整发行版，无需重复下载）。
+
+        版本按 :data:`KNOWN_STANDALONE_VERSIONS` 查询（如 3.10 → 3.10.20），与 embed
+        runtime 版本（3.10.11）可能不同但 ABI 兼容（CPython 按 major.minor 兼容）。
+
+        Args:
+            cache_root: 缓存根目录（如 ``~/.fspack/cache/python``）。
+            py_version: 目标 Python 完整版本号（如 ``3.10.11``）。
+            target: 目标平台（决定可执行文件路径与是否下载）。
+            stage: 阶段记录器。
+
+        Returns:
+            standalone python 可执行文件路径。
+
+        Raises:
+            NuitkaError: 下载或解压失败。
+        """
+        # Linux runtime 已是 standalone python（完整发行版），直接用 runtime python
+        if target is Platform.LINUX:
+            # Linux runtime python 路径由 compile_src 的 runtime_dir 参数提供，
+            # 这里不重复下载，返回空 Path 占位（实际调用方用 runtime_dir 解析）
+            return Path()
+
+        # Windows: 下载 python-build-standalone Windows 版
+        major_minor = ".".join(py_version.split(".")[:2])
+        standalone_version = KNOWN_STANDALONE_VERSIONS.get(major_minor)
+        if standalone_version is None:
+            raise NuitkaError(
+                f"Python {py_version} 无对应 python-build-standalone Windows 版本，"
+                f"KNOWN_STANDALONE_VERSIONS 支持的 minor: {sorted(KNOWN_STANDALONE_VERSIONS)}"
+            )
+
+        build_python_dir = cls._build_python_cache_dir(cache_root, standalone_version)
+        py_exe = cls._build_python_exe(build_python_dir, standalone_version, target)
+
+        # 缓存命中：python.exe 已存在
+        if py_exe.is_file():
+            _logger.info(
+                "standalone python %s 已就绪（缓存命中 %s）",
+                standalone_version,
+                build_python_dir,
+            )
+            stage.hit_cache()
+            stage.set_detail(f"python {standalone_version} 已就绪")
+            return py_exe
+
+        # 下载 python-build-standalone Windows tarball
+        # 惰性导入避免循环依赖
+        from fspack.packaging.net import Downloader
+        from fspack.packaging.runtime import STANDALONE_RELEASE_TAG, standalone_url
+
+        url = standalone_url(standalone_version, STANDALONE_RELEASE_TAG, windows=True)
+        _logger.info("下载 standalone python %s: %s", standalone_version, url)
+
+        build_python_dir.mkdir(parents=True, exist_ok=True)
+        archive_path = build_python_dir / f"cpython-{standalone_version}+{STANDALONE_RELEASE_TAG}-windows.tar.gz"
+
+        try:
+            downloader = Downloader(timeout=300)
+            downloader.download(
+                url,
+                archive_path,
+                stage=stage,
+                label=f"standalone python {standalone_version}",
+            )
+        except OSError as e:
+            raise NuitkaError(f"下载 standalone python 失败: {url} -> {e}") from e
+
+        # 解压 tarball
+        _logger.info("解压 standalone python 到 %s", build_python_dir)
+        try:
+            with tarfile.open(archive_path, "r:gz") as tf:
+                tf.extractall(build_python_dir)
+        except (tarfile.TarError, OSError) as e:
+            raise NuitkaError(f"standalone python tarball 损坏: {archive_path}") from e
+
+        # 解压后结构：build_python_dir/cpython-<ver>+<tag>-x86_64-pc-windows-msvc-install_only/python/python.exe
+        # 需将内层目录提升到 build_python_dir 根
+        extracted_root = (
+            build_python_dir
+            / f"cpython-{standalone_version}+{STANDALONE_RELEASE_TAG}-x86_64-pc-windows-msvc-install_only"
+        )
+        if extracted_root.is_dir():
+            python_dir = extracted_root / "python"
+            target_python_dir = build_python_dir / "python"
+            if python_dir.is_dir() and not target_python_dir.exists():
+                shutil.move(str(python_dir), str(target_python_dir))
+            # 清理其他文件（share/doc 等）
+            shutil.rmtree(extracted_root, ignore_errors=True)
+
+        # 删除 tarball 节省空间
+        archive_path.unlink(missing_ok=True)
+
+        if not py_exe.is_file():
+            raise NuitkaError(f"standalone python 解压后未找到 {py_exe}，请检查缓存目录 {build_python_dir}")
+
+        stage.set_detail(f"python {standalone_version} 安装完成")
+        return py_exe
 
     @staticmethod
     def _nuitka_cache_dir(cache_root: Path, py_version: str) -> Path:
@@ -346,19 +500,21 @@ class NuitkaCompiler:
         nuitka_cache: Path,
         *,
         stage: StageRecorder,
+        build_python_exe: Path | None = None,
     ) -> None:
         """编译 ``src_dir`` 下所有 ``.py`` 为 ``.pyd``/``.so``，编译后删除 ``.py`` 源码.
 
-        用 ``runtime/python.exe <bootstrap.py>`` 注入缓存路径调用 nuitka，绕过
-        ``python3X._pth`` 对 ``PYTHONPATH`` 的限制（_pth 存在时 PYTHONPATH 不生效，
-        但脚本模式仍读取 _pth 配置的 sys.path，运行时 ``sys.path.insert`` 可注入
-        额外路径）。用临时脚本文件而非 ``-c``：Nuitka 的 ``reExecuteNuitka`` 无条件
-        访问 ``sys.modules["__main__"].__file__``，``-c`` 模式下该属性不存在会
-        ``AttributeError``。
+        用 **standalone python**（``build_python_exe``）运行 nuitka，避免 embed runtime
+        python 不完整导致 reExecute 进程衍生。``build_python_exe`` 为 None 或不存在时
+        回退到 runtime python（Linux runtime 已是完整 standalone，无需单独下载）。
+
+        用临时脚本文件而非 ``-c``：Nuitka 的 ``reExecuteNuitka`` 无条件访问
+        ``sys.modules["__main__"].__file__``，``-c`` 模式下该属性不存在会
+        ``AttributeError``。脚本内 ``sys.path.insert`` 注入 nuitka 缓存路径。
 
         步骤：
 
-        1. 解析 runtime python 路径并检查缓存目录有 nuitka，无则告警并跳过
+        1. 解析编译用 python 路径（优先 standalone，回退 runtime）并检查缓存目录有 nuitka
         2. 创建临时 bootstrap 脚本注入 sys.path 调用 nuitka ``--module`` 逐个编译 ``.py``
         3. 删除 ``.py`` 源码（保留 ``__init__.py`` 维持包标识，避免 PEP 420
            命名空间包导致 ``.pyd`` 不被识别为包成员）
@@ -372,15 +528,22 @@ class NuitkaCompiler:
             src_dir: 用户源码目录（``dist/src``）。
             runtime_dir: runtime 根目录（含 ``python.exe`` 或 ``python/bin/``）。
             py_version: Python 完整版本号（如 ``3.11.9``）。
-            target: 目标平台（决定 runtime python 路径）。
+            target: 目标平台（决定 runtime python 路径回退）。
             nuitka_cache: nuitka 缓存目录（含 ``nuitka/`` 包，由 :meth:`ensure_env` 安装）。
             stage: 阶段记录器，记录编译项数与跳过数。
+            build_python_exe: standalone python 可执行文件路径（Windows 由
+                :meth:`_ensure_build_python` 下载）。None 或不存在时回退到 runtime python。
         """
-        py_exe = cls._runtime_python(runtime_dir, py_version, target)
-        if not py_exe.is_file():
-            _logger.warning("Nuitka 编译跳过: runtime python 未就绪 %s", py_exe)
-            stage.set_detail("runtime python 未就绪，跳过")
-            return
+        # 优先用 standalone python（完整环境），回退到 runtime python（Linux 已是 standalone）
+        if build_python_exe is not None and build_python_exe.is_file():
+            py_exe = build_python_exe
+            _logger.info("用 standalone python 运行 nuitka: %s", py_exe)
+        else:
+            py_exe = cls._runtime_python(runtime_dir, py_version, target)
+            if not py_exe.is_file():
+                _logger.warning("Nuitka 编译跳过: runtime python 未就绪 %s", py_exe)
+                stage.set_detail("runtime python 未就绪，跳过")
+                return
 
         if not cls._is_nuitka_cached(nuitka_cache):
             _logger.warning(
@@ -412,17 +575,14 @@ class NuitkaCompiler:
         # --output-dir: 输出目录与源码同目录（保持包结构）
         # --no-pyi-file: 不生成 .pyi 类型存根（运行时不需要）
         # --remove-output: 编译后删除临时构建文件（.build/ 目录）
-        # --python-for-scons: 指定运行 scons 的 Python 路径。runtime/python.exe 是 embed
-        #   版本（无完整标准库），scons 需要完整 Python 环境。不指定时 Nuitka 会从 Windows
-        #   注册表反复查找 Python，导致大量 runtime/python.exe 子进程衍生、CPU 占满卡死。
-        #   用构建机 sys.executable 提供完整环境，避免进程衍生。
         # --jobs=1: 限制 C 编译并行度为 1。Nuitka 默认使用全部 CPU 核心，多文件并行编译时
         #   每个 scons 子进程再启动 gcc，进程数指数级膨胀导致 CPU 卡死。限制为 1 串行编译，
         #   虽然慢但稳定，避免资源耗尽。
+        # 不需要 --python-for-scons：已用 standalone python（完整环境）运行 nuitka，
+        # scons 自动继承 sys.executable，无需另指定。
         # 注意：nuitka 4.x 的 --show-progress 已 obsolete 无效；nuitka 的 reExecute 机制
         # (os._exit 退出子进程 A，Windows close_fds=True 导致子进程 B 不继承 PIPE) 使得
         # _stream_compile 的 PIPE 捕获不可靠。用心跳线程保证用户看到编译进度。
-        build_python = sys.executable
         compiled = 0
         failed = 0
         total = len(py_files)
@@ -450,8 +610,6 @@ class NuitkaCompiler:
                             f"--output-dir={py_file.parent}",
                             "--no-pyi-file",
                             "--remove-output",
-                            "--python-for-scons",
-                            build_python,
                             "--jobs",
                             "1",
                             str(py_file),
@@ -525,7 +683,7 @@ class NuitkaCompiler:
         *,
         stage: StageRecorder,
     ) -> None:
-        """整合 ensure_env + stamp 缓存 + compile_src 的入口.
+        """整合 ensure_env + standalone python + stamp 缓存 + compile_src 的入口.
 
         重复构建时若 :meth:`_stamp_path` 文件内容与 :meth:`_stamp_key` 匹配，
         跳过整个 Nuitka 阶段（含 C 编译器检查、wheel 安装、源码编译），
@@ -534,8 +692,10 @@ class NuitkaCompiler:
         首次构建或源码/版本变化时：
 
         1. :meth:`ensure_env` 检查 C 编译器并安装锁定版 nuitka 到本地缓存
-        2. :meth:`compile_src` 逐文件编译 ``.py`` 为 ``.pyd``
-        3. 写入 stamp 文件供下次构建比对
+        2. :meth:`_ensure_build_python` 准备 standalone python（Windows 专用，
+           embed runtime python 不完整会导致 Nuitka reExecute fork bomb）
+        3. :meth:`compile_src` 用 standalone python 运行 nuitka 逐文件编译 ``.py`` 为 ``.pyd``
+        4. 写入 stamp 文件供下次构建比对
 
         Args:
             src_dir: 用户源码目录（``dist/src``）。
@@ -545,10 +705,11 @@ class NuitkaCompiler:
             target: 目标平台。
             mirror: 镜像配置（提供 ``pypi_index`` 给 :meth:`ensure_env`）。
             cache_root: nuitka 缓存根目录（如 ``~/.fspack/cache/nuitka``）。
+                standalone python 缓存目录与之同根（``cache_root.parent / "python"``）。
             stage: 阶段记录器。
 
         Raises:
-            NuitkaError: C 编译器缺失，或 nuitka 安装失败。
+            NuitkaError: C 编译器缺失，或 nuitka 安装失败，或 standalone python 下载失败。
         """
         nuitka_ver = nuitka_version_for(py_version)
         stamp = cls._stamp_path(dist_dir)
@@ -564,10 +725,32 @@ class NuitkaCompiler:
         except OSError:
             pass
 
-        # 未命中：ensure_env + compile_src + 写 stamp
+        # 未命中：ensure_env + ensure_build_python + compile_src + 写 stamp
         cls.ensure_env(cache_root, py_version, target, mirror, stage=stage)
         nuitka_cache = cls._nuitka_cache_dir(cache_root, py_version)
-        cls.compile_src(src_dir, runtime_dir, py_version, target, nuitka_cache, stage=stage)
+
+        # Windows 编译环境：下载 python-build-standalone 完整发行版运行 nuitka
+        # embed runtime python 不完整（无 .py 源码、_pth 限制 sys.path），Nuitka 的
+        # reExecute 机制（os._exit 子进程 + scons 调用）会反复衍生 python.exe 子进程
+        # 导致 CPU 卡死（Nuitka 官方文档称此为 Fork Bomb）。
+        # standalone python 是完整 CPython，sys.executable 可被 nuitka/scons 安全调用。
+        # Linux runtime 已是 standalone，返回空 Path 占位（compile_src 内部回退到 runtime python）。
+        build_python_exe = cls._ensure_build_python(
+            cache_root.parent / "python",
+            py_version,
+            target,
+            stage=stage,
+        )
+
+        cls.compile_src(
+            src_dir,
+            runtime_dir,
+            py_version,
+            target,
+            nuitka_cache,
+            stage=stage,
+            build_python_exe=build_python_exe,
+        )
 
         # 编译后写 stamp（即使部分文件失败也写，避免下次重复尝试）
         stamp.parent.mkdir(parents=True, exist_ok=True)
