@@ -9,6 +9,7 @@ __all__ = [
     "FspackError",
     "InstallerError",
     "LoaderError",
+    "NuitkaError",
     "ProjectError",
 ]
 
@@ -39,3 +40,7 @@ class InstallerError(FspackError):
 
 class BuiltinError(FspackError):
     """内置库（tkinter 等）打包错误."""
+
+
+class NuitkaError(FspackError):
+    """Nuitka 环境就绪或编译错误（缺 C 编译器、wheel 安装失败等）."""

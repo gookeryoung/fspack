@@ -40,10 +40,12 @@ except ModuleNotFoundError:  # pragma: no cover
 __all__ = [
     "DEFAULT_LINUX_PY_VERSION",
     "DEFAULT_MIRROR",
+    "DEFAULT_NUITKA_VERSION",
     "DEFAULT_PY_VERSION",
     "KNOWN_EMBED_VERSIONS",
     "KNOWN_STANDALONE_VERSIONS",
     "MIRRORS",
+    "NUITKA_VERSIONS",
     "AppType",
     "BuildConfig",
     "DependencyReport",
@@ -54,6 +56,7 @@ __all__ = [
     "get_mirror",
     "infer_app_type",
     "known_versions",
+    "nuitka_version_for",
     "parse_project",
     "resolve_py_version",
 ]
@@ -283,6 +286,39 @@ KNOWN_STANDALONE_VERSIONS: dict[str, str] = {
 # 更新版本表时默认值自动跟随，避免硬编码常量与版本表不同步。
 DEFAULT_PY_VERSION = KNOWN_EMBED_VERSIONS["3.11"]
 DEFAULT_LINUX_PY_VERSION = KNOWN_STANDALONE_VERSIONS["3.11"]
+
+
+# Nuitka 版本按目标 Python major.minor 锁定。
+# - 3.8/3.9：nuitka 2.5.1（2.x 末尾稳定版，4.x 已不再维护 Python 3.8 EOL）
+# - 3.10+：nuitka 4.1.3（当前最新稳定版，覆盖 3.10/3.11/3.12/3.13/3.14）
+# 键用 major.minor 与 KNOWN_*_VERSIONS 风格一致，避免每个补丁版本重复
+# （3.11.9 与 3.11.15 共用 4.1.3）。
+NUITKA_VERSIONS: dict[str, str] = {
+    "3.8": "2.5.1",
+    "3.9": "2.5.1",
+    "3.10": "4.1.3",
+    "3.11": "4.1.3",
+    "3.12": "4.1.3",
+    "3.13": "4.1.3",
+    "3.14": "4.1.3",
+}
+
+# 默认 Nuitka 版本：py_version 不在 NUITKA_VERSIONS 时回退（如未来 3.15）。
+DEFAULT_NUITKA_VERSION = "4.1.3"
+
+
+def nuitka_version_for(py_version: str) -> str:
+    """按目标 Python 版本返回锁定的 Nuitka 版本.
+
+    Args:
+        py_version: 完整 Python 版本号（如 ``3.11.9``）。
+
+    Returns:
+        对应的 Nuitka 版本号（如 ``4.1.3``）；未知 Python 版本回退
+        :data:`DEFAULT_NUITKA_VERSION`。
+    """
+    major, minor = py_version.split(".")[:2]
+    return NUITKA_VERSIONS.get(f"{major}.{minor}", DEFAULT_NUITKA_VERSION)
 
 
 def known_versions(target: Platform) -> dict[str, str]:

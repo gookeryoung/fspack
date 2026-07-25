@@ -523,12 +523,21 @@ def build(  # noqa: PLR0912, PLR0913
     # 用户源码以 .pyd 形式本机执行，速度提升 30-50%（参考 RimSort Nuitka 打包方案）。
     # 仅编译用户源码（src/），第三方依赖（site-packages/）保持 wheel 解压 + .pyc。
     # 交叉构建跳过（Nuitka 无法生成目标平台 .pyd）。
+    # ensure_env 检查 C 编译器并按 py_version 锁定版 nuitka 安装到 runtime；
+    # stamp 命中跳过整个阶段（含 ensure_env 与 compile_src）。
     if opts.nuitka and target is detect_platform():
         with tracker.stage("Nuitka 编译") as st:
             from fspack.packaging.nuitka import NuitkaCompiler
 
-            with spinner(f"Nuitka 编译 {info.name}"):
-                NuitkaCompiler.compile_src(src_dst, runtime_dir, info.py_version, target, stage=st)
+            NuitkaCompiler.compile_with_stamp(
+                src_dst,
+                cfg.dist_dir,
+                runtime_dir,
+                info.py_version,
+                target,
+                cfg.mirror,
+                stage=st,
+            )
 
     # 预编译字节码：用 runtime 自身 python 编译 src + site-packages 为 .pyc，加速首次启动。
     # pyc_strip=True 时额外剥离非 __init__.py 源码（源码保护，保留包标识避免命名空间包问题）。

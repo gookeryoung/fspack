@@ -1476,7 +1476,7 @@ def test_precompile_pyc_stamp_cache_hit_skips_compileall(tmp_path: Path, monkeyp
 
 
 def test_build_with_nuitka_invokes_compiler(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """nuitka=True 时 build() 调用 NuitkaCompiler.compile_src 编译用户源码."""
+    """nuitka=True 时 build() 调用 NuitkaCompiler.compile_with_stamp 编译用户源码."""
     proj = tmp_path / "app"
     proj.mkdir()
     (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
@@ -1489,24 +1489,31 @@ def test_build_with_nuitka_invokes_compiler(tmp_path: Path, monkeypatch: pytest.
     monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
     monkeypatch.setattr("fspack.builder.detect_platform", lambda: Platform.WINDOWS)
 
-    # 拦截 NuitkaCompiler.compile_src 验证调用
+    # 拦截 NuitkaCompiler.compile_with_stamp 验证调用
     nuitka_called: dict[str, object] = {}
 
-    def fake_compile_src(
+    def fake_compile_with_stamp(  # noqa: PLR0913
+        cls: type,
         src_dir: Path,
+        dist_dir: Path,
         runtime_dir: Path,
         py_version: str,
         target: Platform,
+        mirror: object,
         *,
         stage: StageRecorder,
     ) -> None:
         nuitka_called["src_dir"] = src_dir
+        nuitka_called["dist_dir"] = dist_dir
         nuitka_called["py_version"] = py_version
         nuitka_called["target"] = target
         stage.processed()
         stage.set_detail("mock 编译")
 
-    monkeypatch.setattr("fspack.packaging.nuitka.NuitkaCompiler.compile_src", staticmethod(fake_compile_src))
+    monkeypatch.setattr(
+        "fspack.packaging.nuitka.NuitkaCompiler.compile_with_stamp",
+        classmethod(fake_compile_with_stamp),
+    )
 
     build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, options=BuildOptions(nuitka=True))
 
@@ -1514,6 +1521,8 @@ def test_build_with_nuitka_invokes_compiler(tmp_path: Path, monkeypatch: pytest.
     assert nuitka_called["target"] is Platform.WINDOWS
     # src_dir 是 dist/src
     assert Path(str(nuitka_called["src_dir"])).name == "src"
+    # dist_dir 是 proj/dist
+    assert Path(str(nuitka_called["dist_dir"])).name == "dist"
 
 
 def test_build_nuitka_skipped_on_cross_compile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1533,10 +1542,13 @@ def test_build_nuitka_skipped_on_cross_compile(tmp_path: Path, monkeypatch: pyte
 
     nuitka_called = {"n": 0}
 
-    def fake_compile_src(*args: object, **kwargs: object) -> None:
+    def fake_compile_with_stamp(*args: object, **kwargs: object) -> None:
         nuitka_called["n"] += 1
 
-    monkeypatch.setattr("fspack.packaging.nuitka.NuitkaCompiler.compile_src", staticmethod(fake_compile_src))
+    monkeypatch.setattr(
+        "fspack.packaging.nuitka.NuitkaCompiler.compile_with_stamp",
+        classmethod(fake_compile_with_stamp),
+    )
 
     build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, options=BuildOptions(nuitka=True))
 
