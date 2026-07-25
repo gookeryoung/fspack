@@ -1,4 +1,9 @@
-"""NuitkaCompiler 单元测试：用户源码编译为本机 .pyd/.so."""
+"""NuitkaCompiler 单元测试：用户源码编译为本机 .pyd/.so.
+
+nuitka 装到本地缓存 ``~/.fspack/cache/nuitka/<py_version>/site-packages``，
+不污染 ``dist/runtime``。编译时用 ``runtime/python.exe -c`` 注入 sys.path
+调用 nuitka，绕过 ``python3X._pth`` 对 ``PYTHONPATH`` 的限制。
+"""
 
 from __future__ import annotations
 
@@ -36,32 +41,49 @@ class _CompileFail:
 
 
 class _ImportAbsent:
-    """subprocess.run 失败返回值桩（模拟 nuitka 未安装）."""
+    """subprocess.run 失败返回值桩（模拟 import 失败）."""
 
     returncode = 1
     stdout = ""
-    stderr = "ModuleNotFoundError: No module named 'nuitka'"
+    stderr = "ModuleNotFoundError: No module named 'pip'"
 
 
-def test_is_available_true(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """runtime python 已安装 nuitka 时 is_available 返回 True."""
-    py = tmp_path / "python.exe"
-    py.write_bytes(b"")
-    monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", lambda cmd, **kw: _CompileOK())
-    assert NuitkaCompiler.is_available(py) is True
+def _make_nuitka_cache(cache_dir: Path) -> Path:
+    """在 cache_dir 下创建 nuitka/__init__.py 模拟已装 nuitka，返回 cache_dir."""
+    nuitka_pkg = cache_dir / "nuitka"
+    nuitka_pkg.mkdir(parents=True, exist_ok=True)
+    (nuitka_pkg / "__init__.py").write_text("", encoding="utf-8")
+    return cache_dir
 
 
-def test_is_available_false_on_import_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """runtime python 未安装 nuitka 时 is_available 返回 False."""
-    py = tmp_path / "python.exe"
-    py.write_bytes(b"")
-    monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", lambda cmd, **kw: _ImportAbsent())
-    assert NuitkaCompiler.is_available(py) is False
+# ---- _nuitka_cache_dir 与 _is_nuitka_cached 测试 ----
 
 
-def test_is_available_false_when_py_missing(tmp_path: Path) -> None:
-    """runtime python 文件不存在时直接返回 False（不调用 subprocess）."""
-    assert NuitkaCompiler.is_available(tmp_path / "nonexistent.exe") is False
+def test_nuitka_cache_dir_path(tmp_path: Path) -> None:
+    """_nuitka_cache_dir 返回 cache_root / py_version / site-packages."""
+    cache_root = tmp_path / "nuitka_cache"
+    cache_dir = NuitkaCompiler._nuitka_cache_dir(cache_root, "3.11.9")
+    assert cache_dir == cache_root / "3.11.9" / "site-packages"
+
+
+def test_is_nuitka_cached_true_when_init_exists(tmp_path: Path) -> None:
+    """缓存目录有 nuitka/__init__.py 时 _is_nuitka_cached 返回 True."""
+    cache_dir = _make_nuitka_cache(tmp_path / "cache")
+    assert NuitkaCompiler._is_nuitka_cached(cache_dir) is True
+
+
+def test_is_nuitka_cached_false_when_missing(tmp_path: Path) -> None:
+    """缓存目录无 nuitka 包时 _is_nuitka_cached 返回 False."""
+    assert NuitkaCompiler._is_nuitka_cached(tmp_path / "empty") is False
+
+
+def test_is_nuitka_cached_false_when_init_missing(tmp_path: Path) -> None:
+    """缓存目录有 nuitka/ 但无 __init__.py 时返回 False（PEP 420 命名空间包不算）."""
+    (tmp_path / "nuitka").mkdir()
+    assert NuitkaCompiler._is_nuitka_cached(tmp_path) is False
+
+
+# ---- _runtime_python 路径解析测试 ----
 
 
 def test_runtime_python_windows(tmp_path: Path) -> None:
@@ -78,58 +100,58 @@ def test_runtime_python_linux(tmp_path: Path) -> None:
     assert py == runtime / "python" / "bin" / "python3.11"
 
 
+# ---- compile_src 测试 ----
+
+
 def test_compile_src_skips_when_python_missing(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """runtime python 未就绪时告警并跳过编译."""
     runtime = tmp_path / "runtime"
     runtime.mkdir()
     src = tmp_path / "src"
     src.mkdir()
+    cache = _make_nuitka_cache(tmp_path / "cache")
     st = StageRecorder("Nuitka 编译")
     with caplog.at_level("WARNING", logger="fspack.packaging.nuitka"):
-        NuitkaCompiler.compile_src(src, runtime, "3.11.9", Platform.WINDOWS, stage=st)
+        NuitkaCompiler.compile_src(src, runtime, "3.11.9", Platform.WINDOWS, cache, stage=st)
     assert any("runtime python 未就绪" in r.message for r in caplog.records)
     assert "未就绪" in st._detail
 
 
-def test_compile_src_skips_when_nuitka_absent(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    """runtime python 未安装 nuitka 时告警并跳过（回退到 .pyc 模式）."""
+def test_compile_src_skips_when_nuitka_not_cached(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """缓存目录无 nuitka 时告警并跳过（回退到 .pyc 模式）."""
     runtime = tmp_path / "runtime"
     runtime.mkdir()
     (runtime / "python.exe").write_bytes(b"")
     src = tmp_path / "src"
     src.mkdir()
     (src / "app.py").write_text("print('hi')")
-
-    # is_available 调用返回失败，模拟 nuitka 未安装
-    monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", lambda cmd, **kw: _ImportAbsent())
+    cache = tmp_path / "empty_cache"  # 无 nuitka 包
 
     st = StageRecorder("Nuitka 编译")
     with caplog.at_level("WARNING", logger="fspack.packaging.nuitka"):
-        NuitkaCompiler.compile_src(src, runtime, "3.11.9", Platform.WINDOWS, stage=st)
-    # 日志多行换行，用 "未安装" 子串匹配
-    assert any("未安装" in r.message for r in caplog.records)
+        NuitkaCompiler.compile_src(src, runtime, "3.11.9", Platform.WINDOWS, cache, stage=st)
+    assert any("缓存目录无 nuitka" in r.message for r in caplog.records)
     assert "未安装" in st._detail
 
 
-def test_compile_src_no_py_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_compile_src_no_py_files(tmp_path: Path) -> None:
     """src 目录无 .py 文件时直接返回，detail 标注无文件."""
     runtime = tmp_path / "runtime"
     runtime.mkdir()
     (runtime / "python.exe").write_bytes(b"")
     src = tmp_path / "src"
     src.mkdir()
-
-    monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", lambda cmd, **kw: _CompileOK())
+    cache = _make_nuitka_cache(tmp_path / "cache")
 
     st = StageRecorder("Nuitka 编译")
-    NuitkaCompiler.compile_src(src, runtime, "3.11.9", Platform.WINDOWS, stage=st)
+    NuitkaCompiler.compile_src(src, runtime, "3.11.9", Platform.WINDOWS, cache, stage=st)
     assert "无 .py 文件" in st._detail
 
 
-def test_compile_src_invokes_nuitka_module(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """compile_src 对每个 .py 调用 `python -m nuitka --module`."""
+def test_compile_src_invokes_c_bootstrap_with_sys_path_injection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """compile_src 用 `-c "sys.path.insert(0, <cache>); from nuitka.__main__ import main; main()"` 调用 nuitka."""
     runtime = tmp_path / "runtime"
     runtime.mkdir()
     (runtime / "python.exe").write_bytes(b"")
@@ -137,30 +159,33 @@ def test_compile_src_invokes_nuitka_module(tmp_path: Path, monkeypatch: pytest.M
     src.mkdir()
     (src / "app.py").write_text("print('hi')")
     (src / "util.py").write_text("x = 1")
+    cache = _make_nuitka_cache(tmp_path / "cache")
 
     captured: list[list[str]] = []
-    # is_available 与 compile 各调一次 subprocess.run
     monkeypatch.setattr(
         "fspack.packaging.nuitka.subprocess.run",
         lambda cmd, **kw: captured.append(cmd) or _CompileOK(),
     )
 
     st = StageRecorder("Nuitka 编译")
-    NuitkaCompiler.compile_src(src, runtime, "3.11.9", Platform.WINDOWS, stage=st)
+    NuitkaCompiler.compile_src(src, runtime, "3.11.9", Platform.WINDOWS, cache, stage=st)
 
-    # 第一次是 is_available 的 `import nuitka` 检查
-    assert "import nuitka" in captured[0]
-    # 后续是 compile 调用，每个 .py 一次
-    compile_calls = captured[1:]
-    assert len(compile_calls) == 2
-    for cmd in compile_calls:
-        assert "-m" in cmd
-        assert cmd[cmd.index("-m") + 1] == "nuitka"
+    # 每个 .py 一次编译调用（无 is_available subprocess 调用，_is_nuitka_cached 是文件系统检查）
+    assert len(captured) == 2
+    for cmd in captured:
+        assert str(runtime / "python.exe") in cmd[0]
+        # -c 注入 sys.path
+        assert "-c" in cmd
+        c_idx = cmd.index("-c")
+        bootstrap = cmd[c_idx + 1]
+        assert "sys.path.insert" in bootstrap
+        assert str(cache) in bootstrap
+        assert "from nuitka.__main__ import main" in bootstrap
+        # nuitka 编译参数
         assert "--module" in cmd
         assert "--no-pyi-file" in cmd
         assert "--remove-output" in cmd
         assert "--quiet" in cmd
-        assert str(runtime / "python.exe") in cmd[0]
 
 
 def test_compile_src_deletes_non_init_py(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -175,11 +200,12 @@ def test_compile_src_deletes_non_init_py(tmp_path: Path, monkeypatch: pytest.Mon
     (src / "sub").mkdir()
     (src / "sub" / "__init__.py").write_text("")
     (src / "sub" / "mod.py").write_text("x = 1")
+    cache = _make_nuitka_cache(tmp_path / "cache")
 
     monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", lambda cmd, **kw: _CompileOK())
 
     st = StageRecorder("Nuitka 编译")
-    NuitkaCompiler.compile_src(src, runtime, "3.11.9", Platform.WINDOWS, stage=st)
+    NuitkaCompiler.compile_src(src, runtime, "3.11.9", Platform.WINDOWS, cache, stage=st)
 
     # __init__.py 保留
     assert (src / "__init__.py").is_file()
@@ -200,14 +226,10 @@ def test_compile_src_failure_warns_continues(
     src.mkdir()
     (src / "ok.py").write_text("x = 1")
     (src / "bad.py").write_text("invalid syntax !!!")
-
-    # is_available 成功，编译时第一文件失败第二文件成功
-    call_count = {"n": 0}
+    cache = _make_nuitka_cache(tmp_path / "cache")
 
     def fake_run(cmd: list[str], **kw: Any) -> object:
-        call_count["n"] += 1
-        if call_count["n"] == 1:
-            return _CompileOK()  # is_available
+        # cmd 最后一个元素是 py_file 路径
         if "bad.py" in cmd[-1]:
             return _CompileFail()
         return _CompileOK()
@@ -216,7 +238,7 @@ def test_compile_src_failure_warns_continues(
 
     st = StageRecorder("Nuitka 编译")
     with caplog.at_level("WARNING", logger="fspack.packaging.nuitka"):
-        NuitkaCompiler.compile_src(src, runtime, "3.11.9", Platform.WINDOWS, stage=st)
+        NuitkaCompiler.compile_src(src, runtime, "3.11.9", Platform.WINDOWS, cache, stage=st)
 
     # bad.py 编译失败告警
     assert any("Nuitka 编译失败" in r.message and "bad.py" in r.message for r in caplog.records)
@@ -233,6 +255,7 @@ def test_compile_src_linux_uses_python3_bin(tmp_path: Path, monkeypatch: pytest.
     src = tmp_path / "src"
     src.mkdir()
     (src / "app.py").write_text("print('hi')")
+    cache = _make_nuitka_cache(tmp_path / "cache")
 
     captured: list[list[str]] = []
     monkeypatch.setattr(
@@ -241,9 +264,9 @@ def test_compile_src_linux_uses_python3_bin(tmp_path: Path, monkeypatch: pytest.
     )
 
     st = StageRecorder("Nuitka 编译")
-    NuitkaCompiler.compile_src(src, runtime, "3.11.9", Platform.LINUX, stage=st)
+    NuitkaCompiler.compile_src(src, runtime, "3.11.9", Platform.LINUX, cache, stage=st)
 
-    # 第一个 subprocess 调用是 is_available 检查
+    assert len(captured) == 1
     assert "python3.11" in captured[0][0]
 
 
@@ -257,15 +280,16 @@ def test_compile_src_records_stage_metrics(tmp_path: Path, monkeypatch: pytest.M
     (src / "__init__.py").write_text("")
     (src / "app.py").write_text("print('hi')")
     (src / "util.py").write_text("x = 1")
+    cache = _make_nuitka_cache(tmp_path / "cache")
 
     monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", lambda cmd, **kw: _CompileOK())
 
     st = StageRecorder("Nuitka 编译")
-    NuitkaCompiler.compile_src(src, runtime, "3.11.9", Platform.WINDOWS, stage=st)
+    NuitkaCompiler.compile_src(src, runtime, "3.11.9", Platform.WINDOWS, cache, stage=st)
 
     # 2 个非 __init__.py 被剥离（__init__.py 保留维持包标识）
     assert st._skipped == 2
-    # 3 个 .py 编译成功（__init__.py + app.py + util.py，不算 is_available 调用）
+    # 3 个 .py 编译成功（__init__.py + app.py + util.py）
     assert st._items == 3
 
 
@@ -279,6 +303,7 @@ def test_compile_src_unlink_failure_warns(
     src = tmp_path / "src"
     src.mkdir()
     (src / "app.py").write_text("print('hi')")
+    cache = _make_nuitka_cache(tmp_path / "cache")
 
     monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", lambda cmd, **kw: _CompileOK())
 
@@ -290,7 +315,7 @@ def test_compile_src_unlink_failure_warns(
 
     st = StageRecorder("Nuitka 编译")
     with caplog.at_level("WARNING", logger="fspack.packaging.nuitka"):
-        NuitkaCompiler.compile_src(src, runtime, "3.11.9", Platform.WINDOWS, stage=st)
+        NuitkaCompiler.compile_src(src, runtime, "3.11.9", Platform.WINDOWS, cache, stage=st)
 
     # unlink 失败告警
     assert any("删除 .py 失败" in r.message for r in caplog.records)
@@ -361,82 +386,47 @@ def test_check_c_compiler_linux_with_gcc_passes(tmp_path: Path, monkeypatch: pyt
 # ---- ensure_env 环境就绪测试 ----
 
 
-def test_ensure_env_runtime_py_missing_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """runtime python 不存在时 raise NuitkaError."""
+def test_ensure_env_cache_hit_skips_download(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """缓存目录已有 nuitka 时跳过 pip install，stage 标注缓存命中."""
     monkeypatch.setattr("fspack.packaging.loader.mingw_available", lambda: True)
-    runtime = tmp_path / "runtime"
-    runtime.mkdir()
-    st = StageRecorder("Nuitka 环境")
-    with pytest.raises(NuitkaError, match="runtime python 未就绪"):
-        NuitkaCompiler.ensure_env(runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), stage=st)
-
-
-def test_ensure_env_already_installed_skips_download(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """runtime python 已安装 nuitka 时跳过 pip install，stage 标注缓存命中."""
-    monkeypatch.setattr("fspack.packaging.loader.mingw_available", lambda: True)
-    runtime = tmp_path / "runtime"
-    runtime.mkdir()
-    (runtime / "python.exe").write_bytes(b"")
-    # is_available 返回 True（import nuitka 成功），ensure_env 不会走到 pip install
-    monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", lambda cmd, **kw: _CompileOK())
+    cache_root = tmp_path / "nuitka_cache"
+    # 预装 nuitka 到缓存
+    _make_nuitka_cache(NuitkaCompiler._nuitka_cache_dir(cache_root, "3.11.9"))
 
     st = StageRecorder("Nuitka 环境")
-    nuitka_ver = NuitkaCompiler.ensure_env(runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), stage=st)
+    nuitka_ver = NuitkaCompiler.ensure_env(cache_root, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), stage=st)
 
     assert nuitka_ver == "4.1.3"
     assert st._hits == 1
     assert "4.1.3" in st._detail
 
 
-def test_ensure_env_pip_install_target_invoked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """runtime python 未装 nuitka 时用构建机 pip install --target 装 nuitka."""
+def test_ensure_env_pip_install_target_to_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """缓存未命中时用构建机 pip install --target 装 nuitka 到缓存目录（非 dist/runtime）."""
     monkeypatch.setattr("fspack.packaging.loader.mingw_available", lambda: True)
-    runtime = tmp_path / "runtime"
-    runtime.mkdir()
-    (runtime / "python.exe").write_bytes(b"")
-    (runtime / "Lib" / "site-packages").mkdir(parents=True)
+    cache_root = tmp_path / "nuitka_cache"
+    expected_cache_dir = NuitkaCompiler._nuitka_cache_dir(cache_root, "3.11.9")
 
-    # 模拟构建机 python 路径
     fake_build_python = "C:/fake/python.exe"
     monkeypatch.setattr("fspack.packaging.nuitka.sys.executable", fake_build_python)
 
-    # is_available 第一次返回失败（未装），第二次成功（装后验证）
-    # _ensure_pip_available 用 subprocess.run 检查 import pip，也要返回成功
-    call_count = {"n": 0}
-
-    def fake_run(cmd: list[str], **kw: Any) -> object:
-        call_count["n"] += 1
-        # 第 1 次：is_available(py_exe) → 失败（未装）
-        # 第 2 次：_ensure_pip_available → 成功（有 pip）
-        # 第 3 次：pip install --target → 成功
-        # 第 4 次：is_available(py_exe) 验证 → 成功
-        if call_count["n"] == 1:
-            return _CompileFail()
-        return _CompileOK()
-
-    monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", fake_run)
-
-    # 捕获 pip install 命令
     captured_cmd: list[list[str]] = []
 
-    def capture_run(cmd: list[str], **kw: Any) -> object:
+    # _ensure_pip_available 检查有 pip → 成功；pip install → 成功
+    def stateful_run(cmd: list[str], **kw: Any) -> object:
         captured_cmd.append(cmd)
         return _CompileOK()
-
-    # 重新设置：第 1 次 is_available 失败，后续成功
-    state = {"n": 0}
-
-    def stateful_run(cmd: list[str], **kw: Any) -> object:
-        state["n"] += 1
-        captured_cmd.append(cmd)
-        if state["n"] == 1:
-            return _CompileFail()  # is_available 首次检查
-        return _CompileOK()  # _ensure_pip + pip install + 验证
 
     monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", stateful_run)
 
+    # pip install 成功后需要缓存目录有 nuitka 包，模拟文件系统写入
+    def fake_is_cached(cache_dir: Path) -> bool:
+        return cache_dir == expected_cache_dir and bool(captured_cmd)  # pip install 调用后返回 True
+
+    monkeypatch.setattr(NuitkaCompiler, "_is_nuitka_cached", staticmethod(fake_is_cached))
+
     st = StageRecorder("Nuitka 环境")
-    nuitka_ver = NuitkaCompiler.ensure_env(runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), stage=st)
+    nuitka_ver = NuitkaCompiler.ensure_env(cache_root, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), stage=st)
 
     assert nuitka_ver == "4.1.3"
     # 找到 pip install 命令
@@ -446,14 +436,11 @@ def test_ensure_env_pip_install_target_invoked(tmp_path: Path, monkeypatch: pyte
     # 用构建机 python
     assert cmd[0] == fake_build_python
     assert cmd[1:4] == ["-m", "pip", "install"]
-    assert "--target" in cmd
-    # --target 指向 runtime/Lib/site-packages
+    # --target 指向缓存目录（非 dist/runtime）
     target_idx = cmd.index("--target")
-    assert cmd[target_idx + 1] == str(runtime / "Lib" / "site-packages")
-    # --no-compile 与 --no-cache-dir
+    assert cmd[target_idx + 1] == str(expected_cache_dir)
     assert "--no-compile" in cmd
     assert "--no-cache-dir" in cmd
-    # -i 镜像源
     assert "-i" in cmd
     assert "nuitka==4.1.3" in cmd
     assert "安装完成" in st._detail
@@ -462,110 +449,109 @@ def test_ensure_env_pip_install_target_invoked(tmp_path: Path, monkeypatch: pyte
 def test_ensure_env_no_pip_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """构建机缺 pip 且 ensurepip 与 uv 两轮自救均失败时 raise NuitkaError."""
     monkeypatch.setattr("fspack.packaging.loader.mingw_available", lambda: True)
-    runtime = tmp_path / "runtime"
-    runtime.mkdir()
-    (runtime / "python.exe").write_bytes(b"")
+    cache_root = tmp_path / "nuitka_cache"
 
     fake_build_python = "C:/fake/python.exe"
     monkeypatch.setattr("fspack.packaging.nuitka.sys.executable", fake_build_python)
 
+    # 缓存未命中（_is_nuitka_cached 返回 False）
+    monkeypatch.setattr(NuitkaCompiler, "_is_nuitka_cached", staticmethod(lambda cache_dir: False))
+
     # 调用顺序：
-    # 1. is_available (import nuitka) → 失败
-    # 2. _has_pip (import pip) → 失败（缺 pip）
-    # 3. _try_ensurepip (python -m ensurepip) → 失败
-    # 4. _has_pip (再次检查) → 失败
-    # 5. _try_uv_install_pip (uv pip install pip) → 失败
-    # 6. _has_pip (再次检查) → 失败
+    # 1. _has_pip (import pip) → 失败（缺 pip）
+    # 2. _try_ensurepip (python -m ensurepip) → 失败
+    # 3. _try_uv_install_pip (uv pip install pip) → 失败
     # → raise NuitkaError
     state = {"n": 0}
 
     def stateful_run(cmd: list[str], **kw: Any) -> object:
         state["n"] += 1
-        if state["n"] == 1:
-            return _CompileFail()  # is_available
-        return _ImportAbsent()  # 所有后续调用均失败
+        return _ImportAbsent()  # 所有调用均失败
 
     monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", stateful_run)
 
     st = StageRecorder("Nuitka 环境")
     with pytest.raises(NuitkaError, match="缺 pip 模块且两轮自助安装失败"):
-        NuitkaCompiler.ensure_env(runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), stage=st)
+        NuitkaCompiler.ensure_env(cache_root, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), stage=st)
 
 
 def test_ensure_env_ensurepip_self_heal_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """缺 pip 时 ensurepip 自救成功，继续 pip install nuitka."""
     monkeypatch.setattr("fspack.packaging.loader.mingw_available", lambda: True)
-    runtime = tmp_path / "runtime"
-    runtime.mkdir()
-    (runtime / "python.exe").write_bytes(b"")
-    (runtime / "Lib" / "site-packages").mkdir(parents=True)
+    cache_root = tmp_path / "nuitka_cache"
 
     fake_build_python = "C:/fake/python.exe"
     monkeypatch.setattr("fspack.packaging.nuitka.sys.executable", fake_build_python)
 
+    # _is_nuitka_cached：首次 False，pip install 后 True
+    is_cached_state = {"first": True}
+
+    def fake_is_cached(cache_dir: Path) -> bool:
+        if is_cached_state["first"]:
+            is_cached_state["first"] = False
+            return False
+        return True
+
+    monkeypatch.setattr(NuitkaCompiler, "_is_nuitka_cached", staticmethod(fake_is_cached))
+
     # 调用顺序：
-    # 1. is_available (import nuitka) → 失败
-    # 2. _has_pip (import pip) → 失败（缺 pip）
-    # 3. _try_ensurepip (python -m ensurepip) → 成功
-    # 4. _has_pip (再次检查) → 成功（ensurepip 装好了）
-    # 5. pip install --target nuitka → 成功
-    # 6. is_available 验证 → 成功
+    # 1. _has_pip (import pip) → 失败（缺 pip）
+    # 2. _try_ensurepip (python -m ensurepip) → 成功
+    # 3. _has_pip (再次检查) → 成功（ensurepip 装好了）
+    # 4. pip install --target nuitka → 成功
     state = {"n": 0}
 
     def stateful_run(cmd: list[str], **kw: Any) -> object:
         state["n"] += 1
         if state["n"] == 1:
-            return _CompileFail()  # is_available 首次失败
-        if state["n"] == 2:
             return _ImportAbsent()  # _has_pip 失败（缺 pip）
-        if state["n"] == 3:
-            return _CompileOK()  # _try_ensurepip 成功
-        if state["n"] == 4:
-            return _CompileOK()  # _has_pip 再次检查成功
-        return _CompileOK()  # pip install 与验证
+        return _CompileOK()  # ensurepip + has_pip + pip install
 
     monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", stateful_run)
 
     st = StageRecorder("Nuitka 环境")
-    nuitka_ver = NuitkaCompiler.ensure_env(runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), stage=st)
+    nuitka_ver = NuitkaCompiler.ensure_env(cache_root, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), stage=st)
     assert nuitka_ver == "4.1.3"
 
 
 def test_ensure_env_uv_self_heal_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """ensurepip 失败但 uv pip install pip 自救成功."""
     monkeypatch.setattr("fspack.packaging.loader.mingw_available", lambda: True)
-    runtime = tmp_path / "runtime"
-    runtime.mkdir()
-    (runtime / "python.exe").write_bytes(b"")
-    (runtime / "Lib" / "site-packages").mkdir(parents=True)
+    cache_root = tmp_path / "nuitka_cache"
 
     fake_build_python = "C:/fake/python.exe"
     monkeypatch.setattr("fspack.packaging.nuitka.sys.executable", fake_build_python)
 
+    is_cached_state = {"first": True}
+
+    def fake_is_cached(cache_dir: Path) -> bool:
+        if is_cached_state["first"]:
+            is_cached_state["first"] = False
+            return False
+        return True
+
+    monkeypatch.setattr(NuitkaCompiler, "_is_nuitka_cached", staticmethod(fake_is_cached))
+
     # 调用顺序（注意短路求值：_try_ensurepip 返回 False 时不调用 _has_pip）：
-    # 1. is_available (import nuitka) → 失败
-    # 2. _has_pip (import pip) → 失败（缺 pip）
-    # 3. _try_ensurepip → 失败（uv venv 无 ensurepip 模块，短路不调用 _has_pip）
-    # 4. _try_uv_install_pip → 成功
-    # 5. _has_pip (再次检查) → 成功
-    # 6. pip install --target nuitka → 成功
-    # 7. is_available 验证 → 成功
+    # 1. _has_pip (import pip) → 失败（缺 pip）
+    # 2. _try_ensurepip → 失败（uv venv 无 ensurepip 模块，短路不调用 _has_pip）
+    # 3. _try_uv_install_pip → 成功
+    # 4. _has_pip (再次检查) → 成功
+    # 5. pip install --target nuitka → 成功
     state = {"n": 0}
 
     def stateful_run(cmd: list[str], **kw: Any) -> object:
         state["n"] += 1
         if state["n"] == 1:
-            return _CompileFail()  # is_available
-        if state["n"] == 2:
             return _ImportAbsent()  # _has_pip 失败
-        if state["n"] == 3:
+        if state["n"] == 2:
             return _CompileFail()  # _try_ensurepip 失败
         return _CompileOK()  # uv pip install pip 与后续
 
     monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", stateful_run)
 
     st = StageRecorder("Nuitka 环境")
-    nuitka_ver = NuitkaCompiler.ensure_env(runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), stage=st)
+    nuitka_ver = NuitkaCompiler.ensure_env(cache_root, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), stage=st)
     assert nuitka_ver == "4.1.3"
 
 
@@ -617,24 +603,21 @@ def test_try_uv_install_pip_invokes_uv_command(tmp_path: Path, monkeypatch: pyte
 def test_ensure_env_pip_install_fails_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """pip install 返回非零退出码时 raise NuitkaError."""
     monkeypatch.setattr("fspack.packaging.loader.mingw_available", lambda: True)
-    runtime = tmp_path / "runtime"
-    runtime.mkdir()
-    (runtime / "python.exe").write_bytes(b"")
-    (runtime / "Lib" / "site-packages").mkdir(parents=True)
+    cache_root = tmp_path / "nuitka_cache"
 
     fake_build_python = "C:/fake/python.exe"
     monkeypatch.setattr("fspack.packaging.nuitka.sys.executable", fake_build_python)
+
+    # 缓存未命中
+    monkeypatch.setattr(NuitkaCompiler, "_is_nuitka_cached", staticmethod(lambda cache_dir: False))
 
     state = {"n": 0}
 
     def stateful_run(cmd: list[str], **kw: Any) -> object:
         state["n"] += 1
-        # 第 1 次：is_available → 失败
-        # 第 2 次：_ensure_pip_available → 成功
-        # 第 3 次：pip install → 失败
-        if state["n"] == 3:
-            return _CompileFail()
-        if state["n"] == 1:
+        # 第 1 次：_has_pip → 成功
+        # 第 2 次：pip install → 失败
+        if state["n"] == 2:
             return _CompileFail()
         return _CompileOK()
 
@@ -642,56 +625,26 @@ def test_ensure_env_pip_install_fails_raises(tmp_path: Path, monkeypatch: pytest
 
     st = StageRecorder("Nuitka 环境")
     with pytest.raises(NuitkaError, match=r"pip install nuitka==4\.1\.3 失败"):
-        NuitkaCompiler.ensure_env(runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), stage=st)
+        NuitkaCompiler.ensure_env(cache_root, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), stage=st)
 
 
-def test_ensure_env_install_fails_import_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """pip install 成功但 import nuitka 仍失败时 raise NuitkaError."""
+def test_ensure_env_install_fails_cache_still_empty_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """pip install 成功但缓存目录仍无 nuitka 包时 raise NuitkaError."""
     monkeypatch.setattr("fspack.packaging.loader.mingw_available", lambda: True)
-    runtime = tmp_path / "runtime"
-    runtime.mkdir()
-    (runtime / "python.exe").write_bytes(b"")
-    (runtime / "Lib" / "site-packages").mkdir(parents=True)
+    cache_root = tmp_path / "nuitka_cache"
 
     fake_build_python = "C:/fake/python.exe"
     monkeypatch.setattr("fspack.packaging.nuitka.sys.executable", fake_build_python)
 
-    state = {"n": 0}
+    # _is_nuitka_cached 始终返回 False（pip install 成功但缓存仍空）
+    monkeypatch.setattr(NuitkaCompiler, "_is_nuitka_cached", staticmethod(lambda cache_dir: False))
 
-    def stateful_run(cmd: list[str], **kw: Any) -> object:
-        state["n"] += 1
-        # 第 1 次：is_available → 失败（未装）
-        # 第 2 次：_ensure_pip_available → 成功
-        # 第 3 次：pip install → 成功
-        # 第 4 次：is_available 验证 → 失败（import 仍失败）
-        if state["n"] in (1, 4):
-            return _CompileFail()
-        return _CompileOK()
-
-    monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", stateful_run)
-
-    st = StageRecorder("Nuitka 环境")
-    with pytest.raises(NuitkaError, match="安装后 import nuitka 仍失败"):
-        NuitkaCompiler.ensure_env(runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), stage=st)
-
-
-def test_ensure_env_linux_uses_python3_bin_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Linux 平台 ensure_env 用 runtime/python/bin/python{ver} 与对应 site-packages."""
-    monkeypatch.setattr("fspack.packaging.loader.gcc_available", lambda: True)
-    runtime = tmp_path / "runtime"
-    pybin = runtime / "python" / "bin"
-    pybin.mkdir(parents=True)
-    (pybin / "python3.11").write_bytes(b"")
-    (runtime / "python" / "lib" / "python3.11" / "site-packages").mkdir(parents=True)
-
-    # is_available 首次即成功（已装）
+    # _has_pip 成功，pip install 成功
     monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", lambda cmd, **kw: _CompileOK())
 
     st = StageRecorder("Nuitka 环境")
-    nuitka_ver = NuitkaCompiler.ensure_env(runtime, "3.11.9", Platform.LINUX, get_mirror("aliyun"), stage=st)
-
-    assert nuitka_ver == "4.1.3"
-    assert st._hits == 1
+    with pytest.raises(NuitkaError, match="安装后缓存目录仍无 nuitka 包"):
+        NuitkaCompiler.ensure_env(cache_root, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), stage=st)
 
 
 # ---- compile_with_stamp stamp 缓存测试 ----
@@ -706,6 +659,7 @@ def test_compile_with_stamp_cache_hit_skips_all(tmp_path: Path, monkeypatch: pyt
     dist.mkdir()
     runtime = tmp_path / "runtime"
     runtime.mkdir()
+    cache_root = tmp_path / "nuitka_cache"
 
     # 预写匹配的 stamp
     nuitka_ver = nuitka_version_for("3.11.9")
@@ -726,7 +680,9 @@ def test_compile_with_stamp_cache_hit_skips_all(tmp_path: Path, monkeypatch: pyt
     )
 
     st = StageRecorder("Nuitka 编译")
-    NuitkaCompiler.compile_with_stamp(src, dist, runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), stage=st)
+    NuitkaCompiler.compile_with_stamp(
+        src, dist, runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), cache_root, stage=st
+    )
 
     assert ensure_called["n"] == 0
     assert compile_called["n"] == 0
@@ -743,12 +699,15 @@ def test_compile_with_stamp_writes_stamp_after_compile(tmp_path: Path, monkeypat
     dist.mkdir()
     runtime = tmp_path / "runtime"
     runtime.mkdir()
+    cache_root = tmp_path / "nuitka_cache"
 
     monkeypatch.setattr(NuitkaCompiler, "ensure_env", classmethod(lambda cls, *a, **kw: "4.1.3"))
     monkeypatch.setattr(NuitkaCompiler, "compile_src", classmethod(lambda cls, *a, **kw: None))
 
     st = StageRecorder("Nuitka 编译")
-    NuitkaCompiler.compile_with_stamp(src, dist, runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), stage=st)
+    NuitkaCompiler.compile_with_stamp(
+        src, dist, runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), cache_root, stage=st
+    )
 
     # stamp 文件已写入，内容匹配 _stamp_key
     stamp = NuitkaCompiler._stamp_path(dist)
@@ -767,6 +726,7 @@ def test_compile_with_stamp_invalidates_on_src_change(tmp_path: Path, monkeypatc
     dist.mkdir()
     runtime = tmp_path / "runtime"
     runtime.mkdir()
+    cache_root = tmp_path / "nuitka_cache"
 
     # 预写基于旧源码内容的 stamp
     nuitka_ver = nuitka_version_for("3.11.9")
@@ -786,7 +746,9 @@ def test_compile_with_stamp_invalidates_on_src_change(tmp_path: Path, monkeypatc
     )
 
     st = StageRecorder("Nuitka 编译")
-    NuitkaCompiler.compile_with_stamp(src, dist, runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), stage=st)
+    NuitkaCompiler.compile_with_stamp(
+        src, dist, runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), cache_root, stage=st
+    )
 
     # stamp 不匹配，调用 ensure_env 与 compile_src
     assert calls["ensure"] == 1

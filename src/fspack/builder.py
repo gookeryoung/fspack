@@ -519,16 +519,19 @@ def build(  # noqa: PLR0912, PLR0913
         with spinner(f"复制 {info.name} 源码"):
             copy_source(project_dir, src_dst)
 
-    # Nuitka 编译模式：用 python -m nuitka --module 将 dist/src 下用户源码编译为 .pyd。
+    # Nuitka 编译模式：用 runtime python -c "sys.path.insert(0, <nuitka_cache>); ..." 调用
+    # nuitka --module 将 dist/src 下用户源码编译为 .pyd。
     # 用户源码以 .pyd 形式本机执行，速度提升 30-50%（参考 RimSort Nuitka 打包方案）。
     # 仅编译用户源码（src/），第三方依赖（site-packages/）保持 wheel 解压 + .pyc。
     # 交叉构建跳过（Nuitka 无法生成目标平台 .pyd）。
-    # ensure_env 检查 C 编译器并按 py_version 锁定版 nuitka 安装到 runtime；
+    # nuitka 装到本地缓存 ~/.fspack/cache/nuitka/<py_version>/，不污染 dist/runtime；
+    # 编译时用 -c 注入 sys.path 绕过 _pth 对 PYTHONPATH 的限制。
     # stamp 命中跳过整个阶段（含 ensure_env 与 compile_src）。
     if opts.nuitka and target is detect_platform():
         with tracker.stage("Nuitka 编译") as st:
             from fspack.packaging.nuitka import NuitkaCompiler
 
+            nuitka_cache_root = Path.home() / ".fspack" / "cache" / "nuitka"
             NuitkaCompiler.compile_with_stamp(
                 src_dst,
                 cfg.dist_dir,
@@ -536,6 +539,7 @@ def build(  # noqa: PLR0912, PLR0913
                 info.py_version,
                 target,
                 cfg.mirror,
+                nuitka_cache_root,
                 stage=st,
             )
 

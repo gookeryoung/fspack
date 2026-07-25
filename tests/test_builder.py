@@ -1500,6 +1500,7 @@ def test_build_with_nuitka_invokes_compiler(tmp_path: Path, monkeypatch: pytest.
         py_version: str,
         target: Platform,
         mirror: object,
+        cache_root: Path,
         *,
         stage: StageRecorder,
     ) -> None:
@@ -1507,6 +1508,7 @@ def test_build_with_nuitka_invokes_compiler(tmp_path: Path, monkeypatch: pytest.
         nuitka_called["dist_dir"] = dist_dir
         nuitka_called["py_version"] = py_version
         nuitka_called["target"] = target
+        nuitka_called["cache_root"] = cache_root
         stage.processed()
         stage.set_detail("mock 编译")
 
@@ -1523,6 +1525,8 @@ def test_build_with_nuitka_invokes_compiler(tmp_path: Path, monkeypatch: pytest.
     assert Path(str(nuitka_called["src_dir"])).name == "src"
     # dist_dir 是 proj/dist
     assert Path(str(nuitka_called["dist_dir"])).name == "dist"
+    # cache_root 指向本地缓存（~/.fspack/cache/nuitka），不污染 dist/runtime
+    assert Path(str(nuitka_called["cache_root"])).name == "nuitka"
 
 
 def test_build_nuitka_skipped_on_cross_compile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

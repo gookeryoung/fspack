@@ -52,33 +52,31 @@ _logger = logging.getLogger(__name__)
 class NuitkaCompiler:
     """Nuitka 编译器：将用户源码编译为本机 ``.pyd``/``.so``.
 
+    nuitka 装到本地缓存 ``~/.fspack/cache/nuitka/<py_version>/site-packages/``，
+    不污染 ``dist/runtime`` 发行产物。编译时用 ``runtime/python.exe -c`` 注入
+    ``sys.path`` 指向缓存目录，绕过 ``python3X._pth`` 对 ``PYTHONPATH`` 的限制。
+
     公共 API：
 
-    - :meth:`is_available`：检查 runtime python 是否已安装 nuitka
-    - :meth:`ensure_env`：检查 C 编译器并按目标 Python 版本安装锁定版 nuitka 到 runtime
+    - :meth:`ensure_env`：检查 C 编译器并按目标 Python 版本安装锁定版 nuitka 到本地缓存
     - :meth:`compile_src`：编译 ``dist/src`` 下所有 ``.py`` 为本机模块
     - :meth:`compile_with_stamp`：整合 ensure_env + stamp 缓存 + compile_src 的入口
     """
 
     @staticmethod
-    def is_available(runtime_py: Path) -> bool:
-        """检查 runtime python 是否已安装 nuitka 包.
+    def _nuitka_cache_dir(cache_root: Path, py_version: str) -> Path:
+        """返回 nuitka 缓存目录：``cache_root / py_version / site-packages``.
 
-        Args:
-            runtime_py: runtime python 可执行文件路径（如 ``runtime/python.exe``）。
-
-        Returns:
-            已安装返回 ``True``，否则 ``False``。
+        与 :func:`fspack.builder.embed_cache_dir` 等缓存约定一致，nuitka 包
+        安装到此目录，编译时用 ``sys.path.insert`` 注入。缓存按 py_version
+        隔离，避免不同版本 ABI 冲突。
         """
-        if not runtime_py.is_file():
-            return False
-        result = subprocess.run(
-            [str(runtime_py), "-c", "import nuitka"],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        return result.returncode == 0
+        return cache_root / py_version / "site-packages"
+
+    @staticmethod
+    def _is_nuitka_cached(cache_dir: Path) -> bool:
+        """检查缓存目录是否有 nuitka 包（文件系统检查，无 subprocess 开销）."""
+        return (cache_dir / "nuitka" / "__init__.py").is_file()
 
     @staticmethod
     def _runtime_python(runtime_dir: Path, py_version: str, target: Platform) -> Path:
@@ -91,18 +89,6 @@ class NuitkaCompiler:
             return runtime_dir / "python.exe"
         major, minor = py_version.split(".")[:2]
         return runtime_dir / "python" / "bin" / f"python{major}.{minor}"
-
-    @staticmethod
-    def _runtime_site_packages(runtime_dir: Path, py_version: str, target: Platform) -> Path:
-        """解析 runtime site-packages 路径.
-
-        Windows: ``runtime/Lib/site-packages``
-        Linux: ``runtime/python/lib/python<major>.<minor>/site-packages``
-        """
-        if target is Platform.WINDOWS:
-            return runtime_dir / "Lib" / "site-packages"
-        major, minor = py_version.split(".")[:2]
-        return runtime_dir / "python" / "lib" / f"python{major}.{minor}" / "site-packages"
 
     @staticmethod
     def _check_c_compiler(target: Platform) -> None:
@@ -213,32 +199,35 @@ class NuitkaCompiler:
     @classmethod
     def ensure_env(
         cls,
-        runtime_dir: Path,
+        cache_root: Path,
         py_version: str,
         target: Platform,
         mirror: MirrorConfig,
         *,
         stage: StageRecorder,
     ) -> str:
-        """确保 runtime python 已安装锁定版 nuitka，返回 nuitka 版本号.
+        """确保本地缓存已装锁定版 nuitka，返回 nuitka 版本号.
+
+        nuitka 装到 ``cache_root / py_version / site-packages``，不污染
+        ``dist/runtime``。重复构建时缓存命中直接返回，无需重装。
 
         步骤：
 
         1. :meth:`_check_c_compiler` 检查 C 编译器，缺失 raise :class:`NuitkaError`
         2. 按 :func:`nuitka_version_for` 取锁定版本号
-        3. ``import nuitka`` 检查 runtime python 是否已装该版本
-        4. 未装则用构建机 ``pip install --target`` 从 sdist 构建并解压到 runtime site-packages
-        5. 再次 ``import nuitka`` 验证安装成功
+        3. :meth:`_is_nuitka_cached` 检查缓存目录是否已有 nuitka
+        4. 无则用构建机 ``pip install --target`` 从 sdist 构建并解压到缓存目录
+        5. :meth:`_is_nuitka_cached` 再次验证安装成功
 
         nuitka 4.x 在 PyPI 只发布 sdist（无预构建 wheel），:func:`download_wheels` 的
-        ``--only-binary=:all:`` 无法处理。改用 ``pip install --target <site-packages>``
-        让 pip 自动完成 sdist 下载、构建、解压。nuitka 实际是纯 Python（无 ``.pyd``），
+        ``--only-binary=:all:`` 无法处理。改用 ``pip install --target <cache>`` 让 pip
+        自动完成 sdist 下载、构建、解压。nuitka 实际是纯 Python（无 ``.pyd``），
         构建机 python 版本与 runtime 不同也能 ``import``。
 
         Args:
-            runtime_dir: runtime 根目录（含 ``python.exe`` 或 ``python/bin/``）。
+            cache_root: 缓存根目录（如 ``~/.fspack/cache/nuitka``）。
             py_version: Python 完整版本号（如 ``3.11.9``）。
-            target: 目标平台（决定 C 编译器检查与 site-packages 路径）。
+            target: 目标平台（决定 C 编译器检查）。
             mirror: 镜像配置（提供 ``pypi_index``）。
             stage: 阶段记录器，回写缓存命中数与下载字节数。
 
@@ -246,31 +235,28 @@ class NuitkaCompiler:
             锁定的 Nuitka 版本号（如 ``4.1.3``）。
 
         Raises:
-            NuitkaError: C 编译器缺失、构建机缺 pip、或安装后 ``import nuitka`` 仍失败。
+            NuitkaError: C 编译器缺失、构建机缺 pip、或安装后缓存目录仍无 nuitka。
         """
         cls._check_c_compiler(target)
 
         nuitka_ver = nuitka_version_for(py_version)
-        py_exe = cls._runtime_python(runtime_dir, py_version, target)
-        if not py_exe.is_file():
-            raise NuitkaError(f"runtime python 未就绪: {py_exe}")
+        cache_dir = cls._nuitka_cache_dir(cache_root, py_version)
 
-        # 已安装则跳过下载解压
-        if cls.is_available(py_exe):
-            _logger.info("nuitka %s 已就绪（runtime python 已安装）", nuitka_ver)
+        # 缓存命中：已装则跳过下载解压
+        if cls._is_nuitka_cached(cache_dir):
+            _logger.info("nuitka %s 已就绪（缓存命中 %s）", nuitka_ver, cache_dir)
             stage.hit_cache()
             stage.set_detail(f"nuitka {nuitka_ver} 已就绪")
             return nuitka_ver
 
         # nuitka 4.x 在 PyPI 只发布 sdist，用构建机 pip install --target 从 sdist
-        # 构建并解压到 runtime site-packages。nuitka 实际是纯 Python，跨版本可 import。
+        # 构建并解压到本地缓存（不污染 dist/runtime）。nuitka 是纯 Python，跨版本可 import。
         build_python = sys.executable
         cls._ensure_pip_available(build_python)
 
-        site_packages = cls._runtime_site_packages(runtime_dir, py_version, target)
-        site_packages.mkdir(parents=True, exist_ok=True)
+        cache_dir.mkdir(parents=True, exist_ok=True)
 
-        # --no-compile: 不编译 .pyc（runtime python 版本可能与构建机不同）
+        # --no-compile: 不编译 .pyc（缓存可能跨 Python 版本复用）
         # --no-cache-dir: 不用 pip 缓存，避免污染
         # -i mirror.pypi_index: 用 fspack 镜像源
         cmd = [
@@ -279,40 +265,46 @@ class NuitkaCompiler:
             "pip",
             "install",
             "--target",
-            str(site_packages),
+            str(cache_dir),
             "--no-compile",
             "--no-cache-dir",
             "-i",
             mirror.pypi_index,
             f"nuitka=={nuitka_ver}",
         ]
-        _logger.info("用构建机 pip 装 nuitka %s 到 %s", nuitka_ver, site_packages)
+        _logger.info("用构建机 pip 装 nuitka %s 到缓存 %s", nuitka_ver, cache_dir)
         result = subprocess.run(cmd, check=False, capture_output=True, text=True)
         if result.returncode != 0:
             raise NuitkaError(f"pip install nuitka=={nuitka_ver} 失败:\n{result.stderr.strip()[:500]}")
 
-        # 验证安装
-        if not cls.is_available(py_exe):
-            raise NuitkaError(f"nuitka 安装后 import nuitka 仍失败，请检查 runtime python: {py_exe}")
+        # 验证安装：检查缓存目录有 nuitka 包
+        if not cls._is_nuitka_cached(cache_dir):
+            raise NuitkaError(f"nuitka 安装后缓存目录仍无 nuitka 包: {cache_dir}")
         stage.set_detail(f"nuitka {nuitka_ver} 安装完成")
         return nuitka_ver
 
     @classmethod
-    def compile_src(
+    def compile_src(  # noqa: PLR0913
         cls,
         src_dir: Path,
         runtime_dir: Path,
         py_version: str,
         target: Platform,
+        nuitka_cache: Path,
         *,
         stage: StageRecorder,
     ) -> None:
         """编译 ``src_dir`` 下所有 ``.py`` 为 ``.pyd``/``.so``，编译后删除 ``.py`` 源码.
 
+        用 ``runtime/python.exe -c "sys.path.insert(0, <nuitka_cache>); from nuitka.__main__ import main; main()"``
+        注入缓存路径调用 nuitka，绕过 ``python3X._pth`` 对 ``PYTHONPATH`` 的限制
+        （_pth 存在时 PYTHONPATH 不生效，但 ``-c`` 模式仍读取 _pth 配置的 sys.path，
+        运行时 ``sys.path.insert`` 可注入额外路径）。
+
         步骤：
 
-        1. 解析 runtime python 路径并检查 nuitka 可用性，不可用则告警并跳过
-        2. 用 runtime python 调用 ``python -m nuitka --module`` 逐个编译 ``.py``
+        1. 解析 runtime python 路径并检查缓存目录有 nuitka，无则告警并跳过
+        2. 用 ``-c`` 注入 sys.path 调用 nuitka ``--module`` 逐个编译 ``.py``
         3. 删除 ``.py`` 源码（保留 ``__init__.py`` 维持包标识，避免 PEP 420
            命名空间包导致 ``.pyd`` 不被识别为包成员）
         4. 清理 Nuitka 临时构建文件（``.build/`` 目录）
@@ -326,6 +318,7 @@ class NuitkaCompiler:
             runtime_dir: runtime 根目录（含 ``python.exe`` 或 ``python/bin/``）。
             py_version: Python 完整版本号（如 ``3.11.9``）。
             target: 目标平台（决定 runtime python 路径）。
+            nuitka_cache: nuitka 缓存目录（含 ``nuitka/`` 包，由 :meth:`ensure_env` 安装）。
             stage: 阶段记录器，记录编译项数与跳过数。
         """
         py_exe = cls._runtime_python(runtime_dir, py_version, target)
@@ -334,10 +327,10 @@ class NuitkaCompiler:
             stage.set_detail("runtime python 未就绪，跳过")
             return
 
-        if not cls.is_available(py_exe):
+        if not cls._is_nuitka_cached(nuitka_cache):
             _logger.warning(
-                "Nuitka 编译跳过: runtime python 未安装 nuitka，请用 '%s -m pip install nuitka' 安装",
-                py_exe,
+                "Nuitka 编译跳过: 缓存目录无 nuitka %s，请用 fsp b --nuitka 触发安装",
+                nuitka_cache,
             )
             stage.set_detail("nuitka 未安装，跳过（回退到 .pyc 模式）")
             return
@@ -347,7 +340,11 @@ class NuitkaCompiler:
             stage.set_detail("无 .py 文件可编译")
             return
 
-        # Nuitka 编译参数：
+        # -c 注入 sys.path 绕过 _pth 对 PYTHONPATH 的限制
+        # nuitka.__main__.main() 解析 sys.argv[1:]，与 `-m nuitka` 行为一致
+        bootstrap = f"import sys; sys.path.insert(0, r'{nuitka_cache}'); from nuitka.__main__ import main; main()"
+
+        # Nuitka 编译参数（作为 -c 后参数传入，进入 sys.argv[1:]）：
         # --module: 编译为可导入模块（.pyd/.so），不生成独立 exe
         # --output-dir: 输出目录与源码同目录（保持包结构）
         # --no-pyi-file: 不生成 .pyi 类型存根（运行时不需要）
@@ -359,8 +356,8 @@ class NuitkaCompiler:
             result = subprocess.run(
                 [
                     str(py_exe),
-                    "-m",
-                    "nuitka",
+                    "-c",
+                    bootstrap,
                     "--module",
                     f"--output-dir={py_file.parent}",
                     "--no-pyi-file",
@@ -431,6 +428,7 @@ class NuitkaCompiler:
         py_version: str,
         target: Platform,
         mirror: MirrorConfig,
+        cache_root: Path,
         *,
         stage: StageRecorder,
     ) -> None:
@@ -442,7 +440,7 @@ class NuitkaCompiler:
 
         首次构建或源码/版本变化时：
 
-        1. :meth:`ensure_env` 检查 C 编译器并安装锁定版 nuitka 到 runtime
+        1. :meth:`ensure_env` 检查 C 编译器并安装锁定版 nuitka 到本地缓存
         2. :meth:`compile_src` 逐文件编译 ``.py`` 为 ``.pyd``
         3. 写入 stamp 文件供下次构建比对
 
@@ -453,6 +451,7 @@ class NuitkaCompiler:
             py_version: Python 完整版本号（如 ``3.11.9``）。
             target: 目标平台。
             mirror: 镜像配置（提供 ``pypi_index`` 给 :meth:`ensure_env`）。
+            cache_root: nuitka 缓存根目录（如 ``~/.fspack/cache/nuitka``）。
             stage: 阶段记录器。
 
         Raises:
@@ -473,8 +472,9 @@ class NuitkaCompiler:
             pass
 
         # 未命中：ensure_env + compile_src + 写 stamp
-        cls.ensure_env(runtime_dir, py_version, target, mirror, stage=stage)
-        cls.compile_src(src_dir, runtime_dir, py_version, target, stage=stage)
+        cls.ensure_env(cache_root, py_version, target, mirror, stage=stage)
+        nuitka_cache = cls._nuitka_cache_dir(cache_root, py_version)
+        cls.compile_src(src_dir, runtime_dir, py_version, target, nuitka_cache, stage=stage)
 
         # 编译后写 stamp（即使部分文件失败也写，避免下次重复尝试）
         stamp.parent.mkdir(parents=True, exist_ok=True)
