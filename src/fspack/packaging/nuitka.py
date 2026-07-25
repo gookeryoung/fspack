@@ -41,6 +41,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 from fspack.config import MirrorConfig, nuitka_version_for
@@ -51,6 +52,9 @@ from fspack.progress import StageRecorder
 __all__ = ["NuitkaCompiler"]
 
 _logger = logging.getLogger(__name__)
+
+# 心跳间隔：nuitka reExecute 机制导致子进程输出不可靠，每 N 秒输出编译耗时让用户看到进度
+_HEARTBEAT_INTERVAL = 10.0
 
 
 class NuitkaCompiler:
@@ -408,29 +412,42 @@ class NuitkaCompiler:
         # --output-dir: 输出目录与源码同目录（保持包结构）
         # --no-pyi-file: 不生成 .pyi 类型存根（运行时不需要）
         # --remove-output: 编译后删除临时构建文件（.build/ 目录）
-        # --show-progress: 显示编译步骤进度，避免数十秒无输出被误认为卡死
+        # 注意：nuitka 4.x 的 --show-progress 已 obsolete 无效；nuitka 的 reExecute 机制
+        # (os._exit 退出子进程 A，Windows close_fds=True 导致子进程 B 不继承 PIPE) 使得
+        # _stream_compile 的 PIPE 捕获不可靠。用心跳线程保证用户看到编译进度。
         compiled = 0
         failed = 0
         total = len(py_files)
         try:
             for idx, py_file in enumerate(py_files, 1):
-                # 显示当前编译进度，避免多文件编译时长时间无输出被误认为卡死
                 _logger.info("编译 [%d/%d] %s", idx, total, py_file.name)
-                # 用 _stream_compile 流式输出 nuitka 编译过程（Nuitka:INFO 步骤 + C 编译/链接），
-                # Python 主动读取子进程 stdout/stderr 并实时写入终端，避免 fd 继承在
-                # nuitka reExecute 机制下不可靠的问题。
-                returncode, _stdout, _stderr = cls._stream_compile(
-                    [
-                        str(py_exe),
-                        str(bootstrap_script),
-                        "--module",
-                        f"--output-dir={py_file.parent}",
-                        "--no-pyi-file",
-                        "--remove-output",
-                        "--show-progress",
-                        str(py_file),
-                    ]
-                )
+                # 心跳线程：每 10 秒输出编译耗时，避免单文件编译数十秒无输出被误认为卡死。
+                # nuitka reExecute 的子进程 B 输出可能不到 PIPE，心跳是唯一的进度反馈。
+                stop_heartbeat = threading.Event()
+                start_ts = time.monotonic()
+
+                def _heartbeat(_stop: threading.Event = stop_heartbeat, _start: float = start_ts) -> None:
+                    while not _stop.wait(_HEARTBEAT_INTERVAL):
+                        elapsed = int(time.monotonic() - _start)
+                        _logger.info("Nuitka 编译中... 已耗时 %ds", elapsed)
+
+                hb_thread = threading.Thread(target=_heartbeat, daemon=True)
+                hb_thread.start()
+                try:
+                    returncode, _stdout, _stderr = cls._stream_compile(
+                        [
+                            str(py_exe),
+                            str(bootstrap_script),
+                            "--module",
+                            f"--output-dir={py_file.parent}",
+                            "--no-pyi-file",
+                            "--remove-output",
+                            str(py_file),
+                        ]
+                    )
+                finally:
+                    stop_heartbeat.set()
+                    hb_thread.join(timeout=1.0)
                 if returncode == 0:
                     compiled += 1
                     stage.processed()

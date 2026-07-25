@@ -10,6 +10,8 @@ sys.path 调用 nuitka，绕过 ``python3X._pth`` 对 ``PYTHONPATH`` 的限制�
 
 from __future__ import annotations
 
+import logging
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -191,11 +193,11 @@ def test_compile_src_invokes_bootstrap_script_with_sys_path_injection(
         bootstrap_scripts.add(bootstrap_script)
         # 所有调用复用同一 bootstrap 脚本
         assert bootstrap_script.endswith("_nuitka_bootstrap.py")
-        # nuitka 编译参数（--show-progress 显示编译步骤，不用 --quiet 抑制 INFO）
+        # nuitka 编译参数（--show-progress 在 4.x 已 obsolete，不加；不用 --quiet 抑制 INFO）
         assert "--module" in cmd
         assert "--no-pyi-file" in cmd
         assert "--remove-output" in cmd
-        assert "--show-progress" in cmd
+        assert "--show-progress" not in cmd
         assert "--quiet" not in cmd
     # 复用同一脚本文件
     assert len(bootstrap_scripts) == 1
@@ -793,3 +795,144 @@ def test_stamp_path_under_dist(tmp_path: Path) -> None:
     """stamp 文件位于 dist/.nuitka_compile_stamp."""
     dist = tmp_path / "dist"
     assert NuitkaCompiler._stamp_path(dist) == dist / ".nuitka_compile_stamp"
+
+
+# ---- _stream_compile 流式输出测试 ----
+
+
+def test_stream_compile_captures_stdout_and_stderr(capfd: pytest.CaptureFixture[str]) -> None:
+    """_stream_compile 捕获子进程 stdout/stderr 并实时写入终端 fd."""
+    cmd = [sys.executable, "-c", "import sys; print('out-msg'); sys.stderr.write('err-msg\\n')"]
+    returncode, stdout, stderr = NuitkaCompiler._stream_compile(cmd)
+    assert returncode == 0
+    assert "out-msg" in stdout
+    assert "err-msg" in stderr
+    # 验证输出被实时写入终端 fd（capfd 捕获 fd 级输出）
+    captured = capfd.readouterr()
+    assert "out-msg" in captured.out
+    assert "err-msg" in captured.err
+
+
+def test_stream_compile_captures_delayed_output(capfd: pytest.CaptureFixture[str]) -> None:
+    """_stream_compile 能捕获子进程延迟输出（模拟 nuitka 编译耗时的多段输出）."""
+    cmd = [
+        sys.executable,
+        "-c",
+        "import sys, time; print('step1'); time.sleep(0.3); print('step2'); sys.stderr.write('warn\\n')",
+    ]
+    returncode, stdout, stderr = NuitkaCompiler._stream_compile(cmd)
+    assert returncode == 0
+    assert "step1" in stdout
+    assert "step2" in stdout
+    assert "warn" in stderr
+    captured = capfd.readouterr()
+    assert "step1" in captured.out
+    assert "step2" in captured.out
+    assert "warn" in captured.err
+
+
+def test_stream_compile_returns_nonzero_on_failure(capfd: pytest.CaptureFixture[str]) -> None:
+    """子进程退出码非零时 _stream_compile 正确返回 returncode."""
+    cmd = [sys.executable, "-c", "import sys; sys.exit(3)"]
+    returncode, _stdout, _stderr = NuitkaCompiler._stream_compile(cmd)
+    assert returncode == 3
+
+
+def test_stream_compile_captures_multiline_output(capfd: pytest.CaptureFixture[str]) -> None:
+    """_stream_compile 能捕获多行输出（模拟 nuitka --show-progress 的多步骤输出）."""
+    script = (
+        "print('Nuitka:INFO:Started Python compilation'); "
+        "print('Nuitka:INFO:Completed Python level compilation'); "
+        "print('Nuitka:INFO:Generating C source code'); "
+        "print('Nuitka:INFO:Running C compilation')"
+    )
+    cmd = [sys.executable, "-c", script]
+    returncode, stdout, _stderr = NuitkaCompiler._stream_compile(cmd)
+    assert returncode == 0
+    assert "Started Python compilation" in stdout
+    assert "Completed Python level compilation" in stdout
+    assert "Generating C source code" in stdout
+    assert "Running C compilation" in stdout
+    captured = capfd.readouterr()
+    assert "Running C compilation" in captured.out
+
+
+# ---- 心跳线程测试 ----
+
+
+def test_compile_src_heartbeat_logs_progress(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """compile_src 在编译期间通过心跳线程输出进度日志.
+
+    nuitka 的 reExecute 机制导致子进程输出不可靠（Windows close_fds=True 不继承 PIPE），
+    心跳线程是唯一的进度反馈。mock _stream_compile 模拟耗时编译，验证心跳日志输出。
+    """
+    import time as _time
+
+    from fspack.progress import StageRecorder
+
+    # 缩短心跳间隔到 0.05 秒，避免测试等待 10 秒
+    monkeypatch.setattr("fspack.packaging.nuitka._HEARTBEAT_INTERVAL", 0.05)
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "__init__.py").write_text("", encoding="utf-8")
+    (src / "app.py").write_text("print('hello')", encoding="utf-8")
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "python.exe").write_text("", encoding="utf-8")
+    cache = tmp_path / "cache"
+    # 创建 nuitka 包假文件，让 _is_nuitka_cached 检查通过
+    (cache / "nuitka").mkdir(parents=True)
+    (cache / "nuitka" / "__init__.py").write_text("", encoding="utf-8")
+
+    # mock _stream_compile 模拟耗时 0.2 秒的编译（触发至少 1 次心跳）
+    def slow_stream(_cmd: list[str]) -> tuple[int, str, str]:
+        _time.sleep(0.2)
+        return (0, "", "")
+
+    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(slow_stream))
+
+    with caplog.at_level(logging.INFO, logger="fspack.packaging.nuitka"):
+        st = StageRecorder("Nuitka 编译")
+        NuitkaCompiler.compile_src(src, runtime, "3.10.11", Platform.WINDOWS, cache, stage=st)
+
+    # 验证心跳日志输出（至少 1 次 "Nuitka 编译中... 已耗时"）
+    heartbeat_logs = [r for r in caplog.records if "Nuitka 编译中" in r.message]
+    assert len(heartbeat_logs) >= 1, f"期望至少 1 次心跳日志，实际 {len(heartbeat_logs)} 次"
+    # 验证心跳消息格式
+    assert "已耗时" in heartbeat_logs[0].message
+
+
+def test_compile_src_heartbeat_stops_after_compile(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """编译完成后心跳线程立即停止，不输出多余日志."""
+    from fspack.progress import StageRecorder
+
+    # 心跳间隔设为较长值，确保编译期间不触发心跳
+    monkeypatch.setattr("fspack.packaging.nuitka._HEARTBEAT_INTERVAL", 10.0)
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "__init__.py").write_text("", encoding="utf-8")
+    (src / "app.py").write_text("print('hello')", encoding="utf-8")
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "python.exe").write_text("", encoding="utf-8")
+    cache = tmp_path / "cache"
+    # 创建 nuitka 包假文件，让 _is_nuitka_cached 检查通过
+    (cache / "nuitka").mkdir(parents=True)
+    (cache / "nuitka" / "__init__.py").write_text("", encoding="utf-8")
+
+    # mock _stream_compile 立即返回
+    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(lambda cmd: (0, "", "")))
+
+    # 验证不会因为心跳线程阻塞
+    st = StageRecorder("Nuitka 编译")
+    NuitkaCompiler.compile_src(src, runtime, "3.10.11", Platform.WINDOWS, cache, stage=st)
+    # 编译成功，无异常即通过
