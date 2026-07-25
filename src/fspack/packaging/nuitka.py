@@ -35,10 +35,12 @@ stamp 缓存（:meth:`NuitkaCompiler.compile_with_stamp`）：重复构建时若
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 from fspack.config import MirrorConfig, nuitka_version_for
@@ -94,6 +96,45 @@ class NuitkaCompiler:
             return runtime_dir / "python.exe"
         major, minor = py_version.split(".")[:2]
         return runtime_dir / "python" / "bin" / f"python{major}.{minor}"
+
+    @staticmethod
+    def _stream_compile(cmd: list[str]) -> tuple[int, str, str]:
+        """运行 nuitka 编译命令，实时流式输出 stdout/stderr 到终端.
+
+        用 ``Popen`` + 两个守护线程通过 ``os.read`` 读取 stdout/stderr 文件描述符
+        字节块并实时写入 ``sys.stdout``/``sys.stderr``，支持 nuitka 的 ``Nuitka:INFO``
+        步骤输出和 C 编译器调用过程实时显示，避免单文件编译数十秒无输出被误认为卡死。
+
+        同时累积 stdout/stderr 内容供失败时诊断（当前仅返回未使用，保留以备扩展）。
+
+        参考 :func:`fspack.packaging.wheels._stream_subprocess` 的实现模式，区别在于
+        nuitka 的 INFO 输出可能走 stdout 或 stderr，需同时流式两者。
+        """
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        stdout_chunks: list[bytes] = []
+        stderr_chunks: list[bytes] = []
+
+        def _drain(stream: object, chunks: list[bytes], out: object) -> None:
+            assert stream is not None
+            fd = stream.fileno()  # type: ignore[union-attr]
+            while True:
+                chunk = os.read(fd, 4096)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                out.buffer.write(chunk)  # type: ignore[union-attr]
+                out.buffer.flush()  # type: ignore[union-attr]
+
+        t_out = threading.Thread(target=_drain, args=(process.stdout, stdout_chunks, sys.stdout), daemon=True)
+        t_err = threading.Thread(target=_drain, args=(process.stderr, stderr_chunks, sys.stderr), daemon=True)
+        t_out.start()
+        t_err.start()
+        returncode = process.wait()
+        t_out.join()
+        t_err.join()
+        stdout = b"".join(stdout_chunks).decode("utf-8", errors="replace")
+        stderr = b"".join(stderr_chunks).decode("utf-8", errors="replace")
+        return returncode, stdout, stderr
 
     @staticmethod
     def _check_c_compiler(target: Platform) -> None:
@@ -367,7 +408,7 @@ class NuitkaCompiler:
         # --output-dir: 输出目录与源码同目录（保持包结构）
         # --no-pyi-file: 不生成 .pyi 类型存根（运行时不需要）
         # --remove-output: 编译后删除临时构建文件（.build/ 目录）
-        # --quiet: 静默模式，减少日志输出
+        # --show-progress: 显示编译步骤进度，避免数十秒无输出被误认为卡死
         compiled = 0
         failed = 0
         total = len(py_files)
@@ -375,10 +416,10 @@ class NuitkaCompiler:
             for idx, py_file in enumerate(py_files, 1):
                 # 显示当前编译进度，避免多文件编译时长时间无输出被误认为卡死
                 _logger.info("编译 [%d/%d] %s", idx, total, py_file.name)
-                # stdout/stderr=None: nuitka 编译过程（Nuitka:INFO 步骤 + C 编译/链接）
-                # 实时输出到终端，避免单文件编译数十秒无输出被误认为卡死。
-                # 不用 --quiet：--quiet 会抑制所有 INFO 输出只留警告/错误，用户看不到进度。
-                result = subprocess.run(
+                # 用 _stream_compile 流式输出 nuitka 编译过程（Nuitka:INFO 步骤 + C 编译/链接），
+                # Python 主动读取子进程 stdout/stderr 并实时写入终端，避免 fd 继承在
+                # nuitka reExecute 机制下不可靠的问题。
+                returncode, _stdout, _stderr = cls._stream_compile(
                     [
                         str(py_exe),
                         str(bootstrap_script),
@@ -386,16 +427,16 @@ class NuitkaCompiler:
                         f"--output-dir={py_file.parent}",
                         "--no-pyi-file",
                         "--remove-output",
+                        "--show-progress",
                         str(py_file),
-                    ],
-                    check=False,
+                    ]
                 )
-                if result.returncode == 0:
+                if returncode == 0:
                     compiled += 1
                     stage.processed()
                 else:
                     failed += 1
-                    _logger.warning("Nuitka 编译失败 %s（退出码 %s），详见上方输出", py_file, result.returncode)
+                    _logger.warning("Nuitka 编译失败 %s（退出码 %s），详见上方输出", py_file, returncode)
         finally:
             shutil.rmtree(bootstrap_dir, ignore_errors=True)
 

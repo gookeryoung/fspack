@@ -167,15 +167,15 @@ def test_compile_src_invokes_bootstrap_script_with_sys_path_injection(
     captured: list[list[str]] = []
     script_contents: list[str] = []
 
-    def fake_run(cmd: list[str], **kw: object) -> object:
+    def fake_stream(cmd: list[str]) -> tuple[int, str, str]:
         captured.append(cmd)
         # 在 finally 清理前捕获脚本内容
         script_path = Path(cmd[1])
         if script_path.is_file():
             script_contents.append(script_path.read_text(encoding="utf-8"))
-        return _CompileOK()
+        return (0, "", "")
 
-    monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", fake_run)
+    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(fake_stream))
 
     st = StageRecorder("Nuitka 编译")
     NuitkaCompiler.compile_src(src, runtime, "3.11.9", Platform.WINDOWS, cache, stage=st)
@@ -191,10 +191,11 @@ def test_compile_src_invokes_bootstrap_script_with_sys_path_injection(
         bootstrap_scripts.add(bootstrap_script)
         # 所有调用复用同一 bootstrap 脚本
         assert bootstrap_script.endswith("_nuitka_bootstrap.py")
-        # nuitka 编译参数（不用 --quiet，保留 INFO 输出让用户看到编译进度）
+        # nuitka 编译参数（--show-progress 显示编译步骤，不用 --quiet 抑制 INFO）
         assert "--module" in cmd
         assert "--no-pyi-file" in cmd
         assert "--remove-output" in cmd
+        assert "--show-progress" in cmd
         assert "--quiet" not in cmd
     # 复用同一脚本文件
     assert len(bootstrap_scripts) == 1
@@ -220,7 +221,7 @@ def test_compile_src_deletes_non_init_py(tmp_path: Path, monkeypatch: pytest.Mon
     (src / "sub" / "mod.py").write_text("x = 1")
     cache = _make_nuitka_cache(tmp_path / "cache")
 
-    monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", lambda cmd, **kw: _CompileOK())
+    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(lambda cmd: (0, "", "")))
 
     st = StageRecorder("Nuitka 编译")
     NuitkaCompiler.compile_src(src, runtime, "3.11.9", Platform.WINDOWS, cache, stage=st)
@@ -246,13 +247,13 @@ def test_compile_src_failure_warns_continues(
     (src / "bad.py").write_text("invalid syntax !!!")
     cache = _make_nuitka_cache(tmp_path / "cache")
 
-    def fake_run(cmd: list[str], **kw: Any) -> object:
+    def fake_stream(cmd: list[str]) -> tuple[int, str, str]:
         # cmd 最后一个元素是 py_file 路径
         if "bad.py" in cmd[-1]:
-            return _CompileFail()
-        return _CompileOK()
+            return (1, "", "syntax error")
+        return (0, "", "")
 
-    monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", fake_run)
+    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(fake_stream))
 
     st = StageRecorder("Nuitka 编译")
     with caplog.at_level("WARNING", logger="fspack.packaging.nuitka"):
@@ -277,8 +278,9 @@ def test_compile_src_linux_uses_python3_bin(tmp_path: Path, monkeypatch: pytest.
 
     captured: list[list[str]] = []
     monkeypatch.setattr(
-        "fspack.packaging.nuitka.subprocess.run",
-        lambda cmd, **kw: captured.append(cmd) or _CompileOK(),
+        NuitkaCompiler,
+        "_stream_compile",
+        staticmethod(lambda cmd: captured.append(cmd) or (0, "", "")),
     )
 
     st = StageRecorder("Nuitka 编译")
@@ -300,7 +302,7 @@ def test_compile_src_records_stage_metrics(tmp_path: Path, monkeypatch: pytest.M
     (src / "util.py").write_text("x = 1")
     cache = _make_nuitka_cache(tmp_path / "cache")
 
-    monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", lambda cmd, **kw: _CompileOK())
+    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(lambda cmd: (0, "", "")))
 
     st = StageRecorder("Nuitka 编译")
     NuitkaCompiler.compile_src(src, runtime, "3.11.9", Platform.WINDOWS, cache, stage=st)
@@ -323,7 +325,7 @@ def test_compile_src_unlink_failure_warns(
     (src / "app.py").write_text("print('hi')")
     cache = _make_nuitka_cache(tmp_path / "cache")
 
-    monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", lambda cmd, **kw: _CompileOK())
+    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(lambda cmd: (0, "", "")))
 
     # 让 Path.unlink 抛 OSError
     def fake_unlink(self: Path) -> None:
