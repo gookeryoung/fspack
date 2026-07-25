@@ -62,7 +62,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_build.add_argument(
         "--pyc-optimize",
         type=int,
-        default=0,
+        default=2,
         choices=[0, 1, 2],
         help=(
             "字节码优化级别：0=保留 docstring/assert（默认），1=剥离 assert，"

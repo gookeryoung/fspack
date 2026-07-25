@@ -130,7 +130,8 @@ def test_build_pyc_options_default_false(tmp_path: Path, monkeypatch: pytest.Mon
     assert opts.no_pyc is False
     assert opts.pyc_strip is False
     assert opts.no_stdlib_trim is False
-    assert opts.pyc_optimize == 0
+    # --pyc-optimize 默认 2（与 cli.py argparse default 一致，iter-35 决策）
+    assert opts.pyc_optimize == 2
     assert opts.no_site is False
     assert opts.nuitka is False
 
