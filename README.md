@@ -93,7 +93,7 @@ fsp b [project] [--mirror <name>] [--py-version <ver>] [--target <platform>]
 - `--pyc-strip`：剥离非 `__init__.py` 的 .py 源码（仅保留 .pyc，需配合预编译；保留包标识避免命名空间包问题）
 - `--pyc-optimize`：字节码优化级别：0=保留 docstring/assert，1=剥离 assert，2=剥离 assert+docstring（-OO，体积减 5-15%，启动提速 5-10%，默认 2）
 - `--no-site`：禁用 site.py 加载（`_pth` 省略 `import site` 行，节省 ~20-30ms 启动时间）
-- `--nuitka`：启用 Nuitka 编译模式，用户源码编译为 .pyd 本机执行（速度提升 30-50%）。Nuitka 自动装到本地缓存 `~/.fspack/cache/nuitka/`，不污染 dist/runtime；交叉构建自动跳过；默认关闭
+- `--nuitka`：启用 Nuitka 编译模式，用户源码编译为 .pyd 本机执行（速度提升 30-50%）。Nuitka 自动装到本地缓存 `~/.fspack/cache/nuitka/`，不污染 dist/runtime；Windows 编译环境用 python-build-standalone 完整发行版（缓存到 `~/.fspack/cache/python/`），避免 embed python 触发 Nuitka reExecute fork bomb；入口文件保留 .py 不编译（入口包装器 `runpy.run_path()` 需要）；交叉构建自动跳过；默认关闭
 
 ### fsp run
 
@@ -142,7 +142,7 @@ fsp p [project] [--mirror <name>] [--py-version <ver>] [--target <plat>] [--no-b
 7. **复制源码**：项目源码复制到 `dist/src/`，排除 dist/build/.venv 等构建产物；按 mtime 跳过未改动文件
 8. **标准库精简**（默认，仅 Linux）：剥离 standalone 的 test/ensurepip/idlelib 等无用模块；`--no-stdlib-trim` 可关闭
 9. **字节码预编译**（默认）：`compileall` 预编译 src+site-packages 为 .pyc 加速首次启动；stamp 缓存命中跳过；`--pyc-optimize` 控制 -O/-OO 级别；`--pyc-strip` 进一步剥离 .py 仅留 .pyc
-10. **Nuitka 编译**（可选，`--nuitka`）：用户源码编译为 .pyd 本机执行；按 Python 版本锁定 Nuitka 版本（3.8/3.9→2.5.1，3.10+→4.1.3），自动装到 `~/.fspack/cache/nuitka/`；stamp 缓存键 = `nuitka_version|py_version|src_fingerprint`，命中跳过整个阶段；交叉构建自动跳过
+10. **Nuitka 编译**（可选，`--nuitka`）：用户源码编译为 .pyd 本机执行；按 Python 版本锁定 Nuitka 版本（3.8/3.9→2.5.1，3.10+→4.1.3），自动装到 `~/.fspack/cache/nuitka/`；Windows 用缓存于 `~/.fspack/cache/python/` 的 standalone python 运行编译（embed python 不完整会触发 reExecute fork bomb）；入口文件保留 .py 不编译（`runpy.run_path()` 兼容）；stamp 缓存键 = `nuitka_version|py_version|src_fingerprint|entry_rels`，命中跳过整个阶段；交叉构建自动跳过
 11. **Win7 兼容 DLL 注入**（Windows，Python 3.9+）：注入 api-ms-win-core-path 替代 DLL，支持在 Win7/Win2008R2 运行
 12. **生成 C loader**：按平台模板生成 C 源码（烧入入口脚本相对路径），mingw（Windows）或 gcc（Linux）编译为可执行文件
 

@@ -1,6 +1,19 @@
 更新日志
 =========
 
+v0.2.7（未发布）
+----------------
+
+- feat: 新增 ``--nuitka`` 编译模式，用户源码编译为 .pyd 本机执行（速度提升 30-50%）；按 Python 版本锁定 Nuitka 版本（3.8/3.9→2.5.1，3.10+→4.1.3），自动装到本地缓存 ``~/.fspack/cache/nuitka/`` 不污染 dist/runtime；Windows 用缓存的 standalone python 运行编译，避免 embed python 触发 reExecute fork bomb；入口文件保留 .py 兼容 ``runpy.run_path()``；stamp 缓存命中跳过整个阶段；缺 pip 时 ensurepip/uv 两轮自救
+- feat: 新增 ``--pyc-optimize`` 字节码优化级别与 ``--no-site`` 禁用 site.py 加载选项
+- feat: QtWebEngine 资源按需保留（.debug.pak 无条件剥离，icudtl.dat/QtWebEngineProcess 按 WebEngine 使用情况保留）
+- feat: 打包阶段（生成 NSIS 脚本/编译安装包）纳入 BuildTracker 汇总表统计
+- feat(pyside2-qml-dashboard): 新增 WSL 管理仪表盘 QML 示例项目
+- fix(slim): 补全 Qt QML/Quick 模块依赖映射，修复 QML 项目运行时 DLL 缺失
+- fix: Nuitka 编译用心跳线程与流式输出显示进度，避免长时间无输出被误认为卡死；``--jobs=1`` 限制 C 编译并行度
+- refactor: 封装 BuildOptions 聚合 build 开关参数，移除 commands/ 目录薄包装层
+- refactor: 重构依赖检测与版本选择逻辑，修复镜像与命名问题
+
 v0.2.6
 ------
 

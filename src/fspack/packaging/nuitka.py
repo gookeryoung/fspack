@@ -12,13 +12,15 @@ Nuitka 环境就绪流程（:meth:`NuitkaCompiler.ensure_env`）：
 
 1. 检查 C 编译器（Windows: ``mingw_available()``，Linux: ``gcc_available()``），
    缺失直接 raise :class:`NuitkaError`（不静默跳过）
-2. 检查 runtime python 是否已安装目标版本 nuitka（``import nuitka`` 成功）
-3. 未安装则用构建机 ``pip install --target`` 从 sdist 构建并解压到 runtime site-packages
+2. 检查本地缓存 ``~/.fspack/cache/nuitka/<py_version>/site-packages`` 是否已装
+   目标版本 nuitka（文件系统检查 ``nuitka/__init__.py``，无 subprocess 开销）
+3. 未安装则用构建机 ``pip install --target`` 从 sdist 构建并解压到本地缓存，
+   不污染 ``dist/runtime`` 发行产物
 
 nuitka 4.x 在 PyPI 只发布 sdist（无预构建 wheel），且 sdist 构建出的 wheel 标签
 与构建机 python ABI 绑定（如 ``cp313-cp313-win_amd64``），但实际内容是纯 Python
 （无 ``.pyd``），跨 Python 版本可 ``import``。fspack 用构建机 python 执行
-``pip install --target <runtime_site_packages>`` 让 pip 自动完成 sdist 下载、构建、
+``pip install --target <cache_site_packages>`` 让 pip 自动完成 sdist 下载、构建、
 解压，绕过 :func:`download_wheels` 的 ``--only-binary=:all:`` 限制。
 
 Nuitka 版本按目标 Python 版本锁定（:func:`nuitka_version_for`）：
@@ -38,9 +40,10 @@ Nuitka 官方建议"用目标 Python 解释器运行 nuitka"。fspack 的 ``dist
 （CPython 按 major.minor 兼容）。编译出的 ``.pyd`` 可在 embed runtime 上运行。
 
 stamp 缓存（:meth:`NuitkaCompiler.compile_with_stamp`）：重复构建时若
-``dist/.nuitka_compile_stamp``（含 ``nuitka_version|py_version|src_fingerprint``）
+``dist/.nuitka_compile_stamp``（含 ``nuitka_version|py_version|src_fingerprint|entry_rels``）
 匹配则跳过整个 Nuitka 阶段（含 ensure_env 与 compile_src），避免重复 subprocess
-启动开销与编译耗时。
+启动开销与编译耗时。入口文件（``entry_rels``）不编译不删除，保留 ``.py`` 供
+入口包装器 ``runpy.run_path()`` 调用。
 """
 
 from __future__ import annotations
