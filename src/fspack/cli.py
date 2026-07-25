@@ -69,7 +69,7 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[0, 1, 2],
         help=(
             "字节码优化级别：0=保留 docstring/assert（默认），1=剥离 assert，"
-            "2=剥离 assert+docstring（-OO，体积减 5-15%，启动提速 5-10%）"
+            "2=剥离 assert+docstring（-OO，体积减 5-15%%，启动提速 5-10%%）"
         ),
     )
     p_build.add_argument(
@@ -81,8 +81,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--nuitka",
         action="store_true",
         help=(
-            "启用 Nuitka 编译模式：用户源码编译为 .pyd 本机执行（速度提升 30-50%）。"
-            "需提前 pip install nuitka；交叉构建自动跳过；默认关闭"
+            "启用 Nuitka 编译模式：用户源码编译为 .pyd 本机执行（速度提升 30-50%%）。"
+            "Nuitka 自动装到本地缓存 ~/.fspack/cache/nuitka/，不污染 dist/runtime；交叉构建自动跳过；默认关闭"
         ),
     )
 
