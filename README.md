@@ -16,10 +16,15 @@ fspack 将 Python 项目打包为可执行文件与跨平台安装包：用 embe
 - **零依赖入侵**：不需修改用户源码，自动分析 import 推断第三方依赖
 - **embed python 运行时**：Windows 用官方 embed python zip，Linux 用 indygreg python-build-standalone
 - **C loader 启动器**：动态加载 libpython，烧入入口路径，mingw/gcc 编译为原生可执行文件
-- **跨平台安装包**：`fsp p` 按目标平台生成 Windows NSIS 安装包（含开始菜单/桌面快捷方式、卸载器、中英文双语）或 Linux .deb + tar.gz 便携包
+- **跨平台安装包**：`fsp p` 按目标平台生成 Windows NSIS 安装包（含开始菜单/桌面快捷方式、卸载器、中英文双语）或 Linux .deb + tar.gz 便携包，`--format` 可指定 zip 跨平台便携包
 - **双平台支持**：Windows（embed + mingw 交叉编译）、Linux（python-build-standalone + gcc）
 - **多入口打包**：`[tool.fspack.entries]` 声明多个入口，单个项目生成多个 exe 共享 runtime/依赖/源码，支持 cli/gui/web 混合类型
-- **国内镜像**：默认阿里云 PyPI 与 embed python 镜像，`--mirror` 切换
+- **字节码预编译**：默认将 src 与 site-packages 预编译为 .pyc 加速首次启动；`--pyc-strip` 剥离 .py 仅留 .pyc，`--pyc-optimize` 控制 -O/-OO 优化级别
+- **Nuitka 本机编译**：`--nuitka` 将用户源码编译为 .pyd 本机执行（速度提升 30-50%），自动按 Python 版本锁定 Nuitka 版本并装到本地缓存 `~/.fspack/cache/nuitka/`，stamp 缓存命中跳过整个阶段
+- **标准库精简**：默认剥离 Linux standalone 的 test/ensurepip/idlelib 等无用模块；`--no-stdlib-trim` 可关闭
+- **增量构建缓存**：源码指纹 + 预编译 stamp + Nuitka stamp 三层缓存，未改动文件跳过复制与重编
+- **Win7 兼容**：Python 3.9+ 注入 api-ms-win-core-path 替代 DLL，支持在 Win7/Win2008R2 运行
+- **国内镜像**：默认清华源 PyPI 与 embed python 镜像，`--mirror` 切换（aliyun/huawei/tsinghua）
 - **彩色进度显示**：rich 驱动的步骤进度（> 准备运行时 / √ 构建完成），错误/警告/一般消息颜色区分，`-v` 开启 DEBUG 日志
 
 ## 安装
@@ -73,12 +78,22 @@ fsp b /path/to/project --mirror aliyun --py-version 3.11.9 --target windows
 
 ```text
 fsp b [project] [--mirror <name>] [--py-version <ver>] [--target <platform>]
+              [--keep-module <mod>] [--icon <path>] [--no-stdlib-trim]
+              [--no-pyc] [--pyc-strip] [--pyc-optimize <0|1|2>] [--no-site] [--nuitka]
 ```
 
 - `project`：项目目录，默认当前目录
-- `--mirror`：镜像源（aliyun/huawei/tsinghua），默认 aliyun
+- `--mirror`：镜像源（aliyun/huawei/tsinghua），默认 tsinghua
 - `--py-version`：embed python 版本，默认 3.11.9（Windows）/ 3.11.10（Linux，匹配 python-build-standalone release）
 - `--target`：目标平台（windows/linux），默认当前平台
+- `--keep-module`：显式保留子模块（如 `PySide2.QtGui`），可重复指定
+- `--icon`：exe 图标文件路径（.ico/.png/.jpg 等），覆盖 `[tool.fspack] icon`；未指定时按 `[tool.fspack] icon` > 自动搜索 favicon.* > 默认 app.ico 解析
+- `--no-stdlib-trim`：关闭标准库精简（默认剥离 Linux standalone 的 test/ensurepip/idlelib 等无用模块）
+- `--no-pyc`：关闭字节码预编译（默认预编译 src+site-packages 为 .pyc 加速首次启动）
+- `--pyc-strip`：剥离非 `__init__.py` 的 .py 源码（仅保留 .pyc，需配合预编译；保留包标识避免命名空间包问题）
+- `--pyc-optimize`：字节码优化级别：0=保留 docstring/assert，1=剥离 assert，2=剥离 assert+docstring（-OO，体积减 5-15%，启动提速 5-10%，默认 2）
+- `--no-site`：禁用 site.py 加载（`_pth` 省略 `import site` 行，节省 ~20-30ms 启动时间）
+- `--nuitka`：启用 Nuitka 编译模式，用户源码编译为 .pyd 本机执行（速度提升 30-50%）。Nuitka 自动装到本地缓存 `~/.fspack/cache/nuitka/`，不污染 dist/runtime；交叉构建自动跳过；默认关闭
 
 ### fsp run
 
@@ -100,13 +115,19 @@ fsp c [project]
 ### fsp package
 
 ```text
-fsp p [project] [--mirror <name>] [--py-version <ver>] [--target <plat>] [--no-build]
+fsp p [project] [--mirror <name>] [--py-version <ver>] [--target <plat>] [--no-build] [--format <fmt>]
 ```
 
 - `--target`：目标平台（windows/linux），默认当前平台
 - `--no-build`：跳过重建，直接打包已有 dist（需先 `fsp b`）
+- `--format`：发行包格式（auto/zip/nsis/tar.gz/deb/all，默认 auto）
+  - `auto`：平台默认（Windows=nsis，Linux=tar.gz+deb）
+  - `zip`：跨平台便携包
+  - `nsis`：Windows 安装包
+  - `tar.gz`/`deb`：Linux 便携包/安装包
+  - `all`：当前平台全部格式
 
-按目标平台分发：Windows 走 NSIS 生成 `dist/release/<name>-setup.exe`；Linux 走 dpkg-deb 生成 `dist/release/<name>_<ver>_amd64.deb` 与 `dist/release/<name>-<ver>-linux.tar.gz` 便携包。
+按目标平台分发：Windows 走 NSIS 生成 `dist/release/<name>-setup.exe`；Linux 走 dpkg-deb 生成 `dist/release/<name>_<ver>_amd64.deb` 与 `dist/release/<name>-<ver>-linux.tar.gz` 便携包；`zip` 格式生成 `dist/release/<name>-<ver>-<plat>.zip` 跨平台便携包。
 
 ## 工作原理
 
@@ -114,12 +135,16 @@ fsp p [project] [--mirror <name>] [--py-version <ver>] [--target <plat>] [--no-b
 
 1. **解析** `pyproject.toml`，识别项目名、版本、入口模块、CLI/GUI 类型
 2. **下载运行时**：Windows 下载 embed python zip 并解压到 `dist/runtime/`；Linux 下载 python-build-standalone tar.gz 并解压到 `dist/runtime/python/`
-3. **分析依赖**：AST 扫描源码 import，分类标准库/本地/第三方，与 `pyproject.toml` 声明依赖比对
+3. **分析依赖**：AST 扫描源码 import，分类标准库/本地/第三方，与 `pyproject.toml` 声明依赖比对；结果按源码指纹缓存，未改动跳过
 4. **补充内置库**（仅 Windows）：AST 检出 `tkinter` 使用时，从 python-build-standalone Windows 构建提取 tkinter 组件（纯 Python 包 + `_tkinter.pyd` + Tcl/Tk 运行时脚本）补充到 runtime，按版本缓存 zip 避免重复下载
 5. **下载 wheel**：用 dev python 的 `pip download` 拉取目标平台 wheel，解包到 `dist/runtime/Lib/site-packages/`（Windows）或 `dist/runtime/python/lib/python3.X/site-packages/`（Linux）
-6. **写 _pth**（仅 Windows）：覆盖 `runtime/python3X._pth`，注册 site-packages 与 `..\src` 路径
-7. **复制源码**：项目源码复制到 `dist/src/`，排除 dist/build/.venv 等构建产物
-8. **生成 C loader**：按平台模板生成 C 源码（烧入入口脚本相对路径），mingw（Windows）或 gcc（Linux）编译为可执行文件
+6. **写 _pth**（仅 Windows）：覆盖 `runtime/python3X._pth`，注册 site-packages 与 `..\src` 路径；`--no-site` 时省略 `import site` 行节省启动时间
+7. **复制源码**：项目源码复制到 `dist/src/`，排除 dist/build/.venv 等构建产物；按 mtime 跳过未改动文件
+8. **标准库精简**（默认，仅 Linux）：剥离 standalone 的 test/ensurepip/idlelib 等无用模块；`--no-stdlib-trim` 可关闭
+9. **字节码预编译**（默认）：`compileall` 预编译 src+site-packages 为 .pyc 加速首次启动；stamp 缓存命中跳过；`--pyc-optimize` 控制 -O/-OO 级别；`--pyc-strip` 进一步剥离 .py 仅留 .pyc
+10. **Nuitka 编译**（可选，`--nuitka`）：用户源码编译为 .pyd 本机执行；按 Python 版本锁定 Nuitka 版本（3.8/3.9→2.5.1，3.10+→4.1.3），自动装到 `~/.fspack/cache/nuitka/`；stamp 缓存键 = `nuitka_version|py_version|src_fingerprint`，命中跳过整个阶段；交叉构建自动跳过
+11. **Win7 兼容 DLL 注入**（Windows，Python 3.9+）：注入 api-ms-win-core-path 替代 DLL，支持在 Win7/Win2008R2 运行
+12. **生成 C loader**：按平台模板生成 C 源码（烧入入口脚本相对路径），mingw（Windows）或 gcc（Linux）编译为可执行文件
 
 dist 布局：
 
@@ -129,8 +154,8 @@ dist/
 ├── runtime/            # Python 运行时
 │   ├── python311.dll   # Windows embed
 │   ├── python311._pth
-│   └── Lib/site-packages/   # 第三方依赖
-├── src/                # 用户源码
+│   └── Lib/site-packages/   # 第三方依赖（.pyc 预编译）
+├── src/                # 用户源码（--nuitka 时编译为 .pyd）
 └── release/            # 安装包（fsp p 产出）
     ├── <name>-setup.exe           # Windows NSIS
     ├── <name>_<ver>_amd64.deb     # Linux .deb
@@ -181,7 +206,13 @@ fsp r --entry web     # 运行 web 入口
 | pyqt5_cli | 有库 GUI | PyQt5 依赖，验证 Python 3.12 兼容 |
 | tk_app | 有库 GUI | tkinter 内置库打包，验证 TkinterBundler 从 standalone 提取补充到 embed python |
 | pygame_cli | 有库 pygame | pygame 依赖，验证多媒体库打包 |
+| pygame_conway | 有库 pygame | pygame 生命游戏，验证多文件结构与 slow 端到端测试 |
+| pygame_gktetris | 有库 pygame | pygame 俄罗斯方块，验证 entities 包结构打包 |
 | pygame_snake | 有库 pygame | pygame 贪吃蛇，验证 dummy 驱动运行 |
+| pyside2_qml_dashboard | 有库 GUI | PySide2+QML 仪表盘示例，验证 QML 资源与多视图打包 |
+| sci_numpy | 科学计算 | numpy 依赖，验证数值计算库打包 |
+| sci_scipy | 科学计算 | scipy 依赖，验证大型科学计算库精简规则 |
+| sci_matplotlib | 科学计算 | matplotlib 依赖，验证绘图库 C 扩展打包 |
 | web_app | 有库 web | flask 依赖，验证 web 框架打包 |
 | multi_entry | 多入口混合 | cli+gui+web 三入口共享 runtime/依赖，验证 `[tool.fspack.entries]` 多入口打包 |
 
