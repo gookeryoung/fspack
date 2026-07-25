@@ -191,11 +191,11 @@ def test_compile_src_invokes_bootstrap_script_with_sys_path_injection(
         bootstrap_scripts.add(bootstrap_script)
         # 所有调用复用同一 bootstrap 脚本
         assert bootstrap_script.endswith("_nuitka_bootstrap.py")
-        # nuitka 编译参数
+        # nuitka 编译参数（不用 --quiet，保留 INFO 输出让用户看到编译进度）
         assert "--module" in cmd
         assert "--no-pyi-file" in cmd
         assert "--remove-output" in cmd
-        assert "--quiet" in cmd
+        assert "--quiet" not in cmd
     # 复用同一脚本文件
     assert len(bootstrap_scripts) == 1
     # 脚本内容含 sys.path 注入与 nuitka main 调用

@@ -375,8 +375,9 @@ class NuitkaCompiler:
             for idx, py_file in enumerate(py_files, 1):
                 # 显示当前编译进度，避免多文件编译时长时间无输出被误认为卡死
                 _logger.info("编译 [%d/%d] %s", idx, total, py_file.name)
-                # stderr=None: nuitka 编译过程（C 编译/链接进度）实时输出到终端，
-                # 避免单文件编译数十秒无输出被误认为卡死。stdout 捕获但 --quiet 模式下通常为空。
+                # stdout/stderr=None: nuitka 编译过程（Nuitka:INFO 步骤 + C 编译/链接）
+                # 实时输出到终端，避免单文件编译数十秒无输出被误认为卡死。
+                # 不用 --quiet：--quiet 会抑制所有 INFO 输出只留警告/错误，用户看不到进度。
                 result = subprocess.run(
                     [
                         str(py_exe),
@@ -385,13 +386,9 @@ class NuitkaCompiler:
                         f"--output-dir={py_file.parent}",
                         "--no-pyi-file",
                         "--remove-output",
-                        "--quiet",
                         str(py_file),
                     ],
                     check=False,
-                    text=True,
-                    stdout=subprocess.PIPE,
-                    stderr=None,
                 )
                 if result.returncode == 0:
                     compiled += 1
