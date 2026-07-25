@@ -16,6 +16,7 @@ from fspack.config import (
     DEFAULT_LINUX_PY_VERSION,
     DEFAULT_PY_VERSION,
     BuildConfig,
+    BuildOptions,
     DependencyReport,
     MirrorConfig,
     ProjectInfo,
@@ -357,34 +358,27 @@ def build(  # noqa: PLR0912, PLR0913
     dist_dir: Path | None = None,
     embed_cache: Path | None = None,
     target: Platform | None = None,
-    keep_modules: set[str] | None = None,
-    icon: Path | None = None,
-    no_stdlib_trim: bool = False,
-    no_pyc: bool = False,
-    pyc_strip: bool = False,
-    pyc_optimize: int = 0,
-    no_site: bool = False,
-    nuitka: bool = False,
+    options: BuildOptions | None = None,
 ) -> ProjectInfo:
     """执行完整构建流水线，返回项目信息。
 
-    icon 优先级：CLI ``--icon`` > 项目 ``[tool.fspack] icon`` > 自动搜索
+    构建行为开关（``keep_modules``/``icon``/``no_stdlib_trim``/``no_pyc``/
+    ``pyc_strip``/``pyc_optimize``/``no_site``/``nuitka``）封装在 ``options``
+    中，详见 :class:`fspack.config.BuildOptions`。``options=None`` 等价于
+    全部开关取默认值（启用精简与预编译，关闭 Nuitka）。
+
+    icon 优先级：``options.icon`` > 项目 ``[tool.fspack] icon`` > 自动搜索
     ``favicon.*`` > 默认 ``assets/icons/app.ico``。非 ``.ico`` 格式（如
     ``.png``/``.jpg``）通过 Pillow 转换为 ``.ico``（需安装 ``fspack[image]``），
     转换失败回退到默认 icon。仅 Windows 目标生效，Linux 忽略（ELF 无图标资源概念）。
 
-    ``pyc_optimize`` 控制 ``compileall -o`` 级别（0/1/2），见 :func:`_precompile_pyc`。
-
-    ``no_site=True`` 时 ``python3X._pth`` 省略 ``import site`` 行，启动跳过
-    ``site.py`` 执行，节省 ~20-30ms。wrapper 已显式 ``sys.path.insert``
-    site-packages，不影响第三方依赖发现。
-
-    ``nuitka=True`` 时启用 Nuitka 编译模式：用 ``python -m nuitka --module``
+    ``options.nuitka=True`` 时启用 Nuitka 编译模式：用 ``python -m nuitka --module``
     将 ``dist/src`` 下用户源码编译为 ``.pyd``，运行时本机执行，速度提升 30-50%。
     默认关闭。Nuitka 模式下 ``pyc_optimize`` 与 ``pyc_strip`` 仍生效于
     site-packages（第三方依赖保持 .pyc），用户源码以 .pyd 替代 .pyc。
     交叉构建时（构建机平台 ≠ 目标平台）Nuitka 跳过（无法生成目标平台 .pyd）。
     """
+    opts = options or BuildOptions()
     tracker = BuildTracker()
     project_dir = Path(project_dir).resolve()
     target = target or detect_platform()
@@ -452,7 +446,7 @@ def build(  # noqa: PLR0912, PLR0913
 
     # 标准库精简：剥离 Linux standalone 中 test/ensurepip/idlelib 等运行时无用模块。
     # Windows embed 标准库在 python3XX.zip 内（官方已精简），阶段内自动跳过。
-    if not no_stdlib_trim:
+    if not opts.no_stdlib_trim:
         with tracker.stage("精简标准库") as st:
             _trim_stdlib(runtime_dir, info.py_version, target, st)
 
@@ -510,7 +504,7 @@ def build(  # noqa: PLR0912, PLR0913
                     stage=st,
                 )
             with tracker.stage("解压 wheel(精简)") as st:
-                unpack_wheels(wheels, site_packages, report.ast_submodules, keep_modules, stage=st)
+                unpack_wheels(wheels, site_packages, report.ast_submodules, opts.keep_modules, stage=st)
     else:
         _logger.info("无第三方依赖，跳过 wheel 下载")
 
@@ -518,7 +512,7 @@ def build(  # noqa: PLR0912, PLR0913
         # tkinter 补充到 runtime/Lib/tkinter/，需将 Lib 加入 _pth 使其可被 import
         # （_pth 默认只含 Lib\site-packages，不含 Lib 本身）
         extra_pth_paths = ("Lib",) if has_tkinter else ()
-        write_pth(cfg.dist_dir, info.py_version, extra_paths=extra_pth_paths, enable_site=not no_site)
+        write_pth(cfg.dist_dir, info.py_version, extra_paths=extra_pth_paths, enable_site=not opts.no_site)
 
     with tracker.stage("复制源码") as st:
         src_dst = cfg.dist_dir / "src"
@@ -529,7 +523,7 @@ def build(  # noqa: PLR0912, PLR0913
     # 用户源码以 .pyd 形式本机执行，速度提升 30-50%（参考 RimSort Nuitka 打包方案）。
     # 仅编译用户源码（src/），第三方依赖（site-packages/）保持 wheel 解压 + .pyc。
     # 交叉构建跳过（Nuitka 无法生成目标平台 .pyd）。
-    if nuitka and target is detect_platform():
+    if opts.nuitka and target is detect_platform():
         with tracker.stage("Nuitka 编译") as st:
             from fspack.packaging.nuitka import NuitkaCompiler
 
@@ -541,22 +535,22 @@ def build(  # noqa: PLR0912, PLR0913
     # 交叉构建时（构建机平台 ≠ 目标平台）runtime python 无法执行，跳过预编译。
     # Nuitka 模式下 src 已编译为 .pyd，compileall 会跳过（找不到 .py 不生成 .pyc），
     # site-packages 仍按 pyc_optimize 编译，故本步保留不跳过。
-    if not no_pyc and target is detect_platform():
+    if not opts.no_pyc and target is detect_platform():
         with tracker.stage("预编译字节码") as st:
             _precompile_pyc(
                 cfg.dist_dir,
                 runtime_dir,
                 info.py_version,
                 target,
-                strip_py=pyc_strip,
+                strip_py=opts.pyc_strip,
                 stage=st,
-                optimize=pyc_optimize,
+                optimize=opts.pyc_optimize,
             )
 
     # icon 优先级：CLI --icon > 项目 [tool.fspack] icon > 自动搜索 favicon.* > 默认 app.ico（仅 Windows）
     # Linux 目标无图标资源概念，统一传 None
     with tracker.stage("解析图标") as st:
-        resolved_icon = _resolve_project_icon(icon, info.icon, project_dir, cfg.dist_dir / "build", target)
+        resolved_icon = _resolve_project_icon(opts.icon, info.icon, project_dir, cfg.dist_dir / "build", target)
         if resolved_icon is not None:
             st.set_detail(str(resolved_icon.name))
 

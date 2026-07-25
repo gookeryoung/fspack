@@ -99,7 +99,7 @@ def test_build_and_run_guicalc(tmp_path: Path) -> None:
     缺 ICU 时仅验证构建（下载/解包/_pth/exe），跳过运行断言。
     """
     from fspack.builder import build
-    from fspack.config import get_mirror
+    from fspack.config import BuildOptions, get_mirror
     from fspack.packaging.loader import mingw_available
     from fspack.platform import Platform
 
@@ -111,7 +111,11 @@ def test_build_and_run_guicalc(tmp_path: Path) -> None:
     proj = tmp_path / "gui_calc"
     shutil.copytree(_EXAMPLES / "gui_calc", proj)
     build(
-        proj, get_mirror("aliyun"), "3.11.9", target=Platform.WINDOWS, keep_modules={"PySide6.QtCore", "PySide6.QtGui"}
+        proj,
+        get_mirror("aliyun"),
+        "3.11.9",
+        target=Platform.WINDOWS,
+        options=BuildOptions(keep_modules={"PySide6.QtCore", "PySide6.QtGui"}),
     )
 
     exe = proj / "dist" / "gui_calc.exe"
@@ -162,7 +166,7 @@ def test_build_and_run_pyside2app(tmp_path: Path) -> None:
     PySide2 的 Qt DLL 在 wine 上可能缺系统 DLL，缺时跳过运行断言。
     """
     from fspack.builder import build
-    from fspack.config import get_mirror
+    from fspack.config import BuildOptions, get_mirror
     from fspack.packaging.loader import mingw_available
     from fspack.platform import Platform
 
@@ -173,7 +177,9 @@ def test_build_and_run_pyside2app(tmp_path: Path) -> None:
 
     proj = tmp_path / "pyside2_app"
     shutil.copytree(_EXAMPLES / "pyside2_app", proj)
-    build(proj, get_mirror("aliyun"), None, target=Platform.WINDOWS, keep_modules={"PySide2.QtGui"})
+    build(
+        proj, get_mirror("aliyun"), None, target=Platform.WINDOWS, options=BuildOptions(keep_modules={"PySide2.QtGui"})
+    )
 
     exe = proj / "dist" / "pyside2_app.exe"
     assert exe.is_file(), f"未生成 exe: {exe}"
@@ -196,7 +202,7 @@ def test_build_and_run_pyqt5_cli(tmp_path: Path) -> None:
     PyQt5 的 Qt DLL 在 wine 上可能缺系统 DLL，缺时跳过运行断言。
     """
     from fspack.builder import build
-    from fspack.config import get_mirror
+    from fspack.config import BuildOptions, get_mirror
     from fspack.packaging.loader import mingw_available
     from fspack.platform import Platform
 
@@ -207,7 +213,13 @@ def test_build_and_run_pyqt5_cli(tmp_path: Path) -> None:
 
     proj = tmp_path / "pyqt5_cli"
     shutil.copytree(_EXAMPLES / "pyqt5_cli", proj)
-    build(proj, get_mirror("aliyun"), "3.12.0", target=Platform.WINDOWS, keep_modules={"PyQt5.QtCore", "PyQt5.QtGui"})
+    build(
+        proj,
+        get_mirror("aliyun"),
+        "3.12.0",
+        target=Platform.WINDOWS,
+        options=BuildOptions(keep_modules={"PyQt5.QtCore", "PyQt5.QtGui"}),
+    )
 
     exe = proj / "dist" / "pyqt5_cli.exe"
     assert exe.is_file(), f"未生成 exe: {exe}"
@@ -251,7 +263,7 @@ def test_build_and_run_multi_entry(tmp_path: Path) -> None:
     GUI 入口（PySide2）在 wine 上可能缺系统 DLL，缺时 skip GUI 运行断言。
     """
     from fspack.builder import build
-    from fspack.config import get_mirror
+    from fspack.config import BuildOptions, get_mirror
     from fspack.packaging.loader import mingw_available
     from fspack.platform import Platform
 
@@ -262,7 +274,9 @@ def test_build_and_run_multi_entry(tmp_path: Path) -> None:
 
     proj = tmp_path / "multi_entry"
     shutil.copytree(_EXAMPLES / "multi_entry", proj)
-    build(proj, get_mirror("aliyun"), None, target=Platform.WINDOWS, keep_modules={"PySide2.QtGui"})
+    build(
+        proj, get_mirror("aliyun"), None, target=Platform.WINDOWS, options=BuildOptions(keep_modules={"PySide2.QtGui"})
+    )
 
     # 三个入口 exe 均应生成
     for ep_name in ("cli", "gui", "web"):

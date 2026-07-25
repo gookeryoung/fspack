@@ -220,6 +220,35 @@ class BuildConfig:
     target: Platform = Platform.WINDOWS
 
 
+@dataclass(frozen=True)
+class BuildOptions:
+    """构建行为开关（不影响产物路径与运行时环境）。
+
+    与 :class:`BuildConfig` 区别：``BuildConfig`` 封装路径与镜像配置（必需），
+    ``BuildOptions`` 封装构建行为开关（可选，默认值对应原 ``build()`` 行为）。
+    将原 ``build()`` 的 8 个开关参数聚合为一个 dataclass，便于扩展与透传。
+
+    字段：
+    - ``keep_modules``：显式保留的子模块集合（如 ``{"PySide2.QtGui"}``）
+    - ``icon``：exe 图标路径，覆盖项目配置与自动搜索
+    - ``no_stdlib_trim``：关闭标准库精简（默认剥离 Linux standalone 无用模块）
+    - ``no_pyc``：关闭字节码预编译
+    - ``pyc_strip``：剥离非 ``__init__.py`` 的 ``.py`` 源码
+    - ``pyc_optimize``：字节码优化级别 0/1/2（``compileall -o``）
+    - ``no_site``：禁用 ``site.py`` 加载（``_pth`` 省略 ``import site``）
+    - ``nuitka``：启用 Nuitka 编译模式（用户源码编译为 ``.pyd``）
+    """
+
+    keep_modules: set[str] | None = None
+    icon: Path | None = None
+    no_stdlib_trim: bool = False
+    no_pyc: bool = False
+    pyc_strip: bool = False
+    pyc_optimize: int = 0
+    no_site: bool = False
+    nuitka: bool = False
+
+
 # ---- pyproject.toml 解析与项目入口识别 ----
 
 # Windows embed python 版本映射：major.minor → 完整版本号

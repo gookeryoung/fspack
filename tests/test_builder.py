@@ -24,7 +24,7 @@ from fspack.builder import (
     fspack_wheel_cache_dir,
     unpack_wheels,
 )
-from fspack.config import DependencyReport, get_mirror
+from fspack.config import BuildOptions, DependencyReport, get_mirror
 from fspack.console import console
 from fspack.exceptions import DependencyError
 from fspack.platform import Platform
@@ -413,7 +413,13 @@ def test_build_forwards_keep_modules(tmp_path: Path, monkeypatch: pytest.MonkeyP
         )[-1],
     )
 
-    build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, keep_modules={"requests.adapters"})
+    build(
+        proj,
+        get_mirror("huawei"),
+        "3.11.9",
+        target=Platform.WINDOWS,
+        options=BuildOptions(keep_modules={"requests.adapters"}),
+    )
     assert captured["keep_modules"] == {"requests.adapters"}
     assert isinstance(captured["submodule_usage"], dict)
     assert "requests" in captured["submodule_usage"]
@@ -1211,7 +1217,7 @@ def test_build_no_pyc_skips_precompile_stage(tmp_path: Path, monkeypatch: pytest
     monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
 
     stage_names = _capture_stage_names(monkeypatch)
-    build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, no_pyc=True)
+    build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, options=BuildOptions(no_pyc=True))
 
     assert "预编译字节码" not in stage_names
     assert "精简标准库" in stage_names  # 精简标准库仍执行
@@ -1230,7 +1236,7 @@ def test_build_no_stdlib_trim_skips_trim_stage(tmp_path: Path, monkeypatch: pyte
     monkeypatch.setattr("fspack.builder.detect_platform", lambda: Platform.WINDOWS)
 
     stage_names = _capture_stage_names(monkeypatch)
-    build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, no_stdlib_trim=True)
+    build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, options=BuildOptions(no_stdlib_trim=True))
 
     assert "精简标准库" not in stage_names
     assert "预编译字节码" in stage_names  # 预编译仍执行
@@ -1252,7 +1258,7 @@ def test_build_pyc_strip_deletes_non_init_py(tmp_path: Path, monkeypatch: pytest
     # 模拟同平台构建（CI 可能在 Linux 上跑 Windows 目标测试，交叉构建会跳过预编译）
     monkeypatch.setattr("fspack.builder.detect_platform", lambda: Platform.WINDOWS)
 
-    build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, pyc_strip=True)
+    build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, options=BuildOptions(pyc_strip=True))
 
     src = proj / "dist" / "src"
     # app.py 被剥离
@@ -1502,7 +1508,7 @@ def test_build_with_nuitka_invokes_compiler(tmp_path: Path, monkeypatch: pytest.
 
     monkeypatch.setattr("fspack.packaging.nuitka.NuitkaCompiler.compile_src", staticmethod(fake_compile_src))
 
-    build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, nuitka=True)
+    build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, options=BuildOptions(nuitka=True))
 
     assert nuitka_called["py_version"] == "3.11.9"
     assert nuitka_called["target"] is Platform.WINDOWS
@@ -1532,7 +1538,7 @@ def test_build_nuitka_skipped_on_cross_compile(tmp_path: Path, monkeypatch: pyte
 
     monkeypatch.setattr("fspack.packaging.nuitka.NuitkaCompiler.compile_src", staticmethod(fake_compile_src))
 
-    build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, nuitka=True)
+    build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, options=BuildOptions(nuitka=True))
 
     # 交叉构建跳过 Nuitka
     assert nuitka_called["n"] == 0

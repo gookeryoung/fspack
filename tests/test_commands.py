@@ -1,4 +1,8 @@
-"""commands 子命令测试：build/clean/run 直测与 _build_cmd 分支."""
+"""commands 子命令测试：clean/run/package 直测与 _build_cmd 分支.
+
+build 子命令已整合到 cli.py 直接调用 builder.build()，参数透传测试见
+tests/test_cli.py（mock fspack.builder.build 校验 BuildOptions 封装）。
+"""
 
 from __future__ import annotations
 
@@ -6,7 +10,6 @@ from pathlib import Path
 
 import pytest
 
-from fspack.commands.build import run as build_run
 from fspack.commands.clean import run as clean_run
 from fspack.commands.package import run as package_run
 from fspack.commands.run import _build_cmd, _find_exe, _select_entry
@@ -14,150 +17,6 @@ from fspack.commands.run import run as run_run
 from fspack.config import AppType, EntryPoint, ProjectInfo, get_mirror
 from fspack.exceptions import FspackError
 from fspack.platform import Platform, detect_platform
-
-
-def test_build_run_default_mirror_and_py_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, object] = {}
-
-    def fake_build(  # noqa: PLR0913
-        project: Path,
-        mirror: object,
-        py_version: str | None,
-        target: object = None,
-        keep_modules: set[str] | None = None,
-        icon: Path | None = None,
-        no_stdlib_trim: bool = False,
-        no_pyc: bool = False,
-        pyc_strip: bool = False,
-        pyc_optimize: int = 0,
-        no_site: bool = False,
-        nuitka: bool = False,
-    ) -> None:
-        captured["mirror"] = mirror
-        captured["py_version"] = py_version
-        captured["target"] = target
-        captured["icon"] = icon
-
-    monkeypatch.setattr("fspack.commands.build.build", fake_build)
-    build_run(tmp_path, mirror=None, py_version=None)
-    assert captured["mirror"] == get_mirror("tsinghua")
-    assert captured["py_version"] is None
-    assert captured["target"] is detect_platform()
-    assert captured["icon"] is None
-
-
-def test_build_run_explicit_options(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, object] = {}
-
-    def fake_build(  # noqa: PLR0913
-        project: Path,
-        mirror: object,
-        py_version: str,
-        target: object = None,
-        keep_modules: set[str] | None = None,
-        icon: Path | None = None,
-        no_stdlib_trim: bool = False,
-        no_pyc: bool = False,
-        pyc_strip: bool = False,
-        pyc_optimize: int = 0,
-        no_site: bool = False,
-        nuitka: bool = False,
-    ) -> None:
-        captured["mirror"] = mirror
-        captured["py_version"] = py_version
-        captured["target"] = target
-        captured["icon"] = icon
-
-    monkeypatch.setattr("fspack.commands.build.build", fake_build)
-    icon_path = tmp_path / "custom.ico"
-    icon_path.write_bytes(b"")
-    build_run(tmp_path, mirror="aliyun", py_version="3.10.0", target=Platform.LINUX, icon=icon_path)
-    assert captured["mirror"] == get_mirror("aliyun")
-    assert captured["py_version"] == "3.10.0"
-    assert captured["target"] is Platform.LINUX
-    assert captured["icon"] == icon_path
-
-
-def test_build_run_keep_modules(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, object] = {}
-
-    def fake_build(  # noqa: PLR0913
-        project: Path,
-        mirror: object,
-        py_version: str | None,
-        target: object = None,
-        keep_modules: set[str] | None = None,
-        icon: Path | None = None,
-        no_stdlib_trim: bool = False,
-        no_pyc: bool = False,
-        pyc_strip: bool = False,
-        pyc_optimize: int = 0,
-        no_site: bool = False,
-        nuitka: bool = False,
-    ) -> None:
-        captured["keep_modules"] = keep_modules
-
-    monkeypatch.setattr("fspack.commands.build.build", fake_build)
-    build_run(tmp_path, keep_modules={"PySide2.QtGui"})
-    assert captured["keep_modules"] == {"PySide2.QtGui"}
-
-
-def test_build_run_pyc_options_passthrough(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """--no-pyc/--pyc-strip/--no-stdlib-trim 透传到 build()."""
-    captured: dict[str, object] = {}
-
-    def fake_build(  # noqa: PLR0913
-        project: Path,
-        mirror: object,
-        py_version: str | None,
-        target: object = None,
-        keep_modules: set[str] | None = None,
-        icon: Path | None = None,
-        no_stdlib_trim: bool = False,
-        no_pyc: bool = False,
-        pyc_strip: bool = False,
-        pyc_optimize: int = 0,
-        no_site: bool = False,
-        nuitka: bool = False,
-    ) -> None:
-        captured["no_stdlib_trim"] = no_stdlib_trim
-        captured["no_pyc"] = no_pyc
-        captured["pyc_strip"] = pyc_strip
-
-    monkeypatch.setattr("fspack.commands.build.build", fake_build)
-    build_run(tmp_path, no_stdlib_trim=True, no_pyc=True, pyc_strip=True)
-    assert captured["no_stdlib_trim"] is True
-    assert captured["no_pyc"] is True
-    assert captured["pyc_strip"] is True
-
-
-def test_build_run_pyc_options_default_false(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """默认 no_stdlib_trim/no_pyc/pyc_strip 均为 False（即开启精简与预编译）."""
-    captured: dict[str, object] = {}
-
-    def fake_build(  # noqa: PLR0913
-        project: Path,
-        mirror: object,
-        py_version: str | None,
-        target: object = None,
-        keep_modules: set[str] | None = None,
-        icon: Path | None = None,
-        no_stdlib_trim: bool = False,
-        no_pyc: bool = False,
-        pyc_strip: bool = False,
-        pyc_optimize: int = 0,
-        no_site: bool = False,
-        nuitka: bool = False,
-    ) -> None:
-        captured["no_stdlib_trim"] = no_stdlib_trim
-        captured["no_pyc"] = no_pyc
-        captured["pyc_strip"] = pyc_strip
-
-    monkeypatch.setattr("fspack.commands.build.build", fake_build)
-    build_run(tmp_path)
-    assert captured["no_stdlib_trim"] is False
-    assert captured["no_pyc"] is False
-    assert captured["pyc_strip"] is False
 
 
 def test_clean_run_removes_dist(tmp_path: Path) -> None:

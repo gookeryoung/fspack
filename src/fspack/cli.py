@@ -127,21 +127,24 @@ def main(argv: list[str] | None = None) -> None:
 
     project = Path(ns.project).resolve()
     if command in ("build", "b"):
-        from fspack.commands import build as build_cmd
+        from fspack.builder import build
+        from fspack.config import BuildOptions, get_mirror
 
-        build_cmd.run(
+        build(
             project,
-            mirror=ns.mirror,
-            py_version=ns.py_version,
+            get_mirror(ns.mirror),
+            ns.py_version,
             target=_parse_target(ns.target),
-            keep_modules=set(ns.keep_modules) if ns.keep_modules else None,
-            icon=Path(ns.icon).resolve() if ns.icon else None,
-            no_stdlib_trim=ns.no_stdlib_trim,
-            no_pyc=ns.no_pyc,
-            pyc_strip=ns.pyc_strip,
-            pyc_optimize=ns.pyc_optimize,
-            no_site=ns.no_site,
-            nuitka=ns.nuitka,
+            options=BuildOptions(
+                keep_modules=set(ns.keep_modules) if ns.keep_modules else None,
+                icon=Path(ns.icon).resolve() if ns.icon else None,
+                no_stdlib_trim=ns.no_stdlib_trim,
+                no_pyc=ns.no_pyc,
+                pyc_strip=ns.pyc_strip,
+                pyc_optimize=ns.pyc_optimize,
+                no_site=ns.no_site,
+                nuitka=ns.nuitka,
+            ),
         )
     elif command in ("run", "r"):
         from fspack.commands import run as run_cmd
