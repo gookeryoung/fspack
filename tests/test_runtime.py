@@ -156,6 +156,22 @@ def test_write_pth_extra_paths(tmp_path: Path) -> None:
     assert "assets" in pth.read_text()
 
 
+def test_write_pth_disable_site(tmp_path: Path) -> None:
+    """enable_site=False 省略 `import site` 行，启动跳过 site.py 加速."""
+    pth = write_pth(tmp_path, "3.11.9", enable_site=False)
+    content = pth.read_text(encoding="utf-8")
+    assert "import site" not in content
+    # 标准库与 site-packages 路径仍存在
+    assert "python311.zip" in content
+    assert "Lib\\site-packages" in content
+
+
+def test_write_pth_enable_site_default(tmp_path: Path) -> None:
+    """默认 enable_site=True 保留 `import site` 行（向后兼容）."""
+    pth = write_pth(tmp_path, "3.11.9")
+    assert "import site" in pth.read_text(encoding="utf-8")
+
+
 def test_ensure_embed_skips_when_dll_present(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     runtime = tmp_path / "runtime"
     runtime.mkdir()

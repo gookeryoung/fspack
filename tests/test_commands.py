@@ -29,6 +29,9 @@ def test_build_run_default_mirror_and_py_version(tmp_path: Path, monkeypatch: py
         no_stdlib_trim: bool = False,
         no_pyc: bool = False,
         pyc_strip: bool = False,
+        pyc_optimize: int = 0,
+        no_site: bool = False,
+        nuitka: bool = False,
     ) -> None:
         captured["mirror"] = mirror
         captured["py_version"] = py_version
@@ -56,6 +59,9 @@ def test_build_run_explicit_options(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         no_stdlib_trim: bool = False,
         no_pyc: bool = False,
         pyc_strip: bool = False,
+        pyc_optimize: int = 0,
+        no_site: bool = False,
+        nuitka: bool = False,
     ) -> None:
         captured["mirror"] = mirror
         captured["py_version"] = py_version
@@ -85,6 +91,9 @@ def test_build_run_keep_modules(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
         no_stdlib_trim: bool = False,
         no_pyc: bool = False,
         pyc_strip: bool = False,
+        pyc_optimize: int = 0,
+        no_site: bool = False,
+        nuitka: bool = False,
     ) -> None:
         captured["keep_modules"] = keep_modules
 
@@ -107,6 +116,9 @@ def test_build_run_pyc_options_passthrough(tmp_path: Path, monkeypatch: pytest.M
         no_stdlib_trim: bool = False,
         no_pyc: bool = False,
         pyc_strip: bool = False,
+        pyc_optimize: int = 0,
+        no_site: bool = False,
+        nuitka: bool = False,
     ) -> None:
         captured["no_stdlib_trim"] = no_stdlib_trim
         captured["no_pyc"] = no_pyc
@@ -133,6 +145,9 @@ def test_build_run_pyc_options_default_false(tmp_path: Path, monkeypatch: pytest
         no_stdlib_trim: bool = False,
         no_pyc: bool = False,
         pyc_strip: bool = False,
+        pyc_optimize: int = 0,
+        no_site: bool = False,
+        nuitka: bool = False,
     ) -> None:
         captured["no_stdlib_trim"] = no_stdlib_trim
         captured["no_pyc"] = no_pyc

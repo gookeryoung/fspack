@@ -39,6 +39,9 @@ def test_build_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
         no_stdlib_trim: bool = False,
         no_pyc: bool = False,
         pyc_strip: bool = False,
+        pyc_optimize: int = 0,
+        no_site: bool = False,
+        nuitka: bool = False,
     ) -> None:
         called["project"] = project
         called["mirror"] = mirror
@@ -87,6 +90,9 @@ def test_build_target_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
         no_stdlib_trim: bool = False,
         no_pyc: bool = False,
         pyc_strip: bool = False,
+        pyc_optimize: int = 0,
+        no_site: bool = False,
+        nuitka: bool = False,
     ) -> None:
         called["target"] = target
 
@@ -108,6 +114,9 @@ def test_build_target_windows_dispatch(tmp_path: Path, monkeypatch: pytest.Monke
         no_stdlib_trim: bool = False,
         no_pyc: bool = False,
         pyc_strip: bool = False,
+        pyc_optimize: int = 0,
+        no_site: bool = False,
+        nuitka: bool = False,
     ) -> None:
         called["target"] = target
 
@@ -129,6 +138,9 @@ def test_build_keep_module_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         no_stdlib_trim: bool = False,
         no_pyc: bool = False,
         pyc_strip: bool = False,
+        pyc_optimize: int = 0,
+        no_site: bool = False,
+        nuitka: bool = False,
     ) -> None:
         called["keep_modules"] = keep_modules
 
@@ -151,6 +163,9 @@ def test_build_icon_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
         no_stdlib_trim: bool = False,
         no_pyc: bool = False,
         pyc_strip: bool = False,
+        pyc_optimize: int = 0,
+        no_site: bool = False,
+        nuitka: bool = False,
     ) -> None:
         called["icon"] = icon
 
@@ -175,6 +190,9 @@ def test_build_no_icon_passes_none(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         no_stdlib_trim: bool = False,
         no_pyc: bool = False,
         pyc_strip: bool = False,
+        pyc_optimize: int = 0,
+        no_site: bool = False,
+        nuitka: bool = False,
     ) -> None:
         called["icon"] = icon
 
@@ -197,10 +215,16 @@ def test_build_pyc_options_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         no_stdlib_trim: bool = False,
         no_pyc: bool = False,
         pyc_strip: bool = False,
+        pyc_optimize: int = 0,
+        no_site: bool = False,
+        nuitka: bool = False,
     ) -> None:
         called["no_stdlib_trim"] = no_stdlib_trim
         called["no_pyc"] = no_pyc
         called["pyc_strip"] = pyc_strip
+        called["pyc_optimize"] = pyc_optimize
+        called["no_site"] = no_site
+        called["nuitka"] = nuitka
 
     monkeypatch.setattr("fspack.commands.build.run", fake_run)
     cli.main(["b", str(tmp_path), "--no-pyc", "--pyc-strip", "--no-stdlib-trim"])
@@ -223,16 +247,61 @@ def test_build_pyc_options_default_false(tmp_path: Path, monkeypatch: pytest.Mon
         no_stdlib_trim: bool = False,
         no_pyc: bool = False,
         pyc_strip: bool = False,
+        pyc_optimize: int = 0,
+        no_site: bool = False,
+        nuitka: bool = False,
     ) -> None:
         called["no_pyc"] = no_pyc
         called["pyc_strip"] = pyc_strip
         called["no_stdlib_trim"] = no_stdlib_trim
+        called["pyc_optimize"] = pyc_optimize
+        called["no_site"] = no_site
+        called["nuitka"] = nuitka
 
     monkeypatch.setattr("fspack.commands.build.run", fake_run)
     cli.main(["b", str(tmp_path)])
     assert called["no_pyc"] is False
     assert called["pyc_strip"] is False
     assert called["no_stdlib_trim"] is False
+    assert called["pyc_optimize"] == 0
+    assert called["no_site"] is False
+    assert called["nuitka"] is False
+
+
+def test_build_new_options_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`--pyc-optimize`/`--no-site`/`--nuitka` 解析并透传给 build_cmd.run."""
+    called: dict[str, Any] = {}
+
+    def fake_run(  # noqa: PLR0913
+        project: Path,
+        mirror: str | None = None,
+        py_version: str | None = None,
+        target: object = None,
+        keep_modules: set[str] | None = None,
+        icon: Path | None = None,
+        no_stdlib_trim: bool = False,
+        no_pyc: bool = False,
+        pyc_strip: bool = False,
+        pyc_optimize: int = 0,
+        no_site: bool = False,
+        nuitka: bool = False,
+    ) -> None:
+        called["pyc_optimize"] = pyc_optimize
+        called["no_site"] = no_site
+        called["nuitka"] = nuitka
+
+    monkeypatch.setattr("fspack.commands.build.run", fake_run)
+    cli.main(["b", str(tmp_path), "--pyc-optimize", "2", "--no-site", "--nuitka"])
+    assert called["pyc_optimize"] == 2
+    assert called["no_site"] is True
+    assert called["nuitka"] is True
+
+
+def test_build_pyc_optimize_invalid_choice(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`--pyc-optimize` 仅接受 0/1/2，非法值 argparse 报错."""
+    monkeypatch.setattr("fspack.commands.build.run", lambda **kw: None)
+    with pytest.raises(SystemExit):
+        cli.main(["b", str(tmp_path), "--pyc-optimize", "3"])
 
 
 def test_run_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

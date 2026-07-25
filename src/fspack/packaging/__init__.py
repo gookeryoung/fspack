@@ -19,4 +19,6 @@
 - :mod:`fspack.packaging.entry` —— :class:`EntryWrapper` 入口包装器源码生成
 - :mod:`fspack.packaging.icon` —— :func:`find_favicon` 自动搜索 favicon 与
   :func:`ensure_ico` 图片格式转换（Pillow 可选）
+- :mod:`fspack.packaging.nuitka` —— :class:`NuitkaCompiler` 用户源码编译为本机
+  ``.pyd``/``.so``（可选，``--nuitka`` 启用，参考 RimSort 打包方案）
 """

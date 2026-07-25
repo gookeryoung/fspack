@@ -115,6 +115,86 @@ class TestClassifyEntry:
         result = classify_entry("PySide2/resources/icudtl.dat", "PySide2", {"WebEngineCore"})
         assert result == ("shared", None)
 
+    def test_resources_debug_pak_excluded(self) -> None:
+        """resources 目录中 *.debug.pak 是 DevTools 调试资源，始终剥离.
+
+        回归测试：ref/RimSort 此项浪费 74MB，fspack 通过此规则剥离。
+        """
+        # 有 WebEngine 依赖时 .debug.pak 仍剥离
+        result = classify_entry(
+            "PySide6/resources/qtwebengine_devtools_resources.debug.pak",
+            "PySide6",
+            {"WebEngineCore"},
+        )
+        assert result == ("exclude", None)
+        result = classify_entry(
+            "PySide6/resources/qtwebengine_resources.debug.pak",
+            "PySide6",
+            {"WebEngineWidgets"},
+        )
+        assert result == ("exclude", None)
+        result = classify_entry(
+            "PySide6/resources/qtwebengine_resources_100p.debug.pak",
+            "PySide6",
+            {"WebEngine"},
+        )
+        assert result == ("exclude", None)
+
+    def test_resources_non_debug_pak_kept(self) -> None:
+        """resources 目录中非 .debug.pak 资源（如 icudtl.dat、qtwebengine_resources.pak）保留."""
+        result = classify_entry(
+            "PySide6/resources/qtwebengine_resources.pak",
+            "PySide6",
+            {"WebEngineCore"},
+        )
+        assert result == ("shared", None)
+        result = classify_entry(
+            "PySide6/resources/icudtl.dat",
+            "PySide6",
+            {"WebEngineCore"},
+        )
+        assert result == ("shared", None)
+
+    def test_top_icudtl_dat_no_dep_excluded(self) -> None:
+        """顶层 icudtl.dat 无 WebEngine 依赖时剥离（ICU 数据仅 WebEngine 必需）."""
+        result = classify_entry("PySide6/icudtl.dat", "PySide6")
+        assert result == ("exclude", None)
+
+    def test_top_icudtl_dat_with_dep_kept(self) -> None:
+        """顶层 icudtl.dat 有 WebEngine 依赖时保留."""
+        result = classify_entry("PySide6/icudtl.dat", "PySide6", {"WebEngineCore"})
+        assert result == ("shared", None)
+
+    def test_qtwebengineprocess_exe_no_dep_excluded(self) -> None:
+        """顶层 QtWebEngineProcess.exe 无 WebEngine 依赖时剥离.
+
+        回归测试：.exe 在 STRIP_EXTS 中会被默认剥离，但 QtWebEngineProcess.exe
+        是 WebEngine 子进程宿主，WebEngine 应用必需。须在 STRIP_EXTS 之前拦截，
+        按 WebEngine 子模块依赖判断。
+        """
+        result = classify_entry("PySide6/QtWebEngineProcess.exe", "PySide6")
+        assert result == ("exclude", None)
+
+    def test_qtwebengineprocess_exe_with_dep_kept(self) -> None:
+        """顶层 QtWebEngineProcess.exe 有 WebEngine 依赖时保留（绕过 STRIP_EXTS .exe 规则）."""
+        result = classify_entry("PySide6/QtWebEngineProcess.exe", "PySide6", {"WebEngineCore"})
+        assert result == ("shared", None)
+
+    def test_qtwebengineprocess_linux_no_dep_excluded(self) -> None:
+        """Linux 平台 QtWebEngineProcess（无后缀 ELF）同样按 WebEngine 依赖判断."""
+        result = classify_entry("PySide6/QtWebEngineProcess", "PySide6")
+        assert result == ("exclude", None)
+
+    def test_qtwebengineprocess_linux_with_dep_kept(self) -> None:
+        """Linux 平台 QtWebEngineProcess 有 WebEngine 依赖时保留."""
+        result = classify_entry("PySide6/QtWebEngineProcess", "PySide6", {"WebEngineWidgets"})
+        assert result == ("shared", None)
+
+    def test_designer_exe_still_excluded(self) -> None:
+        """非 QtWebEngineProcess 的 .exe 仍归 STRIP_EXTS 剥离（如 designer.exe）."""
+        result = classify_entry("PySide6/designer.exe", "PySide6", {"WebEngineCore"})
+        assert result == ("exclude", None)
+
     def test_qml_no_dep_excluded(self) -> None:
         """qml 目录无 Qml/Quick 依赖时剥离."""
         assert classify_entry("PySide2/qml/QtQuick.2/qmldir", "PySide2") == ("exclude", None)

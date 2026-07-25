@@ -1068,6 +1068,99 @@ def test_precompile_pyc_compileall_failure_warns_not_raises(
     assert any("compileall 失败" in r.message for r in caplog.records)
 
 
+def test_precompile_pyc_optimize_passes_o_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """optimize 参数透传为 compileall `-o` 标志，控制字节码优化级别."""
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    (runtime / "python.exe").write_bytes(b"")
+    (runtime / "Lib" / "site-packages").mkdir(parents=True)
+    dist = tmp_path / "dist"
+    (dist / "src").mkdir(parents=True)
+    (dist / "src" / "app.py").write_text("print('hi')")
+
+    captured: list[list[str]] = []
+    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: captured.append(cmd) or _CompileCompleted())
+
+    st = StageRecorder("预编译字节码")
+    _precompile_pyc(dist, runtime, "3.11.9", Platform.WINDOWS, strip_py=False, stage=st, optimize=2)
+
+    # 每次 compileall 调用都含 `-o 2`
+    for cmd in captured:
+        assert "-o" in cmd
+        assert cmd[cmd.index("-o") + 1] == "2"
+
+
+def test_precompile_pyc_optimize_default_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """optimize 默认 0，compileall 命令含 `-o 0`."""
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    (runtime / "python.exe").write_bytes(b"")
+    (runtime / "Lib" / "site-packages").mkdir(parents=True)
+    dist = tmp_path / "dist"
+    (dist / "src").mkdir(parents=True)
+    (dist / "src" / "app.py").write_text("print('hi')")
+
+    captured: list[list[str]] = []
+    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: captured.append(cmd) or _CompileCompleted())
+
+    st = StageRecorder("预编译字节码")
+    _precompile_pyc(dist, runtime, "3.11.9", Platform.WINDOWS, strip_py=False, stage=st)
+
+    for cmd in captured:
+        assert cmd[cmd.index("-o") + 1] == "0"
+
+
+def test_pyc_stamp_key_includes_optimize(tmp_path: Path) -> None:
+    """_pyc_stamp_key 纳入 optimize，切换级别时强制重编译."""
+    from fspack.builder import _pyc_stamp_key
+
+    sp = tmp_path / "sp"
+    sp.mkdir()
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("")
+    key0 = _pyc_stamp_key(src, sp, strip_py=False, optimize=0)
+    key1 = _pyc_stamp_key(src, sp, strip_py=False, optimize=1)
+    key2 = _pyc_stamp_key(src, sp, strip_py=False, optimize=2)
+    assert key0 != key1
+    assert key0 != key2
+    assert key1 != key2
+    # 同级别稳定
+    assert _pyc_stamp_key(src, sp, strip_py=False, optimize=0) == key0
+
+
+def test_precompile_pyc_optimize_invalidates_old_stamp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """切换 optimize 时旧 stamp 不命中，触发重编译."""
+    from fspack.builder import _pyc_stamp_path
+
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    (runtime / "python.exe").write_bytes(b"")
+    (runtime / "Lib" / "site-packages").mkdir(parents=True)
+    dist = tmp_path / "dist"
+    (dist / "src").mkdir(parents=True)
+    (dist / "src" / "app.py").write_text("print('hi')")
+
+    # 先用 optimize=0 编译，写 stamp
+    captured_first: list[list[str]] = []
+    monkeypatch.setattr(
+        "fspack.builder.subprocess.run", lambda cmd, **kw: captured_first.append(cmd) or _CompileCompleted()
+    )
+    st = StageRecorder("预编译字节码")
+    _precompile_pyc(dist, runtime, "3.11.9", Platform.WINDOWS, strip_py=False, stage=st, optimize=0)
+    assert captured_first  # 实际调用了 compileall
+    assert _pyc_stamp_path(dist).is_file()
+
+    # 切换 optimize=2，应触发重编译
+    captured_second: list[list[str]] = []
+    monkeypatch.setattr(
+        "fspack.builder.subprocess.run", lambda cmd, **kw: captured_second.append(cmd) or _CompileCompleted()
+    )
+    st2 = StageRecorder("预编译字节码")
+    _precompile_pyc(dist, runtime, "3.11.9", Platform.WINDOWS, strip_py=False, stage=st2, optimize=2)
+    assert captured_second  # 重新调用 compileall，stamp 未命中
+
+
 # ---- build() 集成新阶段测试 ----
 
 
@@ -1339,3 +1432,107 @@ def test_build_dep_cache_hit_skips_ast_analysis(tmp_path: Path, monkeypatch: pyt
     monkeypatch.setattr("fspack.config.DependencyReport.from_src", classmethod(tracking_from_src))
     build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
     assert not analyze_called, "缓存命中时不应调用 AST 分析"
+
+
+# ---- Nuitka 编译模式与 stamp 缓存命中测试 ----
+
+
+def test_precompile_pyc_stamp_cache_hit_skips_compileall(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """stamp 命中时跳过 compileall 调用，stage 标注缓存命中."""
+    from fspack.builder import _pyc_stamp_key, _pyc_stamp_path
+
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    (runtime / "python.exe").write_bytes(b"")
+    (runtime / "Lib" / "site-packages").mkdir(parents=True)
+    dist = tmp_path / "dist"
+    (dist / "src").mkdir(parents=True)
+    (dist / "src" / "app.py").write_text("print('hi')")
+
+    # 预先写入匹配的 stamp
+    stamp_key = _pyc_stamp_key(dist / "src", runtime / "Lib" / "site-packages", strip_py=False, optimize=0)
+    _pyc_stamp_path(dist).parent.mkdir(parents=True, exist_ok=True)
+    _pyc_stamp_path(dist).write_text(stamp_key, encoding="utf-8")
+
+    call_count = {"n": 0}
+    monkeypatch.setattr(
+        "fspack.builder.subprocess.run",
+        lambda cmd, **kw: call_count.__setitem__("n", call_count["n"] + 1) or _CompileCompleted(),
+    )
+
+    st = StageRecorder("预编译字节码")
+    _precompile_pyc(dist, runtime, "3.11.9", Platform.WINDOWS, strip_py=False, stage=st)
+
+    # stamp 命中，不调用 compileall
+    assert call_count["n"] == 0
+    assert st._hits == 1
+    assert "缓存命中" in st._detail
+
+
+def test_build_with_nuitka_invokes_compiler(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """nuitka=True 时 build() 调用 NuitkaCompiler.compile_src 编译用户源码."""
+    proj = tmp_path / "app"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (proj / "app.py").write_text("def main():\n    pass\n")
+
+    _setup_embed_mocks(tmp_path, monkeypatch, "3.11.9")
+    runtime = proj / "dist" / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    (runtime / "python.exe").write_bytes(b"")
+    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
+    monkeypatch.setattr("fspack.builder.detect_platform", lambda: Platform.WINDOWS)
+
+    # 拦截 NuitkaCompiler.compile_src 验证调用
+    nuitka_called: dict[str, object] = {}
+
+    def fake_compile_src(
+        src_dir: Path,
+        runtime_dir: Path,
+        py_version: str,
+        target: Platform,
+        *,
+        stage: StageRecorder,
+    ) -> None:
+        nuitka_called["src_dir"] = src_dir
+        nuitka_called["py_version"] = py_version
+        nuitka_called["target"] = target
+        stage.processed()
+        stage.set_detail("mock 编译")
+
+    monkeypatch.setattr("fspack.packaging.nuitka.NuitkaCompiler.compile_src", staticmethod(fake_compile_src))
+
+    build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, nuitka=True)
+
+    assert nuitka_called["py_version"] == "3.11.9"
+    assert nuitka_called["target"] is Platform.WINDOWS
+    # src_dir 是 dist/src
+    assert Path(str(nuitka_called["src_dir"])).name == "src"
+
+
+def test_build_nuitka_skipped_on_cross_compile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """交叉构建时（构建机平台 ≠ 目标平台）Nuitka 跳过，不调用编译器."""
+    proj = tmp_path / "app"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (proj / "app.py").write_text("def main():\n    pass\n")
+
+    _setup_embed_mocks(tmp_path, monkeypatch, "3.11.9")
+    runtime = proj / "dist" / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    (runtime / "python.exe").write_bytes(b"")
+    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
+    # 构建机是 Linux，目标是 Windows → 交叉构建
+    monkeypatch.setattr("fspack.builder.detect_platform", lambda: Platform.LINUX)
+
+    nuitka_called = {"n": 0}
+
+    def fake_compile_src(*args: object, **kwargs: object) -> None:
+        nuitka_called["n"] += 1
+
+    monkeypatch.setattr("fspack.packaging.nuitka.NuitkaCompiler.compile_src", staticmethod(fake_compile_src))
+
+    build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, nuitka=True)
+
+    # 交叉构建跳过 Nuitka
+    assert nuitka_called["n"] == 0

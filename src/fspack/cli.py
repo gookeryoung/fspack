@@ -59,6 +59,29 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="剥离非 __init__.py 的 .py 源码（仅保留 .pyc，需配合预编译；保留包标识避免命名空间包问题）",
     )
+    p_build.add_argument(
+        "--pyc-optimize",
+        type=int,
+        default=0,
+        choices=[0, 1, 2],
+        help=(
+            "字节码优化级别：0=保留 docstring/assert（默认），1=剥离 assert，"
+            "2=剥离 assert+docstring（-OO，体积减 5-15%，启动提速 5-10%）"
+        ),
+    )
+    p_build.add_argument(
+        "--no-site",
+        action="store_true",
+        help="禁用 site.py 加载（_pth 省略 import site 行，节省 ~20-30ms 启动时间）",
+    )
+    p_build.add_argument(
+        "--nuitka",
+        action="store_true",
+        help=(
+            "启用 Nuitka 编译模式：用户源码编译为 .pyd 本机执行（速度提升 30-50%）。"
+            "需提前 pip install nuitka；交叉构建自动跳过；默认关闭"
+        ),
+    )
 
     p_run = sub.add_parser("run", aliases=["r"], help="运行已打包项目")
     p_run.add_argument("project", nargs="?", default=".", help="项目目录")
@@ -116,6 +139,9 @@ def main(argv: list[str] | None = None) -> None:
             no_stdlib_trim=ns.no_stdlib_trim,
             no_pyc=ns.no_pyc,
             pyc_strip=ns.pyc_strip,
+            pyc_optimize=ns.pyc_optimize,
+            no_site=ns.no_site,
+            nuitka=ns.nuitka,
         )
     elif command in ("run", "r"):
         from fspack.commands import run as run_cmd

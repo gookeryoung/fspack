@@ -24,6 +24,9 @@ def run(  # noqa: PLR0913
     no_stdlib_trim: bool = False,
     no_pyc: bool = False,
     pyc_strip: bool = False,
+    pyc_optimize: int = 0,
+    no_site: bool = False,
+    nuitka: bool = False,
 ) -> None:
     """执行项目构建."""
     mirror_cfg = get_mirror(mirror)
@@ -38,4 +41,7 @@ def run(  # noqa: PLR0913
         no_stdlib_trim=no_stdlib_trim,
         no_pyc=no_pyc,
         pyc_strip=pyc_strip,
+        pyc_optimize=pyc_optimize,
+        no_site=no_site,
+        nuitka=nuitka,
     )

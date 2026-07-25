@@ -150,18 +150,21 @@ def _pyc_stamp_path(dist_dir: Path) -> Path:
     return dist_dir / ".pyc_stamp"
 
 
-def _pyc_stamp_key(src_dir: Path, site_packages: Path, strip_py: bool) -> str:
-    """计算预编译 stamp 键：src 指纹 + site-packages 指纹 + strip_py。
+def _pyc_stamp_key(src_dir: Path, site_packages: Path, strip_py: bool, optimize: int = 0) -> str:
+    """计算预编译 stamp 键：src 指纹 + site-packages 指纹 + strip_py + optimize。
 
     ``copy_source`` 在预编译前已将 ``.py`` 同步到 ``dist/src``（``strip_py`` 模式下
     也会重新复制），故 ``src_fp`` 始终反映完整源码状态，无需特殊处理 ``strip_py``
     的 ``.py`` 缺失场景。stamp 键在检查与写入时复用，避免重复计算指纹。
+
+    ``optimize`` 纳入 stamp 键：切换 ``--pyc-optimize`` 时强制重编译，避免旧的
+    optimize=0 .pyc 被运行时加载而无法享受 -OO 优化。
     """
     from fspack.analyzer import source_fingerprint
 
     src_fp = source_fingerprint(src_dir) if src_dir.is_dir() else ""
     sp_fp = _site_packages_fingerprint(site_packages)
-    return f"{src_fp}|{sp_fp}|{strip_py}"
+    return f"{src_fp}|{sp_fp}|{strip_py}|{optimize}"
 
 
 def _precompile_pyc(  # noqa: PLR0913
@@ -172,18 +175,29 @@ def _precompile_pyc(  # noqa: PLR0913
     *,
     strip_py: bool,
     stage: StageRecorder,
+    optimize: int = 0,
 ) -> None:
     """预编译 src 与 site-packages 的 .py 为 .pyc，加速首次启动。
 
     用 runtime 自身的 python 调用 ``compileall``，保证 ABI 一致。生成
-    ``__pycache__/{name}.cpython-{ver}.pyc``（optimize=0），运行时默认加载。
+    ``__pycache__/{name}.cpython-{ver}.pyc``，运行时默认加载。
+
+    ``optimize`` 控制 ``compileall -o`` 级别（CPython ``compile()`` 的 ``optimize``
+    参数）：
+
+    - ``0``（默认）：保留 docstring 与 assert，最大兼容性
+    - ``1``：剥离 assert，保留 docstring（``-O``）
+    - ``2``：剥离 assert 与 docstring（``-OO``），体积减少 5-15%，启动提速 5-10%
+
+    参考 rimsort 等 Nuitka 打包产物：本机代码无 docstring 开销；fspack 通过
+    ``-o 2`` 编译可缩小与 Nuitka 的执行速度差距。注意 ``-OO`` 会移除 ``__doc__``
+    属性，依赖文档字符串的程序（如 Sphinx 运行时）应使用 ``0`` 或 ``1``。
 
     ``strip_py=True`` 时额外删除非 ``__init__.py`` 的 ``.py`` 源码（保留包标识，
-    避免 PEP 420 命名空间包导致 ``.pyc`` 不被加载）。docstring/assert 保留，
-    剥离需运行时 ``PYTHONOPTIMIZE=2`` 配合，作为未来增强。
+    避免 PEP 420 命名空间包导致 ``.pyc`` 不被加载）。
 
-    重复构建时用 ``dist/.pyc_stamp``（src 指纹 + site-packages 指纹 + strip_py）
-    跳过 compileall，避免 subprocess 启动与文件遍历开销。
+    重复构建时用 ``dist/.pyc_stamp``（src 指纹 + site-packages 指纹 + strip_py +
+    optimize）跳过 compileall，避免 subprocess 启动与文件遍历开销。
     """
     if target is Platform.WINDOWS:
         py_exe = runtime_dir / "python.exe"
@@ -199,7 +213,7 @@ def _precompile_pyc(  # noqa: PLR0913
         return
 
     # stamp 检查：命中则跳过 compileall，stamp_key 留待未命中时写入
-    stamp_key = _pyc_stamp_key(src_dir, site_packages, strip_py)
+    stamp_key = _pyc_stamp_key(src_dir, site_packages, strip_py, optimize)
     stamp = _pyc_stamp_path(dist_dir)
     try:
         if stamp.is_file() and stamp.read_text(encoding="utf-8") == stamp_key:
@@ -213,7 +227,7 @@ def _precompile_pyc(  # noqa: PLR0913
     compiled = 0
     for d in targets:
         result = subprocess.run(
-            [str(py_exe), "-m", "compileall", str(d), "-q", "-j", "0"],
+            [str(py_exe), "-m", "compileall", str(d), "-q", "-j", "0", "-o", str(optimize)],
             check=False,
             capture_output=True,
             text=True,
@@ -348,6 +362,9 @@ def build(  # noqa: PLR0912, PLR0913
     no_stdlib_trim: bool = False,
     no_pyc: bool = False,
     pyc_strip: bool = False,
+    pyc_optimize: int = 0,
+    no_site: bool = False,
+    nuitka: bool = False,
 ) -> ProjectInfo:
     """执行完整构建流水线，返回项目信息。
 
@@ -355,6 +372,18 @@ def build(  # noqa: PLR0912, PLR0913
     ``favicon.*`` > 默认 ``assets/icons/app.ico``。非 ``.ico`` 格式（如
     ``.png``/``.jpg``）通过 Pillow 转换为 ``.ico``（需安装 ``fspack[image]``），
     转换失败回退到默认 icon。仅 Windows 目标生效，Linux 忽略（ELF 无图标资源概念）。
+
+    ``pyc_optimize`` 控制 ``compileall -o`` 级别（0/1/2），见 :func:`_precompile_pyc`。
+
+    ``no_site=True`` 时 ``python3X._pth`` 省略 ``import site`` 行，启动跳过
+    ``site.py`` 执行，节省 ~20-30ms。wrapper 已显式 ``sys.path.insert``
+    site-packages，不影响第三方依赖发现。
+
+    ``nuitka=True`` 时启用 Nuitka 编译模式：用 ``python -m nuitka --module``
+    将 ``dist/src`` 下用户源码编译为 ``.pyd``，运行时本机执行，速度提升 30-50%。
+    默认关闭。Nuitka 模式下 ``pyc_optimize`` 与 ``pyc_strip`` 仍生效于
+    site-packages（第三方依赖保持 .pyc），用户源码以 .pyd 替代 .pyc。
+    交叉构建时（构建机平台 ≠ 目标平台）Nuitka 跳过（无法生成目标平台 .pyd）。
     """
     tracker = BuildTracker()
     project_dir = Path(project_dir).resolve()
@@ -489,19 +518,40 @@ def build(  # noqa: PLR0912, PLR0913
         # tkinter 补充到 runtime/Lib/tkinter/，需将 Lib 加入 _pth 使其可被 import
         # （_pth 默认只含 Lib\site-packages，不含 Lib 本身）
         extra_pth_paths = ("Lib",) if has_tkinter else ()
-        write_pth(cfg.dist_dir, info.py_version, extra_paths=extra_pth_paths)
+        write_pth(cfg.dist_dir, info.py_version, extra_paths=extra_pth_paths, enable_site=not no_site)
 
     with tracker.stage("复制源码") as st:
         src_dst = cfg.dist_dir / "src"
         with spinner(f"复制 {info.name} 源码"):
             copy_source(project_dir, src_dst)
 
+    # Nuitka 编译模式：用 python -m nuitka --module 将 dist/src 下用户源码编译为 .pyd。
+    # 用户源码以 .pyd 形式本机执行，速度提升 30-50%（参考 RimSort Nuitka 打包方案）。
+    # 仅编译用户源码（src/），第三方依赖（site-packages/）保持 wheel 解压 + .pyc。
+    # 交叉构建跳过（Nuitka 无法生成目标平台 .pyd）。
+    if nuitka and target is detect_platform():
+        with tracker.stage("Nuitka 编译") as st:
+            from fspack.packaging.nuitka import NuitkaCompiler
+
+            with spinner(f"Nuitka 编译 {info.name}"):
+                NuitkaCompiler.compile_src(src_dst, runtime_dir, info.py_version, target, stage=st)
+
     # 预编译字节码：用 runtime 自身 python 编译 src + site-packages 为 .pyc，加速首次启动。
     # pyc_strip=True 时额外剥离非 __init__.py 源码（源码保护，保留包标识避免命名空间包问题）。
     # 交叉构建时（构建机平台 ≠ 目标平台）runtime python 无法执行，跳过预编译。
+    # Nuitka 模式下 src 已编译为 .pyd，compileall 会跳过（找不到 .py 不生成 .pyc），
+    # site-packages 仍按 pyc_optimize 编译，故本步保留不跳过。
     if not no_pyc and target is detect_platform():
         with tracker.stage("预编译字节码") as st:
-            _precompile_pyc(cfg.dist_dir, runtime_dir, info.py_version, target, strip_py=pyc_strip, stage=st)
+            _precompile_pyc(
+                cfg.dist_dir,
+                runtime_dir,
+                info.py_version,
+                target,
+                strip_py=pyc_strip,
+                stage=st,
+                optimize=pyc_optimize,
+            )
 
     # icon 优先级：CLI --icon > 项目 [tool.fspack] icon > 自动搜索 favicon.* > 默认 app.ico（仅 Windows）
     # Linux 目标无图标资源概念，统一传 None

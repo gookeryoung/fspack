@@ -99,6 +99,15 @@ _QT_PLUGIN_DEPS: dict[str, frozenset[str]] = {
 # resources 目录依赖（WebEngine 运行时资源，约 15MB）
 _QT_RESOURCE_DEPS = frozenset({"WebEngineCore", "WebEngineWidgets", "WebEngine"})
 
+# QtWebEngine 运行时必需的顶层文件：仅当保留任一 WebEngine 子模块时保留。
+# - QtWebEngineProcess.exe：Chromium 子进程宿主，加载页面时由 QtWebEngineCore 派生
+#   （若剥离会致 QtWebEngine 渲染失败）。注意 .exe 在 STRIP_EXTS 中会被默认剥离，
+#   故需在 _classify_top_or_meta 之前拦截此特殊文件名。
+# - icudtl.dat：ICU 国际化数据（约 10MB），Chromium 内嵌 ICU 必需，非 WebEngine
+#   应用无需保留。
+# - QtWebEngineProcess.exe 对应 Linux 版本无后缀（ELF），同样按此规则判断。
+_QT_WEBENGINE_TOP_FILES = frozenset({"QtWebEngineProcess.exe", "QtWebEngineProcess", "icudtl.dat"})
+
 # qml 目录依赖（QtQml/QtQuick 运行时，约 21MB）
 _QT_QML_DEPS = frozenset(
     {"Qml", "Quick", "QuickWidgets", "QuickControls2", "Quick3D", "QuickShapes", "QuickTemplates2"}
@@ -287,23 +296,34 @@ class QtSlimSpec(SlimSpec):
 
         - ``.exe``/``.h``/``.cpp``/``.lib`` 等 STRIP_EXTS 扩展名 → exclude
           （由 :meth:`_classify_top_or_meta` 统一处理，含跨包）
+        - 顶层 ``QtWebEngineProcess[.exe]``/``icudtl.dat`` → 仅 WebEngine 子模块
+          保留时归 shared（须在 STRIP_EXTS 之前拦截，避免 .exe 误剥离）
         - 顶层 ``.pyd``/``.pyi``/``.so`` → submodule（归一化子模块名）
         - 顶层 ``Qt5Xxx.dll``/``Qt6Xxx.dll`` → submodule（归一化子模块名）；
           PySide2/PySide6 的 abi3.dll 隐式依赖 Qml/Network DLL → 归 shared
         - 非 Qt5/Qt6 前缀 DLL → shared（VC++ 运行时等）
         - 子目录 ``examples``/``translations``/``include`` 等 → exclude
         - ``plugins/<subdir>/<files>`` → 按依赖映射保留/剥离，未知子目录剥离
-        - ``resources/`` → 仅 WebEngine 相关子模块时保留
+        - ``resources/`` → 仅 WebEngine 相关子模块时保留；内部 ``*.debug.pak``
+          是 DevTools 调试资源，运行时不需要，始终剥离
         - ``qml/`` → 仅 Qml/Quick 相关子模块时保留
         - 其他 → shared
         """
+        parts = entry.split("/")
+
+        # QtWebEngine 顶层文件特殊处理：须在 _classify_top_or_meta 之前拦截，
+        # 否则 QtWebEngineProcess.exe 会被 STRIP_EXTS 中的 .exe 规则误剥离。
+        # 仅当保留任一 WebEngine 子模块时保留，避免非 WebEngine 应用携带冗余 ICU 数据。
+        if len(parts) == 2 and parts[1] in _QT_WEBENGINE_TOP_FILES:
+            if _QT_RESOURCE_DEPS & keep_subs:
+                return ("shared", None)
+            return ("exclude", None)
+
         common = cls._classify_top_or_meta(entry, top_pkg)
         if common is not None:
             return common
 
         is_abi_pkg = normalize_name(top_pkg) in _QT_ABI_DLL_PACKAGES
-
-        parts = entry.split("/")
 
         # 顶层文件（parts == 2）
         if len(parts) == 2:
@@ -344,9 +364,14 @@ class QtSlimSpec(SlimSpec):
                 return ("shared", None)
             return ("exclude", None)
         if subdir == "resources":
-            if _QT_RESOURCE_DEPS & keep_subs:
-                return ("shared", None)
-            return ("exclude", None)
+            if not (_QT_RESOURCE_DEPS & keep_subs):
+                return ("exclude", None)
+            # WebEngine 资源中 *.debug.pak 是 Chromium DevTools 调试资源，
+            # 运行时不需要（ref/RimSort 此项浪费 74MB），始终剥离。
+            # 非 .debug.pak 资源（如 icudtl.dat 副本、qtwebengine_resources.pak）保留。
+            if entry.endswith(".debug.pak"):
+                return ("exclude", None)
+            return ("shared", None)
         if subdir == "qml":
             if _QT_QML_DEPS & keep_subs:
                 return ("shared", None)
