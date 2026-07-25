@@ -318,12 +318,16 @@ def test_build_and_run_linux_helloworld(tmp_path: Path) -> None:
     """Linux 平台端到端：gcc 编译 + python-build-standalone 运行 cli_helloworld。
 
     python-build-standalone 的 20260718 release 提供 3.11.15，Linux 目标使用 3.11.15。
+    仅在 Linux 原生平台运行：Linux loader 编译用本地 gcc（非交叉编译器），
+    Windows 上的 mingw gcc 缺 ``dlfcn.h``/``linux/limits.h`` 等头文件无法编译。
     """
     from fspack.builder import build
     from fspack.config import get_mirror
     from fspack.packaging.loader import gcc_available
-    from fspack.platform import Platform
+    from fspack.platform import Platform, detect_platform
 
+    if detect_platform() is not Platform.LINUX:
+        pytest.skip("Linux e2e 测试需在 Linux 上运行（交叉编译缺 Linux 头文件）")
     if not gcc_available():
         pytest.skip("gcc 未安装")
 
@@ -342,12 +346,17 @@ def test_build_and_run_linux_helloworld(tmp_path: Path) -> None:
 
 @pytest.mark.slow
 def test_build_and_run_linux_clitool(tmp_path: Path) -> None:
-    """Linux 平台端到端：有库 CLI（requests），验证依赖打包与运行."""
+    """Linux 平台端到端：有库 CLI（requests），验证依赖打包与运行.
+
+    仅在 Linux 原生平台运行（同 ``test_build_and_run_linux_helloworld`` 平台限制）。
+    """
     from fspack.builder import build
     from fspack.config import get_mirror
     from fspack.packaging.loader import gcc_available
-    from fspack.platform import Platform
+    from fspack.platform import Platform, detect_platform
 
+    if detect_platform() is not Platform.LINUX:
+        pytest.skip("Linux e2e 测试需在 Linux 上运行（交叉编译缺 Linux 头文件）")
     if not gcc_available():
         pytest.skip("gcc 未安装")
 
