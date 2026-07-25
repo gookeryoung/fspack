@@ -199,6 +199,16 @@ def test_compile_src_invokes_bootstrap_script_with_sys_path_injection(
         assert "--remove-output" in cmd
         assert "--show-progress" not in cmd
         assert "--quiet" not in cmd
+        # --python-for-scons 指定构建机 Python（runtime/python.exe 是 embed 无完整标准库）
+        assert "--python-for-scons" in cmd
+        scons_idx = cmd.index("--python-for-scons")
+        assert scons_idx + 1 < len(cmd)
+        assert cmd[scons_idx + 1] == sys.executable
+        # --jobs=1 限制 C 编译并行度，避免 CPU 卡死
+        assert "--jobs" in cmd
+        jobs_idx = cmd.index("--jobs")
+        assert jobs_idx + 1 < len(cmd)
+        assert cmd[jobs_idx + 1] == "1"
     # 复用同一脚本文件
     assert len(bootstrap_scripts) == 1
     # 脚本内容含 sys.path 注入与 nuitka main 调用

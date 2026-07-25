@@ -412,9 +412,17 @@ class NuitkaCompiler:
         # --output-dir: 输出目录与源码同目录（保持包结构）
         # --no-pyi-file: 不生成 .pyi 类型存根（运行时不需要）
         # --remove-output: 编译后删除临时构建文件（.build/ 目录）
+        # --python-for-scons: 指定运行 scons 的 Python 路径。runtime/python.exe 是 embed
+        #   版本（无完整标准库），scons 需要完整 Python 环境。不指定时 Nuitka 会从 Windows
+        #   注册表反复查找 Python，导致大量 runtime/python.exe 子进程衍生、CPU 占满卡死。
+        #   用构建机 sys.executable 提供完整环境，避免进程衍生。
+        # --jobs=1: 限制 C 编译并行度为 1。Nuitka 默认使用全部 CPU 核心，多文件并行编译时
+        #   每个 scons 子进程再启动 gcc，进程数指数级膨胀导致 CPU 卡死。限制为 1 串行编译，
+        #   虽然慢但稳定，避免资源耗尽。
         # 注意：nuitka 4.x 的 --show-progress 已 obsolete 无效；nuitka 的 reExecute 机制
         # (os._exit 退出子进程 A，Windows close_fds=True 导致子进程 B 不继承 PIPE) 使得
         # _stream_compile 的 PIPE 捕获不可靠。用心跳线程保证用户看到编译进度。
+        build_python = sys.executable
         compiled = 0
         failed = 0
         total = len(py_files)
@@ -442,6 +450,10 @@ class NuitkaCompiler:
                             f"--output-dir={py_file.parent}",
                             "--no-pyi-file",
                             "--remove-output",
+                            "--python-for-scons",
+                            build_python,
+                            "--jobs",
+                            "1",
                             str(py_file),
                         ]
                     )
