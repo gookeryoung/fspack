@@ -167,7 +167,7 @@ def test_run_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         called["debug"] = debug
         called["entry"] = entry
 
-    monkeypatch.setattr("fspack.commands.run.run", fake_run)
+    monkeypatch.setattr("fspack.runner.run", fake_run)
     cli.main(["r", str(tmp_path), "--", "--foo", "bar"])
     assert called["rest"] == ["--foo", "bar"]
 
@@ -191,7 +191,7 @@ def test_run_debug_flag_after_project(tmp_path: Path, monkeypatch: pytest.Monkey
         called["debug"] = debug
         called["entry"] = entry
 
-    monkeypatch.setattr("fspack.commands.run.run", fake_run)
+    monkeypatch.setattr("fspack.runner.run", fake_run)
     cli.main(["r", str(tmp_path), "--debug"])
     assert called["debug"] is True
     assert called["rest"] == []
@@ -209,14 +209,14 @@ def test_run_entry_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
     ) -> None:
         called["entry"] = entry
 
-    monkeypatch.setattr("fspack.commands.run.run", fake_run)
+    monkeypatch.setattr("fspack.runner.run", fake_run)
     cli.main(["r", str(tmp_path), "--entry", "cli"])
     assert called["entry"] == "cli"
 
 
 def test_clean_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     called: dict[str, Path] = {}
-    monkeypatch.setattr("fspack.commands.clean.run", lambda project: called.__setitem__("p", project))
+    monkeypatch.setattr("fspack.builder.clean_dist", lambda project: called.__setitem__("p", project))
     cli.main(["c", str(tmp_path)])
     assert called["p"] == tmp_path.resolve()
 

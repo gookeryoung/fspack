@@ -1,4 +1,9 @@
-"""fsp r —— 运行已打包项目（Linux 用 wine，Windows 直跑）."""
+"""运行已打包项目：``fsp r`` 实现.
+
+Linux 下 ``.exe`` 用 wine 运行，原生无后缀可执行文件直跑；Windows 直跑 ``.exe``。
+``--debug`` 模式绕过 loader exe，用 embed python 直接执行入口包装器，使 GUI
+应用（Windows subsystem）的 stdout/stderr 可见，便于排查启动失败。
+"""
 
 from __future__ import annotations
 

@@ -1,7 +1,8 @@
-"""commands 子命令测试：clean/run 直测与 _build_cmd 分支.
+"""runner 模块测试：``fsp r`` 直测与 ``_build_cmd`` 分支.
 
-build 与 package 子命令已整合到 cli.py 直接调用 builder.build() 与
-installer.build_release()，参数透传测试见 tests/test_cli.py。
+``run`` 与 ``_select_entry``/``_find_exe``/``_build_cmd``/``_build_debug_cmd``
+原属 ``fspack/commands/run.py``，已整合到 :mod:`fspack.runner`。
+``fsp c`` 的 ``clean_dist`` 测试见 :mod:`tests.test_builder`。
 """
 
 from __future__ import annotations
@@ -10,39 +11,10 @@ from pathlib import Path
 
 import pytest
 
-from fspack.commands.clean import run as clean_run
-from fspack.commands.run import _build_cmd, _find_exe, _select_entry
-from fspack.commands.run import run as run_run
 from fspack.config import AppType, EntryPoint, ProjectInfo
 from fspack.exceptions import FspackError
-
-
-def test_clean_run_removes_dist(tmp_path: Path) -> None:
-    dist = tmp_path / "dist"
-    dist.mkdir()
-    (dist / "x.txt").write_text("x")
-    clean_run(tmp_path)
-    # clean 后 dist 目录重建为空（保留目录结构便于重新构建）
-    assert dist.is_dir()
-    assert not (dist / "x.txt").exists()
-
-
-def test_clean_run_preserves_nsi(tmp_path: Path) -> None:
-    """clean 保留 installer.nsi 便于改代码后重新打包分发."""
-    dist = tmp_path / "dist"
-    dist.mkdir()
-    nsi = dist / "installer.nsi"
-    nsi.write_text('Name "app"', encoding="utf-8")
-    (dist / "x.txt").write_text("x")
-    clean_run(tmp_path)
-    assert dist.is_dir()
-    assert nsi.is_file()
-    assert nsi.read_text(encoding="utf-8") == 'Name "app"'
-    assert not (dist / "x.txt").exists()
-
-
-def test_clean_run_no_dist(tmp_path: Path) -> None:
-    clean_run(tmp_path)
+from fspack.runner import _build_cmd, _find_exe, _select_entry
+from fspack.runner import run as run_run
 
 
 def test_run_run_missing_exe(tmp_path: Path) -> None:
@@ -69,8 +41,8 @@ def test_run_run_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
         captured["env"] = kw.get("env")
         return _Completed()
 
-    monkeypatch.setattr("fspack.commands.run.subprocess.run", fake_run)
-    monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Windows")
+    monkeypatch.setattr("fspack.runner.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.runner.platform.system", lambda: "Windows")
     run_run(tmp_path, rest_args=["--foo", "bar"])
     assert captured["cmd"] == [str(exe), "--foo", "bar"]
     assert captured["env"] is None
@@ -86,8 +58,8 @@ def test_run_run_nonzero_exit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     class _Completed:
         returncode = 2
 
-    monkeypatch.setattr("fspack.commands.run.subprocess.run", lambda cmd, **kw: _Completed())
-    monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Windows")
+    monkeypatch.setattr("fspack.runner.subprocess.run", lambda cmd, **kw: _Completed())
+    monkeypatch.setattr("fspack.runner.platform.system", lambda: "Windows")
     with pytest.raises(FspackError, match="程序退出码非零"):
         run_run(tmp_path)
 
@@ -114,8 +86,8 @@ def test_run_run_debug_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
         captured["env"] = kw.get("env")
         return _Completed()
 
-    monkeypatch.setattr("fspack.commands.run.subprocess.run", fake_run)
-    monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Windows")
+    monkeypatch.setattr("fspack.runner.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.runner.platform.system", lambda: "Windows")
     run_run(tmp_path, debug=True, rest_args=["--foo"])
     py = dist / "runtime" / "python.exe"
     wrapper = dist / "_entry_app.py"
@@ -148,8 +120,8 @@ def test_run_run_debug_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
         captured["env"] = kw.get("env")
         return _Completed()
 
-    monkeypatch.setattr("fspack.commands.run.subprocess.run", fake_run)
-    monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Linux")
+    monkeypatch.setattr("fspack.runner.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.runner.platform.system", lambda: "Linux")
     run_run(tmp_path, debug=True)
     py = bin_dir / "python3.11"
     wrapper = dist / "_entry_app.py"
@@ -169,7 +141,7 @@ def test_run_run_debug_missing_python(tmp_path: Path, monkeypatch: pytest.Monkey
     (dist / "src" / "app.py").write_text("")
     # wrapper 文件已存在，使流程进入 python 检查
     (dist / "_entry_app.py").write_text('"""fspack 生成的入口包装器（app）。"""\n')
-    monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Windows")
+    monkeypatch.setattr("fspack.runner.platform.system", lambda: "Windows")
     with pytest.raises(FspackError, match="未找到 embed python"):
         run_run(tmp_path, debug=True)
 
@@ -181,7 +153,7 @@ def test_run_run_debug_missing_entry(tmp_path: Path, monkeypatch: pytest.MonkeyP
     dist = tmp_path / "dist"
     (dist / "runtime").mkdir(parents=True)
     (dist / "runtime" / "python.exe").write_bytes(b"")
-    monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Windows")
+    monkeypatch.setattr("fspack.runner.platform.system", lambda: "Windows")
     with pytest.raises(FspackError, match="未找到入口包装器"):
         run_run(tmp_path, debug=True)
 
@@ -199,31 +171,31 @@ def test_run_run_gui_nonzero_hints_debug(
     class _Completed:
         returncode = 1
 
-    monkeypatch.setattr("fspack.commands.run.subprocess.run", lambda cmd, **kw: _Completed())
-    monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Windows")
-    with caplog.at_level("WARNING", logger="fspack.commands.run"), pytest.raises(FspackError, match="程序退出码非零"):
+    monkeypatch.setattr("fspack.runner.subprocess.run", lambda cmd, **kw: _Completed())
+    monkeypatch.setattr("fspack.runner.platform.system", lambda: "Windows")
+    with caplog.at_level("WARNING", logger="fspack.runner"), pytest.raises(FspackError, match="程序退出码非零"):
         run_run(tmp_path)
     assert "fspack r --debug" in caplog.text
 
 
 def test_build_cmd_linux_with_wine(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Linux")
-    monkeypatch.setattr("fspack.commands.run.shutil.which", lambda x: "/usr/bin/wine")
+    monkeypatch.setattr("fspack.runner.platform.system", lambda: "Linux")
+    monkeypatch.setattr("fspack.runner.shutil.which", lambda x: "/usr/bin/wine")
     exe = Path("/tmp/app.exe")
     cmd = _build_cmd(exe)
     assert cmd == ["/usr/bin/wine", str(exe)]
 
 
 def test_build_cmd_linux_wine_missing(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Linux")
-    monkeypatch.setattr("fspack.commands.run.shutil.which", lambda x: None)
+    monkeypatch.setattr("fspack.runner.platform.system", lambda: "Linux")
+    monkeypatch.setattr("fspack.runner.shutil.which", lambda x: None)
     exe = Path("/tmp/app.exe")
     cmd = _build_cmd(exe)
     assert cmd == ["wine", str(exe)]
 
 
 def test_build_cmd_non_linux(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Windows")
+    monkeypatch.setattr("fspack.runner.platform.system", lambda: "Windows")
     exe = Path("/tmp/app.exe")
     cmd = _build_cmd(exe)
     assert cmd == [str(exe)]
@@ -231,7 +203,7 @@ def test_build_cmd_non_linux(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_build_cmd_linux_native(monkeypatch: pytest.MonkeyPatch) -> None:
     """Linux 原生可执行文件（无后缀）直接运行，不用 wine."""
-    monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Linux")
+    monkeypatch.setattr("fspack.runner.platform.system", lambda: "Linux")
     exe = Path("/tmp/app")
     cmd = _build_cmd(exe)
     assert cmd == [str(exe)]
@@ -239,7 +211,7 @@ def test_build_cmd_linux_native(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_find_exe_linux_native(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Linux 优先找原生无后缀可执行文件."""
-    monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Linux")
+    monkeypatch.setattr("fspack.runner.platform.system", lambda: "Linux")
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "app").write_bytes(b"")
@@ -249,7 +221,7 @@ def test_find_exe_linux_native(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
 def test_find_exe_linux_fallback_exe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Linux 无原生可执行文件时回退 .exe（wine 运行）."""
-    monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Linux")
+    monkeypatch.setattr("fspack.runner.platform.system", lambda: "Linux")
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "app.exe").write_bytes(b"")
@@ -258,7 +230,7 @@ def test_find_exe_linux_fallback_exe(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
 def test_find_exe_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Windows 只找 .exe."""
-    monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Windows")
+    monkeypatch.setattr("fspack.runner.platform.system", lambda: "Windows")
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "app.exe").write_bytes(b"")
@@ -267,7 +239,7 @@ def test_find_exe_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
 
 def test_find_exe_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """无任何可执行文件返回 None."""
-    monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Linux")
+    monkeypatch.setattr("fspack.runner.platform.system", lambda: "Linux")
     (tmp_path / "dist").mkdir()
     assert _find_exe(tmp_path, "app") is None
 
@@ -289,8 +261,8 @@ def test_run_run_linux_native(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
         captured["cmd"] = cmd
         return _Completed()
 
-    monkeypatch.setattr("fspack.commands.run.subprocess.run", fake_run)
-    monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Linux")
+    monkeypatch.setattr("fspack.runner.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.runner.platform.system", lambda: "Linux")
     run_run(tmp_path)
     assert captured["cmd"] == [str(exe)]
 
@@ -319,7 +291,7 @@ def _make_multi_entry_info() -> ProjectInfo:
 def test_select_entry_default_returns_first(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """多入口未指定 --entry 时返回首个入口并日志提示."""
     info = _make_multi_entry_info()
-    with caplog.at_level("INFO", logger="fspack.commands.run"):
+    with caplog.at_level("INFO", logger="fspack.runner"):
         ep = _select_entry(info, None)
     assert ep.name == "cli"
     assert "未指定 --entry" in caplog.text
@@ -351,7 +323,7 @@ def test_select_entry_single_project_no_warn(tmp_path: Path, caplog: pytest.LogC
         dependencies=(),
         py_version="3.11.9",
     )
-    with caplog.at_level("INFO", logger="fspack.commands.run"):
+    with caplog.at_level("INFO", logger="fspack.runner"):
         ep = _select_entry(info, None)
     assert ep.name == "app"
     assert "未指定 --entry" not in caplog.text
@@ -379,7 +351,7 @@ def test_run_run_multi_entry_select(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         captured["cmd"] = cmd
         return _Completed()
 
-    monkeypatch.setattr("fspack.commands.run.subprocess.run", fake_run)
-    monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Windows")
+    monkeypatch.setattr("fspack.runner.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.runner.platform.system", lambda: "Windows")
     run_run(tmp_path, entry="gui")
     assert captured["cmd"] == [str(gui_exe)]

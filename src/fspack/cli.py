@@ -150,13 +150,13 @@ def main(argv: list[str] | None = None) -> None:
             ),
         )
     elif command in ("run", "r"):
-        from fspack.commands import run as run_cmd
+        from fspack.runner import run as run_cmd
 
-        run_cmd.run(project, rest_args=_drop_separator(ns.rest), debug=ns.debug, entry=ns.entry)
+        run_cmd(project, rest_args=_drop_separator(ns.rest), debug=ns.debug, entry=ns.entry)
     elif command in ("clean", "c"):
-        from fspack.commands import clean as clean_cmd
+        from fspack.builder import clean_dist
 
-        clean_cmd.run(project)
+        clean_dist(project)
     elif command in ("package", "p"):
         from fspack.config import get_mirror
         from fspack.packaging.installer import build_release

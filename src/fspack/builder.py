@@ -43,6 +43,7 @@ from fspack.progress import BuildTracker, StageRecorder, spinner
 __all__ = [
     "DEFAULT_PY_VERSION",
     "build",
+    "clean_dist",
     "copy_source",
     "default_icon_path",
     "download_wheels",
@@ -810,3 +811,30 @@ def unpack_wheels(
     from fspack.slim import slim_unpack
 
     return slim_unpack(wheels, site_packages_dir, submodule_usage, keep_modules, stage=stage)
+
+
+# 清理 dist 时保留的 NSIS 脚本文件名（便于改代码后重新打包分发）
+_KEEP_NSI = "installer.nsi"
+
+
+def clean_dist(project: Path) -> None:
+    """清理项目下的 dist 目录，保留 ``installer.nsi`` 便于重新打包分发.
+
+    ``fsp c`` 的实现：``installer.nsi`` 是 :func:`fspack.packaging.installer.generate_nsis_script`
+    生成的 NSIS 脚本，保留它可在仅改 NSIS 指令（如快捷方式、注册表）后直接 ``fsp p --no-build``
+    重新编译安装包，无需重新跑完整 build 流程。
+    """
+    dist = Path(project) / "dist"
+    if not dist.is_dir():
+        _logger.info("无 dist 目录可清理: %s", dist)
+        return
+    nsi_path = dist / _KEEP_NSI
+    nsi_content: str | None = None
+    if nsi_path.is_file():
+        nsi_content = nsi_path.read_text(encoding="utf-8")
+        _logger.info("保留 NSIS 脚本: %s", nsi_path)
+    shutil.rmtree(dist)
+    dist.mkdir(parents=True, exist_ok=True)
+    if nsi_content is not None:
+        nsi_path.write_text(nsi_content, encoding="utf-8")
+    _logger.info("已清理: %s", dist)

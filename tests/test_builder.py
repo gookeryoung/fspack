@@ -20,6 +20,7 @@ from fspack.builder import (
     _sync_tree,
     _trim_stdlib,
     build,
+    clean_dist,
     copy_source,
     fspack_wheel_cache_dir,
     unpack_wheels,
@@ -1558,3 +1559,34 @@ def test_build_nuitka_skipped_on_cross_compile(tmp_path: Path, monkeypatch: pyte
 
     # 交叉构建跳过 Nuitka
     assert nuitka_called["n"] == 0
+
+
+# --- clean_dist 测试（原 tests/test_commands.py 的 clean 测试） ---
+
+
+def test_clean_dist_removes_dist(tmp_path: Path) -> None:
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "x.txt").write_text("x")
+    clean_dist(tmp_path)
+    # clean 后 dist 目录重建为空（保留目录结构便于重新构建）
+    assert dist.is_dir()
+    assert not (dist / "x.txt").exists()
+
+
+def test_clean_dist_preserves_nsi(tmp_path: Path) -> None:
+    """clean 保留 installer.nsi 便于改代码后重新打包分发."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    nsi = dist / "installer.nsi"
+    nsi.write_text('Name "app"', encoding="utf-8")
+    (dist / "x.txt").write_text("x")
+    clean_dist(tmp_path)
+    assert dist.is_dir()
+    assert nsi.is_file()
+    assert nsi.read_text(encoding="utf-8") == 'Name "app"'
+    assert not (dist / "x.txt").exists()
+
+
+def test_clean_dist_no_dist(tmp_path: Path) -> None:
+    clean_dist(tmp_path)
