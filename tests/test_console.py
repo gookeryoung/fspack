@@ -104,3 +104,67 @@ def test_make_console_keeps_auto_detection_outside_ci(monkeypatch: pytest.Monkey
         monkeypatch.delenv(name, raising=False)
     mod._make_console()
     assert captured.get("legacy_windows") is None
+
+
+class _FakeStream:
+    """模拟 stdout/stderr，记录 reconfigure 调用."""
+
+    def __init__(self, encoding: str | None) -> None:
+        self.encoding = encoding
+        self.reconfigured: list[dict[str, str]] = []
+
+    def reconfigure(self, **kwargs: str) -> None:
+        self.reconfigured.append(kwargs)
+
+
+def test_ensure_utf8_stdio_reconfigures_non_utf8(monkeypatch: pytest.MonkeyPatch) -> None:
+    """非 UTF-8 编码的 stdout/stderr 应被重配置为 UTF-8."""
+    import fspack.console as mod
+
+    fake_out = _FakeStream("cp1252")
+    fake_err = _FakeStream("cp936")
+    monkeypatch.setattr(mod.sys, "stdout", fake_out)
+    monkeypatch.setattr(mod.sys, "stderr", fake_err)
+    mod._ensure_utf8_stdio()
+    assert fake_out.reconfigured == [{"encoding": "utf-8"}]
+    assert fake_err.reconfigured == [{"encoding": "utf-8"}]
+
+
+def test_ensure_utf8_stdio_skips_already_utf8(monkeypatch: pytest.MonkeyPatch) -> None:
+    """已经是 UTF-8 编码的流不应被重配置."""
+    import fspack.console as mod
+
+    fake_out = _FakeStream("utf-8")
+    fake_err = _FakeStream("UTF-8")
+    monkeypatch.setattr(mod.sys, "stdout", fake_out)
+    monkeypatch.setattr(mod.sys, "stderr", fake_err)
+    mod._ensure_utf8_stdio()
+    assert fake_out.reconfigured == []
+    assert fake_err.reconfigured == []
+
+
+def test_ensure_utf8_stdio_handles_no_reconfigure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """流无 reconfigure 方法时不应崩溃（如已关闭的流或自定义对象）."""
+    import fspack.console as mod
+
+    class _NoReconfigure:
+        encoding = "cp1252"
+
+    monkeypatch.setattr(mod.sys, "stdout", _NoReconfigure())
+    monkeypatch.setattr(mod.sys, "stderr", None)
+    mod._ensure_utf8_stdio()  # 不应抛异常
+
+
+def test_ensure_utf8_stdio_handles_reconfigure_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """reconfigure 抛 OSError/ValueError 时应静默忽略（流已关闭等场景）."""
+    import fspack.console as mod
+
+    class _FailingStream:
+        encoding = "cp1252"
+
+        def reconfigure(self, **kwargs: str) -> None:
+            raise OSError("流已关闭")
+
+    monkeypatch.setattr(mod.sys, "stdout", _FailingStream())
+    monkeypatch.setattr(mod.sys, "stderr", _FailingStream())
+    mod._ensure_utf8_stdio()  # 不应抛异常

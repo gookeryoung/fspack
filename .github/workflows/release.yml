@@ -92,9 +92,13 @@ jobs:
             fspack-
 
       - name: Build fspack with fspack
+        env:
+          PYTHONIOENCODING: utf-8
         run: uv run fspack b . --target windows
 
       - name: Generate installer
+        env:
+          PYTHONIOENCODING: utf-8
         run: uv run fspack p . --target windows --format all --no-build
 
       - name: Smoke test (version)

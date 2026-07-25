@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
+import sys
 from typing import Final
 
 from rich.console import Console
@@ -23,6 +25,28 @@ _theme = Theme(
 )
 
 
+def _ensure_utf8_stdio() -> None:
+    """将 stdout/stderr 重配置为 UTF-8 编码。
+
+    Windows 默认控制台编码（cp1252/cp936 等）无法编码中文日志字符，
+    RichHandler emit 时触发 ``UnicodeEncodeError``。强制 UTF-8 后 CI 日志
+    与本地非交互终端均可正常输出中文。设置 ``PYTHONIOENCODING=utf-8``
+    也能解决，但代码层修复更可靠（不依赖外部环境变量），且对未设置该
+    环境变量的 Windows 用户同样生效。
+    """
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        if stream is None:
+            continue
+        encoding = getattr(stream, "encoding", None)
+        if encoding and encoding.lower() in ("utf-8", "utf8"):
+            continue
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            with contextlib.suppress(OSError, ValueError):  # 流已关闭或不支持重配置，忽略
+                reconfigure(encoding="utf-8")
+
+
 def _make_console() -> Console:
     """创建 rich Console 实例。
 
@@ -32,7 +56,11 @@ def _make_console() -> Console:
     ``legacy_windows_render`` 依赖的部分 API（如 ``SetConsoleTextAttribute``
     在重定向 stdout 上失败），导致 RichHandler emit 时崩溃。强制 ANSI 转义
     即可规避：Windows 10+ 与所有 POSIX 系统均原生支持。
+
+    另在创建 Console 前调用 :func:`_ensure_utf8_stdio` 重配置 stdout/stderr
+    为 UTF-8，避免 Windows 默认 cp1252 编码导致中文日志 UnicodeEncodeError。
     """
+    _ensure_utf8_stdio()
     in_ci = any(os.environ.get(name) for name in ("CI", "GITHUB_ACTIONS", "BUILD_NUMBER"))
     return Console(theme=_theme, legacy_windows=False if in_ci else None)
 
