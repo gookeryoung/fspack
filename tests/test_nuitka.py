@@ -1,8 +1,11 @@
 """NuitkaCompiler 单元测试：用户源码编译为本机 .pyd/.so.
 
 nuitka 装到本地缓存 ``~/.fspack/cache/nuitka/<py_version>/site-packages``，
-不污染 ``dist/runtime``。编译时用 ``runtime/python.exe -c`` 注入 sys.path
-调用 nuitka，绕过 ``python3X._pth`` 对 ``PYTHONPATH`` 的限制。
+不污染 ``dist/runtime``。编译时用 ``runtime/python.exe <bootstrap.py>`` 注入
+sys.path 调用 nuitka，绕过 ``python3X._pth`` 对 ``PYTHONPATH`` 的限制。
+用临时脚本文件而非 ``-c``：Nuitka 的 ``reExecuteNuitka`` 无条件访问
+``sys.modules["__main__"].__file__``，``-c`` 模式下该属性不存在会
+``AttributeError``。
 """
 
 from __future__ import annotations
@@ -148,10 +151,10 @@ def test_compile_src_no_py_files(tmp_path: Path) -> None:
     assert "无 .py 文件" in st._detail
 
 
-def test_compile_src_invokes_c_bootstrap_with_sys_path_injection(
+def test_compile_src_invokes_bootstrap_script_with_sys_path_injection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """compile_src 用 `-c "sys.path.insert(0, <cache>); from nuitka.__main__ import main; main()"` 调用 nuitka."""
+    """compile_src 用临时脚本文件注入 sys.path 调用 nuitka（非 -c，因 reExecute 需要 __file__）."""
     runtime = tmp_path / "runtime"
     runtime.mkdir()
     (runtime / "python.exe").write_bytes(b"")
@@ -162,30 +165,45 @@ def test_compile_src_invokes_c_bootstrap_with_sys_path_injection(
     cache = _make_nuitka_cache(tmp_path / "cache")
 
     captured: list[list[str]] = []
-    monkeypatch.setattr(
-        "fspack.packaging.nuitka.subprocess.run",
-        lambda cmd, **kw: captured.append(cmd) or _CompileOK(),
-    )
+    script_contents: list[str] = []
+
+    def fake_run(cmd: list[str], **kw: object) -> object:
+        captured.append(cmd)
+        # 在 finally 清理前捕获脚本内容
+        script_path = Path(cmd[1])
+        if script_path.is_file():
+            script_contents.append(script_path.read_text(encoding="utf-8"))
+        return _CompileOK()
+
+    monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", fake_run)
 
     st = StageRecorder("Nuitka 编译")
     NuitkaCompiler.compile_src(src, runtime, "3.11.9", Platform.WINDOWS, cache, stage=st)
 
     # 每个 .py 一次编译调用（无 is_available subprocess 调用，_is_nuitka_cached 是文件系统检查）
     assert len(captured) == 2
+    bootstrap_scripts: set[str] = set()
     for cmd in captured:
         assert str(runtime / "python.exe") in cmd[0]
-        # -c 注入 sys.path
-        assert "-c" in cmd
-        c_idx = cmd.index("-c")
-        bootstrap = cmd[c_idx + 1]
-        assert "sys.path.insert" in bootstrap
-        assert str(cache) in bootstrap
-        assert "from nuitka.__main__ import main" in bootstrap
+        # cmd[1] 是临时 bootstrap 脚本路径（非 -c，因 reExecute 需要 __main__.__file__）
+        assert "-c" not in cmd
+        bootstrap_script = cmd[1]
+        bootstrap_scripts.add(bootstrap_script)
+        # 所有调用复用同一 bootstrap 脚本
+        assert bootstrap_script.endswith("_nuitka_bootstrap.py")
         # nuitka 编译参数
         assert "--module" in cmd
         assert "--no-pyi-file" in cmd
         assert "--remove-output" in cmd
         assert "--quiet" in cmd
+    # 复用同一脚本文件
+    assert len(bootstrap_scripts) == 1
+    # 脚本内容含 sys.path 注入与 nuitka main 调用
+    assert len(script_contents) == 2
+    for content in script_contents:
+        assert "sys.path.insert" in content
+        assert str(cache) in content
+        assert "from nuitka.__main__ import main" in content
 
 
 def test_compile_src_deletes_non_init_py(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

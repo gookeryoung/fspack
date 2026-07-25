@@ -35,8 +35,10 @@ stamp 缓存（:meth:`NuitkaCompiler.compile_with_stamp`）：重复构建时若
 from __future__ import annotations
 
 import logging
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from fspack.config import MirrorConfig, nuitka_version_for
@@ -53,8 +55,11 @@ class NuitkaCompiler:
     """Nuitka 编译器：将用户源码编译为本机 ``.pyd``/``.so``.
 
     nuitka 装到本地缓存 ``~/.fspack/cache/nuitka/<py_version>/site-packages/``，
-    不污染 ``dist/runtime`` 发行产物。编译时用 ``runtime/python.exe -c`` 注入
-    ``sys.path`` 指向缓存目录，绕过 ``python3X._pth`` 对 ``PYTHONPATH`` 的限制。
+    不污染 ``dist/runtime`` 发行产物。编译时用 ``runtime/python.exe <bootstrap.py>``
+    注入 ``sys.path`` 指向缓存目录，绕过 ``python3X._pth`` 对 ``PYTHONPATH`` 的限制。
+    用临时脚本文件而非 ``-c``：Nuitka 的 ``reExecuteNuitka`` 无条件访问
+    ``sys.modules["__main__"].__file__``，``-c`` 模式下该属性不存在会
+    ``AttributeError``。
 
     公共 API：
 
@@ -284,7 +289,7 @@ class NuitkaCompiler:
         return nuitka_ver
 
     @classmethod
-    def compile_src(  # noqa: PLR0913
+    def compile_src(  # noqa: PLR0912, PLR0913
         cls,
         src_dir: Path,
         runtime_dir: Path,
@@ -296,15 +301,17 @@ class NuitkaCompiler:
     ) -> None:
         """编译 ``src_dir`` 下所有 ``.py`` 为 ``.pyd``/``.so``，编译后删除 ``.py`` 源码.
 
-        用 ``runtime/python.exe -c "sys.path.insert(0, <nuitka_cache>); from nuitka.__main__ import main; main()"``
-        注入缓存路径调用 nuitka，绕过 ``python3X._pth`` 对 ``PYTHONPATH`` 的限制
-        （_pth 存在时 PYTHONPATH 不生效，但 ``-c`` 模式仍读取 _pth 配置的 sys.path，
-        运行时 ``sys.path.insert`` 可注入额外路径）。
+        用 ``runtime/python.exe <bootstrap.py>`` 注入缓存路径调用 nuitka，绕过
+        ``python3X._pth`` 对 ``PYTHONPATH`` 的限制（_pth 存在时 PYTHONPATH 不生效，
+        但脚本模式仍读取 _pth 配置的 sys.path，运行时 ``sys.path.insert`` 可注入
+        额外路径）。用临时脚本文件而非 ``-c``：Nuitka 的 ``reExecuteNuitka`` 无条件
+        访问 ``sys.modules["__main__"].__file__``，``-c`` 模式下该属性不存在会
+        ``AttributeError``。
 
         步骤：
 
         1. 解析 runtime python 路径并检查缓存目录有 nuitka，无则告警并跳过
-        2. 用 ``-c`` 注入 sys.path 调用 nuitka ``--module`` 逐个编译 ``.py``
+        2. 创建临时 bootstrap 脚本注入 sys.path 调用 nuitka ``--module`` 逐个编译 ``.py``
         3. 删除 ``.py`` 源码（保留 ``__init__.py`` 维持包标识，避免 PEP 420
            命名空间包导致 ``.pyd`` 不被识别为包成员）
         4. 清理 Nuitka 临时构建文件（``.build/`` 目录）
@@ -340,11 +347,19 @@ class NuitkaCompiler:
             stage.set_detail("无 .py 文件可编译")
             return
 
-        # -c 注入 sys.path 绕过 _pth 对 PYTHONPATH 的限制
-        # nuitka.__main__.main() 解析 sys.argv[1:]，与 `-m nuitka` 行为一致
-        bootstrap = f"import sys; sys.path.insert(0, r'{nuitka_cache}'); from nuitka.__main__ import main; main()"
+        # 用临时脚本文件启动 nuitka（不能用 -c）：
+        # nuitka.utils.ReExecute.reExecuteNuitka 无条件访问 sys.modules["__main__"].__file__
+        # 设置 NUITKA_BINARY_NAME，-c 模式下 __main__ 无 __file__ 会 AttributeError。
+        # 临时脚本让 __main__.__file__ 指向脚本路径，reExecute 能正常工作。
+        # sys.path.insert 注入缓存目录绕过 python3X._pth 对 PYTHONPATH 的限制。
+        bootstrap_dir = Path(tempfile.mkdtemp(prefix="fspack_nuitka_"))
+        bootstrap_script = bootstrap_dir / "_nuitka_bootstrap.py"
+        bootstrap_script.write_text(
+            f"import sys; sys.path.insert(0, r'{nuitka_cache}'); from nuitka.__main__ import main; main()",
+            encoding="utf-8",
+        )
 
-        # Nuitka 编译参数（作为 -c 后参数传入，进入 sys.argv[1:]）：
+        # Nuitka 编译参数（作为脚本参数传入，进入 sys.argv[1:]）：
         # --module: 编译为可导入模块（.pyd/.so），不生成独立 exe
         # --output-dir: 输出目录与源码同目录（保持包结构）
         # --no-pyi-file: 不生成 .pyi 类型存根（运行时不需要）
@@ -352,29 +367,31 @@ class NuitkaCompiler:
         # --quiet: 静默模式，减少日志输出
         compiled = 0
         failed = 0
-        for py_file in py_files:
-            result = subprocess.run(
-                [
-                    str(py_exe),
-                    "-c",
-                    bootstrap,
-                    "--module",
-                    f"--output-dir={py_file.parent}",
-                    "--no-pyi-file",
-                    "--remove-output",
-                    "--quiet",
-                    str(py_file),
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode == 0:
-                compiled += 1
-                stage.processed()
-            else:
-                failed += 1
-                _logger.warning("Nuitka 编译失败 %s: %s", py_file, result.stderr.strip()[:200])
+        try:
+            for py_file in py_files:
+                result = subprocess.run(
+                    [
+                        str(py_exe),
+                        str(bootstrap_script),
+                        "--module",
+                        f"--output-dir={py_file.parent}",
+                        "--no-pyi-file",
+                        "--remove-output",
+                        "--quiet",
+                        str(py_file),
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode == 0:
+                    compiled += 1
+                    stage.processed()
+                else:
+                    failed += 1
+                    _logger.warning("Nuitka 编译失败 %s: %s", py_file, result.stderr.strip()[:1000])
+        finally:
+            shutil.rmtree(bootstrap_dir, ignore_errors=True)
 
         # 删除非 __init__.py 的 .py 源码（保留包标识），与 pyc_strip 策略一致
         stripped = 0
