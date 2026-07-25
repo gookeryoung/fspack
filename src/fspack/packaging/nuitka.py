@@ -130,24 +130,85 @@ class NuitkaCompiler:
             )
 
     @staticmethod
-    def _ensure_pip_available(python_exe: str) -> None:
-        """检查构建机 python 是否有 pip 模块，无则 raise :class:`NuitkaError`.
-
-        nuitka 4.x 在 PyPI 只发布 sdist，需要 pip 从 sdist 构建_wheel 再解压。
-        fspack 自身用 uv 管理开发环境，uv venv 默认无 pip，需 ``uv pip install pip``
-        （已在 CI workflow 配置）。本地开发机通常有系统 python + pip 在 PATH。
-        """
+    def _has_pip(python_exe: str) -> bool:
+        """检查 python 是否有 pip 模块（``import pip`` 成功）."""
         result = subprocess.run(
             [python_exe, "-c", "import pip"],
             check=False,
             capture_output=True,
         )
+        return result.returncode == 0
+
+    @staticmethod
+    def _try_ensurepip(python_exe: str) -> bool:
+        """第一轮自救：``python -m ensurepip --default-pip`` 安装 pip.
+
+        标准库自带 ensurepip 模块，但 uv 创建的 venv 是精简 venv，可能不含
+        ensurepip 模块（uv 用 Rust 实现的 ``uv pip`` 替代 pip）。失败时返回
+        False，由调用方进入第二轮自救。
+        """
+        _logger.info("尝试 ensurepip 自助安装 pip: %s", python_exe)
+        result = subprocess.run(
+            [python_exe, "-m", "ensurepip", "--default-pip"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
         if result.returncode != 0:
-            raise NuitkaError(
-                f"构建机 python 缺 pip 模块: {python_exe}。"
-                "nuitka 在 PyPI 只发布 sdist，需要 pip 从 sdist 构建。"
-                "请用 `python -m ensurepip` 或 `uv pip install pip` 安装 pip"
-            )
+            _logger.warning("ensurepip 失败: %s", result.stderr.strip()[:200])
+        return result.returncode == 0
+
+    @staticmethod
+    def _try_uv_install_pip() -> bool:
+        """第二轮自救：``uv pip install pip`` 安装 pip 到当前 venv.
+
+        fspack 自身用 uv 管理开发环境，uv venv 默认无 pip。``uv pip install pip``
+        显式安装 pip 模块到当前 venv（uv 会从 ``VIRTUAL_ENV`` 环境变量或当前目录
+        ``.venv`` 推断目标 venv）。需要 ``uv`` 命令在 PATH 中。
+        """
+        _logger.info("尝试 uv pip install pip 自助安装")
+        result = subprocess.run(
+            ["uv", "pip", "install", "pip"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            _logger.warning("uv pip install pip 失败: %s", result.stderr.strip()[:200])
+        return result.returncode == 0
+
+    @classmethod
+    def _ensure_pip_available(cls, python_exe: str) -> None:
+        """确保构建机 python 有 pip 模块，缺则两轮自救，仍缺才 raise.
+
+        nuitka 4.x 在 PyPI 只发布 sdist，需要 pip 从 sdist 构建_wheel 再解压。
+        fspack 用 uv 管理开发环境，uv venv 默认无 pip。按 rule-01 错误自主恢复
+        原则，缺 pip 时先尝试两轮自救：
+
+        1. ``python -m ensurepip --default-pip``（标准库 ensurepip，uv venv 可能精简掉）
+        2. ``uv pip install pip``（uv 显式安装 pip 到当前 venv）
+
+        两轮均失败才 raise :class:`NuitkaError`，避免用户手动中断。
+        """
+        if cls._has_pip(python_exe):
+            return
+
+        # 第一轮：ensurepip（标准库自带，但 uv venv 可能精简掉了）
+        if cls._try_ensurepip(python_exe) and cls._has_pip(python_exe):
+            _logger.info("ensurepip 安装 pip 成功")
+            return
+
+        # 第二轮：uv pip install pip（fspack 用 uv 管理环境）
+        if cls._try_uv_install_pip() and cls._has_pip(python_exe):
+            _logger.info("uv pip install pip 成功")
+            return
+
+        raise NuitkaError(
+            f"构建机 python 缺 pip 模块且两轮自助安装失败: {python_exe}。"
+            "nuitka 在 PyPI 只发布 sdist，需要 pip 从 sdist 构建。"
+            "已尝试 `python -m ensurepip` 和 `uv pip install pip` 均失败，"
+            "请检查 uv 是否在 PATH、网络是否可用，或手动安装 pip"
+        )
 
     @classmethod
     def ensure_env(

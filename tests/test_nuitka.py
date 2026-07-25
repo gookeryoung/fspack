@@ -460,7 +460,7 @@ def test_ensure_env_pip_install_target_invoked(tmp_path: Path, monkeypatch: pyte
 
 
 def test_ensure_env_no_pip_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """构建机 python 缺 pip 时 raise NuitkaError."""
+    """构建机缺 pip 且 ensurepip 与 uv 两轮自救均失败时 raise NuitkaError."""
     monkeypatch.setattr("fspack.packaging.loader.mingw_available", lambda: True)
     runtime = tmp_path / "runtime"
     runtime.mkdir()
@@ -469,22 +469,149 @@ def test_ensure_env_no_pip_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     fake_build_python = "C:/fake/python.exe"
     monkeypatch.setattr("fspack.packaging.nuitka.sys.executable", fake_build_python)
 
-    # is_available 首次失败（未装 nuitka），_ensure_pip_available 失败（无 pip）
+    # 调用顺序：
+    # 1. is_available (import nuitka) → 失败
+    # 2. _has_pip (import pip) → 失败（缺 pip）
+    # 3. _try_ensurepip (python -m ensurepip) → 失败
+    # 4. _has_pip (再次检查) → 失败
+    # 5. _try_uv_install_pip (uv pip install pip) → 失败
+    # 6. _has_pip (再次检查) → 失败
+    # → raise NuitkaError
     state = {"n": 0}
 
     def stateful_run(cmd: list[str], **kw: Any) -> object:
         state["n"] += 1
-        # 第 1 次：is_available → 失败
-        # 第 2 次：_ensure_pip_available (import pip) → 失败
         if state["n"] == 1:
-            return _CompileFail()
-        return _ImportAbsent()  # import pip 失败
+            return _CompileFail()  # is_available
+        return _ImportAbsent()  # 所有后续调用均失败
 
     monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", stateful_run)
 
     st = StageRecorder("Nuitka 环境")
-    with pytest.raises(NuitkaError, match="缺 pip 模块"):
+    with pytest.raises(NuitkaError, match="缺 pip 模块且两轮自助安装失败"):
         NuitkaCompiler.ensure_env(runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), stage=st)
+
+
+def test_ensure_env_ensurepip_self_heal_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """缺 pip 时 ensurepip 自救成功，继续 pip install nuitka."""
+    monkeypatch.setattr("fspack.packaging.loader.mingw_available", lambda: True)
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "python.exe").write_bytes(b"")
+    (runtime / "Lib" / "site-packages").mkdir(parents=True)
+
+    fake_build_python = "C:/fake/python.exe"
+    monkeypatch.setattr("fspack.packaging.nuitka.sys.executable", fake_build_python)
+
+    # 调用顺序：
+    # 1. is_available (import nuitka) → 失败
+    # 2. _has_pip (import pip) → 失败（缺 pip）
+    # 3. _try_ensurepip (python -m ensurepip) → 成功
+    # 4. _has_pip (再次检查) → 成功（ensurepip 装好了）
+    # 5. pip install --target nuitka → 成功
+    # 6. is_available 验证 → 成功
+    state = {"n": 0}
+
+    def stateful_run(cmd: list[str], **kw: Any) -> object:
+        state["n"] += 1
+        if state["n"] == 1:
+            return _CompileFail()  # is_available 首次失败
+        if state["n"] == 2:
+            return _ImportAbsent()  # _has_pip 失败（缺 pip）
+        if state["n"] == 3:
+            return _CompileOK()  # _try_ensurepip 成功
+        if state["n"] == 4:
+            return _CompileOK()  # _has_pip 再次检查成功
+        return _CompileOK()  # pip install 与验证
+
+    monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", stateful_run)
+
+    st = StageRecorder("Nuitka 环境")
+    nuitka_ver = NuitkaCompiler.ensure_env(runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), stage=st)
+    assert nuitka_ver == "4.1.3"
+
+
+def test_ensure_env_uv_self_heal_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """ensurepip 失败但 uv pip install pip 自救成功."""
+    monkeypatch.setattr("fspack.packaging.loader.mingw_available", lambda: True)
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "python.exe").write_bytes(b"")
+    (runtime / "Lib" / "site-packages").mkdir(parents=True)
+
+    fake_build_python = "C:/fake/python.exe"
+    monkeypatch.setattr("fspack.packaging.nuitka.sys.executable", fake_build_python)
+
+    # 调用顺序（注意短路求值：_try_ensurepip 返回 False 时不调用 _has_pip）：
+    # 1. is_available (import nuitka) → 失败
+    # 2. _has_pip (import pip) → 失败（缺 pip）
+    # 3. _try_ensurepip → 失败（uv venv 无 ensurepip 模块，短路不调用 _has_pip）
+    # 4. _try_uv_install_pip → 成功
+    # 5. _has_pip (再次检查) → 成功
+    # 6. pip install --target nuitka → 成功
+    # 7. is_available 验证 → 成功
+    state = {"n": 0}
+
+    def stateful_run(cmd: list[str], **kw: Any) -> object:
+        state["n"] += 1
+        if state["n"] == 1:
+            return _CompileFail()  # is_available
+        if state["n"] == 2:
+            return _ImportAbsent()  # _has_pip 失败
+        if state["n"] == 3:
+            return _CompileFail()  # _try_ensurepip 失败
+        return _CompileOK()  # uv pip install pip 与后续
+
+    monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", stateful_run)
+
+    st = StageRecorder("Nuitka 环境")
+    nuitka_ver = NuitkaCompiler.ensure_env(runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), stage=st)
+    assert nuitka_ver == "4.1.3"
+
+
+def test_has_pip_returns_bool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_has_pip 按 import pip 返回值返回 bool."""
+    py = tmp_path / "python.exe"
+    py.write_bytes(b"")
+
+    # 成功
+    monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", lambda cmd, **kw: _CompileOK())
+    assert NuitkaCompiler._has_pip(str(py)) is True
+
+    # 失败
+    monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", lambda cmd, **kw: _ImportAbsent())
+    assert NuitkaCompiler._has_pip(str(py)) is False
+
+
+def test_try_ensurepip_invokes_python_m_ensurepip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_try_ensurepip 调用 `python -m ensurepip --default-pip`."""
+    py = tmp_path / "python.exe"
+    py.write_bytes(b"")
+
+    captured: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kw: Any) -> object:
+        captured.append(cmd)
+        return _CompileOK()
+
+    monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", fake_run)
+
+    assert NuitkaCompiler._try_ensurepip(str(py)) is True
+    assert captured[0] == [str(py), "-m", "ensurepip", "--default-pip"]
+
+
+def test_try_uv_install_pip_invokes_uv_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_try_uv_install_pip 调用 `uv pip install pip`."""
+    captured: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kw: Any) -> object:
+        captured.append(cmd)
+        return _CompileOK()
+
+    monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", fake_run)
+
+    assert NuitkaCompiler._try_uv_install_pip() is True
+    assert captured[0] == ["uv", "pip", "install", "pip"]
 
 
 def test_ensure_env_pip_install_fails_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
