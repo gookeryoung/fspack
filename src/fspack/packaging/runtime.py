@@ -51,9 +51,10 @@ __all__ = [
 
 _logger = logging.getLogger(__name__)
 
-STANDALONE_BASE_URL = "https://github.com/astral-sh/python-build-standalone/releases/download"
+# 阿里云 GitHub 镜像加速国内下载，路径与 GitHub releases 同构。
+STANDALONE_BASE_URL = "https://mirrors.aliyun.com/github/releases/astral-sh/python-build-standalone"
 # 20260718 release 包含 3.13.14；每个 release tag 只含该时间点的最新补丁版本，
-# 故 KNOWN_EMBED_VERSIONS 中的版本号必须与本 tag 实际提供的版本号匹配。
+# 故 KNOWN_STANDALONE_VERSIONS 中的版本号必须与本 tag 实际提供的版本号匹配。
 STANDALONE_RELEASE_TAG = "20260718"
 
 

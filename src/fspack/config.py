@@ -12,7 +12,7 @@
 - 镜像源：``MIRRORS``/``DEFAULT_MIRROR``/``get_mirror``
 - 项目解析：``parse_project``/``detect_entry``/``infer_app_type``/
   ``resolve_py_version``/``DEFAULT_PY_VERSION``/``DEFAULT_LINUX_PY_VERSION``/
-  ``KNOWN_EMBED_VERSIONS``
+  ``KNOWN_EMBED_VERSIONS``/``KNOWN_STANDALONE_VERSIONS``/``known_versions``
 """
 
 from __future__ import annotations
@@ -42,6 +42,7 @@ __all__ = [
     "DEFAULT_MIRROR",
     "DEFAULT_PY_VERSION",
     "KNOWN_EMBED_VERSIONS",
+    "KNOWN_STANDALONE_VERSIONS",
     "MIRRORS",
     "AppType",
     "BuildConfig",
@@ -52,6 +53,7 @@ __all__ = [
     "detect_entry",
     "get_mirror",
     "infer_app_type",
+    "known_versions",
     "parse_project",
     "resolve_py_version",
 ]
@@ -220,15 +222,26 @@ class BuildConfig:
 
 # ---- pyproject.toml 解析与项目入口识别 ----
 
-DEFAULT_PY_VERSION = "3.11.15"
-DEFAULT_LINUX_PY_VERSION = "3.11.15"
-
-# 已知 embed python 版本映射：major.minor → 完整版本号
-# 版本号须与 STANDALONE_RELEASE_TAG（runtime.py）实际提供的版本号匹配，否则 Linux standalone 下载 404。
-# 3.8/3.9 已 EOL，python-build-standalone 不再发布，仅 Windows embed（python.org）可下载。
+# Windows embed python 版本映射：major.minor → 完整版本号
+# python.org 在 minor 维护期内发布二进制 embed zip；进入 security-only 阶段后仅发
+# 源码包，不再提供 embed zip。下表为各 minor 最后一个含二进制 installer 的版本：
+#   3.8 → 3.8.10（EOL）、3.9 → 3.9.13、3.10 → 3.10.11、3.11 → 3.11.9、
+#   3.12 → 3.12.10；3.13/3.14 仍处 bugfix 阶段，取最新发布版本。
 KNOWN_EMBED_VERSIONS: dict[str, str] = {
     "3.8": "3.8.10",
     "3.9": "3.9.13",
+    "3.10": "3.10.11",
+    "3.11": "3.11.9",
+    "3.12": "3.12.10",
+    "3.13": "3.13.14",
+    "3.14": "3.14.6",
+}
+
+# Linux python-build-standalone 版本映射：major.minor → 完整版本号
+# astral-sh 每个 release tag 持续构建每个 minor 的最新补丁版本（含 security-only
+# 阶段的源码-only 版本），版本号须与 STANDALONE_RELEASE_TAG（runtime.py）实际提供
+# 的一致，否则下载 404。3.8/3.9 已 EOL，astral-sh 不再发布。
+KNOWN_STANDALONE_VERSIONS: dict[str, str] = {
     "3.10": "3.10.20",
     "3.11": "3.11.15",
     "3.12": "3.12.13",
@@ -236,14 +249,27 @@ KNOWN_EMBED_VERSIONS: dict[str, str] = {
     "3.14": "3.14.6",
 }
 
+# 默认 Python 版本：从对应平台的版本表派生，确保 EMBED 与 STANDALONE 各自使用最新版。
+# 更新版本表时默认值自动跟随，避免硬编码常量与版本表不同步。
+DEFAULT_PY_VERSION = KNOWN_EMBED_VERSIONS["3.11"]
+DEFAULT_LINUX_PY_VERSION = KNOWN_STANDALONE_VERSIONS["3.11"]
+
+
+def known_versions(target: Platform) -> dict[str, str]:
+    """按目标平台返回已知 Python 版本映射.
+
+    Windows 用 :data:`KNOWN_EMBED_VERSIONS`（python.org embed zip 可用版本），
+    Linux 用 :data:`KNOWN_STANDALONE_VERSIONS`（python-build-standalone release 可用版本）。
+    两侧最新补丁版本可能不同：如 3.11 Windows 最新 embed 为 3.11.9，Linux standalone 为 3.11.15。
+    """
+    if target is Platform.LINUX:
+        return KNOWN_STANDALONE_VERSIONS
+    return KNOWN_EMBED_VERSIONS
+
 
 def _ver_key(v: str) -> tuple[int, ...]:
     return tuple(int(x) for x in v.split("."))
 
-
-# 降序排列的完整版本列表，用于自动选择最高兼容版本
-# 注意：必须按版本元组排序，字符串排序会让 "3.9.13" > "3.10.11"（因 '9' > '1'）
-_KNOWN_FULL_VERSIONS: list[str] = sorted(KNOWN_EMBED_VERSIONS.values(), key=_ver_key, reverse=True)
 
 # PEP 440 版本规范符正则
 _SPEC_RE = re.compile(r"(>=|<=|==|!=|~=|>|<)\s*(\d+(?:\.\d+)*)")
@@ -379,24 +405,25 @@ def _read_python_version(path: Path) -> str:
     return data.decode("utf-8").strip()
 
 
-def _normalize_py_version(version: str) -> str | None:
+def _normalize_py_version(version: str, versions: dict[str, str]) -> str | None:
     """将版本号规范化为完整版本（``major.minor.micro``）。
 
-    短版本号（``major.minor``，如 ``"3.13"``）查 :data:`KNOWN_EMBED_VERSIONS`
-    映射得到完整版本号（如 ``"3.13.14"``）；完整版本号（>=3 段）原样返回；
-    未知短版本号（无映射）告警并返回 ``None``，避免拼出错误下载 URL。
+    短版本号（``major.minor``，如 ``"3.13"``）查 ``versions`` 映射得到完整版本号
+    （如 ``"3.13.14"``）；完整版本号（>=3 段）原样返回；未知短版本号（无映射）
+    告警并返回 ``None``，避免拼出错误下载 URL。
 
     Args:
         version: 用户输入的版本号，可能为短版本（``"3.13"``）或完整版本（``"3.13.14"``）。
+        versions: 平台对应的已知版本映射（embed 或 standalone）。
 
     Returns:
         完整版本号字符串，或 ``None``（未知短版本号）。
     """
-    if version in KNOWN_EMBED_VERSIONS:
-        return KNOWN_EMBED_VERSIONS[version]
+    if version in versions:
+        return versions[version]
     if len(version.split(".")) >= 3:
         return version
-    _logger.warning("版本号 %s 不在已知 embed 版本映射中", version)
+    _logger.warning("版本号 %s 不在已知版本映射中", version)
     return None
 
 
@@ -405,6 +432,7 @@ def resolve_py_version(
     explicit: str | None,
     requires_python: str | None,
     default: str = DEFAULT_PY_VERSION,
+    target: Platform = Platform.WINDOWS,
 ) -> str:
     """解析最终使用的 Python 版本。
 
@@ -415,11 +443,19 @@ def resolve_py_version(
     4. ``default``
 
     ``explicit`` 与 ``.python-version`` 均支持短版本号（如 ``"3.13"``），通过
-    :data:`KNOWN_EMBED_VERSIONS` 映射为完整版本号（如 ``"3.13.14"``），避免拼出
-    不存在的下载 URL。
+    :func:`known_versions` 按目标平台选取映射（embed 或 standalone），映射为完整版本号
+    （如 ``"3.13.14"``），避免拼出不存在的下载 URL。
+
+    Args:
+        project_dir: 项目目录，用于读取 ``.python-version``。
+        explicit: ``--py-version`` CLI 显式指定的版本号。
+        requires_python: ``pyproject.toml`` 的 ``requires-python`` 约束。
+        default: 无任何线索时的默认版本。
+        target: 目标平台，决定短版本号映射查 embed 还是 standalone 表。
     """
+    versions = known_versions(target)
     if explicit:
-        full = _normalize_py_version(explicit)
+        full = _normalize_py_version(explicit, versions)
         resolved = full if full is not None else explicit
         if requires_python and not _satisfies(resolved, requires_python):
             _logger.warning("Python %s 不满足 requires-python: %s", resolved, requires_python)
@@ -428,7 +464,7 @@ def resolve_py_version(
     pv_file = project_dir / ".python-version"
     if pv_file.is_file():
         pv = _read_python_version(pv_file)
-        full = _normalize_py_version(pv)
+        full = _normalize_py_version(pv, versions)
         if full is not None:
             if requires_python and not _satisfies(full, requires_python):
                 _logger.warning(
@@ -438,10 +474,12 @@ def resolve_py_version(
                 return full
 
     if requires_python:
-        for ver in _KNOWN_FULL_VERSIONS:
+        # 按目标平台选取候选版本：Windows 用 embed，Linux 用 standalone
+        candidates = sorted(versions.values(), key=_ver_key, reverse=True)
+        for ver in candidates:
             if _satisfies(ver, requires_python):
                 return ver
-        raise ProjectError(f"requires-python: {requires_python}，无已知兼容 embed python 版本")
+        raise ProjectError(f"requires-python: {requires_python}，无已知兼容 python 版本")
 
     return default
 

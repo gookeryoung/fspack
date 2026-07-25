@@ -60,5 +60,10 @@ packages = ["src/fspack"]
 fsp = "src/fspack/cli.py"
 fspack = "src/fspack/cli.py"
 
+[tool.uv.workspace]
+members = [
+    "examples/pyside2_qml_dashboard",
+]
+
 [dependency-groups]
 dev = ["fspack[dev,docs,image]"]

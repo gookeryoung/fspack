@@ -1,5 +1,5 @@
 [project]
-name = "cli-office"
+name = "cli_office"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"

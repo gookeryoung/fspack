@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import shutil
 import subprocess
 from dataclasses import replace
@@ -328,7 +329,7 @@ def resolve_project_info(project_dir: Path, py_version: str | None, target: Plat
     """
     info = ProjectInfo.from_dir(project_dir, py_version)
     default_ver = DEFAULT_LINUX_PY_VERSION if target is Platform.LINUX else DEFAULT_PY_VERSION
-    resolved = resolve_py_version(project_dir, py_version, info.requires_python, default_ver)
+    resolved = resolve_py_version(project_dir, py_version, info.requires_python, default_ver, target)
     if resolved != info.py_version:
         _logger.info("自动选择 Python 版本: %s", resolved)
         info = replace(info, py_version=resolved)
@@ -463,7 +464,7 @@ def build(  # noqa: PLR0912, PLR0913
     packages_to_download: tuple[str, ...] = report.declared if report.declared else report.ast_third_party
 
     if packages_to_download:
-        if _site_packages_has_deps(site_packages):
+        if _site_packages_has_deps(site_packages, packages_to_download):
             with tracker.stage("下载依赖") as st:
                 _logger.info("site-packages 已有依赖，跳过下载解压")
                 st.skip(len(packages_to_download))
@@ -485,7 +486,10 @@ def build(  # noqa: PLR0912, PLR0913
         _logger.info("无第三方依赖，跳过 wheel 下载")
 
     if target is Platform.WINDOWS:
-        write_pth(cfg.dist_dir, info.py_version)
+        # tkinter 补充到 runtime/Lib/tkinter/，需将 Lib 加入 _pth 使其可被 import
+        # （_pth 默认只含 Lib\site-packages，不含 Lib 本身）
+        extra_pth_paths = ("Lib",) if has_tkinter else ()
+        write_pth(cfg.dist_dir, info.py_version, extra_paths=extra_pth_paths)
 
     with tracker.stage("复制源码") as st:
         src_dst = cfg.dist_dir / "src"
@@ -688,13 +692,49 @@ def _resolve_project_icon(
     return _DEFAULT_ICON
 
 
-def _site_packages_has_deps(site_packages: Path) -> bool:
-    """检查 site-packages 是否已有解压的 wheel 依赖。
+def _site_packages_has_deps(site_packages: Path, packages: Sequence[str]) -> bool:
+    """检查 site-packages 是否已安装全部声明依赖。
 
-    通过检查 ``*.dist-info`` 目录是否存在判断：有则认为依赖已解压，
-    可跳过下载+解压阶段（需 ``fspack c`` 清理后才会重新解压）。
+    逐个检查 ``packages`` 中的包是否有对应的 ``*.dist-info`` 目录。
+    仅当全部声明依赖均已安装时返回 True，可跳过下载+解压阶段
+    （需 ``fspack c`` 清理后才会重新解压）。
+
+    不能仅检查 ``any(*.dist-info)``：python-build-standalone 预装 pip
+    （含 ``pip-*.dist-info``），embed python 也会预装 pip，导致无用户依赖时
+    误判为已安装。必须按声明的包名逐一匹配。
     """
-    return site_packages.is_dir() and any(site_packages.glob("*.dist-info"))
+    if not site_packages.is_dir():
+        return False
+    # 收集 site-packages 中所有已安装包的规范化名（PEP 503）
+    installed: set[str] = set()
+    for d in site_packages.glob("*.dist-info"):
+        if not d.is_dir():
+            continue
+        # dist-info 目录名格式: <name>-<version>.dist-info
+        stem = d.name[: -len(".dist-info")]
+        # 从右侧分离 version（最后一个 - 之后的部分）
+        parts = stem.rsplit("-", 1)
+        pkg_name = parts[0] if len(parts) == 2 else stem
+        installed.add(_normalize_pkg_name(pkg_name))
+
+    return all(_normalize_pkg_name(_strip_version_specifier(pkg)) in installed for pkg in packages)
+
+
+def _strip_version_specifier(pkg: str) -> str:
+    """从依赖字符串中剥离版本 specifier，返回纯包名。
+
+    ``pygame>=2.5.0`` → ``pygame``；``requests`` → ``requests``。
+    """
+    return re.split(r"[<>=!~;\[]", pkg, maxsplit=1)[0].strip()
+
+
+def _normalize_pkg_name(name: str) -> str:
+    """按 PEP 503 规范化包名：连续的 ``-_.`` 替换为单 ``-``，转小写。
+
+    使 ``ordered_set``/``ordered-set``/``Ordered.Set`` 均映射到 ``ordered-set``，
+    便于跨命名风格匹配 dist-info 目录。
+    """
+    return re.sub(r"[-_.]+", "-", name).lower()
 
 
 def unpack_wheels(

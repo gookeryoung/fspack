@@ -268,23 +268,60 @@ def test_build_skips_runtime_when_already_prepared_linux(tmp_path: Path, monkeyp
 
 
 def test_site_packages_has_deps_true(tmp_path: Path) -> None:
-    """site-packages 含 dist-info 目录时返回 True."""
+    """声明的依赖均在 site-packages 中已安装时返回 True."""
     sp = tmp_path / "sp"
     sp.mkdir()
     (sp / "numpy-1.0.dist-info").mkdir()
-    assert _site_packages_has_deps(sp) is True
+    assert _site_packages_has_deps(sp, ["numpy"]) is True
+    # 含版本 specifier 也应匹配
+    assert _site_packages_has_deps(sp, ["numpy>=1.0"]) is True
+
+
+def test_site_packages_has_deps_false_missing_pkg(tmp_path: Path) -> None:
+    """声明依赖未全部安装时返回 False（即使 site-packages 有其他 dist-info）."""
+    sp = tmp_path / "sp"
+    sp.mkdir()
+    (sp / "numpy-1.0.dist-info").mkdir()
+    # pygame 未安装
+    assert _site_packages_has_deps(sp, ["numpy", "pygame"]) is False
+
+
+def test_site_packages_has_deps_false_ignores_pip(tmp_path: Path) -> None:
+    """仅有预装的 pip dist-info 时，对用户依赖返回 False.
+
+    python-build-standalone 与 embed python 均预装 pip（含 ``pip-*.dist-info``），
+    不能因预装 pip 就误判用户依赖已安装。
+    """
+    sp = tmp_path / "sp"
+    sp.mkdir()
+    (sp / "pip-26.1.2.dist-info").mkdir()
+    assert _site_packages_has_deps(sp, ["pygame"]) is False
+    # 无用户依赖时（packages 为空）vacuously True
+    assert _site_packages_has_deps(sp, []) is True
 
 
 def test_site_packages_has_deps_false_empty(tmp_path: Path) -> None:
     """site-packages 为空目录时返回 False."""
     sp = tmp_path / "sp"
     sp.mkdir()
-    assert _site_packages_has_deps(sp) is False
+    assert _site_packages_has_deps(sp, ["numpy"]) is False
 
 
 def test_site_packages_has_deps_false_no_dir(tmp_path: Path) -> None:
     """site-packages 不存在时返回 False."""
-    assert _site_packages_has_deps(tmp_path / "nonexistent") is False
+    assert _site_packages_has_deps(tmp_path / "nonexistent", ["numpy"]) is False
+
+
+def test_site_packages_has_deps_name_normalization(tmp_path: Path) -> None:
+    """包名规范化：``-``/``_``/``.`` 互通，大小写不敏感."""
+    sp = tmp_path / "sp"
+    sp.mkdir()
+    (sp / "ordered_set-1.1.dist-info").mkdir()
+    # 导入名 orderedset 与 PyPI 名 ordered-set 不匹配（无分隔符），但
+    # ordered_set / ordered-set / Ordered.Set 均规范化为 ordered-set 互通
+    assert _site_packages_has_deps(sp, ["ordered-set"]) is True
+    assert _site_packages_has_deps(sp, ["ordered.set"]) is True
+    assert _site_packages_has_deps(sp, ["Ordered_Set"]) is True
 
 
 def test_unpack_wheels(tmp_path: Path) -> None:

@@ -19,7 +19,7 @@ from fspack.progress import StageRecorder
 def test_standalone_windows_tarball_name() -> None:
     """Windows tarball 文件名遵循 cpython-{ver}+{tag}-x86_64-pc-windows-msvc-install_only 模式."""
     name = TkinterBundler.standalone_windows_tarball_name("3.11.9", "20241016")
-    assert name == "cpython-3.11.9+20241016-x86_64-pc-windows-msvc-shared-install_only.tar.gz"
+    assert name == "cpython-3.11.9+20241016-x86_64-pc-windows-msvc-install_only.tar.gz"
 
 
 def test_standalone_windows_url() -> None:
@@ -28,7 +28,7 @@ def test_standalone_windows_url() -> None:
     assert url.startswith(STANDALONE_BASE_URL)
     assert "20241016" in url
     assert "3.11.9" in url
-    assert url.endswith("x86_64-pc-windows-msvc-shared-install_only.tar.gz")
+    assert url.endswith("x86_64-pc-windows-msvc-install_only.tar.gz")
 
 
 def test_is_needed_windows_with_tkinter() -> None:
@@ -166,13 +166,17 @@ def test_ensure_skips_when_runtime_has_tkinter(tmp_path: Path) -> None:
 
 
 def test_ensure_unpacks_from_cache_zip(tmp_path: Path) -> None:
-    """缓存 zip 存在 → 直接解压到 runtime，不下载 tarball."""
+    """缓存 zip 存在 → 直接解压到 runtime，不下载 tarball.
+
+    ensure 传入 embed 版本 3.11.9，内部解析为同 minor 的 standalone 版本 3.11.15
+    作为缓存键，故缓存 zip 名为 tkinter-3.11.15.zip。
+    """
     runtime = tmp_path / "runtime"
     runtime.mkdir()
     cache_dir = tmp_path / "cache"
     tkinter_cache = cache_dir / "tkinter"
     tkinter_cache.mkdir(parents=True)
-    cache_zip = tkinter_cache / "tkinter-3.11.9.zip"
+    cache_zip = tkinter_cache / "tkinter-3.11.15.zip"
     with zipfile.ZipFile(cache_zip, "w") as zf:
         zf.writestr("Lib/tkinter/__init__.py", b"# from cache")
         zf.writestr("_tkinter.pyd", b"PYD")
@@ -187,7 +191,11 @@ def test_ensure_unpacks_from_cache_zip(tmp_path: Path) -> None:
 
 
 def test_ensure_downloads_and_caches_when_no_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """无缓存 → 下载 tarball → 提取 → 生成缓存 zip → 解压到 runtime."""
+    """无缓存 → 下载 tarball → 提取 → 生成缓存 zip → 解压到 runtime.
+
+    ensure 传入 embed 版本 3.11.9，内部解析为同 minor 的 standalone 版本 3.11.15
+    用于 tarball 下载与缓存 zip 命名。
+    """
     runtime = tmp_path / "runtime"
     runtime.mkdir()
     cache_dir = tmp_path / "cache"
@@ -212,26 +220,30 @@ def test_ensure_downloads_and_caches_when_no_cache(tmp_path: Path, monkeypatch: 
     assert (runtime / "tcl" / "tcl8.6" / "init.tcl").is_file()
     assert (runtime / "tcl" / "tk8.6" / "tk.tcl").is_file()
 
-    # 缓存 zip 已生成
-    cache_zip = cache_dir / "tkinter" / "tkinter-3.11.9.zip"
+    # 缓存 zip 已生成（用 standalone 版本 3.11.15 命名）
+    cache_zip = cache_dir / "tkinter" / "tkinter-3.11.15.zip"
     assert cache_zip.is_file()
     with zipfile.ZipFile(cache_zip, "r") as zf:
         assert "Lib/tkinter/__init__.py" in zf.namelist()
         assert "_tkinter.pyd" in zf.namelist()
 
-    # standalone tarball 也被缓存
-    tarball_name = TkinterBundler.standalone_windows_tarball_name("3.11.9", STANDALONE_RELEASE_TAG)
+    # standalone tarball 也被缓存（用 standalone 版本 3.11.15 命名）
+    tarball_name = TkinterBundler.standalone_windows_tarball_name("3.11.15", STANDALONE_RELEASE_TAG)
     assert (cache_dir / "standalone-windows" / tarball_name).is_file()
 
 
 def test_ensure_reuses_cached_tarball(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """standalone tarball 已缓存 → 不重新下载，直接提取."""
+    """standalone tarball 已缓存 → 不重新下载，直接提取.
+
+    ensure 传入 embed 版本 3.11.9，内部解析为同 minor 的 standalone 版本 3.11.15
+    用于 tarball 缓存路径查找。
+    """
     runtime = tmp_path / "runtime"
     runtime.mkdir()
     cache_dir = tmp_path / "cache"
     standalone_cache = cache_dir / "standalone-windows"
     standalone_cache.mkdir(parents=True)
-    tarball_name = TkinterBundler.standalone_windows_tarball_name("3.11.9", STANDALONE_RELEASE_TAG)
+    tarball_name = TkinterBundler.standalone_windows_tarball_name("3.11.15", STANDALONE_RELEASE_TAG)
     tarball_path = standalone_cache / tarball_name
     _make_tkinter_tarball(tarball_path)
 

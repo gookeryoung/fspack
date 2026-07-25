@@ -43,8 +43,13 @@ class TkinterBundler:
 
     @staticmethod
     def standalone_windows_tarball_name(version: str, release_tag: str) -> str:
-        """返回 python-build-standalone Windows tarball 文件名。"""
-        return f"cpython-{version}+{release_tag}-x86_64-pc-windows-msvc-shared-install_only.tar.gz"
+        """返回 python-build-standalone Windows tarball 文件名。
+
+        20241016 及更早 release 同时提供 ``-shared-`` 与非 shared 变体；
+        20260718 起仅提供非 shared 变体（``x86_64-pc-windows-msvc-install_only``），
+        故统一使用非 shared 命名以保证跨 release 兼容。
+        """
+        return f"cpython-{version}+{release_tag}-x86_64-pc-windows-msvc-install_only.tar.gz"
 
     @staticmethod
     def standalone_windows_url(version: str, release_tag: str) -> str:
@@ -61,9 +66,16 @@ class TkinterBundler:
         """确保 tkinter 在 runtime 中可用（缓存优先）。
 
         1. 检查 ``runtime/Lib/tkinter/__init__.py`` 是否已存在 → 命中跳过
-        2. 检查 ``cache/tkinter/tkinter-{version}.zip`` 是否已缓存 → 解压到 runtime
+        2. 检查 ``cache/tkinter/tkinter-{standalone_ver}.zip`` 是否已缓存 → 解压到 runtime
         3. 下载 Windows standalone tarball → 提取 tkinter → 生成缓存 zip → 解压到 runtime
+
+        ``version`` 为 embed python 版本（如 3.11.9），但 python-build-standalone release
+        只含该 minor 最新补丁（如 3.11.15）。``_tkinter.pyd`` 在同一 minor 内 ABI 兼容
+        （cp311），故用 :data:`KNOWN_STANDALONE_VERSIONS` 解析同 minor 的 standalone 版本
+        下载 tarball，避免拼出不存在的 URL。
         """
+        from fspack.config import KNOWN_STANDALONE_VERSIONS
+
         tkinter_marker = runtime_dir / "Lib" / "tkinter" / "__init__.py"
         if tkinter_marker.is_file():
             stage.hit_cache()
@@ -71,9 +83,13 @@ class TkinterBundler:
             _logger.info("tkinter 打包: runtime 已含 tkinter，跳过")
             return
 
+        # embed 版本 → 同 minor 的 standalone 版本（ABI 兼容，避免拼出不存在的 URL）
+        minor = ".".join(version.split(".")[:2])
+        standalone_ver = KNOWN_STANDALONE_VERSIONS.get(minor, version)
+
         tkinter_cache_dir = cache_dir / "tkinter"
         tkinter_cache_dir.mkdir(parents=True, exist_ok=True)
-        cache_zip = tkinter_cache_dir / f"tkinter-{version}.zip"
+        cache_zip = tkinter_cache_dir / f"tkinter-{standalone_ver}.zip"
 
         if cache_zip.is_file():
             stage.set_detail("从缓存解压 tkinter")
@@ -85,13 +101,15 @@ class TkinterBundler:
         # 下载 Windows standalone tarball
         standalone_windows_cache = cache_dir / "standalone-windows"
         standalone_windows_cache.mkdir(parents=True, exist_ok=True)
-        tarball_path = standalone_windows_cache / cls.standalone_windows_tarball_name(version, STANDALONE_RELEASE_TAG)
+        tarball_path = standalone_windows_cache / cls.standalone_windows_tarball_name(
+            standalone_ver, STANDALONE_RELEASE_TAG
+        )
 
         if not tarball_path.is_file():
-            url = cls.standalone_windows_url(version, STANDALONE_RELEASE_TAG)
-            _logger.info("tkinter 打包: 下载 Windows standalone 构建")
+            url = cls.standalone_windows_url(standalone_ver, STANDALONE_RELEASE_TAG)
+            _logger.info("tkinter 打包: 下载 Windows standalone 构建 %s", standalone_ver)
             downloader = Downloader()
-            downloader.download(url, tarball_path, stage=stage, label=f"standalone-windows {version}")
+            downloader.download(url, tarball_path, stage=stage, label=f"standalone-windows {standalone_ver}")
         else:
             stage.hit_cache()
             _logger.info("tkinter 打包: standalone tarball 已缓存")

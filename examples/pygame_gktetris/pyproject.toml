@@ -1,7 +1,7 @@
 [project]
 dependencies    = ["pygame>=2.5.0"]
 description     = "A modern Tetris game with gradient colors, particle effects and dynamic line-clear animations"
-name            = "gktetris"
+name            = "pygame_gktetris"
 readme          = "README.md"
 requires-python = ">=3.8"
 version         = "0.1.12"

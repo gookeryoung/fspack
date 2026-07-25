@@ -132,12 +132,16 @@ def download_wheels(  # noqa: PLR0913
     assert result is not None  # 回退路径 suppress_error=False，要么返回结果要么抛异常
 
     wheel_names = _parse_pip_download_wheels(result.stdout)
+    used_fallback = False
     if not wheel_names:
         _logger.warning("pip download 输出解析失败，回退到目录扫描")
         wheel_names = sorted(f.name for f in cache_dir.glob("*.whl"))
+        # 目录扫描可能包含其他项目遗留的 wheel，不可作为本 deps_key 的缓存，
+        # 否则下次命中缓存会返回错误依赖列表（如 requests 命中却返回 pygame wheel）。
+        used_fallback = True
 
     wheels = [cache_dir / name for name in wheel_names if (cache_dir / name).is_file()]
-    if wheels:
+    if wheels and not used_fallback:
         _save_deps_cache(cache_dir, deps_key, wheels)
     if stage is not None:
         new_wheels = [w for w in wheels if w.name not in before]
