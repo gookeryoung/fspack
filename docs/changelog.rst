@@ -11,6 +11,8 @@ v0.2.7（未发布）
 - feat(pyside2-qml-dashboard): 新增 WSL 管理仪表盘 QML 示例项目
 - fix(slim): 补全 Qt QML/Quick 模块依赖映射，修复 QML 项目运行时 DLL 缺失
 - fix: Nuitka 编译用心跳线程与流式输出显示进度，避免长时间无输出被误认为卡死；``--jobs=1`` 限制 C 编译并行度
+- fix: ``tarfile.extractall`` 加 PEP 706 ``filter="data"`` 过滤器（Python 3.12+），消除 DeprecationWarning 并阻止路径穿越（runtime.py 与 nuitka.py 两处）
+- fix(test): Linux e2e 测试增加平台跳过条件，Windows 上的 mingw gcc 缺 ``dlfcn.h`` 无法交叉编译 Linux loader
 - refactor: 封装 BuildOptions 聚合 build 开关参数，移除 commands/ 目录薄包装层
 - refactor: 重构依赖检测与版本选择逻辑，修复镜像与命名问题
 
