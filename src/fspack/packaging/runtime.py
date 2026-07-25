@@ -287,7 +287,13 @@ class StandaloneRuntime(RuntimeDownloader):
         """解压 tar.gz 到 runtime_dir。"""
         try:
             with tarfile.open(archive_path, "r:gz") as tf:
-                tf.extractall(runtime_dir)
+                # Python 3.12+ 显式指定 data 过滤器（PEP 706）：消除 DeprecationWarning，
+                # 并阻止绝对路径/路径穿越等恶意条目（tarball 来自网络下载）。
+                # 低版本无 filter 参数，回退原行为。
+                if sys.version_info >= (3, 12):
+                    tf.extractall(runtime_dir, filter="data")
+                else:
+                    tf.extractall(runtime_dir)  # pragma: no cover
         except (tarfile.TarError, OSError) as e:
             raise EmbedError(f"python-build-standalone tarball 损坏: {archive_path}") from e
 
