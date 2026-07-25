@@ -29,7 +29,7 @@ if __name__ == "__main__":
     QQuickStyle.setStyle("Fusion")
 
     theme = ThemeController()
-    qml_file = Path(__file__).parent / "qml" / "Main.qml"
+    qml_file = Path(__file__).parent / "views" / "Main.qml"
     
     engine = QQmlApplicationEngine()
     engine.rootContext().setContextProperty("Theme", theme)
