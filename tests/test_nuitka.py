@@ -10,8 +10,10 @@ sys.path 调用 nuitka，绕过 ``python3X._pth`` 对 ``PYTHONPATH`` 的限制�
 
 from __future__ import annotations
 
+import io
 import logging
 import sys
+import tarfile
 from pathlib import Path
 from typing import Any
 
@@ -19,12 +21,14 @@ import pytest
 
 from fspack.config import (
     DEFAULT_NUITKA_VERSION,
+    KNOWN_STANDALONE_VERSIONS,
     NUITKA_VERSIONS,
     get_mirror,
     nuitka_version_for,
 )
 from fspack.exceptions import NuitkaError
 from fspack.packaging.nuitka import NuitkaCompiler
+from fspack.packaging.runtime import STANDALONE_RELEASE_TAG
 from fspack.platform import Platform
 from fspack.progress import StageRecorder
 
@@ -103,6 +107,176 @@ def test_runtime_python_linux(tmp_path: Path) -> None:
     runtime = tmp_path / "runtime"
     py = NuitkaCompiler._runtime_python(runtime, "3.11.9", Platform.LINUX)
     assert py == runtime / "python" / "bin" / "python3.11"
+
+
+# ---- _build_python_cache_dir 与 _build_python_exe 路径解析测试 ----
+
+
+def test_build_python_cache_dir(tmp_path: Path) -> None:
+    """_build_python_cache_dir 返回 cache_root / py_version（按版本隔离避免 ABI 冲突）."""
+    cache_root = tmp_path / "python_cache"
+    result = NuitkaCompiler._build_python_cache_dir(cache_root, "3.11.15")
+    assert result == cache_root / "3.11.15"
+
+
+def test_build_python_exe_windows(tmp_path: Path) -> None:
+    """Windows standalone python 路径为 <dir>/python/python.exe."""
+    build_dir = tmp_path / "3.11.15"
+    result = NuitkaCompiler._build_python_exe(build_dir, "3.11.15", Platform.WINDOWS)
+    assert result == build_dir / "python" / "python.exe"
+
+
+def test_build_python_exe_linux(tmp_path: Path) -> None:
+    """Linux standalone python 路径为 <dir>/python/bin/python{major}.{minor}."""
+    build_dir = tmp_path / "3.11.15"
+    result = NuitkaCompiler._build_python_exe(build_dir, "3.11.15", Platform.LINUX)
+    assert result == build_dir / "python" / "bin" / "python3.11"
+
+
+# ---- _ensure_build_python standalone python 就绪测试 ----
+
+
+def _make_standalone_tarball(dest: Path, version: str, tag: str, *, with_python: bool = True) -> None:
+    """构造 standalone python tarball，模拟 python-build-standalone 解压结构.
+
+    真实 tarball 结构：``cpython-<ver>+<tag>-x86_64-pc-windows-msvc-install_only/python/python.exe``。
+    ``with_python=False`` 时内层无 ``python/`` 目录，用于模拟结构异常场景。
+    """
+    inner_root = f"cpython-{version}+{tag}-x86_64-pc-windows-msvc-install_only"
+    with tarfile.open(dest, "w:gz") as tf:
+        if with_python:
+            data = b"fake-python-exe"
+            info = tarfile.TarInfo(f"{inner_root}/python/python.exe")
+        else:
+            data = b"readme"
+            info = tarfile.TarInfo(f"{inner_root}/README.txt")
+        info.size = len(data)
+        tf.addfile(info, io.BytesIO(data))
+
+
+def test_ensure_build_python_linux_returns_placeholder(tmp_path: Path) -> None:
+    """Linux runtime 已是完整 standalone，返回空 Path 占位（compile_src 内部回退 runtime python）."""
+    cache_root = tmp_path / "cache"
+    st = StageRecorder("standalone python")
+    result = NuitkaCompiler._ensure_build_python(cache_root, "3.11.15", Platform.LINUX, stage=st)
+    assert result == Path()
+    # Linux 分支不触发下载：缓存目录不应被创建
+    assert not cache_root.exists()
+
+
+def test_ensure_build_python_unknown_version_raises(tmp_path: Path) -> None:
+    """py_version 的 major.minor 不在 KNOWN_STANDALONE_VERSIONS 时 raise NuitkaError."""
+    st = StageRecorder("standalone python")
+    with pytest.raises(NuitkaError, match="无对应 python-build-standalone Windows 版本"):
+        NuitkaCompiler._ensure_build_python(tmp_path / "cache", "3.15.0", Platform.WINDOWS, stage=st)
+
+
+def test_ensure_build_python_cache_hit_skips_download(tmp_path: Path) -> None:
+    """standalone python.exe 已存在时缓存命中，跳过下载并标注 stage."""
+    ver = KNOWN_STANDALONE_VERSIONS["3.11"]
+    cache_root = tmp_path / "cache"
+    build_dir = NuitkaCompiler._build_python_cache_dir(cache_root, ver)
+    py_exe = NuitkaCompiler._build_python_exe(build_dir, ver, Platform.WINDOWS)
+    py_exe.parent.mkdir(parents=True)
+    py_exe.write_bytes(b"fake-python")
+
+    st = StageRecorder("standalone python")
+    result = NuitkaCompiler._ensure_build_python(cache_root, "3.11.9", Platform.WINDOWS, stage=st)
+
+    assert result == py_exe
+    assert st._hits == 1
+    assert "已就绪" in st._detail
+
+
+def test_ensure_build_python_download_failure_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """下载 standalone python 失败（OSError）时包装为 NuitkaError."""
+
+    class _FailDownloader:
+        """Downloader 桩：模拟网络失败."""
+
+        def __init__(self, timeout: int = 0) -> None:
+            pass
+
+        def download(self, url: str, dest: Path, *, stage: object = None, label: str = "") -> int:
+            raise OSError("network unreachable")
+
+    monkeypatch.setattr("fspack.packaging.net.Downloader", _FailDownloader)
+
+    st = StageRecorder("standalone python")
+    with pytest.raises(NuitkaError, match="下载 standalone python 失败"):
+        NuitkaCompiler._ensure_build_python(tmp_path / "cache", "3.11.9", Platform.WINDOWS, stage=st)
+
+
+def test_ensure_build_python_download_extract_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """下载并解压 standalone python 成功：内层 python/ 提升到缓存根，tarball 与解压根被清理."""
+    ver = KNOWN_STANDALONE_VERSIONS["3.11"]
+    cache_root = tmp_path / "cache"
+
+    class _OKDownloader:
+        """Downloader 桩：写入真实 tarball 供解压流程测试."""
+
+        def __init__(self, timeout: int = 0) -> None:
+            pass
+
+        def download(self, url: str, dest: Path, *, stage: object = None, label: str = "") -> int:
+            _make_standalone_tarball(dest, ver, STANDALONE_RELEASE_TAG)
+            return dest.stat().st_size
+
+    monkeypatch.setattr("fspack.packaging.net.Downloader", _OKDownloader)
+
+    st = StageRecorder("standalone python")
+    result = NuitkaCompiler._ensure_build_python(cache_root, "3.11.9", Platform.WINDOWS, stage=st)
+
+    expected_exe = cache_root / ver / "python" / "python.exe"
+    assert result == expected_exe
+    assert expected_exe.is_file()
+    # tarball 已删除节省空间
+    assert not list((cache_root / ver).glob("*.tar.gz"))
+    # 内层解压根（share/doc 等）已清理
+    inner_root = cache_root / ver / f"cpython-{ver}+{STANDALONE_RELEASE_TAG}-x86_64-pc-windows-msvc-install_only"
+    assert not inner_root.exists()
+    assert "安装完成" in st._detail
+
+
+def test_ensure_build_python_corrupt_tarball_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """tarball 损坏（无法解压）时 raise NuitkaError."""
+
+    class _CorruptDownloader:
+        """Downloader 桩：写入非 gzip 内容模拟损坏 tarball."""
+
+        def __init__(self, timeout: int = 0) -> None:
+            pass
+
+        def download(self, url: str, dest: Path, *, stage: object = None, label: str = "") -> int:
+            dest.write_bytes(b"not-a-gzip-file")
+            return 16
+
+    monkeypatch.setattr("fspack.packaging.net.Downloader", _CorruptDownloader)
+
+    st = StageRecorder("standalone python")
+    with pytest.raises(NuitkaError, match="standalone python tarball 损坏"):
+        NuitkaCompiler._ensure_build_python(tmp_path / "cache", "3.11.9", Platform.WINDOWS, stage=st)
+
+
+def test_ensure_build_python_missing_exe_after_extract_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """解压后未找到 python.exe（tarball 结构异常）时 raise NuitkaError."""
+    ver = KNOWN_STANDALONE_VERSIONS["3.11"]
+
+    class _NoPythonDownloader:
+        """Downloader 桩：tarball 内层无 python/ 目录."""
+
+        def __init__(self, timeout: int = 0) -> None:
+            pass
+
+        def download(self, url: str, dest: Path, *, stage: object = None, label: str = "") -> int:
+            _make_standalone_tarball(dest, ver, STANDALONE_RELEASE_TAG, with_python=False)
+            return dest.stat().st_size
+
+    monkeypatch.setattr("fspack.packaging.net.Downloader", _NoPythonDownloader)
+
+    st = StageRecorder("standalone python")
+    with pytest.raises(NuitkaError, match="standalone python 解压后未找到"):
+        NuitkaCompiler._ensure_build_python(tmp_path / "cache", "3.11.9", Platform.WINDOWS, stage=st)
 
 
 # ---- compile_src 测试 ----
@@ -1037,6 +1211,85 @@ def test_stamp_path_under_dist(tmp_path: Path) -> None:
     """stamp 文件位于 dist/.nuitka_compile_stamp."""
     dist = tmp_path / "dist"
     assert NuitkaCompiler._stamp_path(dist) == dist / ".nuitka_compile_stamp"
+
+
+def test_compile_with_stamp_read_oserror_proceeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """stamp 读取 OSError（如磁盘错误）时容错继续编译流程，不崩溃."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("print('hi')")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    cache_root = tmp_path / "nuitka_cache"
+
+    # 预写 stamp 文件使 is_file() 为 True，随后 read_text 抛 OSError
+    stamp = NuitkaCompiler._stamp_path(dist)
+    stamp.write_text("stale", encoding="utf-8")
+
+    orig_read_text = Path.read_text
+
+    def fake_read_text(self: Path, *args: Any, **kwargs: Any) -> str:
+        if self == stamp:
+            raise OSError("disk error")
+        return orig_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", fake_read_text)
+
+    calls = {"compile": 0}
+    monkeypatch.setattr(NuitkaCompiler, "ensure_env", classmethod(lambda cls, *a, **kw: "4.1.3"))
+    monkeypatch.setattr(NuitkaCompiler, "_ensure_build_python", classmethod(lambda cls, *a, **kw: Path()))
+    monkeypatch.setattr(
+        NuitkaCompiler,
+        "compile_src",
+        classmethod(lambda cls, *a, **kw: calls.__setitem__("compile", calls["compile"] + 1)),
+    )
+
+    st = StageRecorder("Nuitka 编译")
+    NuitkaCompiler.compile_with_stamp(
+        src, dist, runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), cache_root, stage=st
+    )
+
+    # OSError 被容错：继续执行编译流程
+    assert calls["compile"] == 1
+
+
+def test_compile_with_stamp_write_oserror_warns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """stamp 写入 OSError（如只读文件系统）时仅告警不中断."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("print('hi')")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    cache_root = tmp_path / "nuitka_cache"
+
+    stamp = NuitkaCompiler._stamp_path(dist)
+    orig_write_text = Path.write_text
+
+    def fake_write_text(self: Path, data: str, *args: Any, **kwargs: Any) -> int:
+        if self == stamp:
+            raise OSError("read-only file system")
+        return orig_write_text(self, data, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", fake_write_text)
+
+    monkeypatch.setattr(NuitkaCompiler, "ensure_env", classmethod(lambda cls, *a, **kw: "4.1.3"))
+    monkeypatch.setattr(NuitkaCompiler, "_ensure_build_python", classmethod(lambda cls, *a, **kw: Path()))
+    monkeypatch.setattr(NuitkaCompiler, "compile_src", classmethod(lambda cls, *a, **kw: None))
+
+    st = StageRecorder("Nuitka 编译")
+    with caplog.at_level("WARNING", logger="fspack.packaging.nuitka"):
+        # 不抛异常即通过（写入失败仅告警）
+        NuitkaCompiler.compile_with_stamp(
+            src, dist, runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), cache_root, stage=st
+        )
+
+    assert any("写入 Nuitka stamp 失败" in r.message for r in caplog.records)
 
 
 # ---- _stream_compile 流式输出测试 ----
