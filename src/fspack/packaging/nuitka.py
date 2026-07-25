@@ -375,6 +375,8 @@ class NuitkaCompiler:
             for idx, py_file in enumerate(py_files, 1):
                 # 显示当前编译进度，避免多文件编译时长时间无输出被误认为卡死
                 _logger.info("编译 [%d/%d] %s", idx, total, py_file.name)
+                # stderr=None: nuitka 编译过程（C 编译/链接进度）实时输出到终端，
+                # 避免单文件编译数十秒无输出被误认为卡死。stdout 捕获但 --quiet 模式下通常为空。
                 result = subprocess.run(
                     [
                         str(py_exe),
@@ -387,15 +389,16 @@ class NuitkaCompiler:
                         str(py_file),
                     ],
                     check=False,
-                    capture_output=True,
                     text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=None,
                 )
                 if result.returncode == 0:
                     compiled += 1
                     stage.processed()
                 else:
                     failed += 1
-                    _logger.warning("Nuitka 编译失败 %s: %s", py_file, result.stderr.strip()[:1000])
+                    _logger.warning("Nuitka 编译失败 %s（退出码 %s），详见上方输出", py_file, result.returncode)
         finally:
             shutil.rmtree(bootstrap_dir, ignore_errors=True)
 
