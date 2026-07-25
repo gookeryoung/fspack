@@ -135,14 +135,16 @@ _QT_MODULE_DEPS: dict[str, frozenset[str]] = {
     "OpenGL": frozenset({"Gui", "Core"}),
     "OpenGLWidgets": frozenset({"OpenGL", "Widgets", "Gui", "Core"}),
     # QML/Quick
-    "Qml": frozenset({"Network", "Core"}),
+    # Qml 在运行时会加载 QML 插件（qml/QtQml/qmlplugin.dll、qml/QtQuick.2/qtquick2plugin.dll
+    # 等），这些插件在 C 层链接 QmlModels 与 QmlWorkerScript（AST 无法发现），故 Qml 直接依赖二者。
+    "Qml": frozenset({"QmlModels", "QmlWorkerScript", "Network", "Core"}),
     "QmlModels": frozenset({"Qml", "Core"}),
     "QmlWorkerScript": frozenset({"Qml", "Core"}),
-    "Quick": frozenset({"Qml", "Gui", "Core"}),
+    "Quick": frozenset({"QmlModels", "Qml", "Gui", "Core"}),
     "QuickWidgets": frozenset({"Quick", "Qml", "Widgets", "Gui", "Core"}),
     "Quick3D": frozenset({"Quick", "Gui", "Core"}),
     "QuickShapes": frozenset({"Quick", "Gui", "Core"}),
-    "QuickControls2": frozenset({"Quick", "Qml", "Gui", "Core"}),
+    "QuickControls2": frozenset({"QuickTemplates2", "Quick", "Qml", "Gui", "Core"}),
     "QuickTemplates2": frozenset({"Quick", "Gui", "Core"}),
     "LabsQmlModels": frozenset({"Qml", "Core"}),
     "LabsSettings": frozenset({"Core"}),

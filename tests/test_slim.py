@@ -151,11 +151,37 @@ class TestQtModuleClosure:
         assert _qt_module_closure({"Widgets"}) == {"Widgets", "Gui", "Core"}
 
     def test_quick_transitive(self) -> None:
-        """QtQuick → QtQml → QtNetwork → QtCore + QtGui."""
+        """QtQuick → QtQmlModels → QtQml → QtNetwork → QtCore + QtGui."""
         from fspack.slim.qt import _qt_module_closure
 
         result = _qt_module_closure({"Quick"})
-        assert {"Quick", "Qml", "Network", "Gui", "Core"}.issubset(result)
+        assert {"Quick", "QmlModels", "Qml", "Network", "Gui", "Core"}.issubset(result)
+
+    def test_quick_controls2_includes_templates2(self) -> None:
+        """QtQuickControls2 在 C 层链接依赖 QtQuickTemplates2，闭包须包含。
+
+        回归测试：缺少此依赖会导致 dist 中 Qt5QuickTemplates2.dll 被剥离，
+        运行时 ``import PySide2.QtQuickControls2`` 报 DLL load failed。
+        """
+        from fspack.slim.qt import _qt_module_closure
+
+        result = _qt_module_closure({"QuickControls2"})
+        assert "QuickTemplates2" in result
+        assert {"QuickControls2", "QuickTemplates2", "Quick", "Qml", "Network", "Gui", "Core"}.issubset(result)
+
+    def test_qml_includes_runtime_plugin_deps(self) -> None:
+        """QtQml 运行时加载的 QML 插件依赖 QmlModels/QmlWorkerScript。
+
+        回归测试：``qtquick2plugin.dll`` 在 C 层链接 ``Qt5QmlModels.dll`` 与
+        ``Qt5QmlWorkerScript.dll``，二者须随 Qml 保留，否则运行 QML 时报
+        "plugin cannot be loaded for module QtQuick"。
+        """
+        from fspack.slim.qt import _qt_module_closure
+
+        result = _qt_module_closure({"Qml"})
+        assert "QmlModels" in result
+        assert "QmlWorkerScript" in result
+        assert {"Qml", "QmlModels", "QmlWorkerScript", "Network", "Core"}.issubset(result)
 
     def test_qt3d_extras_transitive(self) -> None:
         """Qt3DExtras 闭包含 3DRender/3DInput/3DLogic/3DCore/Core/Gui/Network."""
