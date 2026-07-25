@@ -201,7 +201,13 @@ class NuitkaCompiler:
         _logger.info("解压 standalone python 到 %s", build_python_dir)
         try:
             with tarfile.open(archive_path, "r:gz") as tf:
-                tf.extractall(build_python_dir)
+                # Python 3.12+ 显式指定 data 过滤器（PEP 706）：消除 DeprecationWarning，
+                # 并阻止绝对路径/路径穿越等恶意条目（tarball 来自网络下载）。
+                # 低版本无 filter 参数，回退原行为。
+                if sys.version_info >= (3, 12):
+                    tf.extractall(build_python_dir, filter="data")
+                else:
+                    tf.extractall(build_python_dir)  # pragma: no cover
         except (tarfile.TarError, OSError) as e:
             raise NuitkaError(f"standalone python tarball 损坏: {archive_path}") from e
 
