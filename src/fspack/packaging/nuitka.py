@@ -278,9 +278,12 @@ class NuitkaCompiler:
             f"nuitka=={nuitka_ver}",
         ]
         _logger.info("用构建机 pip 装 nuitka %s 到缓存 %s", nuitka_ver, cache_dir)
-        result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+        # stderr=None: pip 进度（Collecting/Downloading/Building wheel/Installing）实时
+        # 输出到终端，避免 sdist 构建数分钟无输出被误认为卡死。stdout 捕获但 pip install
+        # 的 stdout 通常为空（成功信息走 stderr），保留以备诊断。
+        result = subprocess.run(cmd, check=False, text=True, stdout=subprocess.PIPE, stderr=None)
         if result.returncode != 0:
-            raise NuitkaError(f"pip install nuitka=={nuitka_ver} 失败:\n{result.stderr.strip()[:500]}")
+            raise NuitkaError(f"pip install nuitka=={nuitka_ver} 失败（退出码 {result.returncode}），详见上方 pip 输出")
 
         # 验证安装：检查缓存目录有 nuitka 包
         if not cls._is_nuitka_cached(cache_dir):
@@ -367,8 +370,11 @@ class NuitkaCompiler:
         # --quiet: 静默模式，减少日志输出
         compiled = 0
         failed = 0
+        total = len(py_files)
         try:
-            for py_file in py_files:
+            for idx, py_file in enumerate(py_files, 1):
+                # 显示当前编译进度，避免多文件编译时长时间无输出被误认为卡死
+                _logger.info("编译 [%d/%d] %s", idx, total, py_file.name)
                 result = subprocess.run(
                     [
                         str(py_exe),
