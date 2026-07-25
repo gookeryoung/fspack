@@ -417,6 +417,56 @@ def test_compile_src_excludes_nuitka_build_artifacts(tmp_path: Path, monkeypatch
     assert st._skipped == 1
 
 
+def test_compile_src_skips_entry_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """entry_rels 指定的入口文件不编译不删除，保留 .py 供 runpy.run_path() 调用.
+
+    入口包装器用 runpy.run_path(os.path.join(_SRC_DIR, _ENTRY_REL)) 显式指定 .py 路径，
+    若入口 .py 被 Nuitka 编译后删除，run_path 会 FileNotFoundError。
+    """
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "python.exe").write_bytes(b"")
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "snake.py").write_text("print('entry')")  # 入口文件
+    (src / "game_logic.py").write_text("x = 1")  # 普通模块
+    (src / "utils.py").write_text("y = 2")  # 普通模块
+    cache = _make_nuitka_cache(tmp_path / "cache")
+
+    captured_files: list[str] = []
+
+    def fake_stream(cmd: list[str]) -> tuple[int, str, str]:
+        captured_files.append(cmd[-1])
+        return (0, "", "")
+
+    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(fake_stream))
+
+    st = StageRecorder("Nuitka 编译")
+    NuitkaCompiler.compile_src(
+        src,
+        runtime,
+        "3.11.9",
+        Platform.WINDOWS,
+        cache,
+        stage=st,
+        entry_rels={"snake.py"},
+    )
+
+    # 只编译非入口文件：game_logic.py 和 utils.py
+    assert len(captured_files) == 2
+    compiled_names = {Path(f).name for f in captured_files}
+    assert compiled_names == {"game_logic.py", "utils.py"}
+    assert "snake.py" not in compiled_names, "入口文件不应被编译"
+    # 入口 .py 必须保留（runpy.run_path 调用需要）
+    assert (src / "snake.py").is_file(), "入口 .py 必须保留供 run_path 调用"
+    # 非入口 .py 被剥离
+    assert not (src / "game_logic.py").exists()
+    assert not (src / "utils.py").exists()
+    # 编译 2 个，剥离 2 个
+    assert st._items == 2
+    assert st._skipped == 2
+
+
 def test_compile_src_unlink_failure_warns(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -938,15 +988,49 @@ def test_compile_with_stamp_passes_build_python_to_compile_src(tmp_path: Path, m
 def test_stamp_key_includes_nuitka_version_py_version_src_fingerprint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """stamp 键含 nuitka_version + py_version + src_fingerprint."""
+    """stamp 键含 nuitka_version + py_version + src_fingerprint + entry_rels."""
     src = tmp_path / "src"
     src.mkdir()
     (src / "app.py").write_text("print('hi')")
     key = NuitkaCompiler._stamp_key(src, "4.1.3", "3.11.9")
     assert "4.1.3" in key
     assert "3.11.9" in key
-    # 三段式：version|py_version|src_fp
-    assert key.count("|") == 2
+    # 四段式：version|py_version|src_fp|entry_part（entry_rels=None 时 entry_part 为空）
+    assert key.count("|") == 3
+    # 末尾为空 entry_part（None 时）
+    assert key.endswith("|")
+
+
+def test_stamp_key_includes_entry_rels(tmp_path: Path) -> None:
+    """entry_rels 纳入 stamp key：入口集合变化时 stamp 失效，强制重编.
+
+    避免上次编译删除了 .py、本次新增入口跳过但 .py 已不在导致 run_path 失败。
+    """
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "snake.py").write_text("print('entry')")
+    (src / "util.py").write_text("x = 1")
+
+    key_no_entry = NuitkaCompiler._stamp_key(src, "4.1.3", "3.11.9")
+    key_with_entry = NuitkaCompiler._stamp_key(src, "4.1.3", "3.11.9", {"snake.py"})
+    key_different_entry = NuitkaCompiler._stamp_key(src, "4.1.3", "3.11.9", {"util.py"})
+
+    # entry_rels 不同则 stamp key 不同
+    assert key_no_entry != key_with_entry
+    assert key_with_entry != key_different_entry
+    # entry_rels 出现在 key 中（排序后拼接）
+    assert "snake.py" in key_with_entry
+    assert "util.py" in key_different_entry
+
+
+def test_stamp_key_entry_rels_order_independent(tmp_path: Path) -> None:
+    """entry_rels 集合迭代顺序不影响 stamp key（排序后拼接）."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "a.py").write_text("")
+    key1 = NuitkaCompiler._stamp_key(src, "4.1.3", "3.11.9", {"snake.py", "util.py"})
+    key2 = NuitkaCompiler._stamp_key(src, "4.1.3", "3.11.9", {"util.py", "snake.py"})
+    assert key1 == key2
 
 
 def test_stamp_path_under_dist(tmp_path: Path) -> None:

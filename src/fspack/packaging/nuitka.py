@@ -501,6 +501,7 @@ class NuitkaCompiler:
         *,
         stage: StageRecorder,
         build_python_exe: Path | None = None,
+        entry_rels: set[str] | None = None,
     ) -> None:
         """编译 ``src_dir`` 下所有 ``.py`` 为 ``.pyd``/``.so``，编译后删除 ``.py`` 源码.
 
@@ -524,6 +525,12 @@ class NuitkaCompiler:
         策略与 :func:`fspack.builder._strip_py_sources` 一致：保留 ``__init__.py``
         维持包标识。
 
+        **入口文件跳过**（``entry_rels``）：入口包装器用 ``runpy.run_path()`` 显式
+        指定 ``.py`` 路径调用用户代码（按 project_memory 约定，用户拒绝直接 import
+        方案）。若入口 ``.py`` 被 Nuitka 编译后删除，``run_path`` 会
+        ``FileNotFoundError``。故入口文件必须保留 ``.py`` 形态，由预编译字节码阶段
+        编译为 ``.pyc`` 优化（速度略逊 ``.pyd`` 但兼容 ``run_path``）。
+
         Args:
             src_dir: 用户源码目录（``dist/src``）。
             runtime_dir: runtime 根目录（含 ``python.exe`` 或 ``python/bin/``）。
@@ -533,6 +540,8 @@ class NuitkaCompiler:
             stage: 阶段记录器，记录编译项数与跳过数。
             build_python_exe: standalone python 可执行文件路径（Windows 由
                 :meth:`_ensure_build_python` 下载）。None 或不存在时回退到 runtime python。
+            entry_rels: 入口文件相对 ``src_dir`` 的 POSIX 路径集合（如 ``{"snake.py"}``）。
+                这些文件不编译不删除，保留 ``.py`` 供 ``runpy.run_path()`` 调用。
         """
         # 优先用 standalone python（完整环境），回退到 runtime python（Linux 已是 standalone）
         if build_python_exe is not None and build_python_exe.is_file():
@@ -560,6 +569,10 @@ class NuitkaCompiler:
         py_files = sorted(
             p for p in src_dir.rglob("*.py") if not any(part.lower().endswith(".build") for part in p.parts)
         )
+        # 入口文件跳过：入口包装器用 runpy.run_path() 显式指定 .py 路径，编译后 .py
+        # 被删除会导致 FileNotFoundError。入口文件保留 .py 形态，由 .pyc 优化。
+        if entry_rels:
+            py_files = [p for p in py_files if p.relative_to(src_dir).as_posix() not in entry_rels]
         if not py_files:
             stage.set_detail("无 .py 文件可编译")
             return
@@ -668,14 +681,21 @@ class NuitkaCompiler:
         return dist_dir / ".nuitka_compile_stamp"
 
     @staticmethod
-    def _stamp_key(src_dir: Path, nuitka_version: str, py_version: str) -> str:
+    def _stamp_key(
+        src_dir: Path,
+        nuitka_version: str,
+        py_version: str,
+        entry_rels: set[str] | None = None,
+    ) -> str:
         """计算 Nuitka 编译 stamp 键.
 
-        三要素：
+        四要素：
 
         - ``nuitka_version``：切换 Nuitka 版本时强制重编（如 3.10 从 4.1.3 升级到 4.2）
         - ``py_version``：切换 Python 版本时强制重编（.pyd ABI 绑定）
         - ``src_fingerprint``：用户源码变化时强制重编（按 ``rule-01`` 闭环要求）
+        - ``entry_rels``：入口文件集合变化时强制重编（影响哪些文件被跳过，
+          避免上次编译删除了 .py、本次新增入口跳过但 .py 已不在导致 run_path 失败）
 
         ``pyc_optimize`` 不纳入：Nuitka 编译不受 .pyc 优化级别影响，
         site-packages 的 .pyc 由 :func:`_precompile_pyc` 单独缓存。
@@ -683,7 +703,9 @@ class NuitkaCompiler:
         from fspack.analyzer import source_fingerprint
 
         src_fp = source_fingerprint(src_dir) if src_dir.is_dir() else ""
-        return f"{nuitka_version}|{py_version}|{src_fp}"
+        # entry_rels 排序后拼接，避免集合迭代顺序不稳定导致 stamp 抖动
+        entry_part = ",".join(sorted(entry_rels)) if entry_rels else ""
+        return f"{nuitka_version}|{py_version}|{src_fp}|{entry_part}"
 
     @classmethod
     def compile_with_stamp(  # noqa: PLR0913
@@ -697,6 +719,7 @@ class NuitkaCompiler:
         cache_root: Path,
         *,
         stage: StageRecorder,
+        entry_rels: set[str] | None = None,
     ) -> None:
         """整合 ensure_env + standalone python + stamp 缓存 + compile_src 的入口.
 
@@ -722,13 +745,15 @@ class NuitkaCompiler:
             cache_root: nuitka 缓存根目录（如 ``~/.fspack/cache/nuitka``）。
                 standalone python 缓存目录与之同根（``cache_root.parent / "python"``）。
             stage: 阶段记录器。
+            entry_rels: 入口文件相对 ``src_dir`` 的 POSIX 路径集合（如 ``{"snake.py"}``）。
+                传给 :meth:`compile_src` 跳过编译与删除，并纳入 stamp key。
 
         Raises:
             NuitkaError: C 编译器缺失，或 nuitka 安装失败，或 standalone python 下载失败。
         """
         nuitka_ver = nuitka_version_for(py_version)
         stamp = cls._stamp_path(dist_dir)
-        stamp_key = cls._stamp_key(src_dir, nuitka_ver, py_version)
+        stamp_key = cls._stamp_key(src_dir, nuitka_ver, py_version, entry_rels)
 
         # stamp 命中：跳过整个 Nuitka 阶段
         try:
@@ -765,6 +790,7 @@ class NuitkaCompiler:
             nuitka_cache,
             stage=stage,
             build_python_exe=build_python_exe,
+            entry_rels=entry_rels,
         )
 
         # 编译后写 stamp（即使部分文件失败也写，避免下次重复尝试）

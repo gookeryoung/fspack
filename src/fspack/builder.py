@@ -528,11 +528,15 @@ def build(  # noqa: PLR0912, PLR0913
     # nuitka 装到本地缓存 ~/.fspack/cache/nuitka/<py_version>/，不污染 dist/runtime；
     # 编译时用 -c 注入 sys.path 绕过 _pth 对 PYTHONPATH 的限制。
     # stamp 命中跳过整个阶段（含 ensure_env 与 compile_src）。
+    # 入口文件跳过编译：入口包装器用 runpy.run_path() 显式指定 .py 路径调用用户代码，
+    # 若入口 .py 被 Nuitka 编译后删除，run_path 会 FileNotFoundError。
     if opts.nuitka and target is detect_platform():
         with tracker.stage("Nuitka 编译") as st:
             from fspack.packaging.nuitka import NuitkaCompiler
 
             nuitka_cache_root = Path.home() / ".fspack" / "cache" / "nuitka"
+            # 入口文件相对 src 的 POSIX 路径集合：Nuitka 编译跳过这些文件
+            entry_rels = {ep.entry_rel(info.src_dir) for ep in info.all_entries}
             NuitkaCompiler.compile_with_stamp(
                 src_dst,
                 cfg.dist_dir,
@@ -542,6 +546,7 @@ def build(  # noqa: PLR0912, PLR0913
                 cfg.mirror,
                 nuitka_cache_root,
                 stage=st,
+                entry_rels=entry_rels,
             )
 
     # 预编译字节码：用 runtime 自身 python 编译 src + site-packages 为 .pyc，加速首次启动。
