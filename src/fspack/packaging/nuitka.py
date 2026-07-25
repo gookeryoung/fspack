@@ -553,7 +553,13 @@ class NuitkaCompiler:
             stage.set_detail("nuitka 未安装，跳过（回退到 .pyc 模式）")
             return
 
-        py_files = sorted(src_dir.rglob("*.py"))
+        # 收集 .py 文件时排除 Nuitka 残留的 <name>.build/ 目录：
+        # --remove-output 只在编译成功时清理 <name>.build/，失败时残留。
+        # 下次构建若不排除会扫到 scons-debug.py 等产物并尝试编译（无意义且可能失败）。
+        # Nuitka 构建目录命名规则：<source_name>.build（如 snake.py -> snake.build）
+        py_files = sorted(
+            p for p in src_dir.rglob("*.py") if not any(part.lower().endswith(".build") for part in p.parts)
+        )
         if not py_files:
             stage.set_detail("无 .py 文件可编译")
             return
@@ -586,6 +592,9 @@ class NuitkaCompiler:
         compiled = 0
         failed = 0
         total = len(py_files)
+        # 记录成功编译的文件：仅这些 .py 可安全删除（.pyd 已生成）。
+        # 失败的 .py 保留，让运行时回退到 .pyc 加载，避免编译失败导致 dist/src 无可用代码。
+        compiled_files: set[Path] = set()
         try:
             for idx, py_file in enumerate(py_files, 1):
                 _logger.info("编译 [%d/%d] %s", idx, total, py_file.name)
@@ -610,8 +619,10 @@ class NuitkaCompiler:
                             f"--output-dir={py_file.parent}",
                             "--no-pyi-file",
                             "--remove-output",
-                            "--jobs",
-                            "1",
+                            # --jobs=1：必须用 = 形式传参。Nuitka 4.x 的 argparse 配置要求
+                            # --jobs=N 格式，用空格分隔（"--jobs", "1"）会报错：
+                            # "The '--jobs' option requires an argument with '--jobs='."
+                            "--jobs=1",
                             str(py_file),
                         ]
                     )
@@ -620,6 +631,7 @@ class NuitkaCompiler:
                     hb_thread.join(timeout=1.0)
                 if returncode == 0:
                     compiled += 1
+                    compiled_files.add(py_file)
                     stage.processed()
                 else:
                     failed += 1
@@ -627,9 +639,12 @@ class NuitkaCompiler:
         finally:
             shutil.rmtree(bootstrap_dir, ignore_errors=True)
 
-        # 删除非 __init__.py 的 .py 源码（保留包标识），与 pyc_strip 策略一致
+        # 仅删除成功编译的非 __init__.py 源码（.pyd 已生成可替代）。
+        # 失败的 .py 必须保留：运行时可回退到 .pyc 加载，避免编译失败导致 dist/src 无可用代码。
+        # 保留 __init__.py 维持包标识，与 pyc_strip 策略一致（避免 PEP 420 命名空间包
+        # 导致 .pyd/.pyc 不被识别为包成员）。
         stripped = 0
-        for py_file in py_files:
+        for py_file in compiled_files:
             if py_file.name == "__init__.py":
                 continue
             try:

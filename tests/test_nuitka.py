@@ -203,11 +203,11 @@ def test_compile_src_invokes_bootstrap_script_with_sys_path_injection(
         # scons 自动继承 sys.executable，无需另指定。embed runtime python 不完整会触发
         # Nuitka reExecute fork bomb（详见 compile_with_stamp 文档）。
         assert "--python-for-scons" not in cmd
-        # --jobs=1 限制 C 编译并行度，避免 CPU 卡死
-        assert "--jobs" in cmd
-        jobs_idx = cmd.index("--jobs")
-        assert jobs_idx + 1 < len(cmd)
-        assert cmd[jobs_idx + 1] == "1"
+        # --jobs=1 限制 C 编译并行度，避免 CPU 卡死。
+        # 必须用 = 形式：Nuitka 4.x 的 argparse 配置要求 --jobs=N 格式，
+        # 空格分隔（"--jobs", "1"）会报 "requires an argument with '--jobs='" 错误。
+        assert "--jobs=1" in cmd
+        assert "--jobs" not in cmd  # 不应出现独立的 --jobs（避免空格分隔形式）
     # 复用同一脚本文件
     assert len(bootstrap_scripts) == 1
     # 脚本内容含 sys.path 注入与 nuitka main 调用
@@ -293,7 +293,11 @@ def test_compile_src_prefers_standalone_python_over_runtime(tmp_path: Path, monk
 def test_compile_src_failure_warns_continues(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """单文件编译失败仅告警不中断，后续文件继续编译."""
+    """单文件编译失败仅告警不中断，后续文件继续编译.
+
+    失败的 .py 必须保留（运行时回退到 .pyc 加载），仅删除成功编译的 .py。
+    避免编译失败导致 dist/src 无可用代码。
+    """
     runtime = tmp_path / "runtime"
     runtime.mkdir()
     (runtime / "python.exe").write_bytes(b"")
@@ -320,6 +324,10 @@ def test_compile_src_failure_warns_continues(
     # detail 含失败计数
     assert "失败 1" in st._detail
     assert "编译 1" in st._detail
+    # 成功编译的 ok.py 被删除（.pyd 已生成替代）
+    assert not (src / "ok.py").exists()
+    # 失败的 bad.py 必须保留：运行时回退到 .pyc 加载，避免 dist/src 无可用代码
+    assert (src / "bad.py").is_file(), "编译失败的 .py 不应被删除，需保留供 .pyc 回退加载"
 
 
 def test_compile_src_linux_uses_python3_bin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -367,6 +375,46 @@ def test_compile_src_records_stage_metrics(tmp_path: Path, monkeypatch: pytest.M
     assert st._skipped == 2
     # 3 个 .py 编译成功（__init__.py + app.py + util.py）
     assert st._items == 3
+
+
+def test_compile_src_excludes_nuitka_build_artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """compile_src 排除 Nuitka 残留的 <name>.build/ 目录下的 .py 文件.
+
+    --remove-output 只在编译成功时清理 .build/，失败时残留。下次构建若不排除会扫到
+    scons-debug.py 等产物并尝试编译（无意义且可能失败）。
+    """
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "python.exe").write_bytes(b"")
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "snake.py").write_text("print('hi')")
+    # 模拟上次失败留下的 Nuitka 构建目录
+    build_dir = src / "snake.build"
+    build_dir.mkdir()
+    (build_dir / "scons-debug.py").write_text("# scons artifact")
+    (build_dir / "scons_input.txt").write_text("ignored")
+    cache = _make_nuitka_cache(tmp_path / "cache")
+
+    captured_files: list[str] = []
+
+    def fake_stream(cmd: list[str]) -> tuple[int, str, str]:
+        # cmd 最后一个元素是 py_file 路径
+        captured_files.append(cmd[-1])
+        return (0, "", "")
+
+    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(fake_stream))
+
+    st = StageRecorder("Nuitka 编译")
+    NuitkaCompiler.compile_src(src, runtime, "3.11.9", Platform.WINDOWS, cache, stage=st)
+
+    # 只编译用户的 snake.py，不编译 .build/ 下的 scons-debug.py
+    assert len(captured_files) == 1
+    assert captured_files[0].endswith("snake.py")
+    assert not any("scons-debug" in f for f in captured_files)
+    # 编译 1 个，剥离 1 个
+    assert st._items == 1
+    assert st._skipped == 1
 
 
 def test_compile_src_unlink_failure_warns(
