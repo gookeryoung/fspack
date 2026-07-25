@@ -244,7 +244,8 @@ class BuildOptions:
     no_stdlib_trim: bool = False
     no_pyc: bool = False
     pyc_strip: bool = False
-    pyc_optimize: int = 0
+    # pyc_optimize 默认 2（与 cli.py --pyc-optimize argparse default 一致，iter-35 决策）
+    pyc_optimize: int = 2
     no_site: bool = False
     nuitka: bool = False
 
