@@ -119,9 +119,14 @@ class StageRecorder:
 class BuildTracker:
     """构建全流程进度跟踪器."""
 
-    def __init__(self) -> None:
-        """初始化空跟踪器，开始总计时."""
+    def __init__(self, *, title: str = "构建阶段汇总") -> None:
+        """初始化空跟踪器，开始总计时.
+
+        Args:
+            title: 汇总表标题，区分不同流程（构建/打包/编译等）。
+        """
         self._records: list[StageRecord] = []
+        self._title = title
         self._start = time.perf_counter()
 
     @contextmanager
@@ -145,7 +150,7 @@ class BuildTracker:
 
     def summary(self) -> Table:
         """渲染汇总表格."""
-        table = Table(title="构建阶段汇总", show_lines=False, title_style="bold blue")
+        table = Table(title=self._title, show_lines=False, title_style="bold blue")
         table.add_column("阶段", style="bold cyan", no_wrap=True)
         table.add_column("耗时", justify="right")
         table.add_column("缓存", justify="right")

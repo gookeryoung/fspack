@@ -21,12 +21,14 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Callable, TypeVar
 
 from fspack.builder import build, resolve_project_info
 from fspack.config import MirrorConfig, ProjectInfo
 from fspack.console import console
 from fspack.exceptions import InstallerError
 from fspack.platform import Platform, detect_platform
+from fspack.progress import BuildTracker, spinner
 
 if sys.version_info >= (3, 12):  # pragma: no cover
     from typing import override
@@ -55,6 +57,30 @@ _logger = logging.getLogger(__name__)
 # 发行包格式取值校验
 _VALID_FORMATS = ("auto", "zip", "nsis", "tar.gz", "deb", "all")
 
+_T = TypeVar("_T")
+
+
+def _run_stage(
+    tracker: BuildTracker,
+    name: str,
+    fn: Callable[[], _T],
+    *,
+    detail: str = "",
+) -> _T:
+    """执行单阶段并用 ``tracker.stage`` 包装，同时显示 ``console.step`` 实时反馈。
+
+    打包阶段（生成脚本/编译安装包/打 zip 等）统一用此函数包装，确保耗时与项数
+    进入 ``BuildTracker`` 汇总表。``console.step`` 提供实时反馈，``tracker.stage``
+    累积统计数据，两者职责分离不冲突。
+    """
+    with tracker.stage(name) as st:
+        with spinner(name):
+            result = fn()
+        st.processed()
+        if detail:
+            st.set_detail(detail)
+    return result
+
 
 # ---- 基类 ----
 
@@ -82,25 +108,39 @@ class Installer(abc.ABC):
 
     @classmethod
     @abc.abstractmethod
-    def build_package(cls, dist_dir: Path, info: ProjectInfo, release_dir: Path) -> Path:
+    def build_package(
+        cls,
+        dist_dir: Path,
+        info: ProjectInfo,
+        release_dir: Path,
+        *,
+        tracker: BuildTracker,
+    ) -> Path:
         """生成安装包，返回产物路径。"""
 
     @classmethod
-    def build_installer(
+    def build_installer(  # noqa: PLR0913
         cls,
         project_dir: Path,
         mirror: MirrorConfig,
         py_version: str | None = None,
         no_build: bool = False,
         dist_dir: Path | None = None,
+        *,
+        tracker: BuildTracker | None = None,
     ) -> Path:
         """编排：可选 build → 校验可执行文件 → build_package，返回安装包路径。"""
+        own_tracker = tracker is None
+        tk = tracker or BuildTracker(title="打包阶段汇总")
         dist, info = _prepare_dist(project_dir, mirror, py_version, no_build, dist_dir, cls.target_platform())
         exe = dist / cls.exe_filename(info)
         if not exe.is_file():
             raise InstallerError(f"未找到已构建的可执行文件: {exe}（请先执行 fsp b）")
         release = dist / "release"
-        return cls.build_package(dist, info, release)
+        result = cls.build_package(dist, info, release, tracker=tk)
+        if own_tracker:
+            console.rich.print(tk.summary())
+        return result
 
 
 def _prepare_dist(  # noqa: PLR0913
@@ -202,13 +242,28 @@ class NsisInstaller(Installer):
 
     @classmethod
     @override
-    def build_package(cls, dist_dir: Path, info: ProjectInfo, release_dir: Path) -> Path:
+    def build_package(
+        cls,
+        dist_dir: Path,
+        info: ProjectInfo,
+        release_dir: Path,
+        *,
+        tracker: BuildTracker,
+    ) -> Path:
         """生成 NSIS 脚本并编译为安装包。"""
-        console.step("生成 NSIS 脚本")
-        nsi = generate_nsis_script(info, dist_dir, release_dir)
+        nsi = _run_stage(
+            tracker,
+            "生成 NSIS 脚本",
+            lambda: generate_nsis_script(info, dist_dir, release_dir),
+            detail="installer.nsi",
+        )
         out_setup = release_dir / f"{_release_base(info, 'windows')}-setup.exe"
-        console.step("编译 NSIS 安装包")
-        result = compile_installer(nsi, out_setup)
+        result = _run_stage(
+            tracker,
+            "编译 NSIS 安装包",
+            lambda: compile_installer(nsi, out_setup),
+            detail=out_setup.name,
+        )
         console.success(f"安装包已生成: {result}")
         return result
 
@@ -323,12 +378,29 @@ class LinuxInstaller(Installer):
 
     @classmethod
     @override
-    def build_package(cls, dist_dir: Path, info: ProjectInfo, release_dir: Path) -> Path:
+    def build_package(
+        cls,
+        dist_dir: Path,
+        info: ProjectInfo,
+        release_dir: Path,
+        *,
+        tracker: BuildTracker,
+    ) -> Path:
         """生成 tar.gz 便携包与 .deb 安装包，返回 .deb 路径。"""
-        console.step("生成 tar.gz 便携包")
-        build_tarball(dist_dir, info, release_dir)
-        console.step("构造 .deb 安装包")
-        result = build_deb(dist_dir, info, release_dir)
+        tar_name = f"{_release_base(info, 'linux')}.tar.gz"
+        _run_stage(
+            tracker,
+            "生成 tar.gz 便携包",
+            lambda: build_tarball(dist_dir, info, release_dir),
+            detail=tar_name,
+        )
+        deb_name = f"{info.name}_{info.version}-{_py_tag(info)}-slim_amd64.deb"
+        result = _run_stage(
+            tracker,
+            "构造 .deb 安装包",
+            lambda: build_deb(dist_dir, info, release_dir),
+            detail=deb_name,
+        )
         console.success(f"安装包已生成: {result}")
         return result
 
@@ -403,26 +475,34 @@ def build_deb(dist_dir: Path, info: ProjectInfo, release_dir: Path) -> Path:
 # ---- 函数式 API（委托给类）----
 
 
-def build_installer(
+def build_installer(  # noqa: PLR0913
     project_dir: Path,
     mirror: MirrorConfig,
     py_version: str | None = None,
     no_build: bool = False,
     dist_dir: Path | None = None,
+    *,
+    tracker: BuildTracker | None = None,
 ) -> Path:
     """编排：可选 build → 生成 NSIS 脚本 → 编译安装包，返回安装包路径。"""
-    return NsisInstaller.build_installer(project_dir, mirror, py_version, no_build=no_build, dist_dir=dist_dir)
+    return NsisInstaller.build_installer(
+        project_dir, mirror, py_version, no_build=no_build, dist_dir=dist_dir, tracker=tracker
+    )
 
 
-def build_linux_installer(
+def build_linux_installer(  # noqa: PLR0913
     project_dir: Path,
     mirror: MirrorConfig,
     py_version: str | None = None,
     no_build: bool = False,
     dist_dir: Path | None = None,
+    *,
+    tracker: BuildTracker | None = None,
 ) -> Path:
     """编排：可选 build → tar.gz 便携包 → .deb 安装包，返回 .deb 路径。"""
-    return LinuxInstaller.build_installer(project_dir, mirror, py_version, no_build=no_build, dist_dir=dist_dir)
+    return LinuxInstaller.build_installer(
+        project_dir, mirror, py_version, no_build=no_build, dist_dir=dist_dir, tracker=tracker
+    )
 
 
 # ---- zip 便携包（跨平台）----
@@ -435,18 +515,29 @@ def build_zip(  # noqa: PLR0913
     no_build: bool = False,
     dist_dir: Path | None = None,
     target: Platform = Platform.WINDOWS,
+    *,
+    tracker: BuildTracker | None = None,
 ) -> Path:
     """编排：可选 build → 校验可执行文件 → 打包 zip 便携包，返回 zip 路径。
 
     zip 跨平台解压即用，无需安装。文件名 ``<name>-<version>-<platform>.zip``，
     内顶层目录同名，解压后不污染当前目录。排除 ``dist/release/`` 避免递归打包。
     """
+    own_tracker = tracker is None
+    tk = tracker or BuildTracker(title="打包阶段汇总")
     dist, info = _prepare_dist(project_dir, mirror, py_version, no_build, dist_dir, target)
     _check_exe(dist, info, target)
     release = dist / "release"
-    console.step("生成 zip 便携包")
-    result = _make_zip(dist, info, release, target)
+    zip_name = f"{_release_base(info, 'windows' if target is Platform.WINDOWS else 'linux')}.zip"
+    result = _run_stage(
+        tk,
+        "生成 zip 便携包",
+        lambda: _make_zip(dist, info, release, target),
+        detail=zip_name,
+    )
     console.success(f"zip 便携包已生成: {result}")
+    if own_tracker:
+        console.rich.print(tk.summary())
     return result
 
 
@@ -473,37 +564,59 @@ def _make_zip(dist_dir: Path, info: ProjectInfo, release_dir: Path, target: Plat
 # ---- 单格式编排（tar.gz / deb）----
 
 
-def build_tarball_release(
+def build_tarball_release(  # noqa: PLR0913
     project_dir: Path,
     mirror: MirrorConfig,
     py_version: str | None = None,
     no_build: bool = False,
     dist_dir: Path | None = None,
+    *,
+    tracker: BuildTracker | None = None,
 ) -> Path:
     """编排：可选 build → 校验可执行文件 → 生成 tar.gz 便携包，返回包路径。"""
+    own_tracker = tracker is None
+    tk = tracker or BuildTracker(title="打包阶段汇总")
     dist, info = _prepare_dist(project_dir, mirror, py_version, no_build, dist_dir, Platform.LINUX)
     _check_exe(dist, info, Platform.LINUX)
     release = dist / "release"
-    console.step("生成 tar.gz 便携包")
-    result = build_tarball(dist, info, release)
+    tar_name = f"{_release_base(info, 'linux')}.tar.gz"
+    result = _run_stage(
+        tk,
+        "生成 tar.gz 便携包",
+        lambda: build_tarball(dist, info, release),
+        detail=tar_name,
+    )
     console.success(f"tar.gz 便携包已生成: {result}")
+    if own_tracker:
+        console.rich.print(tk.summary())
     return result
 
 
-def build_deb_release(
+def build_deb_release(  # noqa: PLR0913
     project_dir: Path,
     mirror: MirrorConfig,
     py_version: str | None = None,
     no_build: bool = False,
     dist_dir: Path | None = None,
+    *,
+    tracker: BuildTracker | None = None,
 ) -> Path:
     """编排：可选 build → 校验可执行文件 → 构造 .deb 安装包，返回 .deb 路径。"""
+    own_tracker = tracker is None
+    tk = tracker or BuildTracker(title="打包阶段汇总")
     dist, info = _prepare_dist(project_dir, mirror, py_version, no_build, dist_dir, Platform.LINUX)
     _check_exe(dist, info, Platform.LINUX)
     release = dist / "release"
-    console.step("构造 .deb 安装包")
-    result = build_deb(dist, info, release)
+    deb_name = f"{info.name}_{info.version}-{_py_tag(info)}-slim_amd64.deb"
+    result = _run_stage(
+        tk,
+        "构造 .deb 安装包",
+        lambda: build_deb(dist, info, release),
+        detail=deb_name,
+    )
     console.success(f".deb 安装包已生成: {result}")
+    if own_tracker:
+        console.rich.print(tk.summary())
     return result
 
 
@@ -543,9 +656,13 @@ def build_release(  # noqa: PLR0913
 
     多格式时按 ``_resolve_formats`` 顺序逐个生成，每次复用同一 dist（``no_build=True``
     内部触发第一次 build，后续格式跳过 build 直接打包）。返回的列表顺序与生成顺序一致。
+
+    所有格式共享同一 ``BuildTracker``，最终统一渲染「打包阶段汇总」表（与 ``build()``
+    的「构建阶段汇总」对应）。单格式函数（``build_zip`` 等）单独调用时各自渲染汇总表。
     """
     resolved_target = target or detect_platform()
     formats = _resolve_formats(fmt, resolved_target)
+    tracker = BuildTracker(title="打包阶段汇总")
     outputs: list[Path] = []
     for index, f in enumerate(formats):
         # 首个格式负责 build，后续格式 no_build=True 复用同一 dist
@@ -553,17 +670,32 @@ def build_release(  # noqa: PLR0913
         if f == "zip":
             outputs.append(
                 build_zip(
-                    project_dir, mirror, py_version, no_build=skip_build, dist_dir=dist_dir, target=resolved_target
+                    project_dir,
+                    mirror,
+                    py_version,
+                    no_build=skip_build,
+                    dist_dir=dist_dir,
+                    target=resolved_target,
+                    tracker=tracker,
                 )
             )
         elif f == "nsis":
             outputs.append(
-                NsisInstaller.build_installer(project_dir, mirror, py_version, no_build=skip_build, dist_dir=dist_dir)
+                NsisInstaller.build_installer(
+                    project_dir, mirror, py_version, no_build=skip_build, dist_dir=dist_dir, tracker=tracker
+                )
             )
         elif f == "tar.gz":
             outputs.append(
-                build_tarball_release(project_dir, mirror, py_version, no_build=skip_build, dist_dir=dist_dir)
+                build_tarball_release(
+                    project_dir, mirror, py_version, no_build=skip_build, dist_dir=dist_dir, tracker=tracker
+                )
             )
         elif f == "deb":
-            outputs.append(build_deb_release(project_dir, mirror, py_version, no_build=skip_build, dist_dir=dist_dir))
+            outputs.append(
+                build_deb_release(
+                    project_dir, mirror, py_version, no_build=skip_build, dist_dir=dist_dir, tracker=tracker
+                )
+            )
+    console.rich.print(tracker.summary())
     return outputs
