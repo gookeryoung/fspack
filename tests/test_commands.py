@@ -1,7 +1,7 @@
-"""commands 子命令测试：clean/run/package 直测与 _build_cmd 分支.
+"""commands 子命令测试：clean/run 直测与 _build_cmd 分支.
 
-build 子命令已整合到 cli.py 直接调用 builder.build()，参数透传测试见
-tests/test_cli.py（mock fspack.builder.build 校验 BuildOptions 封装）。
+build 与 package 子命令已整合到 cli.py 直接调用 builder.build() 与
+installer.build_release()，参数透传测试见 tests/test_cli.py。
 """
 
 from __future__ import annotations
@@ -11,12 +11,10 @@ from pathlib import Path
 import pytest
 
 from fspack.commands.clean import run as clean_run
-from fspack.commands.package import run as package_run
 from fspack.commands.run import _build_cmd, _find_exe, _select_entry
 from fspack.commands.run import run as run_run
-from fspack.config import AppType, EntryPoint, ProjectInfo, get_mirror
+from fspack.config import AppType, EntryPoint, ProjectInfo
 from fspack.exceptions import FspackError
-from fspack.platform import Platform, detect_platform
 
 
 def test_clean_run_removes_dist(tmp_path: Path) -> None:
@@ -295,86 +293,6 @@ def test_run_run_linux_native(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr("fspack.commands.run.platform.system", lambda: "Linux")
     run_run(tmp_path)
     assert captured["cmd"] == [str(exe)]
-
-
-def test_package_run_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, object] = {}
-
-    def fake_build_release(  # noqa: PLR0913
-        project: Path,
-        mirror: object,
-        py_version: str | None,
-        no_build: bool = False,
-        dist_dir: Path | None = None,
-        target: object = None,
-        fmt: str = "auto",
-    ) -> list[Path]:
-        captured["mirror"] = mirror
-        captured["py_version"] = py_version
-        captured["no_build"] = no_build
-        captured["target"] = target
-        captured["fmt"] = fmt
-        return [tmp_path / "app-setup.exe"]
-
-    monkeypatch.setattr("fspack.commands.package.build_release", fake_build_release)
-    package_run(tmp_path)
-    assert captured["mirror"] == get_mirror("tsinghua")
-    assert captured["py_version"] is None
-    assert captured["no_build"] is False
-    assert captured["fmt"] == "auto"
-    assert captured["target"] is detect_platform()
-
-
-def test_package_run_explicit_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, object] = {}
-
-    def fake_build_release(  # noqa: PLR0913
-        project: Path,
-        mirror: object,
-        py_version: str | None,
-        no_build: bool = False,
-        dist_dir: Path | None = None,
-        target: object = None,
-        fmt: str = "auto",
-    ) -> list[Path]:
-        captured["py_version"] = py_version
-        captured["no_build"] = no_build
-        captured["target"] = target
-        captured["fmt"] = fmt
-        return [Path("out.exe")]
-
-    monkeypatch.setattr("fspack.commands.package.build_release", fake_build_release)
-    package_run(tmp_path, mirror="aliyun", py_version="3.10.0", no_build=True, target=Platform.WINDOWS, fmt="zip")
-    assert captured["py_version"] == "3.10.0"
-    assert captured["no_build"] is True
-    assert captured["target"] is Platform.WINDOWS
-    assert captured["fmt"] == "zip"
-
-
-def test_package_run_explicit_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, object] = {}
-
-    def fake_build_release(  # noqa: PLR0913
-        project: Path,
-        mirror: object,
-        py_version: str | None,
-        no_build: bool = False,
-        dist_dir: Path | None = None,
-        target: object = None,
-        fmt: str = "auto",
-    ) -> list[Path]:
-        captured["py_version"] = py_version
-        captured["no_build"] = no_build
-        captured["target"] = target
-        captured["fmt"] = fmt
-        return [Path("out.deb")]
-
-    monkeypatch.setattr("fspack.commands.package.build_release", fake_build_release)
-    package_run(tmp_path, mirror="aliyun", py_version="3.11.10", no_build=True, target=Platform.LINUX, fmt="all")
-    assert captured["py_version"] == "3.11.10"
-    assert captured["no_build"] is True
-    assert captured["target"] is Platform.LINUX
-    assert captured["fmt"] == "all"
 
 
 # --- 多入口 _select_entry 测试 ---

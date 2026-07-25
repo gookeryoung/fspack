@@ -222,24 +222,28 @@ def test_clean_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_package_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """package 子命令直接调用 installer.build_release，校验参数透传."""
     called: dict[str, Any] = {}
 
-    def fake_run(  # noqa: PLR0913
+    def fake_build_release(  # noqa: PLR0913
         project: Path,
-        mirror: str | None = None,
+        mirror: object = None,
         py_version: str | None = None,
         no_build: bool = False,
+        dist_dir: Path | None = None,
         target: object = None,
         fmt: str = "auto",
-    ) -> None:
+    ) -> list[Path]:
         called["project"] = project
         called["mirror"] = mirror
         called["no_build"] = no_build
+        return []
 
-    monkeypatch.setattr("fspack.commands.package.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.installer.build_release", fake_build_release)
     cli.main(["p", str(tmp_path), "--mirror", "aliyun", "--no-build"])
     assert called["project"] == tmp_path.resolve()
-    assert called["mirror"] == "aliyun"
+    # mirror 经 get_mirror 转为 MirrorConfig，校验 name 字段
+    assert called["mirror"].name == "阿里云"
     assert called["no_build"] is True
 
 

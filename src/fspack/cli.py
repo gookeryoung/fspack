@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 from pathlib import Path
 
 from fspack import __version__
@@ -11,6 +12,8 @@ from fspack.console import console
 from fspack.platform import Platform
 
 __all__ = ["build_parser", "main"]
+
+_logger = logging.getLogger(__name__)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -155,16 +158,19 @@ def main(argv: list[str] | None = None) -> None:
 
         clean_cmd.run(project)
     elif command in ("package", "p"):
-        from fspack.commands import package as package_cmd
+        from fspack.config import get_mirror
+        from fspack.packaging.installer import build_release
 
-        package_cmd.run(
+        outputs = build_release(
             project,
-            mirror=ns.mirror,
-            py_version=ns.py_version,
+            get_mirror(ns.mirror),
+            ns.py_version,
             no_build=ns.no_build,
             target=_parse_target(ns.target),
             fmt=ns.format,
         )
+        for out in outputs:
+            _logger.info("发行包已生成: %s", out)
 
 
 def _drop_separator(rest: list[str]) -> list[str]:
