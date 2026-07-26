@@ -411,6 +411,10 @@ class NuitkaCompiler:
 
         Linux 用 ``gcc``，Windows 用 mingw 交叉编译器 ``x86_64-w64-mingw32-gcc``
         （与 :func:`fspack.packaging.loader.MINGW_GCC` 一致）。
+
+        **Win7 兼容**：Windows 目标额外设置 ``CFLAGS=-D_WIN32_WINNT=0x0601``，
+        限制 MinGW 头文件 targeting Win7（默认 ``0x0A00`` 即 Win10），避免 .pyd
+        调用 Win10+ API 导致 Win7 加载失败。scons 读取 ``CFLAGS`` 追加到 ``CCFLAGS``。
         """
         from fspack.packaging.loader import LINUX_GCC, MINGW_GCC
 
@@ -426,6 +430,17 @@ class NuitkaCompiler:
         else:
             env["CC"] = compiler
             _logger.info("使用系统 C 编译器: CC=%s", env["CC"])
+
+        # Win7 兼容：MinGW 头文件默认 _WIN32_WINNT=0x0A00（Win10），.pyd 可能调用
+        # Win10+ API 导致 Win7 加载失败。覆盖为 0x0601（Win7）确保 .pyd 仅调用
+        # Win7 可用 API。scons 读取 CFLAGS 环境变量追加到 CCFLAGS 传给 gcc。
+        if target is Platform.WINDOWS:
+            win7_flag = "-D_WIN32_WINNT=0x0601"
+            existing_cflags = env.get("CFLAGS", "")
+            if win7_flag not in existing_cflags:
+                env["CFLAGS"] = f"{existing_cflags} {win7_flag}".strip()
+                _logger.info("设置 CFLAGS=%s（Win7 兼容）", env["CFLAGS"])
+
         return env
 
     @classmethod

@@ -50,6 +50,7 @@ __all__ = [
     "compile_loader",
     "gcc_available",
     "generate_loader_source",
+    "inject_mingw_runtime_dlls",
     "loader_cache_dir",
     "mingw_available",
 ]
@@ -602,6 +603,67 @@ def _find_mingw_gcc() -> str:
         if shutil.which(name):
             return name
     return MINGW_GCC
+
+
+# MinGW 运行时 DLL：loader.exe 与 Nuitka 编译的 .pyd 动态链接这些 DLL。
+# 不随 Windows 分发，需注入到 dist/runtime/ 使 Python 加载 .pyd 时能找到
+# （DLL 搜索路径含 runtime/，由 loader.exe 的 SetDllDirectoryW 设置）。
+_MINGW_RUNTIME_DLLS = ("libgcc_s_seh-1.dll", "libwinpthread-1.dll", "libstdc++-6.dll")
+
+
+def _locate_mingw_dll(gcc: str, dll_name: str) -> Path | None:
+    """用 ``gcc -print-file-name`` 定位 MinGW 运行时 DLL，返回绝对路径或 None.
+
+    ``-print-file-name`` 输出 DLL 路径（绝对路径或相对 gcc 工作目录），可能
+    返回空字符串或仅文件名（DLL 不在 gcc 搜索路径时）。仅当返回值是已存在
+    文件时认为定位成功。
+    """
+    result = subprocess.run(
+        [gcc, "-print-file-name", dll_name],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    candidate = result.stdout.strip()
+    if not candidate:
+        return None
+    candidate_path = Path(candidate)
+    if not candidate_path.is_absolute():
+        # 相对路径：相对 gcc 工作目录解析无意义，用 shutil.which 在 PATH 兜底
+        which = shutil.which(candidate)
+        if which is None:
+            return None
+        candidate_path = Path(which)
+    return candidate_path if candidate_path.is_file() else None
+
+
+def inject_mingw_runtime_dlls(target_dir: Path) -> None:
+    """将 MinGW 运行时 DLL 复制到目标目录。
+
+    loader.exe 与 Nuitka 编译的 .pyd 动态链接 ``libgcc_s_seh-1.dll`` /
+    ``libwinpthread-1.dll`` / ``libstdc++-6.dll``。这些 DLL 不随 Windows 分发，
+    需注入到 ``dist/runtime/`` 使 Python 加载 .pyd 时能找到（DLL 搜索路径含
+    ``runtime/``，由 loader.exe 的 :c:func:`SetDllDirectoryW` 设置）。
+
+    用 ``gcc -print-file-name=<dll>`` 定位源 DLL（MinGW 工具链自带）。
+    重复构建时若 DLL 已存在则跳过。源 DLL 缺失时仅告警不报错（兼容静态链接
+    或非标准 MinGW 构建）。
+
+    Args:
+        target_dir: 目标目录（通常是 ``dist/runtime/``），DLL 复制到此目录。
+    """
+    gcc = _find_mingw_gcc()
+    for dll_name in _MINGW_RUNTIME_DLLS:
+        dest = target_dir / dll_name
+        if dest.is_file():
+            _logger.info("MinGW 运行时 DLL 已就绪: %s", dest)
+            continue
+        src = _locate_mingw_dll(gcc, dll_name)
+        if src is None:
+            _logger.warning("MinGW 运行时 DLL 缺失: %s，跳过注入", dll_name)
+            continue
+        shutil.copy2(src, dest)
+        _logger.info("注入 MinGW 运行时 DLL: %s → %s", src, dest)
 
 
 def _compile_icon_resource(icon: Path, work_dir: Path) -> Path | None:

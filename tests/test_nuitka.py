@@ -2264,6 +2264,51 @@ def test_build_compile_env_with_ccache_windows_mingw(tmp_path: Path) -> None:
     assert "x86_64-w64-mingw32-gcc" in env["CC"]
 
 
+def test_build_compile_env_sets_win32_winnt_for_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows 目标 CFLAGS 含 -D_WIN32_WINNT=0x0601（Win7 兼容，限制 MinGW 头文件 targeting）.
+
+    MinGW 头文件默认 _WIN32_WINNT=0x0A00（Win10），.pyd 可能调用 Win10+ API 导致
+    Win7 加载失败。覆盖为 0x0601（Win7）确保 .pyd 仅调用 Win7 可用 API。
+    """
+    from fspack.packaging.nuitka import NuitkaCompiler
+
+    # 清理环境中的 CFLAGS 避免污染
+    monkeypatch.delenv("CFLAGS", raising=False)
+    env = NuitkaCompiler._build_compile_env(Platform.WINDOWS, None)
+    assert "-D_WIN32_WINNT=0x0601" in env["CFLAGS"]
+
+
+def test_build_compile_env_skips_win32_winnt_for_linux(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Linux 目标不设置 _WIN32_WINNT（Linux 无此兼容性问题）."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+
+    monkeypatch.delenv("CFLAGS", raising=False)
+    env = NuitkaCompiler._build_compile_env(Platform.LINUX, None)
+    # Linux 不应添加 _WIN32_WINNT
+    cflags = env.get("CFLAGS", "")
+    assert "_WIN32_WINNT" not in cflags
+
+
+def test_build_compile_env_preserves_existing_cflags(monkeypatch: pytest.MonkeyPatch) -> None:
+    """用户已有 CFLAGS 时追加 _WIN32_WINNT，保留原有标志."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+
+    monkeypatch.setenv("CFLAGS", "-O3 -pipe")
+    env = NuitkaCompiler._build_compile_env(Platform.WINDOWS, None)
+    assert "-O3 -pipe" in env["CFLAGS"]
+    assert "-D_WIN32_WINNT=0x0601" in env["CFLAGS"]
+
+
+def test_build_compile_env_skips_win32_winnt_when_already_present(monkeypatch: pytest.MonkeyPatch) -> None:
+    """用户 CFLAGS 已含 _WIN32_WINNT=0x0601 时不重复添加."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+
+    monkeypatch.setenv("CFLAGS", "-D_WIN32_WINNT=0x0601 -O2")
+    env = NuitkaCompiler._build_compile_env(Platform.WINDOWS, None)
+    # 仅出现一次
+    assert env["CFLAGS"].count("-D_WIN32_WINNT=0x0601") == 1
+
+
 def test_ensure_ccache_finds_system_ccache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """PATH 中有 ccache 时优先使用系统 ccache."""
     from fspack.packaging.nuitka import NuitkaCompiler

@@ -898,7 +898,7 @@ def test_inject_win7_compat_dll_warns_when_source_missing(
 
 
 def _setup_embed_mocks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, py_version: str) -> None:
-    """为 Windows embed 构建注入公共 mock（download/extract/wheels/loader）."""
+    """为 Windows embed 构建注入公共 mock（download/extract/wheels/loader/mingw dll）."""
     monkeypatch.setattr("fspack.builder.download_embed", lambda v, m, c, **kw: tmp_path / "fake.zip")
     parts = py_version.split(".", maxsplit=2)
     pyxy = f"python{parts[0]}{parts[1]}"
@@ -919,6 +919,9 @@ def _setup_embed_mocks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, py_versi
             out_exe.write_text(source),
         )[-1],
     )
+    # mock MinGW 运行时 DLL 注入：实际注入逻辑在 test_loader.py 测试，这里隔离
+    # 避免测试机无 MinGW 时 subprocess.run 触发 FileNotFoundError
+    monkeypatch.setattr("fspack.packaging.loader.inject_mingw_runtime_dlls", lambda target_dir: None)
 
 
 def test_build_injects_win7_compat_dll_for_py39_plus(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -977,6 +980,65 @@ def test_build_skips_win7_compat_dll_for_linux(tmp_path: Path, monkeypatch: pyte
 
     build(proj, get_mirror("huawei"), "3.11.9", target=Platform.LINUX)
     assert not (proj / "dist" / "runtime" / "api-ms-win-core-path-l1-1-0.dll").exists()
+
+
+def test_build_calls_inject_mingw_runtime_dlls_for_windows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Windows 目标构建调用 inject_mingw_runtime_dlls 注入 MinGW 运行时 DLL."""
+    proj = tmp_path / "app"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (proj / "app.py").write_text("def main():\n    pass\n")
+
+    _setup_embed_mocks(tmp_path, monkeypatch, "3.11.9")
+    # 替换 _setup_embed_mocks 的默认 mock，记录调用参数
+    calls: list[Path] = []
+    monkeypatch.setattr("fspack.packaging.loader.inject_mingw_runtime_dlls", calls.append)
+
+    build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
+    assert len(calls) == 1
+    assert calls[0] == proj / "dist" / "runtime"
+
+
+def test_build_skips_inject_mingw_runtime_dlls_for_linux(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Linux 目标构建不调用 inject_mingw_runtime_dlls（Linux 用系统 glibc，无需注入）."""
+    proj = tmp_path / "app"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (proj / "app.py").write_text("def main():\n    pass\n")
+
+    # Linux 用 standalone mock
+    monkeypatch.setattr("fspack.builder.download_standalone", lambda v, r, c, **kw: tmp_path / "fake.tar.gz")
+    monkeypatch.setattr(
+        "fspack.builder.extract_standalone",
+        lambda tar_path, runtime_dir: (
+            runtime_dir.mkdir(parents=True, exist_ok=True),
+            (runtime_dir / "python" / "bin").mkdir(parents=True, exist_ok=True),
+            (runtime_dir / "python" / "bin" / "python3.11").write_text(""),
+            (runtime_dir / "python" / "lib" / "python3.11" / "site-packages").mkdir(parents=True, exist_ok=True),
+        )[-1],
+    )
+    monkeypatch.setattr("fspack.builder.download_wheels", lambda *a, **k: [])
+    monkeypatch.setattr("fspack.builder.unpack_wheels", lambda *a, **k: 0)
+    monkeypatch.setattr(
+        "fspack.builder.compile_loader",
+        lambda source, out_exe, app_type, work_dir, platform, **kw: (
+            out_exe.parent.mkdir(parents=True, exist_ok=True),
+            out_exe.write_text(source),
+        )[-1],
+    )
+    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
+
+    calls: list[Path] = []
+    monkeypatch.setattr("fspack.packaging.loader.inject_mingw_runtime_dlls", calls.append)
+
+    build(proj, get_mirror("huawei"), "3.11.9", target=Platform.LINUX)
+    assert calls == []
 
 
 # ---- _trim_stdlib 测试 ----
