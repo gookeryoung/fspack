@@ -581,6 +581,15 @@ def test_prepare_dist_passes_build_defaults_to_build(tmp_path: Path, monkeypatch
         )
 
     monkeypatch.setattr("fspack.packaging.installer.build", fake_build)
+    # mock makensis 编译，避免 Linux CI 无 NSIS 导致测试失败
+    out_setup = tmp_path / "dist" / "release" / "app-1.0-py3.11.9-windows-slim-setup.exe"
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        out_setup.parent.mkdir(parents=True, exist_ok=True)
+        out_setup.write_bytes(b"")
+        return _Completed()
+
+    monkeypatch.setattr("fspack.packaging.installer.subprocess.run", fake_run)
 
     # build_release → _prepare_dist → build()，options 应反映 [tool.fspack] 配置
     build_release(tmp_path, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, fmt="nsis")
@@ -628,6 +637,15 @@ def test_prepare_dist_no_config_uses_default_options(tmp_path: Path, monkeypatch
         )
 
     monkeypatch.setattr("fspack.packaging.installer.build", fake_build)
+    # mock makensis 编译，避免 Linux CI 无 NSIS 导致测试失败
+    out_setup = tmp_path / "dist" / "release" / "app-1.0-py3.11.9-windows-slim-setup.exe"
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        out_setup.parent.mkdir(parents=True, exist_ok=True)
+        out_setup.write_bytes(b"")
+        return _Completed()
+
+    monkeypatch.setattr("fspack.packaging.installer.subprocess.run", fake_run)
     build_release(tmp_path, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, fmt="nsis")
     assert len(captured_options) == 1
     opts = captured_options[0]
@@ -675,6 +693,15 @@ def test_prepare_dist_skips_build_when_dist_and_exe_ready(tmp_path: Path, monkey
         raise AssertionError("dist+exe 已就绪时不应调用 build()")
 
     monkeypatch.setattr("fspack.packaging.installer.build", fake_build)
+    # mock makensis 编译，避免 Linux CI 无 NSIS 导致测试失败
+    out_setup = dist / "release" / "app-1.0-py3.11.9-windows-slim-setup.exe"
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        out_setup.parent.mkdir(parents=True, exist_ok=True)
+        out_setup.write_bytes(b"")
+        return _Completed()
+
+    monkeypatch.setattr("fspack.packaging.installer.subprocess.run", fake_run)
     # 走 build_installer 路径（NsisInstaller），no_build=False
     build_installer(tmp_path, get_mirror("huawei"), "3.11.9", no_build=False)
     assert build_calls == 0
@@ -721,6 +748,15 @@ def test_prepare_dist_rebuilds_when_dist_exists_but_exe_missing(
         )
 
     monkeypatch.setattr("fspack.packaging.installer.build", fake_build)
+    # mock makensis 编译，避免 Linux CI 无 NSIS 导致测试失败
+    out_setup = dist / "release" / "app-1.0-py3.11.9-windows-slim-setup.exe"
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        out_setup.parent.mkdir(parents=True, exist_ok=True)
+        out_setup.write_bytes(b"")
+        return _Completed()
+
+    monkeypatch.setattr("fspack.packaging.installer.subprocess.run", fake_run)
     build_installer(tmp_path, get_mirror("huawei"), "3.11.9", no_build=False)
     assert build_calls == 1
 
