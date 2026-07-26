@@ -216,11 +216,13 @@ def _release_base(info: ProjectInfo, platform_suffix: str) -> str:
 # - .nuitka_compile_stamp: Nuitka 编译 stamp（dist 根目录）
 # - .pyc_stamp: pyc 预编译 stamp（dist 根目录）
 # - *.build: Nuitka 临时构建目录（src 子目录下，--remove-output 仅成功时清理）
+# - build: loader 编译工作目录（旧版残留，新版用 tempfile 自动清理，此处兜底）
 _DIST_INTERMEDIATE_EXCLUDES: tuple[str, ...] = (
     ".dep_cache.json",
     ".nuitka_compile_stamp",
     ".pyc_stamp",
     "*.build",
+    "build",
 )
 
 # NSIS File /x 参数列表（空格分隔的 /x <pattern> 序列）

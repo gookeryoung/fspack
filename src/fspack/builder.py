@@ -8,6 +8,7 @@ import logging
 import re
 import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Sequence
@@ -709,37 +710,44 @@ def _compile_user_sources(ctx: BuildContext, src_dst: Path) -> None:
 
 
 def _build_entry_loaders(ctx: BuildContext, resolved_icon: Path | None, has_tkinter: bool) -> list[Path]:
-    """为每个入口生成 C loader 与入口包装器，返回生成的 exe 路径列表."""
+    """为每个入口生成 C loader 与入口包装器，返回生成的 exe 路径列表.
+
+    用 ``tempfile.TemporaryDirectory`` 作为 loader 编译工作目录，编译完成后自动清理，
+    避免 ``dist/build/`` 残留 ``loader.c``/``icon.rc``/``icon.ico``/``icon.o`` 中间文件
+    被打包进发行包。loader 缓存命中路径不创建工作目录，无副作用。
+    """
     target = ctx.cfg.target
     exes: list[Path] = []
     with ctx.tracker.stage("生成 C loader") as st:
         source = generate_loader_source(ctx.info.py_xy, target)
-        build_dir = ctx.cfg.dist_dir / "build"
-        for ep in ctx.info.all_entries:
-            entry_rel = ep.entry_rel(ctx.info.src_dir)
-            result = EntryWrapper.dotted_module_name(ctx.info.src_dir, ep.file)
-            module_dotted = result[0] if result is not None else None
-            pkg_root_rel = result[1] if result is not None else "."
-            # 生成入口包装器：处理 sys.path、Qt 插件路径与包上下文（相对导入）
-            wrapper_name = f"_entry_{ep.name}.py"
-            wrapper_path = ctx.cfg.dist_dir / wrapper_name
-            wrapper_path.write_text(
-                EntryWrapper.generate_wrapper_source(
-                    ep.name, module_dotted, entry_rel, pkg_root_rel, has_tkinter=has_tkinter
-                ),
-                encoding="utf-8",
-            )
-            # .entry 指向 wrapper（loader 读 .entry 路径运行）
-            if ctx.info.entries:
-                # 多入口模式：每个入口写 <name>.entry
-                (ctx.cfg.dist_dir / f"{ep.name}.entry").write_text(wrapper_name, encoding="utf-8")
-            else:
-                # 单入口模式：写 .entry（向后兼容）
-                (ctx.cfg.dist_dir / ".entry").write_text(wrapper_name, encoding="utf-8")
-            exe_name = f"{ep.name}.exe" if target is Platform.WINDOWS else ep.name
-            exe = ctx.cfg.dist_dir / exe_name
-            compile_loader(source, exe, ep.app_type, build_dir, target, icon=resolved_icon, stage=st)
-            exes.append(exe)
+        # 临时工作目录：编译完成（或异常）后自动清理，不污染 dist/
+        with tempfile.TemporaryDirectory(prefix="fspack_loader_") as tmp:
+            build_dir = Path(tmp)
+            for ep in ctx.info.all_entries:
+                entry_rel = ep.entry_rel(ctx.info.src_dir)
+                result = EntryWrapper.dotted_module_name(ctx.info.src_dir, ep.file)
+                module_dotted = result[0] if result is not None else None
+                pkg_root_rel = result[1] if result is not None else "."
+                # 生成入口包装器：处理 sys.path、Qt 插件路径与包上下文（相对导入）
+                wrapper_name = f"_entry_{ep.name}.py"
+                wrapper_path = ctx.cfg.dist_dir / wrapper_name
+                wrapper_path.write_text(
+                    EntryWrapper.generate_wrapper_source(
+                        ep.name, module_dotted, entry_rel, pkg_root_rel, has_tkinter=has_tkinter
+                    ),
+                    encoding="utf-8",
+                )
+                # .entry 指向 wrapper（loader 读 .entry 路径运行）
+                if ctx.info.entries:
+                    # 多入口模式：每个入口写 <name>.entry
+                    (ctx.cfg.dist_dir / f"{ep.name}.entry").write_text(wrapper_name, encoding="utf-8")
+                else:
+                    # 单入口模式：写 .entry（向后兼容）
+                    (ctx.cfg.dist_dir / ".entry").write_text(wrapper_name, encoding="utf-8")
+                exe_name = f"{ep.name}.exe" if target is Platform.WINDOWS else ep.name
+                exe = ctx.cfg.dist_dir / exe_name
+                compile_loader(source, exe, ep.app_type, build_dir, target, icon=resolved_icon, stage=st)
+                exes.append(exe)
         st.processed(len(exes))
     return exes
 
