@@ -1,0 +1,11 @@
+[project]
+name = "pygame_conway_py38"
+version = "0.1.4"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "attrs",
+    "numpy",
+    "pygame>=2.5.0",
+]

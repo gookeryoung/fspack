@@ -1,0 +1,4 @@
+[project]
+name = "pyqt5_cli_pyall"
+version = "0.1.0"
+dependencies = ["PyQt5"]

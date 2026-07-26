@@ -1,4 +1,0 @@
-[project]
-name = "pyqt5_cli"
-version = "0.1.0"
-dependencies = ["PyQt5"]

@@ -427,8 +427,8 @@ def test_build_forwards_keep_modules(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
 
 def test_build_orchestration_helloworld(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    proj = tmp_path / "cli_helloworld"
-    shutil.copytree(_EXAMPLES / "cli_helloworld", proj, ignore=shutil.ignore_patterns("dist", "__pycache__"))
+    proj = tmp_path / "cli_helloworld_pyall"
+    shutil.copytree(_EXAMPLES / "cli_helloworld_pyall", proj, ignore=shutil.ignore_patterns("dist", "__pycache__"))
     calls: dict[str, Any] = {}
 
     def fake_extract_embed(zip_path: object, runtime_dir: Path) -> None:
@@ -457,14 +457,14 @@ def test_build_orchestration_helloworld(tmp_path: Path, monkeypatch: pytest.Monk
 
     with console.rich.capture() as capture:
         info = build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
-    assert info.name == "cli_helloworld"
-    assert (proj / "dist" / "cli_helloworld.exe").is_file()
+    assert info.name == "cli_helloworld_pyall"
+    assert (proj / "dist" / "cli_helloworld_pyall.exe").is_file()
     assert (proj / "dist" / "runtime" / "python311._pth").is_file()
     assert (proj / "dist" / "src" / "helloworld.py").is_file()
     assert (proj / "dist" / "runtime" / "python311.dll").is_file()
     assert (proj / "dist" / ".entry").is_file()
-    assert (proj / "dist" / ".entry").read_text(encoding="utf-8") == "_entry_cli_helloworld.py"
-    wrapper = proj / "dist" / "_entry_cli_helloworld.py"
+    assert (proj / "dist" / ".entry").read_text(encoding="utf-8") == "_entry_cli_helloworld_pyall.py"
+    wrapper = proj / "dist" / "_entry_cli_helloworld_pyall.py"
     assert wrapper.is_file()
     assert "fspack 生成的入口包装器" in wrapper.read_text(encoding="utf-8")
     pth = (proj / "dist" / "runtime" / "python311._pth").read_text()
@@ -607,8 +607,8 @@ def test_build_skips_download_when_site_packages_has_deps(tmp_path: Path, monkey
 
 
 def test_build_orchestration_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    proj = tmp_path / "cli_helloworld"
-    shutil.copytree(_EXAMPLES / "cli_helloworld", proj, ignore=shutil.ignore_patterns("dist", "__pycache__"))
+    proj = tmp_path / "cli_helloworld_pyall"
+    shutil.copytree(_EXAMPLES / "cli_helloworld_pyall", proj, ignore=shutil.ignore_patterns("dist", "__pycache__"))
     calls: dict[str, Any] = {}
 
     def fake_extract_standalone(tar_path: object, runtime_dir: Path) -> None:
@@ -637,13 +637,13 @@ def test_build_orchestration_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
 
     info = build(proj, get_mirror("huawei"), "3.11.9", target=Platform.LINUX)
-    assert info.name == "cli_helloworld"
-    assert (proj / "dist" / "cli_helloworld").is_file()
-    assert not (proj / "dist" / "cli_helloworld.exe").exists()
+    assert info.name == "cli_helloworld_pyall"
+    assert (proj / "dist" / "cli_helloworld_pyall").is_file()
+    assert not (proj / "dist" / "cli_helloworld_pyall.exe").exists()
     assert not (proj / "dist" / "runtime" / "python311._pth").exists()
     assert (proj / "dist" / "src" / "helloworld.py").is_file()
     assert (proj / "dist" / ".entry").is_file()
-    assert (proj / "dist" / "_entry_cli_helloworld.py").is_file()
+    assert (proj / "dist" / "_entry_cli_helloworld_pyall.py").is_file()
     assert "standalone" in calls
     assert "dlopen" in calls["compile_source"]
     assert "libpython3.11.so" in calls["compile_source"]

@@ -78,22 +78,22 @@ def _build_and_run(  # noqa: PLR0913
 
 @pytest.mark.slow
 def test_build_and_run_helloworld(tmp_path: Path) -> None:
-    """cli_helloworld 示例真实构建并在 wine 下运行."""
-    _build_and_run("cli_helloworld", "hello, world", tmp_path)
+    """cli_helloworld_pyall 示例真实构建并在 wine 下运行."""
+    _build_and_run("cli_helloworld_pyall", "hello, world", tmp_path)
 
 
 @pytest.mark.slow
 def test_build_and_run_clitool(tmp_path: Path) -> None:
-    """cli_tool 示例：有库 CLI（requests），验证依赖打包与运行."""
-    _build_and_run("cli_tool", "requests ", tmp_path)
+    """cli_tool_pyall 示例：有库 CLI（requests），验证依赖打包与运行."""
+    _build_and_run("cli_tool_pyall", "requests ", tmp_path)
     # 验证 requests 包确实解包到 site-packages
-    proj = tmp_path / "cli_tool"
+    proj = tmp_path / "cli_tool_pyall"
     assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "requests").is_dir()
 
 
 @pytest.mark.slow
 def test_build_and_run_guicalc(tmp_path: Path) -> None:
-    """gui_calc 示例：有库 GUI（PySide6），验证构建与打包。
+    """gui_calc_pyall 示例：有库 GUI（PySide6），验证构建与打包。
 
     PySide6 的 Qt6Core 依赖 icuuc.dll（Windows 10+ 系统 DLL），wine 默认不提供。
     缺 ICU 时仅验证构建（下载/解包/_pth/exe），跳过运行断言。
@@ -108,8 +108,8 @@ def test_build_and_run_guicalc(tmp_path: Path) -> None:
     if not shutil.which("wine"):
         pytest.skip("wine 未安装")
 
-    proj = tmp_path / "gui_calc"
-    shutil.copytree(_EXAMPLES / "gui_calc", proj)
+    proj = tmp_path / "gui_calc_pyall"
+    shutil.copytree(_EXAMPLES / "gui_calc_pyall", proj)
     build(
         proj,
         get_mirror("aliyun"),
@@ -118,7 +118,7 @@ def test_build_and_run_guicalc(tmp_path: Path) -> None:
         options=BuildOptions(keep_modules={"PySide6.QtCore", "PySide6.QtGui"}),
     )
 
-    exe = proj / "dist" / "gui_calc.exe"
+    exe = proj / "dist" / "gui_calc_pyall.exe"
     assert exe.is_file(), f"未生成 exe: {exe}"
     assert (proj / "dist" / "runtime" / "python311.dll").is_file(), "未找到 python311.dll"
     assert (proj / "dist" / "runtime" / "python311._pth").is_file(), "未生成 _pth"
@@ -133,34 +133,34 @@ def test_build_and_run_guicalc(tmp_path: Path) -> None:
 
 
 @pytest.mark.slow
-def test_build_and_run_pygame_cli(tmp_path: Path) -> None:
-    """pygame_cli 示例：有库 pygame，dummy 驱动验证。
+def test_build_and_run_pygame_cli_pyall(tmp_path: Path) -> None:
+    """pygame_cli_pyall 示例：有库 pygame，dummy 驱动验证。
 
     pygame 改为 GUI（无控制台）后，用 debug 模式（embed python + wrapper 直跑）
     使 print 输出可见。SDL dummy 驱动让 pygame 在无显示环境运行。
     """
     _build_and_run(
-        "pygame_cli",
+        "pygame_cli_pyall",
         "pygame ",
         tmp_path,
         extra_env={"SDL_VIDEODRIVER": "dummy", "SDL_AUDIODRIVER": "dummy"},
         debug=True,
     )
-    proj = tmp_path / "pygame_cli"
+    proj = tmp_path / "pygame_cli_pyall"
     assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "pygame").is_dir()
 
 
 @pytest.mark.slow
 def test_build_and_run_webapp(tmp_path: Path) -> None:
-    """web_app 示例：有库 web（flask），test_client 验证路由."""
-    _build_and_run("web_app", "hello from flask", tmp_path)
-    proj = tmp_path / "web_app"
+    """web_app_pyall 示例：有库 web（flask），test_client 验证路由."""
+    _build_and_run("web_app_pyall", "hello from flask", tmp_path)
+    proj = tmp_path / "web_app_pyall"
     assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "flask").is_dir()
 
 
 @pytest.mark.slow
 def test_build_and_run_pyside2app(tmp_path: Path) -> None:
-    """pyside2_app 示例：版本自动解析 + PySide2，验证 requires-python 约束。
+    """pyside2_app_py310 示例：版本自动解析 + PySide2，验证 requires-python 约束。
 
     .python-version=3.10 + requires-python=">=3.8,<3.11" 应解析到 3.10.11。
     PySide2 的 Qt DLL 在 wine 上可能缺系统 DLL，缺时跳过运行断言。
@@ -175,13 +175,13 @@ def test_build_and_run_pyside2app(tmp_path: Path) -> None:
     if not shutil.which("wine"):
         pytest.skip("wine 未安装")
 
-    proj = tmp_path / "pyside2_app"
-    shutil.copytree(_EXAMPLES / "pyside2_app", proj)
+    proj = tmp_path / "pyside2_app_py310"
+    shutil.copytree(_EXAMPLES / "pyside2_app_py310", proj)
     build(
         proj, get_mirror("aliyun"), None, target=Platform.WINDOWS, options=BuildOptions(keep_modules={"PySide2.QtGui"})
     )
 
-    exe = proj / "dist" / "pyside2_app.exe"
+    exe = proj / "dist" / "pyside2_app_py310.exe"
     assert exe.is_file(), f"未生成 exe: {exe}"
     assert (proj / "dist" / "runtime" / "python310.dll").is_file(), "未找到 python310.dll（版本自动解析应为 3.10.11）"
     assert (proj / "dist" / "runtime" / "python310._pth").is_file(), "未生成 _pth"
@@ -196,8 +196,8 @@ def test_build_and_run_pyside2app(tmp_path: Path) -> None:
 
 
 @pytest.mark.slow
-def test_build_and_run_pyqt5_cli(tmp_path: Path) -> None:
-    """pyqt5_cli 示例：Python 3.12 + PyQt5，验证新版本 + PyQt5 兼容。
+def test_build_and_run_pyqt5_cli_pyall(tmp_path: Path) -> None:
+    """pyqt5_cli_pyall 示例：Python 3.12 + PyQt5，验证新版本 + PyQt5 兼容。
 
     PyQt5 的 Qt DLL 在 wine 上可能缺系统 DLL，缺时跳过运行断言。
     """
@@ -211,8 +211,8 @@ def test_build_and_run_pyqt5_cli(tmp_path: Path) -> None:
     if not shutil.which("wine"):
         pytest.skip("wine 未安装")
 
-    proj = tmp_path / "pyqt5_cli"
-    shutil.copytree(_EXAMPLES / "pyqt5_cli", proj)
+    proj = tmp_path / "pyqt5_cli_pyall"
+    shutil.copytree(_EXAMPLES / "pyqt5_cli_pyall", proj)
     build(
         proj,
         get_mirror("aliyun"),
@@ -221,7 +221,7 @@ def test_build_and_run_pyqt5_cli(tmp_path: Path) -> None:
         options=BuildOptions(keep_modules={"PyQt5.QtCore", "PyQt5.QtGui"}),
     )
 
-    exe = proj / "dist" / "pyqt5_cli.exe"
+    exe = proj / "dist" / "pyqt5_cli_pyall.exe"
     assert exe.is_file(), f"未生成 exe: {exe}"
     assert (proj / "dist" / "runtime" / "python312.dll").is_file(), "未找到 python312.dll"
     assert (proj / "dist" / "runtime" / "python312._pth").is_file(), "未生成 _pth"
@@ -237,26 +237,26 @@ def test_build_and_run_pyqt5_cli(tmp_path: Path) -> None:
 
 @pytest.mark.slow
 def test_build_and_run_snake(tmp_path: Path) -> None:
-    """pygame_snake 示例：pygame 贪吃蛇，dummy 驱动验证。
+    """pygame_snake_pyall 示例：pygame 贪吃蛇，dummy 驱动验证。
 
     pygame 改为 GUI（无控制台）后，用 debug 模式（embed python + wrapper 直跑）
     使 print 输出可见。SDL dummy 驱动让 pygame 在无显示环境运行，DUMMY_MAX_FRAMES
     控制循环退出避免死循环。
     """
     _build_and_run(
-        "pygame_snake",
+        "pygame_snake_pyall",
         "snake ready",
         tmp_path,
         extra_env={"SDL_VIDEODRIVER": "dummy", "SDL_AUDIODRIVER": "dummy"},
         debug=True,
     )
-    proj = tmp_path / "pygame_snake"
+    proj = tmp_path / "pygame_snake_pyall"
     assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "pygame").is_dir()
 
 
 @pytest.mark.slow
-def test_build_and_run_multi_entry(tmp_path: Path) -> None:
-    """multi_entry 示例：多入口项目（cli+gui+web）共享 runtime/依赖。
+def test_build_and_run_multi_entry_py310(tmp_path: Path) -> None:
+    """multi_entry_py310 示例：多入口项目（cli+gui+web）共享 runtime/依赖。
 
     验证 [tool.fspack.entries] 解析、三入口 exe 生成、各自运行输出正确。
     .python-version=3.10 + requires-python=">=3.8,<3.11" 应解析到 3.10.11。
@@ -272,8 +272,8 @@ def test_build_and_run_multi_entry(tmp_path: Path) -> None:
     if not shutil.which("wine"):
         pytest.skip("wine 未安装")
 
-    proj = tmp_path / "multi_entry"
-    shutil.copytree(_EXAMPLES / "multi_entry", proj)
+    proj = tmp_path / "multi_entry_py310"
+    shutil.copytree(_EXAMPLES / "multi_entry_py310", proj)
     build(
         proj, get_mirror("aliyun"), None, target=Platform.WINDOWS, options=BuildOptions(keep_modules={"PySide2.QtGui"})
     )
@@ -296,26 +296,26 @@ def test_build_and_run_multi_entry(tmp_path: Path) -> None:
     cli_exe = proj / "dist" / "cli.exe"
     result = subprocess.run(["wine", str(cli_exe)], capture_output=True, text=True, timeout=120, env=env, check=False)
     combined = result.stdout + result.stderr
-    assert "hello from multi_entry cli" in combined, f"cli 入口输出异常: {combined!r}"
+    assert "hello from multi_entry_py310 cli" in combined, f"cli 入口输出异常: {combined!r}"
 
     # Web 入口：wine 运行断言输出（test_client 不启动服务器，可安全运行）
     web_exe = proj / "dist" / "web.exe"
     result = subprocess.run(["wine", str(web_exe)], capture_output=True, text=True, timeout=120, env=env, check=False)
     combined = result.stdout + result.stderr
-    assert "hello from multi_entry web" in combined, f"web 入口输出异常: {combined!r}"
+    assert "hello from multi_entry_py310 web" in combined, f"web 入口输出异常: {combined!r}"
 
     # GUI 入口：PySide2 在 wine 上可能缺系统 DLL，缺时 skip
     gui_exe = proj / "dist" / "gui.exe"
     result = subprocess.run(["wine", str(gui_exe)], capture_output=True, text=True, timeout=300, env=env, check=False)
     combined = result.stdout + result.stderr
-    if "hello from multi_entry gui" not in combined and "DLL load failed" in combined:
+    if "hello from multi_entry_py310 gui" not in combined and "DLL load failed" in combined:
         pytest.skip(f"wine 缺少系统 DLL，PySide2 Qt DLL 无法加载，真实 Windows 可运行: {combined!r}")
-    assert "hello from multi_entry gui" in combined, f"gui 入口输出异常: {combined!r}"
+    assert "hello from multi_entry_py310 gui" in combined, f"gui 入口输出异常: {combined!r}"
 
 
 @pytest.mark.slow
 def test_build_and_run_linux_helloworld(tmp_path: Path) -> None:
-    """Linux 平台端到端：gcc 编译 + python-build-standalone 运行 cli_helloworld。
+    """Linux 平台端到端：gcc 编译 + python-build-standalone 运行 cli_helloworld_pyall。
 
     python-build-standalone 的 20260718 release 提供 3.11.15，Linux 目标使用 3.11.15。
     仅在 Linux 原生平台运行：Linux loader 编译用本地 gcc（非交叉编译器），
@@ -331,11 +331,11 @@ def test_build_and_run_linux_helloworld(tmp_path: Path) -> None:
     if not gcc_available():
         pytest.skip("gcc 未安装")
 
-    proj = tmp_path / "cli_helloworld"
-    shutil.copytree(_EXAMPLES / "cli_helloworld", proj)
+    proj = tmp_path / "cli_helloworld_pyall"
+    shutil.copytree(_EXAMPLES / "cli_helloworld_pyall", proj)
     build(proj, get_mirror("aliyun"), "3.11.15", target=Platform.LINUX)
 
-    exe = proj / "dist" / "cli_helloworld"
+    exe = proj / "dist" / "cli_helloworld_pyall"
     assert exe.is_file(), f"未生成 exe: {exe}"
     assert (proj / "dist" / "runtime" / "python" / "lib" / "libpython3.11.so").is_file(), "未找到 libpython3.11.so"
 
@@ -360,11 +360,11 @@ def test_build_and_run_linux_clitool(tmp_path: Path) -> None:
     if not gcc_available():
         pytest.skip("gcc 未安装")
 
-    proj = tmp_path / "cli_tool"
-    shutil.copytree(_EXAMPLES / "cli_tool", proj)
+    proj = tmp_path / "cli_tool_pyall"
+    shutil.copytree(_EXAMPLES / "cli_tool_pyall", proj)
     build(proj, get_mirror("aliyun"), "3.11.15", target=Platform.LINUX)
 
-    exe = proj / "dist" / "cli_tool"
+    exe = proj / "dist" / "cli_tool_pyall"
     assert exe.is_file(), f"未生成 exe: {exe}"
     assert (proj / "dist" / "runtime" / "python" / "lib" / "python3.11" / "site-packages" / "requests").is_dir()
 
@@ -375,10 +375,10 @@ def test_build_and_run_linux_clitool(tmp_path: Path) -> None:
 
 @pytest.mark.slow
 def test_build_installer_helloworld_slow(tmp_path: Path) -> None:
-    """NSIS 端到端：build cli_helloworld → makensis 编译 → 验证安装包产出。
+    """NSIS 端到端：build cli_helloworld_pyall → makensis 编译 → 验证安装包产出。
 
     需 mingw-w64（Windows loader 编译）与 makensis（NSIS 安装包编译）。
-    验证 dist/installer.nsi 生成正确、dist/release/cli_helloworld-setup.exe 产出为合法 PE 文件且非空。
+    验证 dist/installer.nsi 生成正确、dist/release/cli_helloworld_pyall-setup.exe 产出为合法 PE 文件且非空。
     """
     from fspack.config import get_mirror
     from fspack.packaging.installer import build_installer
@@ -389,11 +389,11 @@ def test_build_installer_helloworld_slow(tmp_path: Path) -> None:
     if not shutil.which("makensis"):
         pytest.skip("makensis 未安装（sudo apt install -y nsis）")
 
-    proj = tmp_path / "cli_helloworld"
-    shutil.copytree(_EXAMPLES / "cli_helloworld", proj)
+    proj = tmp_path / "cli_helloworld_pyall"
+    shutil.copytree(_EXAMPLES / "cli_helloworld_pyall", proj)
 
     out = build_installer(proj, get_mirror("aliyun"), "3.11.9", no_build=False)
-    expected = proj / "dist" / "release" / "cli_helloworld-0.1.0-py3.11.9-windows-slim-setup.exe"
+    expected = proj / "dist" / "release" / "cli_helloworld_pyall-0.1.0-py3.11.9-windows-slim-setup.exe"
     assert out == expected
     assert expected.is_file(), f"未生成安装包: {expected}"
     assert expected.stat().st_size > 1024 * 1024, f"安装包过小: {expected.stat().st_size} bytes"
@@ -404,17 +404,17 @@ def test_build_installer_helloworld_slow(tmp_path: Path) -> None:
     nsi = proj / "dist" / "installer.nsi"
     assert nsi.is_file(), "未生成 installer.nsi"
     content = nsi.read_text(encoding="utf-8")
-    assert 'Name "cli_helloworld 0.1.0"' in content
-    assert 'OutFile "release\\cli_helloworld-0.1.0-py3.11.9-windows-slim-setup.exe"' in content
+    assert 'Name "cli_helloworld_pyall 0.1.0"' in content
+    assert 'OutFile "release\\cli_helloworld_pyall-0.1.0-py3.11.9-windows-slim-setup.exe"' in content
 
 
 @pytest.mark.slow
 def test_build_linux_installer_helloworld_slow(tmp_path: Path) -> None:
-    """Linux 安装包端到端：build cli_helloworld → tar.gz + .deb 真实产出。
+    """Linux 安装包端到端：build cli_helloworld_pyall → tar.gz + .deb 真实产出。
 
     需 gcc（Linux loader 编译）与 dpkg-deb（.deb 构建）。
-    验证 dist/release/cli_helloworld_0.1.0-py3.11.15-slim_amd64.deb 为合法 ar 归档，
-    dist/release/cli_helloworld-0.1.0-py3.11.15-linux-slim.tar.gz 为合法 gzip。
+    验证 dist/release/cli_helloworld_pyall_0.1.0-py3.11.15-slim_amd64.deb 为合法 ar 归档，
+    dist/release/cli_helloworld_pyall-0.1.0-py3.11.15-linux-slim.tar.gz 为合法 gzip。
     """
     from fspack.config import get_mirror
     from fspack.packaging.installer import build_linux_installer
@@ -425,16 +425,16 @@ def test_build_linux_installer_helloworld_slow(tmp_path: Path) -> None:
     if not shutil.which("dpkg-deb"):
         pytest.skip("dpkg-deb 未安装")
 
-    proj = tmp_path / "cli_helloworld"
-    shutil.copytree(_EXAMPLES / "cli_helloworld", proj)
+    proj = tmp_path / "cli_helloworld_pyall"
+    shutil.copytree(_EXAMPLES / "cli_helloworld_pyall", proj)
 
     out = build_linux_installer(proj, get_mirror("aliyun"), "3.11.15", no_build=False)
-    expected_deb = proj / "dist" / "release" / "cli_helloworld_0.1.0-py3.11.15-slim_amd64.deb"
+    expected_deb = proj / "dist" / "release" / "cli_helloworld_pyall_0.1.0-py3.11.15-slim_amd64.deb"
     assert out == expected_deb
     assert expected_deb.is_file(), f"未生成 .deb: {expected_deb}"
     assert expected_deb.stat().st_size > 1024 * 1024, f".deb 过小: {expected_deb.stat().st_size} bytes"
 
-    tarball = proj / "dist" / "release" / "cli_helloworld-0.1.0-py3.11.15-linux-slim.tar.gz"
+    tarball = proj / "dist" / "release" / "cli_helloworld_pyall-0.1.0-py3.11.15-linux-slim.tar.gz"
     assert tarball.is_file(), f"未生成 tar.gz: {tarball}"
     assert tarball.stat().st_size > 1024 * 1024, f"tar.gz 过小: {tarball.stat().st_size} bytes"
 
@@ -456,57 +456,57 @@ def test_build_and_run_cli_complex(tmp_path: Path) -> None:
 
 
 @pytest.mark.slow
-def test_build_and_run_cli_office(tmp_path: Path) -> None:
-    """cli_office 示例：pypdf 依赖，验证 PDF 生成 CLI."""
-    _build_and_run("cli_office", "文件生成成功", tmp_path, debug=True)
-    proj = tmp_path / "cli_office"
+def test_build_and_run_cli_office_py38(tmp_path: Path) -> None:
+    """cli_office_py38 示例：pypdf 依赖，验证 PDF 生成 CLI."""
+    _build_and_run("cli_office_py38", "文件生成成功", tmp_path, debug=True)
+    proj = tmp_path / "cli_office_py38"
     assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "pypdf").is_dir()
 
 
 @pytest.mark.slow
-def test_build_and_run_pygame_conway(tmp_path: Path) -> None:
-    """pygame_conway 示例：numpy/attrs/pygame 依赖，dummy 驱动验证."""
+def test_build_and_run_pygame_conway_py38(tmp_path: Path) -> None:
+    """pygame_conway_py38 示例：numpy/attrs/pygame 依赖，dummy 驱动验证."""
     _build_and_run(
-        "pygame_conway",
+        "pygame_conway_py38",
         "Hello from the pygame community",
         tmp_path,
         extra_env={"SDL_VIDEODRIVER": "dummy", "SDL_AUDIODRIVER": "dummy"},
         debug=True,
     )
-    proj = tmp_path / "pygame_conway"
+    proj = tmp_path / "pygame_conway_py38"
     assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "numpy").is_dir()
     assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "attrs").is_dir()
     assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "pygame").is_dir()
 
 
 @pytest.mark.slow
-def test_build_and_run_pygame_gktetris(tmp_path: Path) -> None:
-    """pygame_gktetris 示例：包模式（src.game）+ pygame，dummy 驱动验证。
+def test_build_and_run_pygame_gktetris_py38(tmp_path: Path) -> None:
+    """pygame_gktetris_py38 示例：包模式（src.game）+ pygame，dummy 驱动验证。
 
     src_dir 有 __init__.py，入口 game.py 在顶层，wrapper 用 runpy.run_module
     以包上下文运行（_ENTRY_MODULE='src.game'），相对导入可用。
     """
     _build_and_run(
-        "pygame_gktetris",
+        "pygame_gktetris_py38",
         "Hello from the pygame community",
         tmp_path,
         extra_env={"SDL_VIDEODRIVER": "dummy", "SDL_AUDIODRIVER": "dummy"},
         debug=True,
     )
-    proj = tmp_path / "pygame_gktetris"
+    proj = tmp_path / "pygame_gktetris_py38"
     assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "pygame").is_dir()
 
 
 @pytest.mark.slow
-def test_build_and_run_sci_numpy(tmp_path: Path) -> None:
-    """sci_numpy 示例：numpy 数组运算，验证科学库精简打包与运行.
+def test_build_and_run_sci_numpy_py38(tmp_path: Path) -> None:
+    """sci_numpy_py38 示例：numpy 数组运算，验证科学库精简打包与运行.
 
     numpy 顶层 C 扩展（_multiarray_umath 等）归 shared 始终保留；
     distutils/_pyinstaller 由 NumpySlimSpec 剥离。timeout 加大以
     适应 numpy wheel 下载与解压。
     """
-    _build_and_run("sci_numpy", "numpy demo ok", tmp_path, timeout=600)
-    proj = tmp_path / "sci_numpy"
+    _build_and_run("sci_numpy_py38", "numpy demo ok", tmp_path, timeout=600)
+    proj = tmp_path / "sci_numpy_py38"
     assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "numpy").is_dir()
     # numpy 专属剥离目录不应解包
     assert not (proj / "dist" / "runtime" / "Lib" / "site-packages" / "numpy" / "distutils").is_dir()
@@ -514,16 +514,16 @@ def test_build_and_run_sci_numpy(tmp_path: Path) -> None:
 
 
 @pytest.mark.slow
-def test_build_and_run_sci_matplotlib(tmp_path: Path) -> None:
-    """sci_matplotlib 示例：Agg 后端绘图保存 PNG，验证 matplotlib 精简打包.
+def test_build_and_run_sci_matplotlib_py38(tmp_path: Path) -> None:
+    """sci_matplotlib_py38 示例：Agg 后端绘图保存 PNG，验证 matplotlib 精简打包.
 
     matplotlib wheel 含跨包 mpl_toolkits 与 matplotlib.libs 共享 DLL；
     sphinxext 文档扩展与跨包/嵌套 tests 目录由 MatplotlibSlimSpec 剥离。
     Agg 后端无需 GUI，打包后无显示环境可运行。timeout 加大以适应
     matplotlib + numpy wheel 下载与解压。
     """
-    _build_and_run("sci_matplotlib", "matplotlib demo ok", tmp_path, timeout=600)
-    proj = tmp_path / "sci_matplotlib"
+    _build_and_run("sci_matplotlib_py38", "matplotlib demo ok", tmp_path, timeout=600)
+    proj = tmp_path / "sci_matplotlib_py38"
     assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "matplotlib").is_dir()
     # 跨包 mpl_toolkits 应解包（运行时模块）
     assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "mpl_toolkits").is_dir()
@@ -534,15 +534,15 @@ def test_build_and_run_sci_matplotlib(tmp_path: Path) -> None:
 
 
 @pytest.mark.slow
-def test_build_and_run_sci_scipy(tmp_path: Path) -> None:
-    """sci_scipy 示例：scipy 线性代数与优化求解，验证 scipy 精简打包.
+def test_build_and_run_sci_scipy_py38(tmp_path: Path) -> None:
+    """sci_scipy_py38 示例：scipy 线性代数与优化求解，验证 scipy 精简打包.
 
     scipy 各子模块下嵌套 tests 目录由 ScipySlimSpec 剥离（约占 scipy
     总体积 10-15%）；_lib 内部库与各子模块运行时代码保留。timeout 加大
     以适应 scipy + numpy wheel 下载与解压。
     """
-    _build_and_run("sci_scipy", "scipy demo ok", tmp_path, timeout=900)
-    proj = tmp_path / "sci_scipy"
+    _build_and_run("sci_scipy_py38", "scipy demo ok", tmp_path, timeout=900)
+    proj = tmp_path / "sci_scipy_py38"
     assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "scipy").is_dir()
     # 嵌套 tests 不应解包（ScipySlimSpec 核心剥离场景）
     assert not ((proj / "dist" / "runtime" / "Lib" / "site-packages" / "scipy" / "linalg" / "tests").is_dir())
@@ -552,8 +552,8 @@ def test_build_and_run_sci_scipy(tmp_path: Path) -> None:
 
 
 @pytest.mark.slow
-def test_build_and_run_tk_app(tmp_path: Path) -> None:
-    """tk_app 示例：tkinter 内置库打包，验证 TkinterBundler 补充 tkinter 到 embed python。
+def test_build_and_run_tk_app_pyall(tmp_path: Path) -> None:
+    """tk_app_pyall 示例：tkinter 内置库打包，验证 TkinterBundler 补充 tkinter 到 embed python。
 
     AST 检出 ``import tkinter`` → TkinterBundler 从 python-build-standalone Windows
     构建提取 tkinter 组件（Lib/tkinter/ + _tkinter.pyd + tcl/tcl8.6/ + tcl/tk8.6/）
@@ -562,8 +562,8 @@ def test_build_and_run_tk_app(tmp_path: Path) -> None:
     GUI 应用用 debug 模式（embed python + wrapper 直跑）使 print 输出可见。
     root.after(1000) 定时退出避免 wine 下挂起。
     """
-    _build_and_run("tk_app", "hello from tkinter", tmp_path, debug=True, timeout=300)
-    proj = tmp_path / "tk_app"
+    _build_and_run("tk_app_pyall", "hello from tkinter", tmp_path, debug=True, timeout=300)
+    proj = tmp_path / "tk_app_pyall"
     # tkinter 纯 Python 包应补充到 runtime/Lib/tkinter/
     assert (proj / "dist" / "runtime" / "Lib" / "tkinter" / "__init__.py").is_file(), "tkinter 包未补充"
     # _tkinter.pyd C 扩展应在 runtime 根目录
@@ -576,6 +576,6 @@ def test_build_and_run_tk_app(tmp_path: Path) -> None:
     assert tcl_ver_dirs, f"未找到 tcl8.x/ 目录: {tcl_dirs}"
     assert tk_ver_dirs, f"未找到 tk8.x/ 目录: {tcl_dirs}"
     # wrapper 应注入 TCL_LIBRARY/TK_LIBRARY 环境变量设置
-    wrapper = (proj / "dist" / "_entry_tk_app.py").read_text(encoding="utf-8")
+    wrapper = (proj / "dist" / "_entry_tk_app_pyall.py").read_text(encoding="utf-8")
     assert "if True:" in wrapper, "wrapper 未注入 tkinter 环境变量（has_tkinter 应为 True）"
     assert "TCL_LIBRARY" in wrapper

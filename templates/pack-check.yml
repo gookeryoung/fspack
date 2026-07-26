@@ -92,10 +92,10 @@ jobs:
       #     wineboot --init
       #     for ep in cli web; do
       #       output=$(wine ./dist/${ep}.exe 2>&1 | tr -d '\r')
-      #       echo "$output" | grep -q "hello from multi_entry $ep" || exit 1
+      #       echo "$output" | grep -q "hello from multi_entry_py310 $ep" || exit 1
       #     done
       #     # GUI 入口用 --debug 绕过 GUI loader，使 print 输出可见
-      #     fspack r . --entry gui --debug 2>&1 | grep -q "hello from multi_entry gui" || exit 1
+      #     fspack r . --entry gui --debug 2>&1 | grep -q "hello from multi_entry_py310 gui" || exit 1
 
       - name: Upload failure artifacts
         if: failure()

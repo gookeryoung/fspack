@@ -66,13 +66,13 @@ def test_mirror_config_embed_url() -> None:
 
 
 def test_project_info_from_dir_helloworld() -> None:
-    """from_dir 类方法解析 cli_helloworld 示例."""
-    info = ProjectInfo.from_dir(_EXAMPLES / "cli_helloworld")
-    assert info.name == "cli_helloworld"
+    """from_dir 类方法解析 cli_helloworld_pyall 示例."""
+    info = ProjectInfo.from_dir(_EXAMPLES / "cli_helloworld_pyall")
+    assert info.name == "cli_helloworld_pyall"
     assert info.entry_module == "helloworld"
     assert info.entry_file.name == "helloworld.py"
     assert info.app_type is AppType.CLI
-    assert info.exe_name == "cli_helloworld.exe"
+    assert info.exe_name == "cli_helloworld_pyall.exe"
     assert info.py_xy == "python311"
 
 
@@ -84,9 +84,9 @@ def test_project_info_from_dir_with_explicit_py_version(tmp_path: Path) -> None:
     assert info.py_version == "3.10.0"
 
 
-def test_project_info_from_dir_pyside2_app() -> None:
+def test_project_info_from_dir_pyside2_app_py310() -> None:
     """from_dir 解析 GUI 示例并读取 requires-python 约束."""
-    info = ProjectInfo.from_dir(_EXAMPLES / "pyside2_app")
+    info = ProjectInfo.from_dir(_EXAMPLES / "pyside2_app_py310")
     assert info.requires_python == ">=3.8,<3.11"
     assert info.app_type is AppType.GUI
 
@@ -219,9 +219,9 @@ def test_project_info_all_entries_multi() -> None:
     assert info.all_entries == (ep1, ep2)
 
 
-def test_project_info_from_dir_multi_entry() -> None:
-    """from_dir 解析 multi_entry 示例返回多个入口."""
-    info = ProjectInfo.from_dir(_EXAMPLES / "multi_entry")
+def test_project_info_from_dir_multi_entry_py310() -> None:
+    """from_dir 解析 multi_entry_py310 示例返回多个入口."""
+    info = ProjectInfo.from_dir(_EXAMPLES / "multi_entry_py310")
     assert len(info.entries) == 3
     assert info.all_entries == info.entries
     assert info.all_entries[0].name == "cli"
@@ -231,12 +231,12 @@ def test_project_info_from_dir_multi_entry() -> None:
 
 
 def test_parse_project_helloworld() -> None:
-    info = parse_project(_EXAMPLES / "cli_helloworld")
-    assert info.name == "cli_helloworld"
+    info = parse_project(_EXAMPLES / "cli_helloworld_pyall")
+    assert info.name == "cli_helloworld_pyall"
     assert info.entry_module == "helloworld"
     assert info.entry_file.name == "helloworld.py"
     assert info.app_type is AppType.CLI
-    assert info.exe_name == "cli_helloworld.exe"
+    assert info.exe_name == "cli_helloworld_pyall.exe"
     assert info.py_xy == "python311"
     assert info.py_version == DEFAULT_PY_VERSION
     assert info.requires_python is None
@@ -244,7 +244,7 @@ def test_parse_project_helloworld() -> None:
 
 def test_parse_project_pyside2app_requires_python() -> None:
     """pyside2app 示例的 requires-python 约束正确解析."""
-    info = parse_project(_EXAMPLES / "pyside2_app")
+    info = parse_project(_EXAMPLES / "pyside2_app_py310")
     assert info.requires_python == ">=3.8,<3.11"
     assert info.app_type is AppType.GUI
 
@@ -507,8 +507,8 @@ def test_resolve_py_version_complex_specifier(tmp_path: Path) -> None:
 
 def test_resolve_py_version_pyside2app_example() -> None:
     """pyside2app 示例：.python-version=3.10 + requires-python<3.11 解析到 3.10.11（Windows embed）."""
-    info = parse_project(_EXAMPLES / "pyside2_app")
-    resolved = resolve_py_version(_EXAMPLES / "pyside2_app", None, info.requires_python)
+    info = parse_project(_EXAMPLES / "pyside2_app_py310")
+    resolved = resolve_py_version(_EXAMPLES / "pyside2_app_py310", None, info.requires_python)
     assert resolved == "3.10.11"
 
 
@@ -562,9 +562,9 @@ def test_resolve_py_version_wildcard_requires_python(tmp_path: Path) -> None:
 # --- 多入口解析测试 ---
 
 
-def test_parse_project_multi_entry_example() -> None:
-    """multi_entry 示例：[tool.fspack.entries] 解析为三个入口."""
-    info = parse_project(_EXAMPLES / "multi_entry")
+def test_parse_project_multi_entry_py310_example() -> None:
+    """multi_entry_py310 示例：[tool.fspack.entries] 解析为三个入口."""
+    info = parse_project(_EXAMPLES / "multi_entry_py310")
     assert len(info.entries) == 3
     assert [ep.name for ep in info.entries] == ["cli", "gui", "web"]
     # 首个入口作为主入口（向后兼容）
@@ -577,7 +577,7 @@ def test_parse_project_multi_entry_example() -> None:
     assert info.entries[2].app_type is AppType.CLI
 
 
-def test_parse_project_multi_entry_single_declared_compat(tmp_path: Path) -> None:
+def test_parse_project_multi_entry_py310_single_declared_compat(tmp_path: Path) -> None:
     """无 [tool.fspack.entries] 时走单入口 detect_entry 路径，entries 为空."""
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
     (tmp_path / "app.py").write_text("def main():\n    pass\n")
@@ -586,7 +586,7 @@ def test_parse_project_multi_entry_single_declared_compat(tmp_path: Path) -> Non
     assert info.entry_module == "app"
 
 
-def test_parse_project_multi_entry_missing_script(tmp_path: Path) -> None:
+def test_parse_project_multi_entry_py310_missing_script(tmp_path: Path) -> None:
     """[tool.fspack.entries] 中脚本不存在时报错."""
     (tmp_path / "pyproject.toml").write_text(
         '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack.entries]\nmain = "missing.py"\n'
@@ -595,7 +595,7 @@ def test_parse_project_multi_entry_missing_script(tmp_path: Path) -> None:
         parse_project(tmp_path)
 
 
-def test_parse_project_multi_entry_empty_path(tmp_path: Path) -> None:
+def test_parse_project_multi_entry_py310_empty_path(tmp_path: Path) -> None:
     """[tool.fspack.entries] 中脚本路径为空时报错."""
     (tmp_path / "pyproject.toml").write_text(
         '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack.entries]\nmain = ""\n'
@@ -633,14 +633,14 @@ def test_infer_app_type_pygame_is_gui(tmp_path: Path) -> None:
 
 
 def test_parse_project_pygame_example_is_gui() -> None:
-    """pygame_cli 示例被识别为 GUI."""
-    info = parse_project(_EXAMPLES / "pygame_cli")
+    """pygame_cli_pyall 示例被识别为 GUI."""
+    info = parse_project(_EXAMPLES / "pygame_cli_pyall")
     assert info.app_type is AppType.GUI
 
 
-def test_parse_project_pygame_snake_is_gui() -> None:
-    """pygame_snake 示例被识别为 GUI."""
-    info = parse_project(_EXAMPLES / "pygame_snake")
+def test_parse_project_pygame_snake_pyall_is_gui() -> None:
+    """pygame_snake_pyall 示例被识别为 GUI."""
+    info = parse_project(_EXAMPLES / "pygame_snake_pyall")
     assert info.app_type is AppType.GUI
 
 
@@ -751,7 +751,7 @@ def test_parse_project_with_missing_icon_raises(tmp_path: Path) -> None:
         parse_project(tmp_path)
 
 
-def test_parse_project_with_icon_in_multi_entry(tmp_path: Path) -> None:
+def test_parse_project_with_icon_in_multi_entry_py310(tmp_path: Path) -> None:
     """多入口项目也正确解析 icon."""
     icon = tmp_path / "icon.ico"
     icon.write_bytes(b"ico")
@@ -850,7 +850,7 @@ def test_parse_project_build_defaults_invalid_pyc_optimize_raises(tmp_path: Path
         parse_project(tmp_path)
 
 
-def test_parse_project_exclude_and_defaults_in_multi_entry(tmp_path: Path) -> None:
+def test_parse_project_exclude_and_defaults_in_multi_entry_py310(tmp_path: Path) -> None:
     """多入口项目也正确解析 exclude 与 build_defaults."""
     (tmp_path / "pyproject.toml").write_text(
         '[project]\nname = "app"\nversion = "0.1"\n\n'

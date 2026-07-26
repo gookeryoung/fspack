@@ -197,24 +197,24 @@ fsp r --entry web     # 运行 web 入口
 
 | 示例 | 类型 | 说明 |
 |------|------|------|
-| cli_helloworld | 无库 CLI | 最小示例，验证基础流水线 |
-| cli_tool | 有库 CLI | requests 依赖，验证 wheel 下载与解包 |
+| cli_helloworld_pyall | 无库 CLI | 最小示例，验证基础流水线 |
+| cli_tool_pyall | 有库 CLI | requests 依赖，验证 wheel 下载与解包 |
 | cli_complex | 无库 CLI | 展示型，多文件结构 |
-| cli_office | 有库 CLI | pypdf 依赖，uv workspace 成员 |
-| gui_calc | 有库 GUI | PySide6 依赖，验证 GUI 快捷方式与 DLL 搜索 |
-| pyside2_app | 有库 GUI | PySide2 依赖，验证 requires-python 版本自动解析 |
-| pyqt5_cli | 有库 GUI | PyQt5 依赖，验证 Python 3.12 兼容 |
-| tk_app | 有库 GUI | tkinter 内置库打包，验证 TkinterBundler 从 standalone 提取补充到 embed python |
-| pygame_cli | 有库 pygame | pygame 依赖，验证多媒体库打包 |
-| pygame_conway | 有库 pygame | pygame 生命游戏，验证多文件结构与 slow 端到端测试 |
-| pygame_gktetris | 有库 pygame | pygame 俄罗斯方块，验证 entities 包结构打包 |
-| pygame_snake | 有库 pygame | pygame 贪吃蛇，验证 dummy 驱动运行 |
-| pyside2_qml_dashboard | 有库 GUI | PySide2+QML 仪表盘示例，验证 QML 资源与多视图打包 |
-| sci_numpy | 科学计算 | numpy 依赖，验证数值计算库打包 |
-| sci_scipy | 科学计算 | scipy 依赖，验证大型科学计算库精简规则 |
-| sci_matplotlib | 科学计算 | matplotlib 依赖，验证绘图库 C 扩展打包 |
-| web_app | 有库 web | flask 依赖，验证 web 框架打包 |
-| multi_entry | 多入口混合 | cli+gui+web 三入口共享 runtime/依赖，验证 `[tool.fspack.entries]` 多入口打包 |
+| cli_office_py38 | 有库 CLI | pypdf 依赖，uv workspace 成员 |
+| gui_calc_pyall | 有库 GUI | PySide6 依赖，验证 GUI 快捷方式与 DLL 搜索 |
+| pyside2_app_py310 | 有库 GUI | PySide2 依赖，验证 requires-python 版本自动解析 |
+| pyqt5_cli_pyall | 有库 GUI | PyQt5 依赖，验证 Python 3.12 兼容 |
+| tk_app_pyall | 有库 GUI | tkinter 内置库打包，验证 TkinterBundler 从 standalone 提取补充到 embed python |
+| pygame_cli_pyall | 有库 pygame | pygame 依赖，验证多媒体库打包 |
+| pygame_conway_py38 | 有库 pygame | pygame 生命游戏，验证多文件结构与 slow 端到端测试 |
+| pygame_gktetris_py38 | 有库 pygame | pygame 俄罗斯方块，验证 entities 包结构打包 |
+| pygame_snake_pyall | 有库 pygame | pygame 贪吃蛇，验证 dummy 驱动运行 |
+| pyside2_qml_dashboard_py38 | 有库 GUI | PySide2+QML 仪表盘示例，验证 QML 资源与多视图打包 |
+| sci_numpy_py38 | 科学计算 | numpy 依赖，验证数值计算库打包 |
+| sci_scipy_py38 | 科学计算 | scipy 依赖，验证大型科学计算库精简规则 |
+| sci_matplotlib_py38 | 科学计算 | matplotlib 依赖，验证绘图库 C 扩展打包 |
+| web_app_pyall | 有库 web | flask 依赖，验证 web 框架打包 |
+| multi_entry_py310 | 多入口混合 | cli+gui+web 三入口共享 runtime/依赖，验证 `[tool.fspack.entries]` 多入口打包 |
 
 ## 平台支持
 

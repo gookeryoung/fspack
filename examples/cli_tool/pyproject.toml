@@ -1,4 +1,0 @@
-[project]
-name = "cli_tool"
-version = "0.1.0"
-dependencies = ["requests"]
