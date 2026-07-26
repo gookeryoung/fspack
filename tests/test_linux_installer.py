@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from fspack.config import AppType, ProjectInfo, get_mirror
+from fspack.config import AppType, BuildOptions, ProjectInfo, get_mirror
 from fspack.exceptions import InstallerError
 from fspack.packaging.installer import build_deb, build_linux_installer, build_tarball
 
@@ -214,9 +214,11 @@ def test_build_linux_installer_with_build(tmp_path: Path, monkeypatch: pytest.Mo
         project_dir: Path,
         mirror: object,
         py_version: str,
+        *,
         dist_dir: Path | None = None,
         embed_cache: Path | None = None,
         target: object = None,
+        options: BuildOptions | None = None,
     ) -> ProjectInfo:
         d = dist_dir or project_dir / "dist"
         d.mkdir(parents=True, exist_ok=True)

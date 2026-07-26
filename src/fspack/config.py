@@ -22,7 +22,7 @@ import codecs
 import enum
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +54,7 @@ __all__ = [
     "EntryPoint",
     "MirrorConfig",
     "ProjectInfo",
+    "build_options_from_defaults",
     "detect_entry",
     "get_mirror",
     "infer_app_type",
@@ -278,6 +279,29 @@ class BuildOptions:
     pyc_optimize: int = 2
     no_site: bool = False
     nuitka: bool = False
+
+
+def build_options_from_defaults(defaults: BuildDefaults) -> BuildOptions:
+    """从 ``[tool.fspack]`` 构建默认值构造 :class:`BuildOptions`.
+
+    ``BuildDefaults`` 中 ``None`` 的字段使用 :class:`BuildOptions` 默认值，
+    非 ``None`` 的字段覆盖默认值。用于无 CLI 标志的场景（如 ``fsp p`` 内部
+    调用 :func:`fspack.builder.build` 时透传项目配置）。
+
+    与 :func:`fspack.cli.main` 的合并策略不同：本函数不处理 CLI 标志覆盖，
+    仅将配置层默认值转为运行层 :class:`BuildOptions`。CLI 合并逻辑由
+    ``cli.py`` 直接内联实现（``any([cli, config])``）。
+    """
+    base = BuildOptions()
+    return replace(
+        base,
+        no_stdlib_trim=defaults.no_stdlib_trim if defaults.no_stdlib_trim is not None else base.no_stdlib_trim,
+        no_pyc=defaults.no_pyc if defaults.no_pyc is not None else base.no_pyc,
+        pyc_strip=defaults.pyc_strip if defaults.pyc_strip is not None else base.pyc_strip,
+        pyc_optimize=defaults.pyc_optimize if defaults.pyc_optimize is not None else base.pyc_optimize,
+        no_site=defaults.no_site if defaults.no_site is not None else base.no_site,
+        nuitka=defaults.nuitka if defaults.nuitka is not None else base.nuitka,
+    )
 
 
 # ---- pyproject.toml 解析与项目入口识别 ----

@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Callable, TypeVar
 
 from fspack.builder import build, resolve_project_info
-from fspack.config import MirrorConfig, ProjectInfo
+from fspack.config import MirrorConfig, ProjectInfo, build_options_from_defaults
 from fspack.console import console
 from fspack.exceptions import InstallerError
 from fspack.platform import Platform, detect_platform
@@ -154,7 +154,8 @@ def _prepare_dist(  # noqa: PLR0913
     """通用编排：可选 ``build()`` 构建项目到 dist，返回 ``(dist_dir, info)``。
 
     不校验可执行文件存在（由调用方按平台 ``exe_filename`` 自行校验）。
-    ``no_build=True`` 时仅检查 dist 目录存在；否则调用 :func:`build` 重新构建。
+    ``no_build=True`` 时仅检查 dist 目录存在；否则调用 :func:`build` 重新构建，
+    并透传 ``[tool.fspack]`` 配置的构建默认值（如 ``nuitka``/``pyc_strip``）。
     """
     project_dir = Path(project_dir).resolve()
     dist = dist_dir or project_dir / "dist"
@@ -163,7 +164,9 @@ def _prepare_dist(  # noqa: PLR0913
             raise InstallerError(f"未找到 dist 目录: {dist}（请先执行 fsp b）")
         info = resolve_project_info(project_dir, py_version, target)
     else:
-        info = build(project_dir, mirror, py_version, dist_dir=dist, target=target)
+        info = resolve_project_info(project_dir, py_version, target)
+        options = build_options_from_defaults(info.build_defaults)
+        info = build(project_dir, mirror, py_version, dist_dir=dist, target=target, options=options)
     return dist, info
 
 

@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from fspack.config import AppType, ProjectInfo, get_mirror
+from fspack.config import AppType, BuildOptions, ProjectInfo, get_mirror
 from fspack.exceptions import InstallerError
 from fspack.packaging.installer import (
     _make_zip,
@@ -195,12 +195,14 @@ def test_build_installer_with_build(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     dist = tmp_path / "dist"
     out_setup = dist / "release" / "app-1.0-py3.11.9-windows-slim-setup.exe"
 
-    def fake_build(
+    def fake_build(  # noqa: PLR0913
         project_dir: Path,
         mirror: object,
         py_version: str,
+        *,
         dist_dir: Path | None = None,
         target: object = None,
+        options: object = None,
     ) -> ProjectInfo:
         d = dist_dir or project_dir / "dist"
         d.mkdir(parents=True, exist_ok=True)
@@ -379,10 +381,10 @@ def test_build_zip_with_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
         project_dir: Path,
         mirror: object,
         py_version: str,
+        *,
         dist_dir: Path | None = None,
         target: object = None,
-        keep_modules: set[str] | None = None,
-        icon: Path | None = None,
+        options: object = None,
     ) -> ProjectInfo:
         d = dist_dir or project_dir / "dist"
         d.mkdir(parents=True, exist_ok=True)
@@ -538,3 +540,117 @@ def test_build_release_platform_mismatch_raises(tmp_path: Path) -> None:
     """fmt=nsis + Linux 目标报错."""
     with pytest.raises(InstallerError, match="NSIS 安装包仅支持 Windows"):
         build_release(tmp_path, get_mirror("huawei"), "3.11.9", target=Platform.LINUX, fmt="nsis")
+
+
+def test_prepare_dist_passes_build_defaults_to_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``fsp p`` 内部调用 ``build()`` 时透传 ``[tool.fspack]`` 构建默认值.
+
+    验证 ``[tool.fspack] nuitka = true`` 等配置在 ``build_release``/``build_installer``
+    路径上生效（修复 ``fsp p`` 不应用 nuitka 配置的 bug）。
+    """
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "1.0"\n'
+        "[tool.fspack]\nnuitka = true\npyc_strip = true\nno_site = true\npyc_optimize = 1\n"
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+
+    captured_options: list[BuildOptions | None] = []
+
+    def fake_build(  # noqa: PLR0913
+        project_dir: Path,
+        mirror: object,
+        py_version: str,
+        *,
+        dist_dir: Path | None = None,
+        target: object = None,
+        options: BuildOptions | None = None,
+    ) -> ProjectInfo:
+        captured_options.append(options)
+        d = dist_dir or project_dir / "dist"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "app.exe").write_bytes(b"")
+        return ProjectInfo(
+            name="app",
+            version="1.0",
+            src_dir=project_dir,
+            entry_module="app",
+            entry_file=project_dir / "app.py",
+            app_type=AppType.CLI,
+            dependencies=(),
+            py_version=py_version,
+        )
+
+    monkeypatch.setattr("fspack.packaging.installer.build", fake_build)
+
+    # build_release → _prepare_dist → build()，options 应反映 [tool.fspack] 配置
+    build_release(tmp_path, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, fmt="nsis")
+    assert len(captured_options) == 1
+    opts = captured_options[0]
+    assert opts is not None
+    assert opts.nuitka is True
+    assert opts.pyc_strip is True
+    assert opts.no_site is True
+    assert opts.pyc_optimize == 1
+    # 未在配置中声明的字段保留 BuildOptions 默认值
+    assert opts.no_stdlib_trim is False
+    assert opts.no_pyc is False
+
+
+def test_prepare_dist_no_config_uses_default_options(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """无 ``[tool.fspack]`` 配置时 ``fsp p`` 使用 :class:`BuildOptions` 默认值."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0"\n')
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+
+    captured_options: list[BuildOptions | None] = []
+
+    def fake_build(  # noqa: PLR0913
+        project_dir: Path,
+        mirror: object,
+        py_version: str,
+        *,
+        dist_dir: Path | None = None,
+        target: object = None,
+        options: BuildOptions | None = None,
+    ) -> ProjectInfo:
+        captured_options.append(options)
+        d = dist_dir or project_dir / "dist"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "app.exe").write_bytes(b"")
+        return ProjectInfo(
+            name="app",
+            version="1.0",
+            src_dir=project_dir,
+            entry_module="app",
+            entry_file=project_dir / "app.py",
+            app_type=AppType.CLI,
+            dependencies=(),
+            py_version=py_version,
+        )
+
+    monkeypatch.setattr("fspack.packaging.installer.build", fake_build)
+    build_release(tmp_path, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, fmt="nsis")
+    assert len(captured_options) == 1
+    opts = captured_options[0]
+    assert opts is not None
+    # 无配置时全部使用默认值（nuitka=False 等）
+    assert opts.nuitka is False
+    assert opts.pyc_strip is False
+    assert opts.pyc_optimize == 2
+
+
+def test_build_options_from_defaults_translation() -> None:
+    """``build_options_from_defaults`` 将 ``BuildDefaults`` 转为 ``BuildOptions``."""
+    from fspack.config import BuildDefaults, BuildOptions, build_options_from_defaults
+
+    # 全 None：使用 BuildOptions 默认值
+    opts = build_options_from_defaults(BuildDefaults())
+    assert opts == BuildOptions()
+
+    # 部分指定：非 None 字段覆盖默认值
+    opts = build_options_from_defaults(BuildDefaults(nuitka=True, pyc_optimize=1, no_site=True))
+    assert opts.nuitka is True
+    assert opts.pyc_optimize == 1
+    assert opts.no_site is True
+    # 未指定的字段保留默认值
+    assert opts.pyc_strip is False
+    assert opts.no_stdlib_trim is False
