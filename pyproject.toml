@@ -65,7 +65,7 @@ packages = ["src/fspack"]
 
 [tool.fspack]
 # 自身打包配置：排除示例目录，启用 Nuitka 编译与 .pyc 剥离优化
-exclude = ["examples"]
+exclude = ["examples", "templates"]
 nuitka = true
 pyc_strip = true
 no_site = true
