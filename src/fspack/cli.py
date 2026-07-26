@@ -65,11 +65,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_build.add_argument(
         "--pyc-optimize",
         type=int,
-        default=2,
+        default=None,
         choices=[0, 1, 2],
         help=(
-            "字节码优化级别：0=保留 docstring/assert（默认），1=剥离 assert，"
-            "2=剥离 assert+docstring（-OO，体积减 5-15%%，启动提速 5-10%%）"
+            "字节码优化级别：0=保留 docstring/assert，1=剥离 assert，"
+            "2=剥离 assert+docstring（-OO，体积减 5-15%%，启动提速 5-10%%，默认 2）"
         ),
     )
     p_build.add_argument(
@@ -131,7 +131,18 @@ def main(argv: list[str] | None = None) -> None:
     project = Path(ns.project).resolve()
     if command in ("build", "b"):
         from fspack.builder import build
-        from fspack.config import BuildOptions, get_mirror
+        from fspack.config import BuildOptions, ProjectInfo, get_mirror
+
+        # 合并 [tool.fspack] 构建默认值与 CLI 标志：
+        # 布尔开关用 any([cli, config])（CLI 或配置任一启用 → 启用）
+        # pyc_optimize 用 CLI > config > 默认值 2（CLI 显式指定优先）
+        info = ProjectInfo.from_dir(project, ns.py_version)
+        defaults = info.build_defaults
+        pyc_opt = (
+            ns.pyc_optimize
+            if ns.pyc_optimize is not None
+            else (defaults.pyc_optimize if defaults.pyc_optimize is not None else 2)
+        )
 
         build(
             project,
@@ -141,12 +152,12 @@ def main(argv: list[str] | None = None) -> None:
             options=BuildOptions(
                 keep_modules=set(ns.keep_modules) if ns.keep_modules else None,
                 icon=Path(ns.icon).resolve() if ns.icon else None,
-                no_stdlib_trim=ns.no_stdlib_trim,
-                no_pyc=ns.no_pyc,
-                pyc_strip=ns.pyc_strip,
-                pyc_optimize=ns.pyc_optimize,
-                no_site=ns.no_site,
-                nuitka=ns.nuitka,
+                no_stdlib_trim=any([ns.no_stdlib_trim, defaults.no_stdlib_trim]),
+                no_pyc=any([ns.no_pyc, defaults.no_pyc]),
+                pyc_strip=any([ns.pyc_strip, defaults.pyc_strip]),
+                pyc_optimize=pyc_opt,
+                no_site=any([ns.no_site, defaults.no_site]),
+                nuitka=any([ns.nuitka, defaults.nuitka]),
             ),
         )
     elif command in ("run", "r"):

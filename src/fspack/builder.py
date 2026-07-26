@@ -518,7 +518,7 @@ def build(  # noqa: PLR0912, PLR0913
     with tracker.stage("复制源码") as st:
         src_dst = cfg.dist_dir / "src"
         with spinner(f"复制 {info.name} 源码"):
-            copy_source(project_dir, src_dst)
+            copy_source(project_dir, src_dst, extra_excludes=info.exclude_dirs)
 
     # Nuitka 编译模式：用 runtime python -c "sys.path.insert(0, <nuitka_cache>); ..." 调用
     # nuitka --module 将 dist/src 下用户源码编译为 .pyd。
@@ -614,7 +614,7 @@ def build(  # noqa: PLR0912, PLR0913
     return info
 
 
-def copy_source(project_dir: Path, src_dst: Path) -> None:
+def copy_source(project_dir: Path, src_dst: Path, extra_excludes: tuple[str, ...] = ()) -> None:
     """将项目源码同步到 dist/src，剥离开发期文件。
 
     保留应用运行所需源码与资源（``.py``/数据文件/``LICENSE`` 等），
@@ -623,13 +623,30 @@ def copy_source(project_dir: Path, src_dst: Path) -> None:
     凭证（``.env``）、文档（``*.md``/``*.rst``/``docs``）与测试代码（``tests``）。
     详见 ``_EXCLUDE`` 模式列表。
 
+    ``extra_excludes`` 为 ``[tool.fspack] exclude`` 配置的额外排除模式，
+    合并到内置 ``_EXCLUDE`` 中（如排除 ``examples`` 目录）。
+
     增量同步：``src_dst`` 已存在时保留 ``__pycache__`` 目录以复用 ``.pyc`` 缓存，
     仅删除源码中已不存在的文件、覆盖复制新增/改动的文件（``copy2`` 保留 mtime）。
     """
+    ignore_fn = _merge_excludes(_EXCLUDE, extra_excludes) if extra_excludes else _EXCLUDE
     if src_dst.exists():
-        _sync_tree(project_dir, src_dst, _EXCLUDE)
+        _sync_tree(project_dir, src_dst, ignore_fn)
     else:
-        shutil.copytree(project_dir, src_dst, ignore=_EXCLUDE)
+        shutil.copytree(project_dir, src_dst, ignore=ignore_fn)
+
+
+def _merge_excludes(base: Callable[..., set[str]], extra: tuple[str, ...]) -> Callable[..., set[str]]:
+    """合并内置排除函数与配置额外排除模式.
+
+    返回的函数对同一 ``(directory, names)`` 取两者排除集的并集。
+    """
+    extra_fn = shutil.ignore_patterns(*extra)
+
+    def combined(directory: str, names: list[str]) -> set[str]:
+        return base(directory, names) | extra_fn(directory, names)
+
+    return combined
 
 
 def _sync_tree(src: Path, dst: Path, ignore_fn: Callable[..., set[str]]) -> None:

@@ -48,6 +48,8 @@ __all__ = [
     "NUITKA_VERSIONS",
     "AppType",
     "BuildConfig",
+    "BuildDefaults",
+    "BuildOptions",
     "DependencyReport",
     "EntryPoint",
     "MirrorConfig",
@@ -144,6 +146,29 @@ class EntryPoint:
 
 
 @dataclass(frozen=True)
+class BuildDefaults:
+    """``[tool.fspack]`` 构建默认值，CLI 标志覆盖这些值.
+
+    所有字段为 ``None`` 表示配置未指定，使用 :class:`BuildOptions` 默认值。
+    非 ``None`` 时作为 CLI 未显式指定该标志时的回退默认值。
+
+    合并策略（在 :func:`fspack.cli.main` 中执行）：
+
+    - 布尔开关（``nuitka``/``pyc_strip``/``no_site`` 等）：``cli or config``，
+      即 CLI 显式启用或配置启用 → 启用
+    - 整数开关（``pyc_optimize``）：``cli if cli is not None else config if config is not None else 2``，
+      CLI 显式指定 > 配置指定 > 默认值 2
+    """
+
+    nuitka: bool | None = None
+    pyc_strip: bool | None = None
+    pyc_optimize: int | None = None
+    no_site: bool | None = None
+    no_pyc: bool | None = None
+    no_stdlib_trim: bool | None = None
+
+
+@dataclass(frozen=True)
 class ProjectInfo:
     """解析后的项目元信息."""
 
@@ -158,6 +183,8 @@ class ProjectInfo:
     requires_python: str | None = None
     entries: tuple[EntryPoint, ...] = ()
     icon: Path | None = None
+    exclude_dirs: tuple[str, ...] = ()
+    build_defaults: BuildDefaults = field(default_factory=BuildDefaults)
 
     @classmethod
     def from_dir(cls, project_dir: Path, py_version: str | None = None) -> ProjectInfo:
@@ -374,6 +401,11 @@ def parse_project(project_dir: Path, py_version: str | None = None) -> ProjectIn
     icon_rel = fspack_cfg.get("icon")
     icon_path = _resolve_icon(project_dir, icon_rel)
 
+    # [tool.fspack] exclude：额外排除目录/文件模式（合并到 copy_source 内置 _EXCLUDE）
+    exclude_dirs = _parse_exclude_dirs(fspack_cfg.get("exclude"))
+    # [tool.fspack] 构建默认值：CLI 标志覆盖
+    build_defaults = _parse_build_defaults(fspack_cfg)
+
     if entries_tbl:
         entries = _parse_entries(project_dir, entries_tbl)
         first = entries[0]
@@ -389,6 +421,8 @@ def parse_project(project_dir: Path, py_version: str | None = None) -> ProjectIn
             requires_python=requires_python,
             entries=entries,
             icon=icon_path,
+            exclude_dirs=exclude_dirs,
+            build_defaults=build_defaults,
         )
 
     entry_module, entry_file, app_type = detect_entry(project_dir, name, deps)
@@ -403,6 +437,8 @@ def parse_project(project_dir: Path, py_version: str | None = None) -> ProjectIn
         py_version=py_version or DEFAULT_PY_VERSION,
         requires_python=requires_python,
         icon=icon_path,
+        exclude_dirs=exclude_dirs,
+        build_defaults=build_defaults,
     )
 
 
@@ -432,6 +468,59 @@ def _parse_entries(
             raise ProjectError(f"[tool.fspack.entries] {entry_name} 的脚本不存在: {script_rel}")
         entries.append(EntryPoint.from_script(entry_name, script_path))
     return tuple(entries)
+
+
+def _parse_exclude_dirs(value: object) -> tuple[str, ...]:
+    """解析 ``[tool.fspack] exclude`` 配置为排除模式元组.
+
+    接受字符串列表（如 ``["examples", "docs"]``），每个元素为 glob 模式，
+    合并到 :func:`fspack.builder.copy_source` 内置 ``_EXCLUDE`` 中。
+    非列表或元素非字符串时报错。
+    """
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise ProjectError(f"[tool.fspack] exclude 必须是字符串列表，得到 {type(value).__name__}")
+    result: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            raise ProjectError(f"[tool.fspack] exclude 元素必须是非空字符串，得到 {item!r}")
+        result.append(item.strip())
+    return tuple(result)
+
+
+# [tool.fspack] 构建默认值键名与 BuildDefaults 字段的映射
+_BUILD_DEFAULT_KEYS: dict[str, str] = {
+    "nuitka": "nuitka",
+    "pyc_strip": "pyc_strip",
+    "pyc_optimize": "pyc_optimize",
+    "no_site": "no_site",
+    "no_pyc": "no_pyc",
+    "no_stdlib_trim": "no_stdlib_trim",
+}
+
+
+def _parse_build_defaults(fspack_cfg: dict[str, Any]) -> BuildDefaults:
+    """从 ``[tool.fspack]`` 解析构建默认值.
+
+    识别 ``nuitka``/``pyc_strip``/``pyc_optimize``/``no_site``/``no_pyc``/
+    ``no_stdlib_trim`` 键，其余键忽略（如 ``icon``/``entries``/``exclude``）。
+    类型不匹配时报错，避免静默忽略错误配置。
+    """
+    kwargs: dict[str, bool | int | None] = {}
+    for cfg_key, field_name in _BUILD_DEFAULT_KEYS.items():
+        raw = fspack_cfg.get(cfg_key)
+        if raw is None:
+            continue
+        if field_name == "pyc_optimize":
+            if not isinstance(raw, int) or raw not in (0, 1, 2):
+                raise ProjectError(f"[tool.fspack] {cfg_key} 必须是 0/1/2，得到 {raw!r}")
+            kwargs[field_name] = raw
+        else:
+            if not isinstance(raw, bool):
+                raise ProjectError(f"[tool.fspack] {cfg_key} 必须是布尔值，得到 {raw!r}")
+            kwargs[field_name] = raw
+    return BuildDefaults(**kwargs)  # type: ignore[arg-type]
 
 
 def _resolve_icon(project_dir: Path, icon_rel: object) -> Path | None:

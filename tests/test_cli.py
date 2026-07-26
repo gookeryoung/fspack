@@ -27,6 +27,17 @@ def test_no_command_prints_help(capsys: pytest.CaptureFixture[str]) -> None:
     assert "fspack" in capsys.readouterr().out
 
 
+def _make_minimal_project(tmp_path: Path) -> Path:
+    """在 tmp_path 下创建最小可解析项目（pyproject.toml + 入口脚本）.
+
+    cli.main 在 dispatch 到 builder.build 前会调用 ProjectInfo.from_dir
+    读取 [tool.fspack] build_defaults，需要可解析的 pyproject.toml。
+    """
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n', encoding="utf-8")
+    (tmp_path / "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
+    return tmp_path
+
+
 def _capture_build() -> tuple[dict[str, Any], Any]:
     """构造 fake_build 与 captured dict，fake_build 签名匹配 builder.build()."""
     captured: dict[str, Any] = {}
@@ -50,6 +61,7 @@ def _capture_build() -> tuple[dict[str, Any], Any]:
 
 
 def test_build_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _make_minimal_project(tmp_path)
     called, fake_build = _capture_build()
     monkeypatch.setattr("fspack.builder.build", fake_build)
     cli.main(["b", str(tmp_path), "--mirror", "aliyun"])
@@ -58,6 +70,7 @@ def test_build_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_build_default_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _make_minimal_project(tmp_path)
     called, fake_build = _capture_build()
     monkeypatch.setattr("fspack.builder.build", fake_build)
     monkeypatch.chdir(tmp_path)
@@ -66,6 +79,7 @@ def test_build_default_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_build_custom_py_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _make_minimal_project(tmp_path)
     called, fake_build = _capture_build()
     monkeypatch.setattr("fspack.builder.build", fake_build)
     cli.main(["b", str(tmp_path), "--py-version", "3.12.3"])
@@ -73,6 +87,7 @@ def test_build_custom_py_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 
 
 def test_build_target_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _make_minimal_project(tmp_path)
     called, fake_build = _capture_build()
     monkeypatch.setattr("fspack.builder.build", fake_build)
     cli.main(["b", str(tmp_path), "--target", "linux"])
@@ -80,6 +95,7 @@ def test_build_target_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_build_target_windows_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _make_minimal_project(tmp_path)
     called, fake_build = _capture_build()
     monkeypatch.setattr("fspack.builder.build", fake_build)
     cli.main(["b", str(tmp_path), "--target", "windows"])
@@ -87,6 +103,7 @@ def test_build_target_windows_dispatch(tmp_path: Path, monkeypatch: pytest.Monke
 
 
 def test_build_keep_module_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _make_minimal_project(tmp_path)
     called, fake_build = _capture_build()
     monkeypatch.setattr("fspack.builder.build", fake_build)
     cli.main(["b", str(tmp_path), "--keep-module", "PySide2.QtGui", "--keep-module", "PySide2.QtNetwork"])
@@ -95,6 +112,7 @@ def test_build_keep_module_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
 def test_build_icon_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`fspack b <project> --icon <path>` 解析为绝对路径并封装到 BuildOptions.icon."""
+    _make_minimal_project(tmp_path)
     called, fake_build = _capture_build()
     monkeypatch.setattr("fspack.builder.build", fake_build)
     icon_abs = tmp_path / "custom.ico"
@@ -104,6 +122,7 @@ def test_build_icon_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 
 def test_build_no_icon_passes_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """未指定 --icon 时 BuildOptions.icon 为 None（由 builder 回退到默认 app.ico）."""
+    _make_minimal_project(tmp_path)
     called, fake_build = _capture_build()
     monkeypatch.setattr("fspack.builder.build", fake_build)
     cli.main(["b", str(tmp_path)])
@@ -112,6 +131,7 @@ def test_build_no_icon_passes_none(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
 def test_build_pyc_options_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`--no-pyc`/`--pyc-strip`/`--no-stdlib-trim` 解析并封装到 BuildOptions."""
+    _make_minimal_project(tmp_path)
     called, fake_build = _capture_build()
     monkeypatch.setattr("fspack.builder.build", fake_build)
     cli.main(["b", str(tmp_path), "--no-pyc", "--pyc-strip", "--no-stdlib-trim"])
@@ -122,6 +142,7 @@ def test_build_pyc_options_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
 def test_build_pyc_options_default_false(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """未指定 pyc 选项时 BuildOptions 各开关均为默认值（开启精简与预编译）."""
+    _make_minimal_project(tmp_path)
     called, fake_build = _capture_build()
     monkeypatch.setattr("fspack.builder.build", fake_build)
     cli.main(["b", str(tmp_path)])
@@ -138,6 +159,7 @@ def test_build_pyc_options_default_false(tmp_path: Path, monkeypatch: pytest.Mon
 
 def test_build_new_options_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`--pyc-optimize`/`--no-site`/`--nuitka` 解析并封装到 BuildOptions."""
+    _make_minimal_project(tmp_path)
     called, fake_build = _capture_build()
     monkeypatch.setattr("fspack.builder.build", fake_build)
     cli.main(["b", str(tmp_path), "--pyc-optimize", "2", "--no-site", "--nuitka"])
@@ -148,9 +170,73 @@ def test_build_new_options_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
 def test_build_pyc_optimize_invalid_choice(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`--pyc-optimize` 仅接受 0/1/2，非法值 argparse 报错."""
+    _make_minimal_project(tmp_path)
     monkeypatch.setattr("fspack.builder.build", lambda *a, **kw: None)
     with pytest.raises(SystemExit):
         cli.main(["b", str(tmp_path), "--pyc-optimize", "3"])
+
+
+def _make_project_with_fspack_config(tmp_path: Path, fspack_config: str) -> Path:
+    """在 tmp_path 下创建带 [tool.fspack] 配置的最小项目."""
+    (tmp_path / "pyproject.toml").write_text(
+        f'[project]\nname = "app"\nversion = "0.1"\n\n{fspack_config}\n', encoding="utf-8"
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
+    return tmp_path
+
+
+def test_build_config_defaults_applied_when_cli_silent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """[tool.fspack] build_defaults 在 CLI 未指定对应标志时作为回退默认值."""
+    _make_project_with_fspack_config(
+        tmp_path,
+        "[tool.fspack]\nnuitka = true\npyc_strip = true\nno_site = true\npyc_optimize = 1\nno_pyc = true\nno_stdlib_trim = true\n",
+    )
+    called, fake_build = _capture_build()
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    cli.main(["b", str(tmp_path)])
+    opts = called["options"]
+    assert opts.nuitka is True
+    assert opts.pyc_strip is True
+    assert opts.no_site is True
+    assert opts.pyc_optimize == 1
+    assert opts.no_pyc is True
+    assert opts.no_stdlib_trim is True
+
+
+def test_build_cli_flag_overrides_config_pyc_optimize(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """CLI --pyc-optimize 显式指定优先于 [tool.fspack] pyc_optimize 配置."""
+    _make_project_with_fspack_config(tmp_path, "[tool.fspack]\npyc_optimize = 1\n")
+    called, fake_build = _capture_build()
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    cli.main(["b", str(tmp_path), "--pyc-optimize", "0"])
+    assert called["options"].pyc_optimize == 0
+
+
+def test_build_cli_and_config_merged_with_any(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """布尔开关用 any([cli, config]) 合并：配置启用 + CLI 未指定 → 启用."""
+    _make_project_with_fspack_config(tmp_path, "[tool.fspack]\nnuitka = true\n")
+    called, fake_build = _capture_build()
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    cli.main(["b", str(tmp_path)])
+    assert called["options"].nuitka is True
+
+
+def test_build_cli_nuitka_flag_with_no_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """无 [tool.fspack] 配置时 --nuitka CLI 标志正常生效."""
+    _make_minimal_project(tmp_path)
+    called, fake_build = _capture_build()
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    cli.main(["b", str(tmp_path), "--nuitka"])
+    assert called["options"].nuitka is True
+
+
+def test_build_config_pyc_optimize_default_when_both_silent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """CLI 与 [tool.fspack] 均未指定 pyc_optimize 时回退到默认值 2."""
+    _make_minimal_project(tmp_path)
+    called, fake_build = _capture_build()
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    cli.main(["b", str(tmp_path)])
+    assert called["options"].pyc_optimize == 2
 
 
 def test_run_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

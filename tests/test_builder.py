@@ -1355,6 +1355,40 @@ def test_copy_source_syncs_deleted_files(tmp_path: Path) -> None:
     assert (dst / "main.py").is_file()
 
 
+def test_copy_source_with_extra_excludes(tmp_path: Path) -> None:
+    """extra_excludes 额外排除 [tool.fspack] exclude 配置的目录."""
+    src = tmp_path / "proj"
+    src.mkdir()
+    (src / "app.py").write_text("print('hi')")
+    (src / "examples").mkdir()
+    (src / "examples" / "demo.py").write_text("print('demo')")
+    (src / "mydata").mkdir()
+    (src / "mydata" / "data.txt").write_text("data")
+    dst = tmp_path / "out" / "src"
+
+    copy_source(src, dst, extra_excludes=("examples", "mydata"))
+    assert (dst / "app.py").is_file()
+    assert not (dst / "examples").exists()
+    assert not (dst / "mydata").exists()
+
+
+def test_copy_source_extra_excludes_merged_with_builtin(tmp_path: Path) -> None:
+    """extra_excludes 与内置 _EXCLUDE 合并：内置排除仍生效 + 额外排除生效."""
+    src = tmp_path / "proj"
+    src.mkdir()
+    (src / "app.py").write_text("print('hi')")
+    (src / "dist").mkdir()  # 内置排除
+    (src / "dist" / "junk.txt").write_text("x")
+    (src / "custom_excl").mkdir()  # 额外排除
+    (src / "custom_excl" / "file.py").write_text("x")
+    dst = tmp_path / "out" / "src"
+
+    copy_source(src, dst, extra_excludes=("custom_excl",))
+    assert (dst / "app.py").is_file()
+    assert not (dst / "dist").exists()
+    assert not (dst / "custom_excl").exists()
+
+
 # ---- 依赖分析缓存 ----
 
 

@@ -713,3 +713,103 @@ def test_parse_project_with_icon_in_multi_entry(tmp_path: Path) -> None:
     (tmp_path / "cli.py").write_text("def main():\n    pass\n")
     info = parse_project(tmp_path)
     assert info.icon == icon.resolve()
+
+
+# --- exclude 与 build_defaults 配置测试 ---
+
+
+def test_parse_project_no_exclude_returns_empty(tmp_path: Path) -> None:
+    """无 [tool.fspack] exclude 配置时 exclude_dirs 为空元组."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    info = parse_project(tmp_path)
+    assert info.exclude_dirs == ()
+
+
+def test_parse_project_with_exclude(tmp_path: Path) -> None:
+    """[tool.fspack] exclude 配置解析为排除模式元组."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nexclude = ["examples", "docs"]\n'
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    info = parse_project(tmp_path)
+    assert info.exclude_dirs == ("examples", "docs")
+
+
+def test_parse_project_exclude_not_list_raises(tmp_path: Path) -> None:
+    """exclude 非列表时报错."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nexclude = "examples"\n'
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    with pytest.raises(ProjectError, match="exclude 必须是字符串列表"):
+        parse_project(tmp_path)
+
+
+def test_parse_project_exclude_empty_string_element_raises(tmp_path: Path) -> None:
+    """exclude 元素为空字符串时报错."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nexclude = [""]\n'
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    with pytest.raises(ProjectError, match="exclude 元素必须是非空字符串"):
+        parse_project(tmp_path)
+
+
+def test_parse_project_no_build_defaults_returns_all_none(tmp_path: Path) -> None:
+    """无 [tool.fspack] 构建默认值时 build_defaults 所有字段为 None."""
+    from fspack.config import BuildDefaults
+
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    info = parse_project(tmp_path)
+    assert info.build_defaults == BuildDefaults()
+
+
+def test_parse_project_with_build_defaults(tmp_path: Path) -> None:
+    """[tool.fspack] 构建默认值正确解析."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n'
+        "[tool.fspack]\nnuitka = true\npyc_strip = true\nno_site = true\npyc_optimize = 1\n"
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    info = parse_project(tmp_path)
+    assert info.build_defaults.nuitka is True
+    assert info.build_defaults.pyc_strip is True
+    assert info.build_defaults.no_site is True
+    assert info.build_defaults.pyc_optimize == 1
+    assert info.build_defaults.no_pyc is None
+    assert info.build_defaults.no_stdlib_trim is None
+
+
+def test_parse_project_build_defaults_invalid_bool_raises(tmp_path: Path) -> None:
+    """构建默认值布尔字段传非布尔值时报错."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nnuitka = "yes"\n'
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    with pytest.raises(ProjectError, match="nuitka 必须是布尔值"):
+        parse_project(tmp_path)
+
+
+def test_parse_project_build_defaults_invalid_pyc_optimize_raises(tmp_path: Path) -> None:
+    """pyc_optimize 非 0/1/2 报错."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\npyc_optimize = 3\n'
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    with pytest.raises(ProjectError, match="pyc_optimize 必须是 0/1/2"):
+        parse_project(tmp_path)
+
+
+def test_parse_project_exclude_and_defaults_in_multi_entry(tmp_path: Path) -> None:
+    """多入口项目也正确解析 exclude 与 build_defaults."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n'
+        '[tool.fspack]\nexclude = ["tests"]\nnuitka = true\n\n'
+        '[tool.fspack.entries]\ncli = "cli.py"\n'
+    )
+    (tmp_path / "cli.py").write_text("def main():\n    pass\n")
+    info = parse_project(tmp_path)
+    assert info.exclude_dirs == ("tests",)
+    assert info.build_defaults.nuitka is True
