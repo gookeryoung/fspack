@@ -779,6 +779,287 @@ def test_strip_compiled_sources_deletes_py_when_so_exists(tmp_path: Path) -> Non
     assert not py_file.exists()
 
 
+# ---- _strip_compiled_sources 可选 import 验证测试 ----
+
+
+class _VerifyResult:
+    """subprocess.run 桩：模拟批量验证成功（returncode=0，输出 JSON 结果）.
+
+    ``module_status`` 为 {模块名: 是否可加载} 字典，控制每个模块的验证结果。
+    """
+
+    def __init__(self, module_status: dict[str, bool]) -> None:
+        import json
+
+        self.returncode = 0
+        results_json = json.dumps(module_status)
+        self.stdout = f"FSPACK_VERIFY_RESULT:{results_json}\n"
+        self.stderr = ""
+
+
+class _CrashResult:
+    """subprocess.run 桩：模拟批量验证崩溃（returncode=-1073741819 访问违例）."""
+
+    def __init__(self) -> None:
+        self.returncode = -1073741819  # 0xC0000005
+        self.stdout = ""
+        self.stderr = ""
+
+
+class _SubprocessResult:
+    """subprocess.run 返回值桩."""
+
+    def __init__(self, returncode: int = 0, stdout: str = "", stderr: str = "") -> None:
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+class _IndividualRunner:
+    """subprocess.run 可调用桩：模拟逐个验证，按调用解析模块名返回结果.
+
+    ``ok_modules`` 为可加载模块集合，其余模块返回崩溃码。
+    每次调用返回新的 :class:`_SubprocessResult`，避免 returncode 在调用间被覆盖。
+    """
+
+    def __init__(self, ok_modules: set[str]) -> None:
+        self._ok_modules = ok_modules
+
+    def __call__(self, cmd: list[str], **kwargs: Any) -> _SubprocessResult:
+        # 从 -c 参数中提取模块名（最后一行 importlib.import_module({mod!r})）
+        script = cmd[cmd.index("-c") + 1]
+        mod = ""
+        for line in reversed(script.split("\n")):
+            if "importlib.import_module(" in line:
+                # 提取引号中的模块名（支持单引号和双引号）
+                start = line.find("'") + 1
+                if start > 0:
+                    end = line.find("'", start)
+                    mod = line[start:end]
+                else:
+                    start = line.find('"') + 1
+                    end = line.find('"', start)
+                    mod = line[start:end]
+                break
+        returncode = 0 if mod in self._ok_modules else -1073741819
+        return _SubprocessResult(returncode=returncode)
+
+
+def test_strip_compiled_sources_verify_preserves_py_when_pyd_corrupt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """_strip_compiled_sources 验证模式：.pyd 损坏时保留 .py 并删除损坏 .pyd.
+
+    Nuitka 4.x 在 Python 3.13+ Windows 上用 zig 编译可能生成损坏 .pyd，
+    验证发现损坏时删除 .pyd（避免运行时优先加载损坏产物）并保留 .py 回退到 .pyc。
+    """
+    from fspack.packaging.nuitka import NuitkaCompiler
+    from fspack.progress import StageRecorder
+
+    # 模拟 site-packages/rich/errors.py + 损坏的 errors.cp313-win_amd64.pyd
+    site_packages = tmp_path / "site-packages"
+    rich_dir = site_packages / "rich"
+    rich_dir.mkdir(parents=True)
+    py_file = rich_dir / "errors.py"
+    py_file.write_text("class ConsoleError(Exception): pass")
+    pyd_file = rich_dir / "errors.cp313-win_amd64.pyd"
+    pyd_file.write_bytes(b"corrupt-pyd")
+
+    # 批量验证返回 errors 模块不可加载
+    monkeypatch.setattr(
+        "fspack.packaging.nuitka.subprocess.run",
+        lambda cmd, **kwargs: _VerifyResult({"rich.errors": False}),
+    )
+
+    st = StageRecorder("Nuitka 编译")
+    with caplog.at_level("WARNING", logger="fspack.packaging.nuitka"):
+        stripped = NuitkaCompiler._strip_compiled_sources(
+            {py_file},
+            st,
+            verify_py_exe=tmp_path / "python.exe",
+            verify_search_root=site_packages,
+        )
+
+    assert stripped == 0, "损坏 .pyd 对应的 .py 不应删除"
+    assert py_file.is_file(), "损坏 .pyd 时应保留 .py 回退到 .pyc"
+    assert not pyd_file.exists(), "损坏 .pyd 应删除避免运行时优先加载"
+    assert any("损坏" in r.message for r in caplog.records)
+
+
+def test_strip_compiled_sources_verify_deletes_py_when_pyd_ok(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_strip_compiled_sources 验证模式：.pyd 可加载时正常删除 .py."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+    from fspack.progress import StageRecorder
+
+    site_packages = tmp_path / "site-packages"
+    rich_dir = site_packages / "rich"
+    rich_dir.mkdir(parents=True)
+    py_file = rich_dir / "errors.py"
+    py_file.write_text("class ConsoleError(Exception): pass")
+    pyd_file = rich_dir / "errors.cp313-win_amd64.pyd"
+    pyd_file.write_bytes(b"valid-pyd")
+
+    # 批量验证返回 errors 模块可加载
+    monkeypatch.setattr(
+        "fspack.packaging.nuitka.subprocess.run",
+        lambda cmd, **kwargs: _VerifyResult({"rich.errors": True}),
+    )
+
+    st = StageRecorder("Nuitka 编译")
+    stripped = NuitkaCompiler._strip_compiled_sources(
+        {py_file},
+        st,
+        verify_py_exe=tmp_path / "python.exe",
+        verify_search_root=site_packages,
+    )
+
+    assert stripped == 1
+    assert not py_file.exists(), "可加载 .pyd 时应删除 .py"
+    assert pyd_file.is_file(), "可加载 .pyd 应保留"
+
+
+def test_strip_compiled_sources_verify_fallback_to_individual_on_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """批量验证崩溃时回退到逐个验证，定位损坏的 .pyd.
+
+    批量 subprocess 因损坏 .pyd 触发访问违例（returncode != 0），
+    回退到逐个模块测试，仅损坏模块保留 .py，可加载模块正常删除 .py。
+    """
+    from fspack.packaging.nuitka import NuitkaCompiler
+    from fspack.progress import StageRecorder
+
+    site_packages = tmp_path / "site-packages"
+    rich_dir = site_packages / "rich"
+    rich_dir.mkdir(parents=True)
+    # 两个模块：errors 可加载，console 损坏
+    errors_py = rich_dir / "errors.py"
+    errors_py.write_text("class ConsoleError(Exception): pass")
+    (rich_dir / "errors.cp313-win_amd64.pyd").write_bytes(b"valid-pyd")
+    console_py = rich_dir / "console.py"
+    console_py.write_text("print('hello')")
+    (rich_dir / "console.cp313-win_amd64.pyd").write_bytes(b"corrupt-pyd")
+
+    # 第一次批量测试崩溃，后续逐个测试只有 rich.errors 成功
+    call_count = [0]
+    individual_runner = _IndividualRunner({"rich.errors"})
+
+    def _fake_run(cmd: list[str], **kwargs: Any) -> Any:
+        call_count[0] += 1
+        if call_count[0] == 1:
+            # 批量测试崩溃
+            return _CrashResult()
+        # 逐个测试：rich.errors 成功，rich.console 崩溃
+        return individual_runner(cmd, **kwargs)
+
+    monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", _fake_run)
+
+    st = StageRecorder("Nuitka 编译")
+    with caplog.at_level("WARNING", logger="fspack.packaging.nuitka"):
+        stripped = NuitkaCompiler._strip_compiled_sources(
+            {errors_py, console_py},
+            st,
+            verify_py_exe=tmp_path / "python.exe",
+            verify_search_root=site_packages,
+        )
+
+    assert stripped == 1, "仅可加载的 errors.py 应删除"
+    assert not errors_py.exists(), "可加载 .pyd 对应的 .py 应删除"
+    assert console_py.is_file(), "损坏 .pyd 对应的 .py 应保留"
+    assert not (rich_dir / "console.cp313-win_amd64.pyd").exists(), "损坏 .pyd 应删除"
+    assert any("批量验证 .pyd 崩溃" in r.message for r in caplog.records)
+
+
+def test_verify_compiled_modules_empty_input() -> None:
+    """_verify_compiled_modules 空输入返回空集合."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+
+    verified, artifacts = NuitkaCompiler._verify_compiled_modules(Path("python.exe"), Path("/tmp"), set())
+    assert verified == set()
+    assert artifacts == []
+
+
+def test_verify_compiled_modules_py_outside_search_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_verify_compiled_modules 在 .py 不在 search_root 下时信任编译结果.
+
+    理论上不会发生（compiled_files 来自 search_root 下的扫描），但防御性处理。
+    """
+    from fspack.packaging.nuitka import NuitkaCompiler
+
+    # py_file 在 tmp_path 下，但 search_root 是另一个目录
+    py_file = tmp_path / "mod.py"
+    py_file.write_text("x = 1")
+    other_root = tmp_path / "other"
+    other_root.mkdir()
+
+    # 不应调用 subprocess（无法推导模块名，直接返回信任结果）
+    def _fail_run(cmd: list[str], **kwargs: Any) -> Any:
+        raise AssertionError("不应调用 subprocess 验证")
+
+    monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", _fail_run)
+
+    verified, artifacts = NuitkaCompiler._verify_compiled_modules(Path("python.exe"), other_root, {py_file})
+    assert verified == {py_file}, "无法推导模块名时信任编译结果"
+    assert artifacts == []
+
+
+def test_batch_import_test_returns_none_on_crash(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_batch_import_test 在 subprocess 崩溃时返回 None（调用方回退到逐个测试）."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+
+    monkeypatch.setattr(
+        "fspack.packaging.nuitka.subprocess.run",
+        lambda cmd, **kwargs: _CrashResult(),
+    )
+
+    result = NuitkaCompiler._batch_import_test(tmp_path / "python.exe", tmp_path, ["rich.errors"])
+    assert result is None
+
+
+def test_batch_import_test_returns_importable_set(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_batch_import_test 成功时返回可加载模块集合."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+
+    monkeypatch.setattr(
+        "fspack.packaging.nuitka.subprocess.run",
+        lambda cmd, **kwargs: _VerifyResult({"rich.errors": True, "rich.console": False}),
+    )
+
+    result = NuitkaCompiler._batch_import_test(tmp_path / "python.exe", tmp_path, ["rich.errors", "rich.console"])
+    assert result == {"rich.errors"}
+
+
+def test_individual_import_test_locates_corrupt_pyd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_individual_import_test 逐个测试定位损坏 .pyd，仅返回可加载模块."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+
+    # rich.errors 可加载，rich.console 崩溃
+    monkeypatch.setattr(
+        "fspack.packaging.nuitka.subprocess.run",
+        _IndividualRunner({"rich.errors"}),
+    )
+
+    result = NuitkaCompiler._individual_import_test(tmp_path / "python.exe", tmp_path, ["rich.errors", "rich.console"])
+    assert result == {"rich.errors"}
+
+
+def test_strip_compiled_sources_no_verify_preserves_original_behavior(tmp_path: Path) -> None:
+    """_strip_compiled_sources 不传验证参数时保持原有行为（仅检查 .pyd 存在）."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+    from fspack.progress import StageRecorder
+
+    py_file = tmp_path / "app.py"
+    py_file.write_text("x = 1")
+    (tmp_path / "app.cp311-win_amd64.pyd").write_bytes(b"fake-pyd")
+
+    st = StageRecorder("Nuitka 编译")
+    # 不传 verify_py_exe 和 verify_search_root
+    stripped = NuitkaCompiler._strip_compiled_sources({py_file}, st)
+
+    assert stripped == 1
+    assert not py_file.exists()
+
+
 def test_cleanup_build_dirs_removes_residual(tmp_path: Path) -> None:
     """_cleanup_build_dirs 清理 Nuitka 编译失败的 .build 残留目录."""
     from fspack.packaging.nuitka import NuitkaCompiler
@@ -1593,6 +1874,8 @@ def test_compile_packages_compiles_specified_package(tmp_path: Path, monkeypatch
     """compile_packages 编译指定包下的 .py 文件（跳过 __init__.py）.
 
     fake_compile_files 同时创建 .pyd 产物，验证 _strip_compiled_sources 删除 .py 前检查 .pyd 存在。
+    新增 import 验证：compile_packages 用 runtime python 批量验证 .pyd 可加载才删除 .py，
+    mock subprocess.run 返回所有模块可加载（fake_pyd 是占位字节，无法真实 import）。
     """
     runtime = tmp_path / "runtime"
     runtime.mkdir()
@@ -1618,6 +1901,12 @@ def test_compile_packages_compiles_specified_package(tmp_path: Path, monkeypatch
 
     monkeypatch.setattr(NuitkaCompiler, "_compile_files", classmethod(fake_compile_files))
 
+    # mock 批量验证：返回所有模块可加载（fake_pyd 是占位字节，无法真实 import）
+    monkeypatch.setattr(
+        "fspack.packaging.nuitka.subprocess.run",
+        lambda cmd, **kwargs: _VerifyResult({"rich._extension": True, "rich.console": True}),
+    )
+
     st = StageRecorder("Nuitka 包编译")
     NuitkaCompiler.compile_packages(sp, ("rich",), runtime, "3.11.9", Platform.WINDOWS, cache, stage=st)
 
@@ -1625,7 +1914,7 @@ def test_compile_packages_compiles_specified_package(tmp_path: Path, monkeypatch
     assert len(captured) == 1
     names = {p.name for p in captured[0]}
     assert names == {"_extension.py", "console.py"}
-    # 编译成功的 .py 被删除（.pyd 已生成）
+    # 编译成功的 .py 被删除（.pyd 已生成且验证可加载）
     assert not (pkg / "_extension.py").exists()
     assert not (pkg / "console.py").exists()
     # .pyd 产物保留

@@ -891,7 +891,18 @@ class NuitkaCompiler:
         finally:
             shutil.rmtree(bootstrap_script.parent, ignore_errors=True)
 
-        stripped = cls._strip_compiled_sources(compiled_files, stage)
+        # 验证 .pyd 可加载才删除 .py：Nuitka 4.x 在 Python 3.13+ Windows 上忽略 CC
+        # 环境变量自动回退到 zig 编译器，zig 编译的 .pyd 可能损坏（运行时访问违例）。
+        # 用 runtime python（.pyd ABI 绑定 runtime）批量 import 验证，损坏的 .pyd
+        # 删除产物保留 .py，回退到 .pyc 加载。
+        runtime_py_exe = cls._runtime_python(runtime_dir, py_version, target)
+        verify_py_exe = runtime_py_exe if runtime_py_exe.is_file() else None
+        stripped = cls._strip_compiled_sources(
+            compiled_files,
+            stage,
+            verify_py_exe=verify_py_exe,
+            verify_search_root=site_packages if verify_py_exe is not None else None,
+        )
         # 清理 Nuitka 编译失败的 .build 残留目录（--remove-output 仅成功时清理）
         for pkg in packages:
             pkg_dir = site_packages / pkg
@@ -1051,13 +1062,26 @@ class NuitkaCompiler:
                 _logger.warning("Nuitka 编译失败 %s（退出码 %s），详见上方输出", py_file, returncode)
         return compiled_files, failed
 
-    @staticmethod
-    def _strip_compiled_sources(compiled_files: set[Path], stage: StageRecorder) -> int:
+    @classmethod
+    def _strip_compiled_sources(
+        cls,
+        compiled_files: set[Path],
+        stage: StageRecorder,
+        *,
+        verify_py_exe: Path | None = None,
+        verify_search_root: Path | None = None,
+    ) -> int:
         """删除成功编译的 .py 源码（.pyd/.so 已生成可替代），返回删除数.
 
         **必须验证 .pyd/.so 真的存在才删除 .py**：Nuitka 可能 returncode==0 但未生成
         .pyd（如文件名含 ``-`` 触发 Nuitka 内部静默失败），此时删除 .py 会导致运行时
         ImportError/访问违例。验证产物存在避免误删。
+
+        **可选 import 验证**（``verify_py_exe`` + ``verify_search_root``）：Nuitka 4.x
+        在 Python 3.13+ Windows 上忽略 ``CC`` 环境变量自动回退到 zig 编译器，zig 编译的
+        .pyd 可能损坏（returncode==0、文件已生成，但运行时访问违例 0xC0000005）。
+        提供验证参数时，删除 .py 前用 subprocess 批量 import 验证 .pyd 可加载，
+        不可加载的 .pyd 删除产物并保留 .py，回退到 .pyc 加载。
 
         Nuitka ``--module`` 输出文件名格式：
         - Windows: ``{stem}.cp{major}{minor}-{platform}.pyd``
@@ -1068,8 +1092,23 @@ class NuitkaCompiler:
         失败的 .py 保留：运行时回退到 .pyc 加载，避免编译失败导致 dist/src 无可用代码。
         ``__init__.py`` 不在 ``compiled_files`` 中（收集时已跳过），无需额外检查。
         """
+        # 可选 import 验证：防止 zig 编译的损坏 .pyd 导致运行时崩溃
+        files_to_strip = compiled_files
+        if verify_py_exe is not None and verify_search_root is not None and compiled_files:
+            verified_files, unverified_artifacts = cls._verify_compiled_modules(
+                verify_py_exe, verify_search_root, compiled_files
+            )
+            # 删除损坏的 .pyd/.so，避免运行时优先加载损坏的产物（.pyd 优先级高于 .pyc）
+            for artifact in unverified_artifacts:
+                try:
+                    artifact.unlink()
+                    _logger.warning("删除损坏的 .pyd/.so 产物: %s", artifact)
+                except OSError as e:
+                    _logger.warning("删除损坏 .pyd/.so 失败 %s: %s", artifact, e)
+            files_to_strip = verified_files
+
         stripped = 0
-        for py_file in compiled_files:
+        for py_file in files_to_strip:
             stem = py_file.stem
             # 检查 .pyd/.so 产物是否真实存在（glob 的 * 跨 . 匹配所有命名变体）
             artifacts = list(py_file.parent.glob(f"{stem}.*.pyd"))
@@ -1085,6 +1124,162 @@ class NuitkaCompiler:
         if stripped:
             stage.skip(stripped)
         return stripped
+
+    @classmethod
+    def _verify_compiled_modules(
+        cls,
+        py_exe: Path,
+        search_root: Path,
+        compiled_files: set[Path],
+    ) -> tuple[set[Path], list[Path]]:
+        """用 subprocess 批量验证 .pyd 可加载，返回 (可加载的 .py 集合, 损坏 .pyd 路径列表).
+
+        **为何需要 import 验证**：Nuitka 4.x 在 Python 3.13+ Windows 上忽略 ``CC``
+        环境变量自动回退到 zig 编译器，zig 编译的 .pyd 可能损坏（returncode==0、
+        文件已生成，但运行时访问违例 0xC0000005）。仅检查文件存在不够，必须实际
+        import 验证。
+
+        **批量测试策略**：一次 subprocess 测试所有模块，避免 N 次 subprocess 启动
+        开销（100ms × N）。如果批量测试因损坏 .pyd 崩溃（returncode != 0），
+        回退到逐个模块测试定位损坏的 .pyd。
+
+        模块名推导：``search_root/rich/_extension.py`` → ``rich._extension``；
+        ``__init__.py`` 不会在 ``compiled_files`` 中（收集时已跳过）。
+
+        Args:
+            py_exe: runtime python 可执行文件（.pyd ABI 绑定 runtime，必须用 runtime 验证）。
+            search_root: 模块搜索根目录（site-packages 或 dist/src）。
+            compiled_files: 编译成功的 .py 文件集合。
+
+        Returns:
+            (可加载的 .py 文件集合, 损坏 .pyd/.so 产物路径列表)。
+            损坏产物的 .py 不在可加载集合中，调用方应保留这些 .py 回退到 .pyc。
+        """
+        if not compiled_files:
+            return set(), []
+
+        # 构建模块名 → .py 文件路径映射
+        module_to_py: dict[str, Path] = {}
+        # 同时记录每个 .py 对应的 .pyd/.so 产物路径（用于损坏时清理）
+        py_to_artifacts: dict[Path, list[Path]] = {}
+        for py_file in compiled_files:
+            try:
+                rel = py_file.relative_to(search_root)
+            except ValueError:
+                # .py 不在 search_root 下（理论上不会发生），跳过验证信任编译结果
+                continue
+            # 推导模块名：去掉 .py 后缀，路径分隔符转为 .
+            parts = rel.with_suffix("").parts
+            module_name = ".".join(parts)
+            if module_name.endswith(".__init__"):
+                module_name = module_name[:-9]
+            module_to_py[module_name] = py_file
+            # 收集 .pyd/.so 产物路径
+            stem = py_file.stem
+            artifacts = list(py_file.parent.glob(f"{stem}.*.pyd"))
+            artifacts.extend(py_file.parent.glob(f"{stem}.*.so"))
+            py_to_artifacts[py_file] = artifacts
+
+        if not module_to_py:
+            # 无法推导模块名，信任编译结果
+            return compiled_files, []
+
+        # 一次 subprocess 批量测试所有模块
+        importable_modules = cls._batch_import_test(py_exe, search_root, list(module_to_py.keys()))
+
+        # 批量测试崩溃，逐个模块测试定位损坏的 .pyd
+        if importable_modules is None:
+            _logger.warning("批量验证 .pyd 崩溃，逐个模块测试定位损坏的 .pyd")
+            importable_modules = cls._individual_import_test(py_exe, search_root, list(module_to_py.keys()))
+
+        # 构建结果：可加载的 .py 集合 + 损坏 .pyd 路径列表
+        verified_files: set[Path] = set()
+        unverified_artifacts: list[Path] = []
+        for module_name, py_file in module_to_py.items():
+            if module_name in importable_modules:
+                verified_files.add(py_file)
+            else:
+                _logger.warning("模块 %s 的 .pyd 损坏（无法加载），保留 .py 回退到 .pyc", module_name)
+                unverified_artifacts.extend(py_to_artifacts.get(py_file, []))
+
+        return verified_files, unverified_artifacts
+
+    @staticmethod
+    def _batch_import_test(
+        py_exe: Path,
+        search_root: Path,
+        module_names: list[str],
+    ) -> set[str] | None:
+        """一次 subprocess 批量测试模块可加载性，返回可加载模块集合.
+
+        subprocess 崩溃（returncode != 0，如访问违例）时返回 None，调用方应回退到
+        :meth:`_individual_import_test` 逐个测试定位损坏的 .pyd。
+
+        用 ``importlib.import_module`` 而非 ``__import__``：支持含 ``-`` 等特殊字符
+        的模块名（如 ``rich._unicode_data.unicode10-0-0``，不是合法 Python 标识符）。
+        """
+        import json
+
+        # 构造测试脚本：导入所有模块并输出 JSON 结果
+        # 用 \n 分隔避免单行脚本过长；JSON 输出在最后一行
+        test_code = (
+            f"import sys; sys.path.insert(0, r'{search_root}')\n"
+            "import importlib, json\n"
+            f"modules = {module_names!r}\n"
+            "results = {}\n"
+            "for mod in modules:\n"
+            "    try:\n"
+            "        importlib.import_module(mod)\n"
+            "        results[mod] = True\n"
+            "    except Exception:\n"
+            "        results[mod] = False\n"
+            "print('FSPACK_VERIFY_RESULT:' + json.dumps(results))\n"
+        )
+        result = subprocess.run(
+            [str(py_exe), "-c", test_code],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            # subprocess 崩溃（如访问违例 0xC0000005），无法获取结果
+            return None
+        # 解析最后一行 JSON 结果（前缀 FSPACK_VERIFY_RESULT: 标识）
+        for line in reversed(result.stdout.strip().split("\n")):
+            if line.startswith("FSPACK_VERIFY_RESULT:"):
+                try:
+                    results = json.loads(line[len("FSPACK_VERIFY_RESULT:") :])
+                    return {mod for mod, ok in results.items() if ok}
+                except json.JSONDecodeError:
+                    continue
+        return None  # pragma: no cover - 输出格式异常回退到逐个测试
+
+    @staticmethod
+    def _individual_import_test(
+        py_exe: Path,
+        search_root: Path,
+        module_names: list[str],
+    ) -> set[str]:
+        """逐个模块测试可加载性，返回可加载模块集合.
+
+        用于 :meth:`_batch_import_test` 崩溃时定位损坏的 .pyd。每个模块独立 subprocess，
+        单个模块崩溃不影响其他模块测试。开销 O(N) subprocess 启动，仅在批量测试崩溃时触发。
+        """
+        importable: set[str] = set()
+        for mod in module_names:
+            test_code = (
+                f"import sys; sys.path.insert(0, r'{search_root}')\n"
+                "import importlib\n"
+                f"importlib.import_module({mod!r})\n"
+            )
+            result = subprocess.run(
+                [str(py_exe), "-c", test_code],
+                capture_output=True,
+                check=False,
+            )
+            if result.returncode == 0:
+                importable.add(mod)
+        return importable
 
     @staticmethod
     def _cleanup_build_dirs(base_dir: Path) -> int:
