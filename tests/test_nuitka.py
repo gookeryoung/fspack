@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import sys
 import tarfile
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -343,7 +345,7 @@ def test_compile_src_invokes_bootstrap_script_with_sys_path_injection(
     captured: list[list[str]] = []
     script_contents: list[str] = []
 
-    def fake_stream(cmd: list[str]) -> tuple[int, str, str]:
+    def fake_stream(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int, str, str]:
         captured.append(cmd)
         # 在 finally 清理前捕获脚本内容
         script_path = Path(cmd[1])
@@ -377,11 +379,14 @@ def test_compile_src_invokes_bootstrap_script_with_sys_path_injection(
         # scons 自动继承 sys.executable，无需另指定。embed runtime python 不完整会触发
         # Nuitka reExecute fork bomb（详见 compile_with_stamp 文档）。
         assert "--python-for-scons" not in cmd
-        # --jobs=1 限制 C 编译并行度，避免 CPU 卡死。
+        # --jobs=N 控制 C 编译并行度（N=os.cpu_count()），单进程内并行无膨胀风险。
         # 必须用 = 形式：Nuitka 4.x 的 argparse 配置要求 --jobs=N 格式，
-        # 空格分隔（"--jobs", "1"）会报 "requires an argument with '--jobs='" 错误。
-        assert "--jobs=1" in cmd
-        assert "--jobs" not in cmd  # 不应出现独立的 --jobs（避免空格分隔形式）
+        # 空格分隔（"--jobs", "N"）会报 "requires an argument with '--jobs='" 错误。
+        jobs_args = [arg for arg in cmd if arg.startswith("--jobs=")]
+        assert len(jobs_args) == 1, f"应仅一个 --jobs=N 参数，实际 {jobs_args}"
+        assert jobs_args[0].split("=", 1)[1].isdigit(), f"--jobs=N 的 N 应为数字，实际 {jobs_args[0]}"
+        # 不应出现独立的 --jobs（避免空格分隔形式）
+        assert "--jobs" not in [arg for arg in cmd if not arg.startswith("--jobs=")]
     # 复用同一脚本文件
     assert len(bootstrap_scripts) == 1
     # 脚本内容含 sys.path 注入与 nuitka main 调用
@@ -408,7 +413,7 @@ def test_compile_src_skips_init_py_not_compiled(tmp_path: Path, monkeypatch: pyt
 
     captured: list[list[str]] = []
 
-    def fake_stream(cmd: list[str]) -> tuple[int, str, str]:
+    def fake_stream(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int, str, str]:
         captured.append(cmd)
         return (0, "", "")
 
@@ -453,7 +458,7 @@ def test_compile_src_prefers_standalone_python_over_runtime(tmp_path: Path, monk
 
     captured: list[list[str]] = []
 
-    def fake_stream(cmd: list[str]) -> tuple[int, str, str]:
+    def fake_stream(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int, str, str]:
         captured.append(cmd)
         return (0, "", "")
 
@@ -493,7 +498,7 @@ def test_compile_src_failure_warns_continues(
     (src / "bad.py").write_text("invalid syntax !!!")
     cache = _make_nuitka_cache(tmp_path / "cache")
 
-    def fake_stream(cmd: list[str]) -> tuple[int, str, str]:
+    def fake_stream(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int, str, str]:
         # cmd 最后一个元素是 py_file 路径
         if "bad.py" in cmd[-1]:
             return (1, "", "syntax error")
@@ -530,7 +535,7 @@ def test_compile_src_linux_uses_python3_bin(tmp_path: Path, monkeypatch: pytest.
     monkeypatch.setattr(
         NuitkaCompiler,
         "_stream_compile",
-        staticmethod(lambda cmd: captured.append(cmd) or (0, "", "")),
+        staticmethod(lambda cmd, **kw: captured.append(cmd) or (0, "", "")),
     )
 
     st = StageRecorder("Nuitka 编译")
@@ -552,7 +557,7 @@ def test_compile_src_records_stage_metrics(tmp_path: Path, monkeypatch: pytest.M
     (src / "util.py").write_text("x = 1")
     cache = _make_nuitka_cache(tmp_path / "cache")
 
-    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(lambda cmd: (0, "", "")))
+    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(lambda cmd, **kw: (0, "", "")))
 
     st = StageRecorder("Nuitka 编译")
     NuitkaCompiler.compile_src(src, runtime, "3.11.9", Platform.WINDOWS, cache, stage=st)
@@ -584,7 +589,7 @@ def test_compile_src_excludes_nuitka_build_artifacts(tmp_path: Path, monkeypatch
 
     captured_files: list[str] = []
 
-    def fake_stream(cmd: list[str]) -> tuple[int, str, str]:
+    def fake_stream(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int, str, str]:
         # cmd 最后一个元素是 py_file 路径
         captured_files.append(cmd[-1])
         return (0, "", "")
@@ -621,7 +626,7 @@ def test_compile_src_skips_entry_files(tmp_path: Path, monkeypatch: pytest.Monke
 
     captured_files: list[str] = []
 
-    def fake_stream(cmd: list[str]) -> tuple[int, str, str]:
+    def fake_stream(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int, str, str]:
         captured_files.append(cmd[-1])
         return (0, "", "")
 
@@ -665,7 +670,7 @@ def test_compile_src_unlink_failure_warns(
     (src / "app.py").write_text("print('hi')")
     cache = _make_nuitka_cache(tmp_path / "cache")
 
-    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(lambda cmd: (0, "", "")))
+    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(lambda cmd, **kw: (0, "", "")))
 
     # 让 Path.unlink 抛 OSError
     def fake_unlink(self: Path) -> None:
@@ -1397,7 +1402,7 @@ def test_compile_src_heartbeat_logs_progress(
     (cache / "nuitka" / "__init__.py").write_text("", encoding="utf-8")
 
     # mock _stream_compile 模拟耗时 0.2 秒的编译（触发至少 1 次心跳）
-    def slow_stream(_cmd: list[str]) -> tuple[int, str, str]:
+    def slow_stream(_cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int, str, str]:
         _time.sleep(0.2)
         return (0, "", "")
 
@@ -1437,9 +1442,394 @@ def test_compile_src_heartbeat_stops_after_compile(
     (cache / "nuitka" / "__init__.py").write_text("", encoding="utf-8")
 
     # mock _stream_compile 立即返回
-    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(lambda cmd: (0, "", "")))
+    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(lambda cmd, **kw: (0, "", "")))
 
     # 验证不会因为心跳线程阻塞
     st = StageRecorder("Nuitka 编译")
     NuitkaCompiler.compile_src(src, runtime, "3.10.11", Platform.WINDOWS, cache, stage=st)
     # 编译成功，无异常即通过
+
+
+# ---- ccache 相关测试 ----
+
+
+def test_resolve_jobs_returns_cpu_count() -> None:
+    """``_resolve_jobs`` 返回 CPU 核心数，最低 4."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+
+    jobs = NuitkaCompiler._resolve_jobs()
+    assert jobs == (os.cpu_count() or 4)
+
+
+def test_build_ccache_env_returns_none_when_no_ccache() -> None:
+    """ccache_exe 为 None 时返回 None（继承环境，不注入 CC）."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+
+    assert NuitkaCompiler._build_ccache_env(Platform.LINUX, None) is None
+    assert NuitkaCompiler._build_ccache_env(Platform.WINDOWS, None) is None
+
+
+def test_build_ccache_env_sets_cc_linux(tmp_path: Path) -> None:
+    """Linux ccache 环境设置 CC="ccache gcc"."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+
+    ccache_exe = tmp_path / "ccache"
+    ccache_exe.write_bytes(b"")
+    env = NuitkaCompiler._build_ccache_env(Platform.LINUX, ccache_exe)
+    assert env is not None
+    assert env["CC"] == f"{ccache_exe} gcc"
+    assert "CCACHE_DIR" in env
+
+
+def test_build_ccache_env_sets_cc_windows_mingw(tmp_path: Path) -> None:
+    """Windows ccache 环境设置 CC="ccache x86_64-w64-mingw32-gcc"."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+
+    ccache_exe = tmp_path / "ccache.exe"
+    ccache_exe.write_bytes(b"")
+    env = NuitkaCompiler._build_ccache_env(Platform.WINDOWS, ccache_exe)
+    assert env is not None
+    assert "x86_64-w64-mingw32-gcc" in env["CC"]
+
+
+def test_ensure_ccache_finds_system_ccache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """PATH 中有 ccache 时优先使用系统 ccache."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+    from fspack.progress import StageRecorder
+
+    fake_ccache = tmp_path / "ccache"
+    fake_ccache.write_bytes(b"")
+    monkeypatch.setattr("fspack.packaging.nuitka.shutil.which", lambda name: str(fake_ccache))
+    st = StageRecorder("Nuitka 编译")
+    result = NuitkaCompiler._ensure_ccache(tmp_path / "nuitka", Platform.LINUX, st)
+    assert result == fake_ccache
+
+
+def test_ensure_ccache_finds_local_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """PATH 无 ccache 但本地缓存有时使用本地缓存."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+    from fspack.progress import StageRecorder
+
+    cache_root = tmp_path / "nuitka"
+    ccache_dir = tmp_path / "ccache"
+    ccache_exe = ccache_dir / "ccache"
+    ccache_exe.parent.mkdir(parents=True)
+    ccache_exe.write_bytes(b"")
+
+    monkeypatch.setattr("fspack.packaging.nuitka.shutil.which", lambda name: None)
+    st = StageRecorder("Nuitka 编译")
+    # cache_root.parent / "ccache" = tmp_path / "ccache"
+    result = NuitkaCompiler._ensure_ccache(cache_root, Platform.LINUX, st)
+    assert result == ccache_exe
+
+
+def test_ensure_ccache_windows_uses_exe_extension(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows 目标查找 ccache.exe."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+    from fspack.progress import StageRecorder
+
+    cache_root = tmp_path / "nuitka"
+    ccache_dir = tmp_path / "ccache"
+    ccache_exe = ccache_dir / "ccache.exe"
+    ccache_exe.parent.mkdir(parents=True)
+    ccache_exe.write_bytes(b"")
+
+    monkeypatch.setattr("fspack.packaging.nuitka.shutil.which", lambda name: None)
+    st = StageRecorder("Nuitka 编译")
+    result = NuitkaCompiler._ensure_ccache(cache_root, Platform.WINDOWS, st)
+    assert result == ccache_exe
+
+
+def test_ensure_ccache_unsupported_platform_returns_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """无预编译二进制的平台（理论上所有平台都有，但 mock URL 缺失时）返回 None."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+    from fspack.progress import StageRecorder
+
+    # 清空 URL 映射模拟不支持的平台
+    monkeypatch.setattr("fspack.packaging.nuitka.CCACHE_URLS", {})
+    monkeypatch.setattr("fspack.packaging.nuitka.shutil.which", lambda name: None)
+    st = StageRecorder("Nuitka 编译")
+    result = NuitkaCompiler._ensure_ccache(tmp_path, Platform.LINUX, st)
+    assert result is None
+
+
+def test_ensure_ccache_download_failure_returns_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """下载失败时回退到 None（warning 不中断）."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+    from fspack.progress import StageRecorder
+
+    monkeypatch.setattr("fspack.packaging.nuitka.shutil.which", lambda name: None)
+
+    def _fail_download(url: str, ccache_dir: Path, target: object) -> None:
+        raise OSError("network error")
+
+    monkeypatch.setattr(NuitkaCompiler, "_download_and_extract_ccache", staticmethod(_fail_download))
+    st = StageRecorder("Nuitka 编译")
+    result = NuitkaCompiler._ensure_ccache(tmp_path, Platform.LINUX, st)
+    assert result is None
+
+
+def test_compile_src_passes_ccache_to_compile_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """ccache=True 时 compile_src 调 _ensure_ccache 并传 ccache_exe 到 _compile_files."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+    from fspack.progress import StageRecorder
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "__init__.py").write_text("")
+    (src / "app.py").write_text("x = 1")
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "python.exe").write_bytes(b"")
+    cache = tmp_path / "nuitka"
+    (cache / "nuitka").mkdir(parents=True)
+    (cache / "nuitka" / "__init__.py").write_text("")
+
+    captured_ccache: list[Path | None] = []
+
+    def fake_compile_files(cls: Any, *args: Any, **kwargs: Any) -> tuple[set[Path], int]:
+        captured_ccache.append(kwargs.get("ccache_exe"))
+        return set(), 0
+
+    monkeypatch.setattr(NuitkaCompiler, "_compile_files", classmethod(fake_compile_files))
+    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(lambda cmd, **kw: (0, "", "")))
+
+    fake_ccache = tmp_path / "ccache_bin"
+    fake_ccache.write_bytes(b"")
+    monkeypatch.setattr(NuitkaCompiler, "_ensure_ccache", classmethod(lambda cls, *a, **kw: fake_ccache))
+
+    st = StageRecorder("Nuitka 编译")
+    NuitkaCompiler.compile_src(src, runtime, "3.11.9", Platform.WINDOWS, cache, stage=st, ccache=True, cache_root=cache)
+    assert len(captured_ccache) == 1
+    assert captured_ccache[0] == fake_ccache
+
+
+def test_compile_src_ccache_false_skips_ensure_ccache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """ccache=False 时不调 _ensure_ccache，_compile_files 收到 ccache_exe=None."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+    from fspack.progress import StageRecorder
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "__init__.py").write_text("")
+    (src / "app.py").write_text("x = 1")
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "python.exe").write_bytes(b"")
+    cache = tmp_path / "nuitka"
+    (cache / "nuitka").mkdir(parents=True)
+    (cache / "nuitka" / "__init__.py").write_text("")
+
+    ensure_called: list[bool] = []
+
+    def fake_ensure_ccache(cls: Any, *a: Any, **kw: Any) -> None:
+        ensure_called.append(True)
+
+    monkeypatch.setattr(NuitkaCompiler, "_ensure_ccache", classmethod(fake_ensure_ccache))
+
+    captured: list[Path | None] = []
+
+    def fake_compile_files(cls: Any, *args: Any, **kwargs: Any) -> tuple[set[Path], int]:
+        captured.append(kwargs.get("ccache_exe"))
+        return set(), 0
+
+    monkeypatch.setattr(NuitkaCompiler, "_compile_files", classmethod(fake_compile_files))
+
+    st = StageRecorder("Nuitka 编译")
+    # 用 Platform.WINDOWS 匹配 runtime/python.exe（Linux 路径为 runtime/python/bin/python3.11）
+    NuitkaCompiler.compile_src(
+        src, runtime, "3.11.9", Platform.WINDOWS, cache, stage=st, ccache=False, cache_root=cache
+    )
+    assert not ensure_called  # ccache=False 不调 _ensure_ccache
+    assert captured[0] is None  # ccache_exe=None
+
+
+def test_compile_with_stamp_passes_ccache_to_compile_src(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """compile_with_stamp 透传 ccache=True 到 compile_src."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+    from fspack.progress import StageRecorder
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("x = 1")
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "python.exe").write_bytes(b"")
+    cache = tmp_path / "nuitka"
+
+    captured_ccache: list[bool] = []
+
+    def fake_compile_src(cls: Any, *args: Any, **kwargs: Any) -> None:
+        captured_ccache.append(kwargs.get("ccache", False))
+
+    def fake_ensure_env(cls: Any, *args: Any, **kwargs: Any) -> str:
+        return "4.1.3"
+
+    def fake_is_nuitka_cached(cache_dir: Any) -> bool:
+        return True
+
+    monkeypatch.setattr(NuitkaCompiler, "compile_src", classmethod(fake_compile_src))
+    monkeypatch.setattr(NuitkaCompiler, "ensure_env", classmethod(fake_ensure_env))
+    monkeypatch.setattr(NuitkaCompiler, "_is_nuitka_cached", staticmethod(fake_is_nuitka_cached))
+    monkeypatch.setattr(
+        NuitkaCompiler,
+        "_ensure_build_python",
+        classmethod(lambda cls, *a, **kw: None),
+    )
+    # 让 stamp 未命中
+    monkeypatch.setattr(NuitkaCompiler, "_stamp_path", staticmethod(lambda dist: tmp_path / "nonexistent_stamp"))
+
+    st = StageRecorder("Nuitka 编译")
+    NuitkaCompiler.compile_with_stamp(
+        src, tmp_path, runtime, "3.11.9", Platform.LINUX, get_mirror("huawei"), cache, stage=st, ccache=True
+    )
+    assert captured_ccache[0] is True
+
+
+def test_build_options_from_defaults_translates_ccache() -> None:
+    """build_options_from_defaults 透传 ccache 字段."""
+    from fspack.config import BuildDefaults, build_options_from_defaults
+
+    # ccache=True
+    defaults = BuildDefaults(ccache=True)
+    opts = build_options_from_defaults(defaults)
+    assert opts.ccache is True
+
+    # ccache=False
+    defaults = BuildDefaults(ccache=False)
+    opts = build_options_from_defaults(defaults)
+    assert opts.ccache is False
+
+    # ccache=None → 默认值 False
+    defaults = BuildDefaults()
+    opts = build_options_from_defaults(defaults)
+    assert opts.ccache is False
+
+
+# ---- _download_and_extract_ccache 与 _ensure_ccache 成功路径测试 ----
+
+
+def _make_ccache_linux_tarball(dest: Path) -> None:
+    """构造 ccache Linux tarball：内含 ccache-<ver>-linux-x86_64/ccache."""
+    inner_dir = "ccache-4.10.2-linux-x86_64"
+    with tarfile.open(dest, "w:xz") as tf:
+        data = b"#!/bin/sh\nexit 0\n"
+        info = tarfile.TarInfo(f"{inner_dir}/ccache")
+        info.size = len(data)
+        info.mode = 0o755
+        tf.addfile(info, io.BytesIO(data))
+
+
+def _make_ccache_windows_zip(dest: Path) -> None:
+    """构造 ccache Windows zip：内含 ccache.exe."""
+    with zipfile.ZipFile(dest, "w") as zf:
+        zf.writestr("ccache.exe", b"fake-exe")
+
+
+def test_download_and_extract_ccache_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Linux 归档解压后 ccache 从 ccache-<ver>-linux-x86_64/ccache 移到根目录."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+
+    ccache_dir = tmp_path / "ccache"
+
+    class _StubDownloader:
+        def __init__(self, timeout: int = 0) -> None:
+            pass
+
+        def download(self, url: str, dest: Path, *, stage: object = None, label: str = "") -> int:
+            _make_ccache_linux_tarball(dest)
+            return dest.stat().st_size
+
+    monkeypatch.setattr("fspack.packaging.net.Downloader", _StubDownloader)
+    NuitkaCompiler._download_and_extract_ccache("http://fake/ccache.tar.xz", ccache_dir, Platform.LINUX)
+
+    # ccache 已从内层目录移到根
+    assert (ccache_dir / "ccache").is_file()
+    # 内层目录已清理
+    assert not list(ccache_dir.glob("ccache-*/"))
+    # tarball 已删除
+    assert not (ccache_dir / "ccache.tar.xz").exists()
+
+
+def test_download_and_extract_ccache_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows zip 解压后 ccache.exe 在根目录."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+
+    ccache_dir = tmp_path / "ccache"
+
+    class _StubDownloader:
+        def __init__(self, timeout: int = 0) -> None:
+            pass
+
+        def download(self, url: str, dest: Path, *, stage: object = None, label: str = "") -> int:
+            _make_ccache_windows_zip(dest)
+            return dest.stat().st_size
+
+    monkeypatch.setattr("fspack.packaging.net.Downloader", _StubDownloader)
+    NuitkaCompiler._download_and_extract_ccache("http://fake/ccache.zip", ccache_dir, Platform.WINDOWS)
+
+    assert (ccache_dir / "ccache.exe").is_file()
+    assert not (ccache_dir / "ccache.zip").exists()
+
+
+def test_ensure_ccache_download_success_returns_exe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """PATH 无 ccache 且本地缓存无时下载预编译二进制成功，返回 ccache 路径并设 stage."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+    from fspack.progress import StageRecorder
+
+    monkeypatch.setattr("fspack.packaging.nuitka.shutil.which", lambda name: None)
+
+    def _fake_download_and_extract(url: str, ccache_dir: Path, target: object) -> None:
+        ccache_dir.mkdir(parents=True, exist_ok=True)
+        exe_name = "ccache.exe" if target is Platform.WINDOWS else "ccache"
+        (ccache_dir / exe_name).write_bytes(b"fake")
+
+    monkeypatch.setattr(NuitkaCompiler, "_download_and_extract_ccache", staticmethod(_fake_download_and_extract))
+
+    st = StageRecorder("Nuitka 编译")
+    cache_root = tmp_path / "nuitka"
+    result = NuitkaCompiler._ensure_ccache(cache_root, Platform.WINDOWS, st)
+    assert result is not None
+    assert result.name == "ccache.exe"
+    assert "已下载" in st._detail
+
+
+def test_ensure_ccache_download_success_linux_chmod(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Linux 下载成功后 chmod 0o755（容错 OSError 不中断）."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+    from fspack.platform import Platform
+    from fspack.progress import StageRecorder
+
+    monkeypatch.setattr("fspack.packaging.nuitka.shutil.which", lambda name: None)
+
+    def _fake_download_and_extract(url: str, ccache_dir: Path, target: object) -> None:
+        ccache_dir.mkdir(parents=True, exist_ok=True)
+        (ccache_dir / "ccache").write_bytes(b"fake")
+
+    monkeypatch.setattr(NuitkaCompiler, "_download_and_extract_ccache", staticmethod(_fake_download_and_extract))
+
+    st = StageRecorder("Nuitka 编译")
+    # Linux chmod 在 Windows 上无意义但不抛错（contextlib.suppress 容错）
+    result = NuitkaCompiler._ensure_ccache(tmp_path / "nuitka", Platform.LINUX, st)
+    assert result is not None
+    assert result.name == "ccache"
+
+
+def test_ensure_ccache_download_succeeds_but_exe_missing_returns_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """下载"成功"但 ccache_exe 未出现在预期路径时返回 None（warning 不中断）."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+    from fspack.progress import StageRecorder
+
+    monkeypatch.setattr("fspack.packaging.nuitka.shutil.which", lambda name: None)
+
+    def _empty_download(url: str, ccache_dir: Path, target: object) -> None:
+        ccache_dir.mkdir(parents=True, exist_ok=True)
+        # 不写 ccache.exe，模拟归档内容异常
+
+    monkeypatch.setattr(NuitkaCompiler, "_download_and_extract_ccache", staticmethod(_empty_download))
+
+    st = StageRecorder("Nuitka 编译")
+    result = NuitkaCompiler._ensure_ccache(tmp_path / "nuitka", Platform.WINDOWS, st)
+    assert result is None

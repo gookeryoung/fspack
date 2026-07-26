@@ -167,6 +167,7 @@ class BuildDefaults:
     no_site: bool | None = None
     no_pyc: bool | None = None
     no_stdlib_trim: bool | None = None
+    ccache: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -268,6 +269,7 @@ class BuildOptions:
     - ``pyc_optimize``：字节码优化级别 0/1/2（``compileall -o``）
     - ``no_site``：禁用 ``site.py`` 加载（``_pth`` 省略 ``import site``）
     - ``nuitka``：启用 Nuitka 编译模式（用户源码编译为 ``.pyd``）
+    - ``ccache``：Nuitka 编译启用 ccache 缓存（首次下载到本地，后续复用，加速重复编译）
     """
 
     keep_modules: set[str] | None = None
@@ -279,6 +281,7 @@ class BuildOptions:
     pyc_optimize: int = 2
     no_site: bool = False
     nuitka: bool = False
+    ccache: bool = False
 
 
 def build_options_from_defaults(defaults: BuildDefaults) -> BuildOptions:
@@ -301,6 +304,7 @@ def build_options_from_defaults(defaults: BuildDefaults) -> BuildOptions:
         pyc_optimize=defaults.pyc_optimize if defaults.pyc_optimize is not None else base.pyc_optimize,
         no_site=defaults.no_site if defaults.no_site is not None else base.no_site,
         nuitka=defaults.nuitka if defaults.nuitka is not None else base.nuitka,
+        ccache=defaults.ccache if defaults.ccache is not None else base.ccache,
     )
 
 
@@ -521,6 +525,7 @@ _BUILD_DEFAULT_KEYS: dict[str, str] = {
     "no_site": "no_site",
     "no_pyc": "no_pyc",
     "no_stdlib_trim": "no_stdlib_trim",
+    "ccache": "ccache",
 }
 
 
@@ -528,7 +533,7 @@ def _parse_build_defaults(fspack_cfg: dict[str, Any]) -> BuildDefaults:
     """从 ``[tool.fspack]`` 解析构建默认值.
 
     识别 ``nuitka``/``pyc_strip``/``pyc_optimize``/``no_site``/``no_pyc``/
-    ``no_stdlib_trim`` 键，其余键忽略（如 ``icon``/``entries``/``exclude``）。
+    ``no_stdlib_trim``/``ccache`` 键，其余键忽略（如 ``icon``/``entries``/``exclude``）。
     类型不匹配时报错，避免静默忽略错误配置。
     """
     kwargs: dict[str, bool | int | None] = {}

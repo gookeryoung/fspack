@@ -93,6 +93,14 @@ def _add_build_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser
             "Nuitka 自动装到本地缓存 ~/.fspack/cache/nuitka/，不污染 dist/runtime；交叉构建自动跳过；默认关闭"
         ),
     )
+    p.add_argument(
+        "--ccache",
+        action="store_true",
+        help=(
+            "Nuitka 编译启用 ccache 缓存：首次下载 ccache 到 ~/.fspack/cache/ccache/，"
+            "后续构建缓存 gcc 编译结果加速重复编译。需配合 --nuitka 使用；默认关闭"
+        ),
+    )
 
 
 def _add_run_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -171,6 +179,7 @@ def main(argv: list[str] | None = None) -> None:
             pyc_optimize=ns.pyc_optimize if ns.pyc_optimize is not None else base.pyc_optimize,
             no_site=ns.no_site or base.no_site,
             nuitka=ns.nuitka or base.nuitka,
+            ccache=ns.ccache or base.ccache,
         )
         build(
             project,

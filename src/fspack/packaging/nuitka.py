@@ -48,6 +48,7 @@ stamp 缓存（:meth:`NuitkaCompiler.compile_with_stamp`）：重复构建时若
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import shutil
@@ -57,6 +58,7 @@ import tarfile
 import tempfile
 import threading
 import time
+import zipfile
 from pathlib import Path
 
 from fspack.config import KNOWN_STANDALONE_VERSIONS, MirrorConfig, nuitka_version_for
@@ -70,6 +72,16 @@ _logger = logging.getLogger(__name__)
 
 # 心跳间隔：nuitka reExecute 机制导致子进程输出不可靠，每 N 秒输出编译耗时让用户看到进度
 _HEARTBEAT_INTERVAL = 10.0
+
+# ccache 版本与下载地址：首次启用 ccache 时下载预编译二进制到 ~/.fspack/cache/ccache/
+# ccache 缓存 gcc 编译结果，源码未变时跳过 C 编译，二次构建近零耗时。
+# 仅 Linux x86_64 与 Windows x86_64 有预编译二进制，其他架构需用户自行安装 ccache 到 PATH。
+CCACHE_VERSION = "4.10.2"
+_CCACHE_BASE = f"https://github.com/ccache/ccache/releases/download/v{CCACHE_VERSION}"
+CCACHE_URLS: dict[Platform, str] = {
+    Platform.LINUX: f"{_CCACHE_BASE}/ccache-{CCACHE_VERSION}-linux-x86_64.tar.xz",
+    Platform.WINDOWS: f"{_CCACHE_BASE}/ccache-{CCACHE_VERSION}-windows-x86_64.zip",
+}
 
 
 class NuitkaCompiler:
@@ -296,19 +308,22 @@ class NuitkaCompiler:
         return runtime_dir / "python" / "bin" / f"python{major}.{minor}"
 
     @staticmethod
-    def _stream_compile(cmd: list[str]) -> tuple[int, str, str]:
+    def _stream_compile(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int, str, str]:
         """运行 nuitka 编译命令，实时流式输出 stdout/stderr 到终端.
 
         用 ``Popen`` + 两个守护线程通过 ``os.read`` 读取 stdout/stderr 文件描述符
         字节块并实时写入 ``sys.stdout``/``sys.stderr``，支持 nuitka 的 ``Nuitka:INFO``
         步骤输出和 C 编译器调用过程实时显示，避免单文件编译数十秒无输出被误认为卡死。
 
+        ``env`` 为 None 时继承当前进程环境；非 None 时替换环境（用于注入
+        ``CC="ccache gcc"`` 让 scons 通过 ccache 调用 gcc，加速重复编译）。
+
         同时累积 stdout/stderr 内容供失败时诊断（当前仅返回未使用，保留以备扩展）。
 
         参考 :func:`fspack.packaging.wheels._stream_subprocess` 的实现模式，区别在于
         nuitka 的 INFO 输出可能走 stdout 或 stderr，需同时流式两者。
         """
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
         stdout_chunks: list[bytes] = []
         stderr_chunks: list[bytes] = []
 
@@ -358,6 +373,137 @@ class NuitkaCompiler:
             raise NuitkaError(
                 "Nuitka 编译需要 gcc，未找到 gcc 可执行文件。请安装 gcc（如 `apt install gcc` 或 `yum install gcc`）"
             )
+
+    @staticmethod
+    def _resolve_jobs() -> int:
+        """计算 Nuitka C 编译并行度：使用全部 CPU 核心加速单文件内的 C 代码编译.
+
+        Nuitka ``--jobs=N`` 控制 scons 内部 gcc 并行编译 C 代码的并行度。
+        串行编译每个 .py 文件（一次一个 nuitka 进程），单进程内 N 个 gcc 并行：
+        4 核机器 → 1 nuitka + 1 scons + 4 gcc = 6 进程，无多进程膨胀风险。
+        （若同时多 nuitka 进程并行 + 每个 --jobs=N，进程数指数级膨胀导致 CPU 卡死，
+        这也是 fspack 保持串行编译 .py 文件的原因。）
+        """
+        return os.cpu_count() or 4
+
+    @staticmethod
+    def _build_ccache_env(target: Platform, ccache_exe: Path | None) -> dict[str, str] | None:
+        """构建注入 Nuitka 子进程的环境变量，启用 ccache 时设置 ``CC="ccache <compiler>"``.
+
+        scons 读取 ``CC`` 环境变量决定 C 编译器路径。设 ``CC="ccache gcc"`` 让 scons
+        通过 ccache 调用 gcc，ccache 透明缓存编译结果（源码未变时直接返回 .o 缓存）。
+
+        Linux 用 ``gcc``，Windows 用 mingw 交叉编译器 ``x86_64-w64-mingw32-gcc``
+        （与 :func:`fspack.packaging.loader.MINGW_GCC` 一致）。
+        ccache_exe 为 None 时返回 None（继承当前环境，不修改 CC）。
+        """
+        if ccache_exe is None:
+            return None
+        from fspack.packaging.loader import LINUX_GCC, MINGW_GCC
+
+        compiler = LINUX_GCC if target is Platform.LINUX else MINGW_GCC
+        env = os.environ.copy()
+        env["CC"] = f"{ccache_exe} {compiler}"
+        # ccache 缓存目录：默认 ~/.cache/ccache，显式指定到 fspack 缓存根便于管理
+        ccache_dir = Path.home() / ".fspack" / "cache" / "ccache-cache"
+        ccache_dir.mkdir(parents=True, exist_ok=True)
+        env["CCACHE_DIR"] = str(ccache_dir)
+        _logger.info("启用 ccache: CC=%s, CCACHE_DIR=%s", env["CC"], env["CCACHE_DIR"])
+        return env
+
+    @classmethod
+    def _ensure_ccache(
+        cls,
+        cache_root: Path,
+        target: Platform,
+        stage: StageRecorder,
+    ) -> Path | None:
+        """确保 ccache 可用：优先 PATH，缺失则下载预编译二进制到本地缓存.
+
+        ccache 缓存 gcc 编译结果（.o 文件），源码未变时直接返回缓存跳过 C 编译。
+        首次构建填充缓存，后续构建（即使清理 dist）近零耗时。
+
+        查找顺序：
+        1. ``shutil.which("ccache")`` — 系统已安装
+        2. ``~/.fspack/cache/ccache/ccache[.exe]`` — 本地缓存
+        3. 从 GitHub releases 下载预编译二进制（仅 Linux/Windows x86_64）
+
+        其他架构（arm64 等）无预编译二进制，需用户自行安装 ccache 到 PATH。
+        下载失败仅 warning 不中断，回退到无 ccache 模式（编译仍可完成，仅无缓存加速）。
+
+        Returns:
+            ccache 可执行文件路径；不可用返回 None。
+        """
+        # 1. 系统已安装
+        found = shutil.which("ccache")
+        if found:
+            _logger.info("使用系统 ccache: %s", found)
+            return Path(found)
+
+        # 2. 本地缓存
+        ccache_dir = cache_root.parent / "ccache"
+        ccache_exe = ccache_dir / ("ccache.exe" if target is Platform.WINDOWS else "ccache")
+        if ccache_exe.is_file():
+            _logger.info("使用本地缓存 ccache: %s", ccache_exe)
+            return ccache_exe
+
+        # 3. 下载预编译二进制
+        url = CCACHE_URLS.get(target)
+        if url is None:
+            _logger.warning("ccache 无 %s 平台预编译二进制，请手动安装到 PATH", target.value)
+            return None
+
+        _logger.info("下载 ccache %s 到 %s", CCACHE_VERSION, ccache_dir)
+        try:
+            cls._download_and_extract_ccache(url, ccache_dir, target)
+        except (OSError, tarfile.TarError, zipfile.BadZipFile) as e:
+            _logger.warning("ccache 下载失败，回退到无缓存模式: %s", e)
+            return None
+        if not ccache_exe.is_file():
+            _logger.warning("ccache 下载后未找到可执行文件 %s", ccache_exe)
+            return None
+        # Linux 需可执行权限
+        if target is Platform.LINUX:
+            with contextlib.suppress(OSError):
+                ccache_exe.chmod(0o755)
+        stage.set_detail(f"ccache {CCACHE_VERSION} 已下载")
+        return ccache_exe
+
+    @staticmethod
+    def _download_and_extract_ccache(url: str, ccache_dir: Path, target: Platform) -> None:
+        """下载 ccache 归档并解压 ccache 二进制到 ``ccache_dir``.
+
+        Linux 归档为 ``.tar.xz``，内含 ``ccache-<ver>-linux-x86_64/ccache``；
+        Windows 归档为 ``.zip``，内含 ``ccache.exe``。
+        解压后仅提取 ccache 可执行文件到 ``ccache_dir`` 根目录（扁平布局）。
+        """
+        from fspack.packaging.net import Downloader
+
+        ccache_dir.mkdir(parents=True, exist_ok=True)
+        downloader = Downloader(timeout=120)
+        if target is Platform.LINUX:
+            archive = ccache_dir / "ccache.tar.xz"
+            downloader.download(url, archive, label="ccache")
+            with tarfile.open(archive, "r:xz") as tf:
+                # PEP 706: 3.12+ 需 filter="data" 防路径穿越
+                if sys.version_info >= (3, 12):
+                    tf.extractall(ccache_dir, filter="data")  # type: ignore[call-arg]
+                else:  # pragma: no cover
+                    tf.extractall(ccache_dir)
+            archive.unlink()
+            # 归档内 ccache 在 ccache-<ver>-linux-x86_64/ccache，移动到根目录
+            extracted = list(ccache_dir.glob("ccache-*/ccache"))
+            if extracted:
+                extracted[0].rename(ccache_dir / "ccache")
+                # 清理空目录
+                for d in ccache_dir.glob("ccache-*/"):
+                    shutil.rmtree(d, ignore_errors=True)
+        else:
+            archive = ccache_dir / "ccache.zip"
+            downloader.download(url, archive, label="ccache")
+            with zipfile.ZipFile(archive) as zf:
+                zf.extractall(ccache_dir)
+            archive.unlink()
 
     @staticmethod
     def _has_pip(python_exe: str) -> bool:
@@ -542,6 +688,8 @@ class NuitkaCompiler:
         stage: StageRecorder,
         build_python_exe: Path | None = None,
         entry_rels: frozenset[str] | None = None,
+        ccache: bool = False,
+        cache_root: Path | None = None,
     ) -> None:
         """编译 ``src_dir`` 下所有 ``.py`` 为 ``.pyd``/``.so``，编译后删除 ``.py`` 源码.
 
@@ -582,6 +730,10 @@ class NuitkaCompiler:
                 :meth:`_ensure_build_python` 下载）。None 或不存在时回退到 runtime python。
             entry_rels: 入口文件相对 ``src_dir`` 的 POSIX 路径集合（如 ``{"snake.py"}``）。
                 这些文件不编译不删除，保留 ``.py`` 供 ``runpy.run_path()`` 调用。
+            ccache: 启用 ccache 缓存加速重复编译。True 时调 :meth:`_ensure_ccache`
+                下载 ccache 到本地缓存，编译时设置 ``CC="ccache gcc"`` 注入子进程。
+            cache_root: ccache 缓存根目录（``~/.fspack/cache/nuitka``），用于推导
+                ccache 下载目录。None 时 ccache 无效。
         """
         py_exe = cls._resolve_compile_python(build_python_exe, runtime_dir, py_version, target, stage)
         if py_exe is None:
@@ -600,9 +752,16 @@ class NuitkaCompiler:
             stage.set_detail("无 .py 文件可编译")
             return
 
+        # ccache 就绪：优先系统 PATH，缺失则下载到 ~/.fspack/cache/ccache/
+        ccache_exe = None
+        if ccache and cache_root is not None:
+            ccache_exe = cls._ensure_ccache(cache_root, target, stage)
+
         bootstrap_script = cls._create_bootstrap_script(nuitka_cache)
         try:
-            compiled_files, failed = cls._compile_files(py_exe, bootstrap_script, py_files, stage)
+            compiled_files, failed = cls._compile_files(
+                py_exe, bootstrap_script, py_files, stage, target=target, ccache_exe=ccache_exe
+            )
         finally:
             shutil.rmtree(bootstrap_script.parent, ignore_errors=True)
 
@@ -675,12 +834,15 @@ class NuitkaCompiler:
         return bootstrap_script
 
     @classmethod
-    def _compile_files(
+    def _compile_files(  # noqa: PLR0913
         cls,
         py_exe: Path,
         bootstrap_script: Path,
         py_files: list[Path],
         stage: StageRecorder,
+        *,
+        target: Platform,
+        ccache_exe: Path | None = None,
     ) -> tuple[set[Path], int]:
         """逐个编译 .py 文件，返回 (成功编译的文件集合, 失败数).
 
@@ -690,9 +852,12 @@ class NuitkaCompiler:
         - ``--output-dir``：输出目录与源码同目录（保持包结构）
         - ``--no-pyi-file``：不生成 .pyi 类型存根（运行时不需要）
         - ``--remove-output``：编译后删除临时构建文件（.build/ 目录）
-        - ``--jobs=1``：限制 C 编译并行度为 1。Nuitka 默认使用全部 CPU 核心，多文件并行编译时
-          每个 scons 子进程再启动 gcc，进程数指数级膨胀导致 CPU 卡死。限制为 1 串行编译，
-          虽然慢但稳定，避免资源耗尽。
+        - ``--jobs=N``：C 编译并行度，N = :meth:`_resolve_jobs`（CPU 核心数）。
+          串行编译每个 .py 文件（一次一个 nuitka 进程），单进程内 N 个 gcc 并行，
+          无多进程膨胀风险。
+
+        ``ccache_exe`` 非 None 时，设置 ``CC="ccache <compiler>"`` 环境变量注入子进程，
+        scons 通过 ccache 调用 gcc，缓存 C 编译结果加速重复编译。
 
         不需要 ``--python-for-scons``：已用 standalone python（完整环境）运行 nuitka，
         scons 自动继承 ``sys.executable``，无需另指定。
@@ -700,6 +865,9 @@ class NuitkaCompiler:
         (os._exit 退出子进程 A，Windows close_fds=True 导致子进程 B 不继承 PIPE) 使得
         _stream_compile 的 PIPE 捕获不可靠。用心跳线程保证用户看到编译进度。
         """
+        # 构建 ccache 环境变量：CC="ccache gcc" 让 scons 通过 ccache 调用 gcc
+        compile_env = cls._build_ccache_env(target, ccache_exe)
+        jobs = cls._resolve_jobs()
         compiled_files: set[Path] = set()
         failed = 0
         total = len(py_files)
@@ -728,12 +896,13 @@ class NuitkaCompiler:
                         f"--output-dir={py_file.parent}",
                         "--no-pyi-file",
                         "--remove-output",
-                        # --jobs=1：必须用 = 形式传参。Nuitka 4.x 的 argparse 配置要求
-                        # --jobs=N 格式，用空格分隔（"--jobs", "1"）会报错：
+                        # --jobs=N：必须用 = 形式传参。Nuitka 4.x 的 argparse 配置要求
+                        # --jobs=N 格式，用空格分隔（"--jobs", "N"）会报错：
                         # "The '--jobs' option requires an argument with '--jobs='."
-                        "--jobs=1",
+                        f"--jobs={jobs}",
                         str(py_file),
-                    ]
+                    ],
+                    env=compile_env,
                 )
             finally:
                 stop_heartbeat.set()
@@ -809,6 +978,7 @@ class NuitkaCompiler:
         *,
         stage: StageRecorder,
         entry_rels: frozenset[str] | None = None,
+        ccache: bool = False,
     ) -> None:
         """整合 ensure_env + standalone python + stamp 缓存 + compile_src 的入口.
 
@@ -880,6 +1050,8 @@ class NuitkaCompiler:
             stage=stage,
             build_python_exe=build_python_exe,
             entry_rels=entry_rels,
+            ccache=ccache,
+            cache_root=cache_root,
         )
 
         # 编译后写 stamp（即使部分文件失败也写，避免下次重复尝试）
