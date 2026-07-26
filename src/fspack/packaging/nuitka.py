@@ -558,7 +558,8 @@ class NuitkaCompiler:
             [python_exe, "-m", "ensurepip", "--default-pip"],
             check=False,
             capture_output=True,
-            encoding="utf-8", errors="replace",
+            encoding="utf-8",
+            errors="replace",
         )
         if result.returncode != 0:
             _logger.warning("ensurepip 失败: %s", result.stderr.strip()[:200])
@@ -577,7 +578,8 @@ class NuitkaCompiler:
             ["uv", "pip", "install", "pip"],
             check=False,
             capture_output=True,
-            encoding="utf-8", errors="replace",
+            encoding="utf-8",
+            errors="replace",
         )
         if result.returncode != 0:
             _logger.warning("uv pip install pip 失败: %s", result.stderr.strip()[:200])
@@ -696,7 +698,9 @@ class NuitkaCompiler:
         # stderr=None: pip 进度（Collecting/Downloading/Building wheel/Installing）实时
         # 输出到终端，避免 sdist 构建数分钟无输出被误认为卡死。stdout 捕获但 pip install
         # 的 stdout 通常为空（成功信息走 stderr），保留以备诊断。
-        result = subprocess.run(cmd, check=False, encoding="utf-8", errors="replace", stdout=subprocess.PIPE, stderr=None)
+        result = subprocess.run(
+            cmd, check=False, encoding="utf-8", errors="replace", stdout=subprocess.PIPE, stderr=None
+        )
         if result.returncode != 0:
             raise NuitkaError(f"pip install nuitka=={nuitka_ver} 失败（退出码 {result.returncode}），详见上方 pip 输出")
 
@@ -1279,7 +1283,8 @@ class NuitkaCompiler:
         result = subprocess.run(
             [str(py_exe), "-c", test_code],
             capture_output=True,
-            encoding="utf-8", errors="replace",
+            encoding="utf-8",
+            errors="replace",
             check=False,
         )
         if result.returncode != 0:

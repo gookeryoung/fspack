@@ -6,7 +6,7 @@ import os
 import subprocess
 import types
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 import pytest
 
@@ -1050,9 +1050,7 @@ def test_download_online_uv_fails_falls_back_to_pip(tmp_path: Path, monkeypatch:
     monkeypatch.setattr("fspack.packaging.wheels._find_uv", lambda: "/usr/bin/uv")
     monkeypatch.setattr(
         "fspack.packaging.wheels._resolve_with_uv",
-        lambda pkgs, pv, pt, idx, **kw: (_ for _ in ()).throw(
-            subprocess.CalledProcessError(1, "uv", stderr="fail")
-        ),
+        lambda pkgs, pv, pt, idx, **kw: (_ for _ in ()).throw(subprocess.CalledProcessError(1, "uv", stderr="fail")),
     )
     captured: dict[str, list[str]] = {}
 
@@ -1500,7 +1498,14 @@ def test_download_online_uv_resolved_passes_extra_sources(tmp_path: Path, monkey
     cache.mkdir()
     monkeypatch.setattr("fspack.packaging.wheels._find_uv", lambda: "/usr/bin/uv")
 
-    def fake_resolve(pkgs, pv, pt, idx, extra_index_urls=(), find_links=()):  # noqa: PLR0913
+    def fake_resolve(  # noqa: PLR0913
+        pkgs: Sequence[str],
+        pv: str,
+        pt: str,
+        idx: str,
+        extra_index_urls: Sequence[str] = (),
+        find_links: Sequence[str] = (),
+    ) -> list[str]:
         # 验证 uv 解析也收到私有包源
         assert extra_index_urls == ("https://pypi.company.com/simple/",)
         assert find_links == ("./wheels",)
@@ -1564,9 +1569,7 @@ def test_download_online_pip_full_passes_extra_sources(tmp_path: Path, monkeypat
     assert "./wheels" in cmd
 
 
-def test_download_online_sdist_fallback_passes_extra_sources(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_download_online_sdist_fallback_passes_extra_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """sdist 回退路径：pip wheel 命令含私有包源参数."""
     cache = tmp_path / "cache"
     cache.mkdir()
