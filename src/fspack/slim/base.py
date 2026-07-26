@@ -310,7 +310,11 @@ class SlimSpec(abc.ABC):
             if filename.startswith("__init__.") or filename.startswith("_"):
                 return ("shared", None)
             suffix = Path(filename).suffix.lower()
-            stem = Path(filename).stem
+            # C 扩展文件名格式为 ``<module>.<abi-tag>.pyd``（如 ``etree.cp312-win_amd64.pyd``），
+            # ``Path.stem`` 只去最后一个后缀得到 ``etree.cp312-win_amd64``（含 ABI 标签），
+            # 与 AST 收集的子模块名 ``etree`` 不匹配，导致 .pyd 被误判为未保留而剥离。
+            # 用 ``split(".")[0]`` 取首个 ``.`` 之前的部分作为模块名。
+            stem = filename.split(".")[0]
             if suffix in cls.SUBMODULE_EXTS:
                 if top_ext_always_shared:
                     # 顶层 C 扩展是 __init__ 硬依赖，始终保留（如 matplotlib ft2font）

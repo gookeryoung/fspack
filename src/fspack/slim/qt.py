@@ -331,7 +331,9 @@ class QtSlimSpec(SlimSpec):
             if filename.startswith("__init__.") or filename.startswith("_"):
                 return ("shared", None)
             suffix = Path(filename).suffix.lower()
-            stem = Path(filename).stem
+            # C 扩展文件名格式为 ``<module>.<abi-tag>.pyd``，用 split(".")[0] 取模块名
+            # （Path.stem 会保留 ABI 标签导致与 keep_subs 不匹配，详见 base.py 同处注释）
+            stem = filename.split(".")[0]
             if suffix in cls.SUBMODULE_EXTS:
                 # .pyd/.pyi/.so 按归一化子模块名选择性保留
                 return ("submodule", _normalize_qt_sub(stem))

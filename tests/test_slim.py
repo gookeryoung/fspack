@@ -1059,11 +1059,16 @@ class TestLxmlSlimSpec:
         )
 
     def test_classify_top_pyd_as_submodule(self) -> None:
-        """lxml 顶层 .pyd 按原文件名归类（如 etree.cpython-38.pyd）."""
+        """lxml 顶层 .pyd 按模块名归类（split(".")[0] 去除 ABI 标签）.
+
+        C 扩展文件名格式为 ``<module>.<abi-tag>.pyd``（如
+        ``etree.cpython-38-x86_64-linux-gnu.so``），用 ``split(".")[0]`` 取
+        ``etree`` 作为模块名，与 AST 收集的子模块名匹配。
+        """
         from fspack.slim.libs import LxmlSlimSpec
 
         result = LxmlSlimSpec.classify_entry("lxml/etree.cpython-38-x86_64-linux-gnu.so", "lxml", set())
-        assert result == ("submodule", "etree.cpython-38-x86_64-linux-gnu")
+        assert result == ("submodule", "etree")
 
     def test_classify_common_excluded(self) -> None:
         """lxml 通用剥离目录（tests/examples 等）归 exclude."""
@@ -1379,7 +1384,7 @@ class TestTopExtAlwaysSharedBehavior:
 
         assert SlimSpec._default_classify("numpy/ft2font.cp311-win_amd64.pyd", "numpy", set()) == (
             "submodule",
-            "ft2font.cp311-win_amd64",  # Path.stem 只去最后后缀
+            "ft2font",  # split(".")[0] 去除 ABI 标签，与 AST 收集的子模块名匹配
         )
 
     def test_top_ext_always_shared_pyd_to_shared(self) -> None:
