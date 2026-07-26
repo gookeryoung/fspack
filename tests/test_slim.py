@@ -215,6 +215,214 @@ class TestClassifyEntry:
         assert classify_entry("numpy/_core/multiarray.pyd", "numpy") == ("shared", None)
         assert classify_entry("mypkg/core.pyd", "mypkg") == ("submodule", "core")
 
+    def test_metatypes_excluded(self) -> None:
+        """metatypes 目录（Qt 元类型 JSON）始终剥离（编译期用，运行时不需要，约 14MB）."""
+        assert classify_entry("PySide6/metatypes/qt6core_metatypes.json", "PySide6") == ("exclude", None)
+        assert classify_entry("PySide6/metatypes/qt6gui_metatypes.json", "PySide6", {"Gui"}) == ("exclude", None)
+
+    def test_lib_cmake_excluded(self) -> None:
+        """lib/cmake/ 三级子目录剥离（cmake 配置文件，构建系统用，运行时不需要）."""
+        assert classify_entry("PySide6/lib/cmake/PySide6/PySide6Config.cmake", "PySide6") == ("exclude", None)
+        assert classify_entry("PySide6/lib/cmake/PySide6/PySide6Targets.cmake", "PySide6", {"Core"}) == (
+            "exclude",
+            None,
+        )
+
+    def test_lib_fonts_kept(self) -> None:
+        """lib/fonts/ 等非 cmake 内容保留（PySide2 lib/fonts/ 含 Qt 内嵌字体，运行时需要）."""
+        assert classify_entry("PySide2/lib/fonts/times.ttf", "PySide2") == ("shared", None)
+        assert classify_entry("PySide6/lib/some_other_file.dat", "PySide6") == ("shared", None)
+
+    def test_qtasyncio_excluded(self) -> None:
+        """QtAsyncio 目录（asyncio 集成模块）始终剥离（非 asyncio 应用不需要）."""
+        assert classify_entry("PySide6/QtAsyncio/__init__.py", "PySide6") == ("exclude", None)
+        assert classify_entry("PySide6/QtAsyncio/tasks.py", "PySide6", {"Core"}) == ("exclude", None)
+
+    def test_ffmpeg_dll_classified_as_multimedia(self) -> None:
+        """FFmpeg 系列 DLL 按 Multimedia 子模块分类（由 _slim_extract 按闭包选择性保留）.
+
+        回归测试：ref/RimSort 闭包内无 Multimedia，avcodec-61.dll 等 FFmpeg 系列
+        合计约 18MB 应被剥离。classify_entry 返回 ``("submodule", "Multimedia")``，
+        当 keep_subs 非空且不含 Multimedia 时由 :func:`_slim_extract` 剥离；
+        keep_subs 为空时（全量解压）保留。
+        """
+        # classify_entry 总是返回 ("submodule", "Multimedia")，剥离由 _slim_extract 决定
+        assert classify_entry("PySide6/avcodec-61.dll", "PySide6") == ("submodule", "Multimedia")
+        assert classify_entry("PySide6/avformat-61.dll", "PySide6") == ("submodule", "Multimedia")
+        assert classify_entry("PySide6/avutil-59.dll", "PySide6") == ("submodule", "Multimedia")
+        assert classify_entry("PySide6/swscale-8.dll", "PySide6") == ("submodule", "Multimedia")
+        assert classify_entry("PySide6/swresample-5.dll", "PySide6") == ("submodule", "Multimedia")
+        # 闭包内有 Multimedia 时返回相同结果（保留与否由 _slim_extract 判断）
+        assert classify_entry("PySide6/avcodec-61.dll", "PySide6", {"Multimedia"}) == ("submodule", "Multimedia")
+        # 闭包内仅有 Widgets 时返回相同结果（_slim_extract 会剥离）
+        assert classify_entry("PySide6/avcodec-61.dll", "PySide6", {"Widgets"}) == ("submodule", "Multimedia")
+
+    def test_qml_abi_dll_classified_as_qml(self) -> None:
+        """``pyside6qml.abi3.dll``/``pyside2qml.abi3.dll`` 按 Qml 子模块分类.
+
+        回归测试：ref/RimSort 闭包内无 Qml（abi3.dll 隐式依赖仅让 Qt6Qml.dll 归
+        shared 保留，未加入 keep_subs），pyside6qml.abi3.dll 是 QML 类型注册绑定层，
+        非 QML 应用不需要。classify_entry 返回 ``("submodule", "Qml")``，当
+        keep_subs 非空且不含 Qml 时由 :func:`_slim_extract` 剥离；keep_subs 为空时保留。
+        """
+        # classify_entry 总是返回 ("submodule", "Qml")，剥离由 _slim_extract 决定
+        assert classify_entry("PySide6/pyside6qml.abi3.dll", "PySide6") == ("submodule", "Qml")
+        assert classify_entry("PySide6/pyside6qml.abi3.dll", "PySide6", {"Widgets"}) == ("submodule", "Qml")
+        assert classify_entry("PySide2/pyside2qml.abi3.dll", "PySide2") == ("submodule", "Qml")
+        # 闭包内有 Qml 时返回相同结果（保留与否由 _slim_extract 判断）
+        assert classify_entry("PySide6/pyside6qml.abi3.dll", "PySide6", {"Qml"}) == ("submodule", "Qml")
+
+    def test_qml_abi_dll_with_qml_kept(self) -> None:
+        """pyside6qml.abi3.dll 有 Qml 依赖时保留（与 test_qml_abi_dll_classified_as_qml 互补）."""
+        result = classify_entry("PySide6/pyside6qml.abi3.dll", "PySide6", {"Qml"})
+        assert result == ("submodule", "Qml")
+        result = classify_entry("PySide6/pyside6qml.abi3.dll", "PySide6", {"Quick"})
+        assert result == ("submodule", "Qml")
+
+    def test_opengl32sw_no_opengl_dep_excluded(self) -> None:
+        """opengl32sw.dll 无 OpenGL 相关模块依赖时剥离.
+
+        回归测试：ref/RimSort 闭包 = {Widgets, Gui, Core, WebEngineWidgets,
+        WebEngineCore, Network, Positioning, WebChannel}，无 OpenGL/Quick/Multimedia
+        等模块，opengl32sw.dll（约 20MB）应被剥离。WebEngineCore 自带 Chromium
+        GPU 加速，不依赖 opengl32sw.dll。
+        """
+        assert classify_entry("PySide6/opengl32sw.dll", "PySide6") == ("exclude", None)
+        # 纯 Widgets 应用剥离
+        assert classify_entry("PySide6/opengl32sw.dll", "PySide6", {"Widgets"}) == ("exclude", None)
+        # RimSort 场景：WebEngine 闭包也剥离
+        assert classify_entry(
+            "PySide6/opengl32sw.dll",
+            "PySide6",
+            {"Widgets", "Gui", "Core", "WebEngineWidgets", "WebEngineCore", "Network", "Positioning"},
+        ) == ("exclude", None)
+
+    @pytest.mark.parametrize(
+        "dep_module",
+        ["OpenGL", "OpenGLWidgets", "Quick", "Quick3D", "QuickShapes", "QuickWidgets", "Multimedia", "Graphs"],
+    )
+    def test_opengl32sw_with_opengl_dep_kept(self, dep_module: str) -> None:
+        """opengl32sw.dll 有任一 OpenGL 相关模块依赖时保留（软件 OpenGL 后备）."""
+        result = classify_entry("PySide6/opengl32sw.dll", "PySide6", {dep_module})
+        assert result == ("shared", None)
+
+    def test_resources_debug_bin_excluded(self) -> None:
+        """resources 目录中 .debug.bin 文件是 DevTools 调试资源，始终剥离.
+
+        回归测试：原规则仅剥离 .debug.pak，遗漏 v8_context_snapshot.debug.bin
+        （约 2.3MB）。扩展为 .debug.* 子串匹配，覆盖所有 DevTools 调试资源。
+        """
+        result = classify_entry(
+            "PySide6/resources/v8_context_snapshot.debug.bin",
+            "PySide6",
+            {"WebEngineCore"},
+        )
+        assert result == ("exclude", None)
+        # 原 .debug.pak 规则仍生效
+        result = classify_entry(
+            "PySide6/resources/qtwebengine_devtools_resources.debug.pak",
+            "PySide6",
+            {"WebEngineCore"},
+        )
+        assert result == ("exclude", None)
+        # 非 .debug.* 资源仍保留
+        result = classify_entry(
+            "PySide6/resources/v8_context_snapshot.bin",
+            "PySide6",
+            {"WebEngineCore"},
+        )
+        assert result == ("shared", None)
+
+    def test_non_qt_dll_still_shared(self) -> None:
+        """非 Qt5/Qt6 前缀且非 FFmpeg/QML ABI/opengl32sw 的 DLL 仍归 shared 保留."""
+        # VC++ 运行时
+        assert classify_entry("PySide6/msvcp140.dll", "PySide6") == ("shared", None)
+        assert classify_entry("PySide6/vcruntime140.dll", "PySide6") == ("shared", None)
+        # pyside6.abi3.dll（绑定层，始终保留）
+        assert classify_entry("PySide6/pyside6.abi3.dll", "PySide6") == ("shared", None)
+
+
+class TestQtAuxiliaryDllIdentifiers:
+    """Qt 辅助 DLL 识别函数（FFmpeg/QML ABI/opengl32sw）."""
+
+    @pytest.mark.parametrize(
+        ("filename", "expected"),
+        [
+            ("avcodec-61.dll", True),
+            ("avformat-61.dll", True),
+            ("avutil-59.dll", True),
+            ("swscale-8.dll", True),
+            ("swresample-5.dll", True),
+            # 大写也匹配
+            ("AVCodec-61.dll", True),
+            ("AvFormat-61.DLL", True),
+            # 非 FFmpeg 前缀
+            ("Qt6Core.dll", False),
+            ("msvcp140.dll", False),
+            ("pyside6.abi3.dll", False),
+            ("opengl32sw.dll", False),
+            # 非 .dll 后缀
+            ("avcodec-61.lib", False),
+            ("avcodec-61.pyd", False),
+        ],
+        ids=[
+            "avcodec",
+            "avformat",
+            "avutil",
+            "swscale",
+            "swresample",
+            "uppercase",
+            "mixed_case",
+            "qt6core",
+            "msvcp",
+            "pyside_abi",
+            "opengl32sw",
+            "lib_ext",
+            "pyd_ext",
+        ],
+    )
+    def test_is_ffmpeg_dll(self, filename: str, expected: bool) -> None:
+        """FFmpeg 系列 DLL 识别：前缀 + 版本号 + .dll 后缀."""
+        from fspack.slim.qt import _is_ffmpeg_dll
+
+        assert _is_ffmpeg_dll(filename) is expected
+
+    @pytest.mark.parametrize(
+        ("filename", "expected"),
+        [
+            ("pyside6qml.abi3.dll", True),
+            ("pyside2qml.abi3.dll", True),
+            ("PYSIDE6QML.ABI3.DLL", True),
+            ("pyside6.abi3.dll", False),  # 非 qml 绑定层
+            ("pyside2.abi3.dll", False),
+            ("shiboken6.abi3.dll", False),
+        ],
+        ids=["pyside6qml", "pyside2qml", "uppercase", "pyside6_abi", "pyside2_abi", "shiboken6"],
+    )
+    def test_is_qml_abi_dll(self, filename: str, expected: bool) -> None:
+        """QML 绑定层 ABI DLL 识别：pyside{2,6}qml.abi3.dll."""
+        from fspack.slim.qt import _is_qml_abi_dll
+
+        assert _is_qml_abi_dll(filename) is expected
+
+    @pytest.mark.parametrize(
+        ("filename", "expected"),
+        [
+            ("opengl32sw.dll", True),
+            ("OPENGL32SW.DLL", True),
+            ("OpenGL32sw.Dll", True),
+            ("opengl32.dll", False),  # 系统 OpenGL，非软件后备
+            ("opengl32sw.lib", False),  # 非动态库
+            ("mesa.dll", False),
+        ],
+        ids=["lowercase", "uppercase", "mixed_case", "system_opengl", "lib_ext", "mesa"],
+    )
+    def test_is_opengl_sw_dll(self, filename: str, expected: bool) -> None:
+        """opengl32sw.dll 识别（Mesa 软件 OpenGL 后备）."""
+        from fspack.slim.qt import _is_opengl_sw_dll
+
+        assert _is_opengl_sw_dll(filename) is expected
+
 
 class TestQtModuleClosure:
     """Qt 模块依赖闭包计算（归一化名）."""
@@ -801,6 +1009,133 @@ class TestSlimUnpack:
         # qml 目录依赖 Qml/Quick → 保留
         assert (dest / "PySide2" / "qml" / "QtQuick.2" / "qmldir").is_file()
         assert (dest / "PySide2" / "qml" / "QtQml" / "Models.2" / "qmldir").is_file()
+
+    def test_qt_auxiliary_dll_with_deps_kept(self, tmp_path: Path) -> None:
+        """闭包含 Multimedia/Qml/Quick 时 FFmpeg/QML ABI/opengl32sw DLL 保留."""
+        whl = tmp_path / "wh" / "PySide6-6.5.0-cp39-none-win_amd64.whl"
+        whl.parent.mkdir()
+        _make_wheel(
+            whl,
+            {
+                "PySide6/__init__.py": b"",
+                "PySide6/QtCore.pyd": b"core",
+                "PySide6/QtQml.pyd": b"qml",
+                "PySide6/QtQuick.pyd": b"quick",
+                "PySide6/QtMultimedia.pyd": b"mm",
+                "PySide6/Qt6Core.dll": b"c",
+                "PySide6/Qt6Qml.dll": b"qml-dll",
+                "PySide6/Qt6Multimedia.dll": b"mm-dll",
+                # FFmpeg 系列（仅 Multimedia 闭包内保留）
+                "PySide6/avcodec-61.dll": b"avcodec",
+                "PySide6/avformat-61.dll": b"avformat",
+                # QML 绑定层 ABI DLL（仅 Qml 闭包内保留）
+                "PySide6/pyside6qml.abi3.dll": b"qml-abi",
+                # opengl32sw.dll（仅 OpenGL 相关模块闭包内保留，Quick/Multimedia 都算）
+                "PySide6/opengl32sw.dll": b"sw",
+                # VC++ 运行时（始终保留）
+                "PySide6/msvcp140.dll": b"msvcp",
+                # 绑定层（始终保留）
+                "PySide6/pyside6.abi3.dll": b"abi",
+            },
+        )
+        dest = tmp_path / "sp"
+        count = slim_unpack(
+            [whl],
+            dest,
+            {"PySide6": frozenset({"QtCore", "Qml", "Quick", "Multimedia"})},
+        )
+        assert count == 1
+        # FFmpeg 系列：闭包含 Multimedia → 保留
+        assert (dest / "PySide6" / "avcodec-61.dll").is_file()
+        assert (dest / "PySide6" / "avformat-61.dll").is_file()
+        # QML ABI DLL：闭包含 Qml → 保留
+        assert (dest / "PySide6" / "pyside6qml.abi3.dll").is_file()
+        # opengl32sw.dll：闭包含 Quick/Multimedia → 保留
+        assert (dest / "PySide6" / "opengl32sw.dll").is_file()
+        # VC++ 运行时始终保留
+        assert (dest / "PySide6" / "msvcp140.dll").is_file()
+        # 绑定层始终保留
+        assert (dest / "PySide6" / "pyside6.abi3.dll").is_file()
+
+    def test_qt_auxiliary_dll_without_deps_excluded(self, tmp_path: Path) -> None:
+        """闭包不含 Multimedia/Qml/OpenGL 模块时 FFmpeg/QML ABI/opengl32sw DLL 剥离.
+
+        回归测试：ref/RimSort 闭包 = {Widgets, Gui, Core, WebEngineWidgets,
+        WebEngineCore, Network, Positioning}，无 Multimedia/Qml/OpenGL 等，
+        FFmpeg 系列（18MB）/QML ABI（0.08MB）/opengl32sw.dll（20MB）应被剥离。
+        WebEngineCore 自带 Chromium GPU 加速，不依赖 opengl32sw.dll。
+        """
+        whl = tmp_path / "wh" / "PySide6-6.5.0-cp39-none-win_amd64.whl"
+        whl.parent.mkdir()
+        _make_wheel(
+            whl,
+            {
+                "PySide6/__init__.py": b"",
+                "PySide6/QtCore.pyd": b"core",
+                "PySide6/QtGui.pyd": b"gui",
+                "PySide6/QtWidgets.pyd": b"widgets",
+                "PySide6/QtWebEngineCore.pyd": b"we-core",
+                "PySide6/QtWebEngineWidgets.pyd": b"we-widgets",
+                "PySide6/Qt6Core.dll": b"c",
+                "PySide6/Qt6Gui.dll": b"g",
+                "PySide6/Qt6Widgets.dll": b"w",
+                "PySide6/Qt6WebEngineCore.dll": b"we-c",
+                "PySide6/Qt6WebEngineWidgets.dll": b"we-w",
+                "PySide6/Qt6Network.dll": b"net",
+                "PySide6/Qt6Positioning.dll": b"pos",
+                # FFmpeg 系列（无 Multimedia → 剥离）
+                "PySide6/avcodec-61.dll": b"avcodec",
+                "PySide6/avformat-61.dll": b"avformat",
+                "PySide6/avutil-59.dll": b"avutil",
+                "PySide6/swscale-8.dll": b"swscale",
+                "PySide6/swresample-5.dll": b"swresample",
+                # QML 绑定层 ABI DLL（无 Qml → 剥离）
+                "PySide6/pyside6qml.abi3.dll": b"qml-abi",
+                # opengl32sw.dll（无 OpenGL 相关模块 → 剥离）
+                "PySide6/opengl32sw.dll": b"sw",
+                # VC++ 运行时（始终保留）
+                "PySide6/msvcp140.dll": b"msvcp",
+                # 绑定层（始终保留）
+                "PySide6/pyside6.abi3.dll": b"abi",
+                # metatypes 目录（始终剥离）
+                "PySide6/metatypes/qt6core_metatypes.json": b"mt",
+                # lib/cmake/ 三级子目录（剥离）
+                "PySide6/lib/cmake/PySide6/PySide6Config.cmake": b"cmake",
+                # QtAsyncio 目录（始终剥离）
+                "PySide6/QtAsyncio/__init__.py": b"asyncio",
+            },
+        )
+        dest = tmp_path / "sp"
+        count = slim_unpack(
+            [whl],
+            dest,
+            {"PySide6": frozenset({"QtCore", "QtGui", "QtWidgets", "QtWebEngineCore", "QtWebEngineWidgets"})},
+        )
+        assert count == 1
+        # 基础子模块保留
+        assert (dest / "PySide6" / "QtCore.pyd").is_file()
+        assert (dest / "PySide6" / "QtWidgets.pyd").is_file()
+        assert (dest / "PySide6" / "QtWebEngineWidgets.pyd").is_file()
+        # FFmpeg 系列：闭包无 Multimedia → 剥离
+        assert not (dest / "PySide6" / "avcodec-61.dll").exists()
+        assert not (dest / "PySide6" / "avformat-61.dll").exists()
+        assert not (dest / "PySide6" / "avutil-59.dll").exists()
+        assert not (dest / "PySide6" / "swscale-8.dll").exists()
+        assert not (dest / "PySide6" / "swresample-5.dll").exists()
+        # QML ABI DLL：闭包无 Qml → 剥离
+        assert not (dest / "PySide6" / "pyside6qml.abi3.dll").exists()
+        # opengl32sw.dll：闭包无 OpenGL 相关模块 → 剥离
+        assert not (dest / "PySide6" / "opengl32sw.dll").exists()
+        # VC++ 运行时始终保留
+        assert (dest / "PySide6" / "msvcp140.dll").is_file()
+        # 绑定层始终保留
+        assert (dest / "PySide6" / "pyside6.abi3.dll").is_file()
+        # metatypes 目录剥离
+        assert not (dest / "PySide6" / "metatypes").exists()
+        # lib/cmake/ 剥离
+        assert not (dest / "PySide6" / "lib" / "cmake").exists()
+        # QtAsyncio 目录剥离
+        assert not (dest / "PySide6" / "QtAsyncio").exists()
 
 
 class TestDefaultSlimSpec:

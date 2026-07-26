@@ -7,7 +7,13 @@
 - 子模块动态扩展：根据源码 import 的子模块（如 ``PySide2.QtMultimedia``），
   保留对应 ``.pyd``/``.pyi`` 与 ``Qt5Xxx.dll``/``Qt6Xxx.dll``，并按依赖映射保留
   相关 plugins（如 ``plugins/mediaservice``）与 resources
-- 非必要目录剥离：``examples``/``translations``/``include``/``typesystems`` 等始终跳过
+- 非必要目录剥离：``examples``/``translations``/``include``/``typesystems``/
+  ``metatypes``/``lib``/``QtAsyncio`` 等始终跳过
+- 按需加载的辅助 DLL 智能识别：
+  - FFmpeg 系列（``avcodec-*``/``avformat-*`` 等）仅 Multimedia 闭包内保留
+  - ``pyside6qml.abi3.dll``/``pyside2qml.abi3.dll`` 仅 Qml 闭包内保留
+  - ``opengl32sw.dll`` 仅 OpenGL 相关模块（OpenGL/Quick/Multimedia 等）闭包内保留
+- WebEngine DevTools 调试资源（``*.debug.pak``/``*.debug.bin``）始终剥离
 
 依赖闭包：用户 ``import QtWidgets`` 时自动加入 ``Gui``/``Core``（C 层链接依赖，
 AST 无法发现），无需用户显式声明或 ``--keep-module``。
@@ -28,6 +34,9 @@ else:
 __all__ = [
     "QT_PACKAGES",
     "QtSlimSpec",
+    "_is_ffmpeg_dll",
+    "_is_opengl_sw_dll",
+    "_is_qml_abi_dll",
     "_normalize_qt_sub",
     "_qt_dll_submodule",
     "_qt_module_closure",
@@ -59,8 +68,15 @@ _QT_EXCLUDE_SUBDIRS = frozenset(
         "support",  # 内部支持文件
         "scripts",  # 脚本
         "doc",  # 文档
+        "metatypes",  # Qt 元类型 JSON（编译期用，运行时不需要，约 14MB）
+        "QtAsyncio",  # QtAsyncio 模块（asyncio 集成，非 asyncio 应用不需要）
     }
 )
+
+# Qt 库 lib/ 子目录下始终剥离的三级子目录。
+# 注意：lib/ 本身不剥离（PySide2 的 lib/fonts/ 含 Qt 内嵌字体，运行时需要），
+# 仅剥离 lib/cmake/（cmake 配置文件，构建系统用，运行时不需要）。
+_QT_LIB_EXCLUDE_SUBDIRS = frozenset({"cmake"})
 
 # Qt plugins 子目录 → 依赖的子模块（归一化名）
 # 空集合表示始终保留（基础功能必需），非空集合表示需任一依赖子模块在保留集合中
@@ -111,6 +127,42 @@ _QT_WEBENGINE_TOP_FILES = frozenset({"QtWebEngineProcess.exe", "QtWebEngineProce
 # qml 目录依赖（QtQml/QtQuick 运行时，约 21MB）
 _QT_QML_DEPS = frozenset(
     {"Qml", "Quick", "QuickWidgets", "QuickControls2", "Quick3D", "QuickShapes", "QuickTemplates2"}
+)
+
+# FFmpeg 系列 DLL 文件名前缀 → 仅 QtMultimedia 闭包内保留。
+# PySide6 wheel 携带 avcodec-61.dll/avformat-61.dll/avutil-59.dll/swscale-8.dll/
+# swresample-5.dll 等 FFmpeg 库（合计约 18MB），仅 Qt6Multimedia.dll 运行时加载。
+# 文件名格式 ``<prefix>-<version>.dll``，用 startswith 识别前缀。
+# 当 Multimedia 不在 keep_subs 时剥离（Qt6Multimedia.dll 已被剥离却仍保留 FFmpeg 是浪费）。
+_QT_FFMPEG_DLL_PREFIXES = frozenset({"avcodec", "avformat", "avutil", "swscale", "swresample"})
+
+# QML 绑定层 ABI DLL：仅 Qml 闭包内保留。
+# pyside6qml.abi3.dll/pyside2qml.abi3.dll 是 QML 类型注册的绑定层，
+# 仅当用户 import QtQml 时被加载，非 QML 应用无需保留。
+_QT_QML_ABI_DLL_NAMES = frozenset({"pyside6qml.abi3.dll", "pyside2qml.abi3.dll"})
+
+# opengl32sw.dll：Mesa 软件 OpenGL 渲染后备，仅 OpenGL 相关模块闭包内保留。
+# 系统无 GPU 驱动或驱动不兼容时 Qt 加载此 DLL 作为 OpenGL 后备（约 20MB）。
+# 仅当用户使用 OpenGL/Quick/Quick3D/Multimedia/Graphs/DataVisualization 等模块时需要；
+# 纯 Widgets/WebEngine 应用不直接使用 OpenGL，可剥离。
+# WebEngineCore 自带 Chromium GPU 加速，不依赖 opengl32sw.dll。
+_QT_OPENGL_SW_DLL_NAMES = frozenset({"opengl32sw.dll"})
+
+# 会使用 OpenGL 的 Qt 子模块（归一化名）。
+# 这些模块在 C 层链接 OpenGL，运行时可能加载 opengl32sw.dll 作为软件后备。
+_QT_OPENGL_DEPS = frozenset(
+    {
+        "OpenGL",
+        "OpenGLWidgets",
+        "Quick",
+        "Quick3D",
+        "QuickShapes",
+        "QuickWidgets",
+        "Multimedia",
+        "Graphs",
+        "DataVisualization",
+        "DataVisualizationQml",
+    }
 )
 
 # Qt 子模块依赖映射（归一化名）：key 为 Qt 子模块名（如 Core/Widgets），value 为该模块
@@ -252,6 +304,31 @@ def _qt_module_closure(submodules: set[str]) -> set[str]:
     return closure
 
 
+def _is_ffmpeg_dll(filename: str) -> bool:
+    """判断文件名是否为 FFmpeg 系列 DLL（仅 QtMultimedia 闭包内保留）。
+
+    匹配 ``avcodec-<ver>.dll``/``avformat-<ver>.dll``/``avutil-<ver>.dll``/
+    ``swscale-<ver>.dll``/``swresample-<ver>.dll`` 等格式。文件名转小写后
+    按 ``-`` 分隔，首段在前缀集合中且后缀为 ``.dll`` 即匹配。
+    """
+    if not filename.lower().endswith(".dll"):
+        return False
+    stem = filename[: -len(".dll")]
+    # 文件名格式 ``<prefix>-<version>``，取首个 ``-`` 之前部分
+    prefix = stem.split("-", 1)[0].lower()
+    return prefix in _QT_FFMPEG_DLL_PREFIXES
+
+
+def _is_qml_abi_dll(filename: str) -> bool:
+    """判断文件名是否为 QML 绑定层 ABI DLL（仅 Qml 闭包内保留）."""
+    return filename.lower() in _QT_QML_ABI_DLL_NAMES
+
+
+def _is_opengl_sw_dll(filename: str) -> bool:
+    """判断文件名是否为 opengl32sw.dll（Mesa 软件 OpenGL 后备）."""
+    return filename.lower() in _QT_OPENGL_SW_DLL_NAMES
+
+
 class QtSlimSpec(SlimSpec):
     """Qt 库精简规则：PySide2/PySide6/PyQt5/PyQt6 共享同一规则。
 
@@ -301,11 +378,19 @@ class QtSlimSpec(SlimSpec):
         - 顶层 ``.pyd``/``.pyi``/``.so`` → submodule（归一化子模块名）
         - 顶层 ``Qt5Xxx.dll``/``Qt6Xxx.dll`` → submodule（归一化子模块名）；
           PySide2/PySide6 的 abi3.dll 隐式依赖 Qml/Network DLL → 归 shared
-        - 非 Qt5/Qt6 前缀 DLL → shared（VC++ 运行时等）
-        - 子目录 ``examples``/``translations``/``include`` 等 → exclude
+        - 顶层 FFmpeg 系列 DLL（``avcodec-*``/``avformat-*`` 等）→ submodule，
+          按 ``Multimedia`` 子模块选择性保留（仅 Multimedia 闭包内加载）
+        - 顶层 ``pyside6qml.abi3.dll``/``pyside2qml.abi3.dll`` → submodule，
+          按 ``Qml`` 子模块选择性保留（QML 绑定层，非 QML 应用不需要）
+        - 顶层 ``opengl32sw.dll`` → 仅 ``_QT_OPENGL_DEPS`` 任一模块在闭包内时
+          归 shared 保留；纯 Widgets/WebEngine 应用剥离（约 20MB 节省）
+        - 其他非 Qt5/Qt6 前缀 DLL → shared（VC++ 运行时等）
+        - 子目录 ``examples``/``translations``/``include``/``metatypes``/
+          ``QtAsyncio`` 等 → exclude；``lib/cmake/`` 三级子目录剥离（cmake 配置），
+          ``lib/`` 其他内容保留（PySide2 ``lib/fonts/`` 含 Qt 内嵌字体）
         - ``plugins/<subdir>/<files>`` → 按依赖映射保留/剥离，未知子目录剥离
-        - ``resources/`` → 仅 WebEngine 相关子模块时保留；内部 ``*.debug.pak``
-          是 DevTools 调试资源，运行时不需要，始终剥离
+        - ``resources/`` → 仅 WebEngine 相关子模块时保留；内部含 ``.debug.`` 子串
+          的文件（``*.debug.pak``/``*.debug.bin``）是 DevTools 调试资源，始终剥离
         - ``qml/`` → 仅 Qml/Quick 相关子模块时保留
         - 其他 → shared
         """
@@ -346,12 +431,29 @@ class QtSlimSpec(SlimSpec):
                     if is_abi_pkg and qt_sub in _QT_ABI_DLL_DEPS:
                         return ("shared", None)
                     return ("submodule", qt_sub)
+                # FFmpeg 系列 DLL（avcodec-61.dll 等）→ 按 Multimedia 子模块选择性保留
+                # 仅 Qt6Multimedia.dll 运行时加载，Multimedia 不在闭包内时剥离
+                if _is_ffmpeg_dll(filename):
+                    return ("submodule", "Multimedia")
+                # QML 绑定层 ABI DLL → 按 Qml 子模块选择性保留
+                if _is_qml_abi_dll(filename):
+                    return ("submodule", "Qml")
+                # opengl32sw.dll → 按 OpenGL 相关模块闭包智能保留
+                # 检查 keep_subs 与 _QT_OPENGL_DEPS 的交集（任一模块在闭包内即保留）
+                if _is_opengl_sw_dll(filename):
+                    if _QT_OPENGL_DEPS & keep_subs:
+                        return ("shared", None)
+                    return ("exclude", None)
                 return ("shared", None)
             return ("shared", None)
 
         # 子目录（len(parts) >= 3）
         subdir = parts[1]
         if subdir in cls.COMMON_EXCLUDE_SUBDIRS or subdir in _QT_EXCLUDE_SUBDIRS:
+            return ("exclude", None)
+        # lib/cmake/ 三级子目录剥离（cmake 配置文件，构建系统用，运行时不需要）。
+        # lib/ 本身不剥离（PySide2 的 lib/fonts/ 含 Qt 内嵌字体，运行时需要）。
+        if subdir == "lib" and len(parts) >= 4 and parts[2] in _QT_LIB_EXCLUDE_SUBDIRS:
             return ("exclude", None)
         if subdir == "plugins" and len(parts) >= 4:
             plugin_type = parts[2]
@@ -368,10 +470,11 @@ class QtSlimSpec(SlimSpec):
         if subdir == "resources":
             if not (_QT_RESOURCE_DEPS & keep_subs):
                 return ("exclude", None)
-            # WebEngine 资源中 *.debug.pak 是 Chromium DevTools 调试资源，
-            # 运行时不需要（ref/RimSort 此项浪费 74MB），始终剥离。
-            # 非 .debug.pak 资源（如 icudtl.dat 副本、qtwebengine_resources.pak）保留。
-            if entry.endswith(".debug.pak"):
+            # WebEngine 资源中含 ``.debug.`` 子串的文件是 Chromium DevTools 调试资源，
+            # 运行时不需要（ref/RimSort qtwebengine_devtools_resources.debug.pak 浪费
+            # 74MB；v8_context_snapshot.debug.bin 浪费 2.3MB），始终剥离。
+            # 非 .debug.* 资源（如 icudtl.dat 副本、qtwebengine_resources.pak）保留。
+            if ".debug." in parts[-1].lower():
                 return ("exclude", None)
             return ("shared", None)
         if subdir == "qml":
