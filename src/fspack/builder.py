@@ -352,7 +352,7 @@ def resolve_project_info(project_dir: Path, py_version: str | None, target: Plat
     return info
 
 
-def build(  # noqa: PLR0912, PLR0913
+def build(  # noqa: PLR0913
     project_dir: Path,
     mirror: MirrorConfig,
     py_version: str | None = None,
@@ -393,50 +393,63 @@ def build(  # noqa: PLR0912, PLR0913
         st.set_detail(f"{info.name} {info.version} ({info.app_type.value})")
 
     runtime_dir = cfg.dist_dir / "runtime"
-    if target is Platform.LINUX:
-        major, minor = info.py_version.split(".")[:2]
-        python_bin = runtime_dir / "python" / "bin" / f"python{major}.{minor}"
-        runtime_ready = python_bin.is_file()
-        standalone_cache = Path.home() / ".fspack" / "cache" / "standalone"
-        tar_path: Path | None = None
-        with tracker.stage("下载运行时") as st:
-            if runtime_ready:
-                st.hit_cache()
-                st.set_detail("runtime 已就绪")
-            else:
-                tar_path = download_standalone(info.py_version, STANDALONE_RELEASE_TAG, standalone_cache, stage=st)
-                st.set_detail("python-build-standalone")
-        with tracker.stage("解压运行时") as st:
-            if runtime_ready:
-                st.hit_cache()
-                st.set_detail("runtime 已就绪")
-            else:
-                assert tar_path is not None
-                extract_standalone(tar_path, runtime_dir)
-                st.processed(1)
-                st.set_detail("python-build-standalone")
-        site_packages = runtime_dir / "python" / "lib" / f"python{major}.{minor}" / "site-packages"
+    site_packages = _prepare_runtime(tracker, info, cfg, opts, runtime_dir, target)
+    report = _analyze_dependencies(tracker, project_dir, info, cfg)
+    has_tkinter = _download_dependencies(tracker, info, cfg, opts, site_packages, runtime_dir, target, report)
+
+    if target is Platform.WINDOWS:
+        # tkinter 补充到 runtime/Lib/tkinter/，需将 Lib 加入 _pth 使其可被 import
+        # （_pth 默认只含 Lib\site-packages，不含 Lib 本身）
+        extra_pth_paths = ("Lib",) if has_tkinter else ()
+        write_pth(cfg.dist_dir, info.py_version, extra_paths=extra_pth_paths, enable_site=not opts.no_site)
+
+    with tracker.stage("复制源码") as st:
+        src_dst = cfg.dist_dir / "src"
+        with spinner(f"复制 {info.name} 源码"):
+            copy_source(project_dir, src_dst, extra_excludes=info.exclude_dirs)
+
+    _compile_user_sources(tracker, info, cfg, opts, src_dst, runtime_dir, target)
+
+    # icon 优先级：CLI --icon > 项目 [tool.fspack] icon > 自动搜索 favicon.* > 默认 app.ico（仅 Windows）
+    # Linux 目标无图标资源概念，统一传 None
+    with tracker.stage("解析图标") as st:
+        resolved_icon = _resolve_project_icon(opts.icon, info.icon, project_dir, cfg.dist_dir / "build", target)
+        if resolved_icon is not None:
+            st.set_detail(str(resolved_icon.name))
+
+    exes = _build_entry_loaders(tracker, info, cfg, target, resolved_icon, has_tkinter)
+
+    console.rich.print(tracker.summary())
+    if len(exes) == 1:
+        console.success(f"构建完成: {exes[0]}")
     else:
-        dll_marker = runtime_dir / f"{embed_dirname(info.py_version)}.dll"
-        runtime_ready = dll_marker.is_file()
-        zip_path: Path | None = None
-        with tracker.stage("下载运行时") as st:
-            if runtime_ready:
-                st.hit_cache()
-                st.set_detail("runtime 已就绪")
-            else:
-                zip_path = download_embed(info.py_version, cfg.mirror, cfg.embed_cache_dir, stage=st)
-                st.set_detail("embed python")
-        with tracker.stage("解压运行时") as st:
-            if runtime_ready:
-                st.hit_cache()
-                st.set_detail("runtime 已就绪")
-            else:
-                assert zip_path is not None
-                extract_embed(zip_path, runtime_dir)
-                st.processed(1)
-                st.set_detail("embed python")
-        site_packages = runtime_dir / "Lib" / "site-packages"
+        console.success(f"构建完成: {len(exes)} 个入口")
+        for exe in exes:
+            console.rich.print(f"  - {exe}")
+    return info
+
+
+def _prepare_runtime(  # noqa: PLR0913
+    tracker: BuildTracker,
+    info: ProjectInfo,
+    cfg: BuildConfig,
+    opts: BuildOptions,
+    runtime_dir: Path,
+    target: Platform,
+) -> Path:
+    """下载/解压运行时、精简标准库，返回 site-packages 路径.
+
+    分支：
+
+    - Linux：下载 python-build-standalone tar.gz，解压到 ``runtime/python``
+    - Windows：下载 embed python zip，解压到 ``runtime``
+
+    runtime 已就绪（dll/python bin 存在）时跳过下载解压，两 stage 均 ``hit_cache``。
+    """
+    if target is Platform.LINUX:
+        site_packages = _prepare_linux_runtime(tracker, info, runtime_dir)
+    else:
+        site_packages = _prepare_windows_runtime(tracker, info, cfg, runtime_dir)
     site_packages.mkdir(parents=True, exist_ok=True)
 
     # Win7 兼容性：Python 3.9+ 官方不再支持 Win7，注入 api-ms-win-core-path-l1-1-0.dll
@@ -451,6 +464,66 @@ def build(  # noqa: PLR0912, PLR0913
         with tracker.stage("精简标准库") as st:
             _trim_stdlib(runtime_dir, info.py_version, target, st)
 
+    return site_packages
+
+
+def _prepare_linux_runtime(tracker: BuildTracker, info: ProjectInfo, runtime_dir: Path) -> Path:
+    """下载并解压 python-build-standalone 到 runtime_dir（Linux 目标）."""
+    major, minor = info.py_version.split(".")[:2]
+    python_bin = runtime_dir / "python" / "bin" / f"python{major}.{minor}"
+    runtime_ready = python_bin.is_file()
+    standalone_cache = Path.home() / ".fspack" / "cache" / "standalone"
+    tar_path: Path | None = None
+    with tracker.stage("下载运行时") as st:
+        if runtime_ready:
+            st.hit_cache()
+            st.set_detail("runtime 已就绪")
+        else:
+            tar_path = download_standalone(info.py_version, STANDALONE_RELEASE_TAG, standalone_cache, stage=st)
+            st.set_detail("python-build-standalone")
+    with tracker.stage("解压运行时") as st:
+        if runtime_ready:
+            st.hit_cache()
+            st.set_detail("runtime 已就绪")
+        else:
+            assert tar_path is not None
+            extract_standalone(tar_path, runtime_dir)
+            st.processed(1)
+            st.set_detail("python-build-standalone")
+    return runtime_dir / "python" / "lib" / f"python{major}.{minor}" / "site-packages"
+
+
+def _prepare_windows_runtime(tracker: BuildTracker, info: ProjectInfo, cfg: BuildConfig, runtime_dir: Path) -> Path:
+    """下载并解压 embed python 到 runtime_dir（Windows 目标）."""
+    dll_marker = runtime_dir / f"{embed_dirname(info.py_version)}.dll"
+    runtime_ready = dll_marker.is_file()
+    zip_path: Path | None = None
+    with tracker.stage("下载运行时") as st:
+        if runtime_ready:
+            st.hit_cache()
+            st.set_detail("runtime 已就绪")
+        else:
+            zip_path = download_embed(info.py_version, cfg.mirror, cfg.embed_cache_dir, stage=st)
+            st.set_detail("embed python")
+    with tracker.stage("解压运行时") as st:
+        if runtime_ready:
+            st.hit_cache()
+            st.set_detail("runtime 已就绪")
+        else:
+            assert zip_path is not None
+            extract_embed(zip_path, runtime_dir)
+            st.processed(1)
+            st.set_detail("embed python")
+    return runtime_dir / "Lib" / "site-packages"
+
+
+def _analyze_dependencies(
+    tracker: BuildTracker,
+    project_dir: Path,
+    info: ProjectInfo,
+    cfg: BuildConfig,
+) -> DependencyReport:
+    """分析依赖（源码指纹缓存命中则跳过 AST 扫描）."""
     with tracker.stage("分析依赖") as st:
         # 源码指纹缓存：源码未变时跳过 AST 分析，重复构建加速 ~478ms
         from fspack.analyzer import source_fingerprint
@@ -469,7 +542,24 @@ def build(  # noqa: PLR0912, PLR0913
             ast_count = len(report.ast_third_party)
             st.processed(ast_count)
             st.set_detail(f"AST {ast_count} 个第三方")
+    return report
 
+
+def _download_dependencies(  # noqa: PLR0913
+    tracker: BuildTracker,
+    info: ProjectInfo,
+    cfg: BuildConfig,
+    opts: BuildOptions,
+    site_packages: Path,
+    runtime_dir: Path,
+    target: Platform,
+    report: DependencyReport,
+) -> bool:
+    """下载并解压第三方依赖 wheel 到 site-packages，返回是否补充了 tkinter.
+
+    补充内置库 tkinter（embed python 缺失，AST 检测到使用时从 python-build-standalone 提取）。
+    下载用包名优先 declared（PyPI 包名权威），declared 为空时回退 ast_third_party。
+    """
     # 补充内置库：embed python 缺失 tkinter（纯 Python 包 + _tkinter.pyd + Tcl/Tk 脚本），
     # 若 AST 检测到 tkinter 使用则从 python-build-standalone Windows 构建提取并补充到 runtime。
     # Linux standalone 已含全部 stdlib，无需补充。
@@ -508,28 +598,31 @@ def build(  # noqa: PLR0912, PLR0913
                 unpack_wheels(wheels, site_packages, report.ast_submodules, opts.keep_modules, stage=st)
     else:
         _logger.info("无第三方依赖，跳过 wheel 下载")
+    return has_tkinter
 
-    if target is Platform.WINDOWS:
-        # tkinter 补充到 runtime/Lib/tkinter/，需将 Lib 加入 _pth 使其可被 import
-        # （_pth 默认只含 Lib\site-packages，不含 Lib 本身）
-        extra_pth_paths = ("Lib",) if has_tkinter else ()
-        write_pth(cfg.dist_dir, info.py_version, extra_paths=extra_pth_paths, enable_site=not opts.no_site)
 
-    with tracker.stage("复制源码") as st:
-        src_dst = cfg.dist_dir / "src"
-        with spinner(f"复制 {info.name} 源码"):
-            copy_source(project_dir, src_dst, extra_excludes=info.exclude_dirs)
+def _compile_user_sources(  # noqa: PLR0913
+    tracker: BuildTracker,
+    info: ProjectInfo,
+    cfg: BuildConfig,
+    opts: BuildOptions,
+    src_dst: Path,
+    runtime_dir: Path,
+    target: Platform,
+) -> None:
+    """编译用户源码：Nuitka 编译（可选）+ 字节码预编译.
 
-    # Nuitka 编译模式：用 runtime python -c "sys.path.insert(0, <nuitka_cache>); ..." 调用
-    # nuitka --module 将 dist/src 下用户源码编译为 .pyd。
-    # 用户源码以 .pyd 形式本机执行，速度提升 30-50%（参考 RimSort Nuitka 打包方案）。
-    # 仅编译用户源码（src/），第三方依赖（site-packages/）保持 wheel 解压 + .pyc。
-    # 交叉构建跳过（Nuitka 无法生成目标平台 .pyd）。
-    # nuitka 装到本地缓存 ~/.fspack/cache/nuitka/<py_version>/，不污染 dist/runtime；
-    # 编译时用 -c 注入 sys.path 绕过 _pth 对 PYTHONPATH 的限制。
-    # stamp 命中跳过整个阶段（含 ensure_env 与 compile_src）。
-    # 入口文件跳过编译：入口包装器用 runpy.run_path() 显式指定 .py 路径调用用户代码，
-    # 若入口 .py 被 Nuitka 编译后删除，run_path 会 FileNotFoundError。
+    Nuitka 编译模式：用 runtime python -c "sys.path.insert(0, <nuitka_cache>); ..." 调用
+    nuitka --module 将 dist/src 下用户源码编译为 .pyd。
+    用户源码以 .pyd 形式本机执行，速度提升 30-50%（参考 RimSort Nuitka 打包方案）。
+    仅编译用户源码（src/），第三方依赖（site-packages/）保持 wheel 解压 + .pyc。
+    交叉构建跳过（Nuitka 无法生成目标平台 .pyd）。
+    nuitka 装到本地缓存 ~/.fspack/cache/nuitka/<py_version>/，不污染 dist/runtime；
+    编译时用 -c 注入 sys.path 绕过 _pth 对 PYTHONPATH 的限制。
+    stamp 命中跳过整个阶段（含 ensure_env 与 compile_src）。
+    入口文件跳过编译：入口包装器用 runpy.run_path() 显式指定 .py 路径调用用户代码，
+    若入口 .py 被 Nuitka 编译后删除，run_path 会 FileNotFoundError。
+    """
     if opts.nuitka and target is detect_platform():
         with tracker.stage("Nuitka 编译") as st:
             from fspack.packaging.nuitka import NuitkaCompiler
@@ -566,13 +659,16 @@ def build(  # noqa: PLR0912, PLR0913
                 optimize=opts.pyc_optimize,
             )
 
-    # icon 优先级：CLI --icon > 项目 [tool.fspack] icon > 自动搜索 favicon.* > 默认 app.ico（仅 Windows）
-    # Linux 目标无图标资源概念，统一传 None
-    with tracker.stage("解析图标") as st:
-        resolved_icon = _resolve_project_icon(opts.icon, info.icon, project_dir, cfg.dist_dir / "build", target)
-        if resolved_icon is not None:
-            st.set_detail(str(resolved_icon.name))
 
+def _build_entry_loaders(  # noqa: PLR0913
+    tracker: BuildTracker,
+    info: ProjectInfo,
+    cfg: BuildConfig,
+    target: Platform,
+    resolved_icon: Path | None,
+    has_tkinter: bool,
+) -> list[Path]:
+    """为每个入口生成 C loader 与入口包装器，返回生成的 exe 路径列表."""
     exes: list[Path] = []
     with tracker.stage("生成 C loader") as st:
         source = generate_loader_source(info.py_xy, target)
@@ -603,15 +699,7 @@ def build(  # noqa: PLR0912, PLR0913
             compile_loader(source, exe, ep.app_type, build_dir, target, icon=resolved_icon, stage=st)
             exes.append(exe)
         st.processed(len(exes))
-
-    console.rich.print(tracker.summary())
-    if len(exes) == 1:
-        console.success(f"构建完成: {exes[0]}")
-    else:
-        console.success(f"构建完成: {len(exes)} 个入口")
-        for exe in exes:
-            console.rich.print(f"  - {exe}")
-    return info
+    return exes
 
 
 def copy_source(project_dir: Path, src_dst: Path, extra_excludes: tuple[str, ...] = ()) -> None:

@@ -178,7 +178,27 @@ class NuitkaCompiler:
             stage.set_detail(f"python {standalone_version} 已就绪")
             return py_exe
 
-        # 下载 python-build-standalone Windows tarball
+        archive_path = cls._download_standalone_python(build_python_dir, standalone_version, stage)
+        cls._extract_standalone_python(archive_path, build_python_dir, standalone_version)
+
+        if not py_exe.is_file():
+            raise NuitkaError(f"standalone python 解压后未找到 {py_exe}，请检查缓存目录 {build_python_dir}")
+
+        stage.set_detail(f"python {standalone_version} 安装完成")
+        return py_exe
+
+    @classmethod
+    def _download_standalone_python(
+        cls,
+        build_python_dir: Path,
+        standalone_version: str,
+        stage: StageRecorder,
+    ) -> Path:
+        """下载 python-build-standalone Windows tarball 到 build_python_dir，返回 tarball 路径.
+
+        Raises:
+            NuitkaError: 下载失败。
+        """
         # 惰性导入避免循环依赖
         from fspack.packaging.net import Downloader
         from fspack.packaging.runtime import STANDALONE_RELEASE_TAG, standalone_url
@@ -199,8 +219,25 @@ class NuitkaCompiler:
             )
         except OSError as e:
             raise NuitkaError(f"下载 standalone python 失败: {url} -> {e}") from e
+        return archive_path
 
-        # 解压 tarball
+    @classmethod
+    def _extract_standalone_python(
+        cls,
+        archive_path: Path,
+        build_python_dir: Path,
+        standalone_version: str,
+    ) -> None:
+        """解压 standalone python tarball 并提升内层目录到 build_python_dir 根.
+
+        解压后结构：``build_python_dir/cpython-<ver>+<tag>-x86_64-pc-windows-msvc-install_only/python/python.exe``
+        需将内层 ``python/`` 目录提升到 ``build_python_dir/python``，清理其他文件。
+
+        Raises:
+            NuitkaError: tarball 损坏或解压失败。
+        """
+        from fspack.packaging.runtime import STANDALONE_RELEASE_TAG
+
         _logger.info("解压 standalone python 到 %s", build_python_dir)
         try:
             with tarfile.open(archive_path, "r:gz") as tf:
@@ -230,12 +267,6 @@ class NuitkaCompiler:
 
         # 删除 tarball 节省空间
         archive_path.unlink(missing_ok=True)
-
-        if not py_exe.is_file():
-            raise NuitkaError(f"standalone python 解压后未找到 {py_exe}，请检查缓存目录 {build_python_dir}")
-
-        stage.set_detail(f"python {standalone_version} 安装完成")
-        return py_exe
 
     @staticmethod
     def _nuitka_cache_dir(cache_root: Path, py_version: str) -> Path:
@@ -500,7 +531,7 @@ class NuitkaCompiler:
         return nuitka_ver
 
     @classmethod
-    def compile_src(  # noqa: PLR0912, PLR0913
+    def compile_src(  # noqa: PLR0913
         cls,
         src_dir: Path,
         runtime_dir: Path,
@@ -552,16 +583,9 @@ class NuitkaCompiler:
             entry_rels: 入口文件相对 ``src_dir`` 的 POSIX 路径集合（如 ``{"snake.py"}``）。
                 这些文件不编译不删除，保留 ``.py`` 供 ``runpy.run_path()`` 调用。
         """
-        # 优先用 standalone python（完整环境），回退到 runtime python（Linux 已是 standalone）
-        if build_python_exe is not None and build_python_exe.is_file():
-            py_exe = build_python_exe
-            _logger.info("用 standalone python 运行 nuitka: %s", py_exe)
-        else:
-            py_exe = cls._runtime_python(runtime_dir, py_version, target)
-            if not py_exe.is_file():
-                _logger.warning("Nuitka 编译跳过: runtime python 未就绪 %s", py_exe)
-                stage.set_detail("runtime python 未就绪，跳过")
-                return
+        py_exe = cls._resolve_compile_python(build_python_exe, runtime_dir, py_version, target, stage)
+        if py_exe is None:
+            return
 
         if not cls._is_nuitka_cached(nuitka_cache):
             _logger.warning(
@@ -571,103 +595,164 @@ class NuitkaCompiler:
             stage.set_detail("nuitka 未安装，跳过（回退到 .pyc 模式）")
             return
 
-        # 收集 .py 文件时排除：
-        # 1. Nuitka 残留的 <name>.build/ 目录：--remove-output 只在编译成功时清理，
-        #    失败时残留。下次构建若不排除会扫到 scons-debug.py 等产物并尝试编译。
-        # 2. __init__.py：包标识文件通常为空或仅含 import，编译为 .pyd 无收益且
-        #    增加 subprocess 开销。.py 保留作包标识（PEP 420），.pyc 预编译提供
-        #    字节码优化。跳过后 compiled_files 不含 __init__.py，删除循环天然跳过。
+        py_files = cls._collect_py_files(src_dir, entry_rels)
+        if not py_files:
+            stage.set_detail("无 .py 文件可编译")
+            return
+
+        bootstrap_script = cls._create_bootstrap_script(nuitka_cache)
+        try:
+            compiled_files, failed = cls._compile_files(py_exe, bootstrap_script, py_files, stage)
+        finally:
+            shutil.rmtree(bootstrap_script.parent, ignore_errors=True)
+
+        stripped = cls._strip_compiled_sources(compiled_files, stage)
+        compiled = len(compiled_files)
+        if failed:
+            stage.set_detail(f"编译 {compiled} 个，失败 {failed} 个，剥离 {stripped} 个 .py")
+        else:
+            stage.set_detail(f"编译 {compiled} 个，剥离 {stripped} 个 .py")
+
+    @classmethod
+    def _resolve_compile_python(
+        cls,
+        build_python_exe: Path | None,
+        runtime_dir: Path,
+        py_version: str,
+        target: Platform,
+        stage: StageRecorder,
+    ) -> Path | None:
+        """解析编译用 python 路径，优先 standalone，回退 runtime python，未就绪返回 None."""
+        if build_python_exe is not None and build_python_exe.is_file():
+            _logger.info("用 standalone python 运行 nuitka: %s", build_python_exe)
+            return build_python_exe
+        py_exe = cls._runtime_python(runtime_dir, py_version, target)
+        if not py_exe.is_file():
+            _logger.warning("Nuitka 编译跳过: runtime python 未就绪 %s", py_exe)
+            stage.set_detail("runtime python 未就绪，跳过")
+            return None
+        return py_exe
+
+    @staticmethod
+    def _collect_py_files(src_dir: Path, entry_rels: set[str] | None) -> list[Path]:
+        """收集待编译的 .py 文件，排除 Nuitka 残留目录、__init__.py 与入口文件.
+
+        排除规则：
+
+        1. Nuitka 残留的 ``<name>.build/`` 目录：``--remove-output`` 只在编译成功时清理，
+           失败时残留。下次构建若不排除会扫到 scons-debug.py 等产物并尝试编译。
+        2. ``__init__.py``：包标识文件通常为空或仅含 import，编译为 .pyd 无收益且
+           增加 subprocess 开销。.py 保留作包标识（PEP 420），.pyc 预编译提供
+           字节码优化。跳过后 compiled_files 不含 __init__.py，删除循环天然跳过。
+        3. 入口文件（``entry_rels``）：入口包装器用 ``runpy.run_path()`` 显式指定 .py 路径，
+           编译后 .py 被删除会导致 FileNotFoundError。入口文件保留 .py 形态，由 .pyc 优化。
+        """
         py_files = sorted(
             p
             for p in src_dir.rglob("*.py")
             if not any(part.lower().endswith(".build") for part in p.parts) and p.name != "__init__.py"
         )
-        # 入口文件跳过：入口包装器用 runpy.run_path() 显式指定 .py 路径，编译后 .py
-        # 被删除会导致 FileNotFoundError。入口文件保留 .py 形态，由 .pyc 优化。
         if entry_rels:
             py_files = [p for p in py_files if p.relative_to(src_dir).as_posix() not in entry_rels]
-        if not py_files:
-            stage.set_detail("无 .py 文件可编译")
-            return
+        return py_files
 
-        # 用临时脚本文件启动 nuitka（不能用 -c）：
-        # nuitka.utils.ReExecute.reExecuteNuitka 无条件访问 sys.modules["__main__"].__file__
-        # 设置 NUITKA_BINARY_NAME，-c 模式下 __main__ 无 __file__ 会 AttributeError。
-        # 临时脚本让 __main__.__file__ 指向脚本路径，reExecute 能正常工作。
-        # sys.path.insert 注入缓存目录绕过 python3X._pth 对 PYTHONPATH 的限制。
+    @staticmethod
+    def _create_bootstrap_script(nuitka_cache: Path) -> Path:
+        """创建临时 bootstrap 脚本注入 sys.path 调用 nuitka.
+
+        用临时脚本文件启动 nuitka（不能用 ``-c``）：
+        nuitka.utils.ReExecute.reExecuteNuitka 无条件访问 ``sys.modules["__main__"].__file__``
+        设置 NUITKA_BINARY_NAME，``-c`` 模式下 ``__main__`` 无 ``__file__`` 会 AttributeError。
+        临时脚本让 ``__main__.__file__`` 指向脚本路径，reExecute 能正常工作。
+        ``sys.path.insert`` 注入缓存目录绕过 ``python3X._pth`` 对 PYTHONPATH 的限制。
+        """
         bootstrap_dir = Path(tempfile.mkdtemp(prefix="fspack_nuitka_"))
         bootstrap_script = bootstrap_dir / "_nuitka_bootstrap.py"
         bootstrap_script.write_text(
             f"import sys; sys.path.insert(0, r'{nuitka_cache}'); from nuitka.__main__ import main; main()",
             encoding="utf-8",
         )
+        return bootstrap_script
 
-        # Nuitka 编译参数（作为脚本参数传入，进入 sys.argv[1:]）：
-        # --module: 编译为可导入模块（.pyd/.so），不生成独立 exe
-        # --output-dir: 输出目录与源码同目录（保持包结构）
-        # --no-pyi-file: 不生成 .pyi 类型存根（运行时不需要）
-        # --remove-output: 编译后删除临时构建文件（.build/ 目录）
-        # --jobs=1: 限制 C 编译并行度为 1。Nuitka 默认使用全部 CPU 核心，多文件并行编译时
-        #   每个 scons 子进程再启动 gcc，进程数指数级膨胀导致 CPU 卡死。限制为 1 串行编译，
-        #   虽然慢但稳定，避免资源耗尽。
-        # 不需要 --python-for-scons：已用 standalone python（完整环境）运行 nuitka，
-        # scons 自动继承 sys.executable，无需另指定。
-        # 注意：nuitka 4.x 的 --show-progress 已 obsolete 无效；nuitka 的 reExecute 机制
-        # (os._exit 退出子进程 A，Windows close_fds=True 导致子进程 B 不继承 PIPE) 使得
-        # _stream_compile 的 PIPE 捕获不可靠。用心跳线程保证用户看到编译进度。
-        compiled = 0
+    @classmethod
+    def _compile_files(
+        cls,
+        py_exe: Path,
+        bootstrap_script: Path,
+        py_files: list[Path],
+        stage: StageRecorder,
+    ) -> tuple[set[Path], int]:
+        """逐个编译 .py 文件，返回 (成功编译的文件集合, 失败数).
+
+        Nuitka 编译参数（作为脚本参数传入，进入 ``sys.argv[1:]``）：
+
+        - ``--module``：编译为可导入模块（.pyd/.so），不生成独立 exe
+        - ``--output-dir``：输出目录与源码同目录（保持包结构）
+        - ``--no-pyi-file``：不生成 .pyi 类型存根（运行时不需要）
+        - ``--remove-output``：编译后删除临时构建文件（.build/ 目录）
+        - ``--jobs=1``：限制 C 编译并行度为 1。Nuitka 默认使用全部 CPU 核心，多文件并行编译时
+          每个 scons 子进程再启动 gcc，进程数指数级膨胀导致 CPU 卡死。限制为 1 串行编译，
+          虽然慢但稳定，避免资源耗尽。
+
+        不需要 ``--python-for-scons``：已用 standalone python（完整环境）运行 nuitka，
+        scons 自动继承 ``sys.executable``，无需另指定。
+        注意：nuitka 4.x 的 ``--show-progress`` 已 obsolete 无效；nuitka 的 reExecute 机制
+        (os._exit 退出子进程 A，Windows close_fds=True 导致子进程 B 不继承 PIPE) 使得
+        _stream_compile 的 PIPE 捕获不可靠。用心跳线程保证用户看到编译进度。
+        """
+        compiled_files: set[Path] = set()
         failed = 0
         total = len(py_files)
         # 记录成功编译的文件：仅这些 .py 可安全删除（.pyd 已生成）。
         # 失败的 .py 保留，让运行时回退到 .pyc 加载，避免编译失败导致 dist/src 无可用代码。
-        compiled_files: set[Path] = set()
-        try:
-            for idx, py_file in enumerate(py_files, 1):
-                _logger.info("编译 [%d/%d] %s", idx, total, py_file.name)
-                # 心跳线程：每 10 秒输出编译耗时，避免单文件编译数十秒无输出被误认为卡死。
-                # nuitka reExecute 的子进程 B 输出可能不到 PIPE，心跳是唯一的进度反馈。
-                stop_heartbeat = threading.Event()
-                start_ts = time.monotonic()
+        for idx, py_file in enumerate(py_files, 1):
+            _logger.info("编译 [%d/%d] %s", idx, total, py_file.name)
+            # 心跳线程：每 10 秒输出编译耗时，避免单文件编译数十秒无输出被误认为卡死。
+            # nuitka reExecute 的子进程 B 输出可能不到 PIPE，心跳是唯一的进度反馈。
+            stop_heartbeat = threading.Event()
+            start_ts = time.monotonic()
 
-                def _heartbeat(_stop: threading.Event = stop_heartbeat, _start: float = start_ts) -> None:
-                    while not _stop.wait(_HEARTBEAT_INTERVAL):
-                        elapsed = int(time.monotonic() - _start)
-                        _logger.info("Nuitka 编译中... 已耗时 %ds", elapsed)
+            def _heartbeat(_stop: threading.Event = stop_heartbeat, _start: float = start_ts) -> None:
+                while not _stop.wait(_HEARTBEAT_INTERVAL):
+                    elapsed = int(time.monotonic() - _start)
+                    _logger.info("Nuitka 编译中... 已耗时 %ds", elapsed)
 
-                hb_thread = threading.Thread(target=_heartbeat, daemon=True)
-                hb_thread.start()
-                try:
-                    returncode, _stdout, _stderr = cls._stream_compile(
-                        [
-                            str(py_exe),
-                            str(bootstrap_script),
-                            "--module",
-                            f"--output-dir={py_file.parent}",
-                            "--no-pyi-file",
-                            "--remove-output",
-                            # --jobs=1：必须用 = 形式传参。Nuitka 4.x 的 argparse 配置要求
-                            # --jobs=N 格式，用空格分隔（"--jobs", "1"）会报错：
-                            # "The '--jobs' option requires an argument with '--jobs='."
-                            "--jobs=1",
-                            str(py_file),
-                        ]
-                    )
-                finally:
-                    stop_heartbeat.set()
-                    hb_thread.join(timeout=1.0)
-                if returncode == 0:
-                    compiled += 1
-                    compiled_files.add(py_file)
-                    stage.processed()
-                else:
-                    failed += 1
-                    _logger.warning("Nuitka 编译失败 %s（退出码 %s），详见上方输出", py_file, returncode)
-        finally:
-            shutil.rmtree(bootstrap_dir, ignore_errors=True)
+            hb_thread = threading.Thread(target=_heartbeat, daemon=True)
+            hb_thread.start()
+            try:
+                returncode, _stdout, _stderr = cls._stream_compile(
+                    [
+                        str(py_exe),
+                        str(bootstrap_script),
+                        "--module",
+                        f"--output-dir={py_file.parent}",
+                        "--no-pyi-file",
+                        "--remove-output",
+                        # --jobs=1：必须用 = 形式传参。Nuitka 4.x 的 argparse 配置要求
+                        # --jobs=N 格式，用空格分隔（"--jobs", "1"）会报错：
+                        # "The '--jobs' option requires an argument with '--jobs='."
+                        "--jobs=1",
+                        str(py_file),
+                    ]
+                )
+            finally:
+                stop_heartbeat.set()
+                hb_thread.join(timeout=1.0)
+            if returncode == 0:
+                compiled_files.add(py_file)
+                stage.processed()
+            else:
+                failed += 1
+                _logger.warning("Nuitka 编译失败 %s（退出码 %s），详见上方输出", py_file, returncode)
+        return compiled_files, failed
 
-        # 仅删除成功编译的 .py 源码（.pyd 已生成可替代）。
-        # 失败的 .py 必须保留：运行时可回退到 .pyc 加载，避免编译失败导致 dist/src 无可用代码。
-        # __init__.py 不在 compiled_files 中（收集时已跳过），无需额外检查。
+    @staticmethod
+    def _strip_compiled_sources(compiled_files: set[Path], stage: StageRecorder) -> int:
+        """删除成功编译的 .py 源码（.pyd 已生成可替代），返回删除数.
+
+        失败的 .py 必须保留：运行时可回退到 .pyc 加载，避免编译失败导致 dist/src 无可用代码。
+        ``__init__.py`` 不在 ``compiled_files`` 中（收集时已跳过），无需额外检查。
+        """
         stripped = 0
         for py_file in compiled_files:
             try:
@@ -677,13 +762,7 @@ class NuitkaCompiler:
                 _logger.warning("删除 .py 失败 %s: %s", py_file, e)
         if stripped:
             stage.skip(stripped)
-
-        # Nuitka 临时构建目录由 --remove-output 自动清理，无需额外处理
-
-        if failed:
-            stage.set_detail(f"编译 {compiled} 个，失败 {failed} 个，剥离 {stripped} 个 .py")
-        else:
-            stage.set_detail(f"编译 {compiled} 个，剥离 {stripped} 个 .py")
+        return stripped
 
     @staticmethod
     def _stamp_path(dist_dir: Path) -> Path:

@@ -26,20 +26,28 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-v", "--verbose", action="store_true", help="显示 DEBUG 级别日志")
 
     sub = parser.add_subparsers(dest="command", metavar="<command>")
+    _add_build_subparser(sub)
+    _add_run_subparser(sub)
+    _add_clean_subparser(sub)
+    _add_package_subparser(sub)
+    return parser
 
-    p_build = sub.add_parser("build", aliases=["b"], help="打包项目")
-    p_build.add_argument("project", nargs="?", default=".", help="项目目录（默认当前目录）")
-    p_build.add_argument("--mirror", default=None, choices=list(MIRRORS), help="镜像源")
-    p_build.add_argument("--py-version", default=None, help="embed python 版本，如 3.11.9")
-    p_build.add_argument("--target", default=None, choices=["windows", "linux"], help="目标平台（默认当前平台）")
-    p_build.add_argument(
+
+def _add_build_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """添加 build/b 子命令：打包项目."""
+    p = sub.add_parser("build", aliases=["b"], help="打包项目")
+    p.add_argument("project", nargs="?", default=".", help="项目目录（默认当前目录）")
+    p.add_argument("--mirror", default=None, choices=list(MIRRORS), help="镜像源")
+    p.add_argument("--py-version", default=None, help="embed python 版本，如 3.11.9")
+    p.add_argument("--target", default=None, choices=["windows", "linux"], help="目标平台（默认当前平台）")
+    p.add_argument(
         "--keep-module",
         action="append",
         default=[],
         dest="keep_modules",
         help="显式保留子模块（如 PySide2.QtGui），可重复指定",
     )
-    p_build.add_argument(
+    p.add_argument(
         "--icon",
         default=None,
         help=(
@@ -47,22 +55,22 @@ def build_parser() -> argparse.ArgumentParser:
             "未指定时按 [tool.fspack] icon > 自动搜索 favicon.* > 默认 app.ico 解析"
         ),
     )
-    p_build.add_argument(
+    p.add_argument(
         "--no-stdlib-trim",
         action="store_true",
         help="关闭标准库精简（默认剥离 Linux standalone 的 test/ensurepip/idlelib 等无用模块）",
     )
-    p_build.add_argument(
+    p.add_argument(
         "--no-pyc",
         action="store_true",
         help="关闭字节码预编译（默认预编译 src+site-packages 为 .pyc 加速首次启动）",
     )
-    p_build.add_argument(
+    p.add_argument(
         "--pyc-strip",
         action="store_true",
         help="剥离非 __init__.py 的 .py 源码（仅保留 .pyc，需配合预编译；保留包标识避免命名空间包问题）",
     )
-    p_build.add_argument(
+    p.add_argument(
         "--pyc-optimize",
         type=int,
         default=None,
@@ -72,12 +80,12 @@ def build_parser() -> argparse.ArgumentParser:
             "2=剥离 assert+docstring（-OO，体积减 5-15%%，启动提速 5-10%%，默认 2）"
         ),
     )
-    p_build.add_argument(
+    p.add_argument(
         "--no-site",
         action="store_true",
         help="禁用 site.py 加载（_pth 省略 import site 行，节省 ~20-30ms 启动时间）",
     )
-    p_build.add_argument(
+    p.add_argument(
         "--nuitka",
         action="store_true",
         help=(
@@ -86,26 +94,35 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
-    p_run = sub.add_parser("run", aliases=["r"], help="运行已打包项目")
-    p_run.add_argument("project", nargs="?", default=".", help="项目目录")
-    p_run.add_argument("rest", nargs="*", default=[], help="透传给目标程序的参数（以 -- 分隔）")
-    p_run.add_argument("--debug", action="store_true", help="用 embed python 直跑入口脚本（绕过 GUI loader，输出可见）")
-    p_run.add_argument(
+
+def _add_run_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """添加 run/r 子命令：运行已打包项目."""
+    p = sub.add_parser("run", aliases=["r"], help="运行已打包项目")
+    p.add_argument("project", nargs="?", default=".", help="项目目录")
+    p.add_argument("rest", nargs="*", default=[], help="透传给目标程序的参数（以 -- 分隔）")
+    p.add_argument("--debug", action="store_true", help="用 embed python 直跑入口脚本（绕过 GUI loader，输出可见）")
+    p.add_argument(
         "--entry",
         default=None,
         help="多入口项目指定要运行的入口名（与 [tool.fspack.entries] 键匹配）",
     )
 
-    p_clean = sub.add_parser("clean", aliases=["c"], help="清理 dist/")
-    p_clean.add_argument("project", nargs="?", default=".", help="项目目录")
 
-    p_pkg = sub.add_parser("package", aliases=["p"], help="生成发行包")
-    p_pkg.add_argument("project", nargs="?", default=".", help="项目目录")
-    p_pkg.add_argument("--mirror", default=None, choices=list(MIRRORS), help="镜像源")
-    p_pkg.add_argument("--py-version", default=None, help="embed python 版本，如 3.11.9")
-    p_pkg.add_argument("--target", default=None, choices=["windows", "linux"], help="目标平台（默认当前平台）")
-    p_pkg.add_argument("--no-build", action="store_true", help="跳过重建，直接打包已有 dist")
-    p_pkg.add_argument(
+def _add_clean_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """添加 clean/c 子命令：清理 dist/."""
+    p = sub.add_parser("clean", aliases=["c"], help="清理 dist/")
+    p.add_argument("project", nargs="?", default=".", help="项目目录")
+
+
+def _add_package_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """添加 package/p 子命令：生成发行包."""
+    p = sub.add_parser("package", aliases=["p"], help="生成发行包")
+    p.add_argument("project", nargs="?", default=".", help="项目目录")
+    p.add_argument("--mirror", default=None, choices=list(MIRRORS), help="镜像源")
+    p.add_argument("--py-version", default=None, help="embed python 版本，如 3.11.9")
+    p.add_argument("--target", default=None, choices=["windows", "linux"], help="目标平台（默认当前平台）")
+    p.add_argument("--no-build", action="store_true", help="跳过重建，直接打包已有 dist")
+    p.add_argument(
         "--format",
         default="auto",
         choices=["auto", "zip", "nsis", "tar.gz", "deb", "all"],
@@ -114,7 +131,6 @@ def build_parser() -> argparse.ArgumentParser:
             "zip=跨平台便携包，nsis=Windows 安装包，tar.gz/deb=Linux，all=平台全部"
         ),
     )
-    return parser
 
 
 def main(argv: list[str] | None = None) -> None:

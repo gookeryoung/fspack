@@ -75,12 +75,8 @@ def download_wheels(  # noqa: PLR0913
     """
     cache_dir.mkdir(parents=True, exist_ok=True)
 
-    # 预过滤 python_version 环境标记
-    filtered = _filter_by_python_version(packages, py_version)
-    if len(filtered) < len(packages):
-        _logger.info("按 python_version 标记过滤: 保留 %d，跳过 %d 个", len(filtered), len(packages) - len(filtered))
+    filtered = _prefilter_by_python_version(packages, py_version)
     if not filtered:
-        _logger.info("所有依赖被 python_version 标记过滤，跳过下载")
         return []
 
     # 尝试读取依赖解析缓存，命中则跳过 pip 调用
@@ -95,11 +91,44 @@ def download_wheels(  # noqa: PLR0913
         return cached_wheels
 
     py = _find_pip_python()
+    base_args = _build_pip_download_args(py, py_version, platform_tags, cache_dir)
+
+    _logger.info("下载依赖 wheel: %s", " ".join(filtered))
+    before = {f.name for f in cache_dir.glob("*.whl")}
+
+    result = _run_pip_download(filtered, base_args, py, py_version, platform_tags, pypi_index, cache_dir)
+
+    wheel_names, used_fallback = _parse_wheel_names(result.stdout, cache_dir)
+    wheels = [cache_dir / name for name in wheel_names if (cache_dir / name).is_file()]
+    if wheels and not used_fallback:
+        _save_deps_cache(cache_dir, deps_key, wheels)
+    if stage is not None:
+        _record_wheel_stage(stage, wheels, before)
+    return wheels
+
+
+def _prefilter_by_python_version(packages: tuple[str, ...] | list[str], py_version: str) -> list[str]:
+    """按目标 Python 版本过滤 ``python_version`` 环境标记，返回保留的包列表."""
+    filtered = _filter_by_python_version(packages, py_version)
+    if len(filtered) < len(packages):
+        _logger.info("按 python_version 标记过滤: 保留 %d，跳过 %d 个", len(filtered), len(packages) - len(filtered))
+    if not filtered:
+        _logger.info("所有依赖被 python_version 标记过滤，跳过下载")
+    return filtered
+
+
+def _build_pip_download_args(
+    py: str,
+    py_version: str,
+    platform_tags: Sequence[str],
+    cache_dir: Path,
+) -> list[str]:
+    """构造 ``pip download`` 基础参数（不含 ``-i index`` 与包名）."""
     major, minor = py_version.split(".")[:2]
     platform_args: list[str] = []
     for tag in platform_tags:
         platform_args.extend(["--platform", tag])
-    base_args: list[str] = [
+    return [
         py,
         "-m",
         "pip",
@@ -118,42 +147,54 @@ def download_wheels(  # noqa: PLR0913
         "--only-binary=:all:",
     ]
 
-    _logger.info("下载依赖 wheel: %s", " ".join(filtered))
-    before = {f.name for f in cache_dir.glob("*.whl")}
 
+def _run_pip_download(  # noqa: PLR0913
+    filtered: list[str],
+    base_args: list[str],
+    py: str,
+    py_version: str,
+    platform_tags: Sequence[str],
+    pypi_index: str,
+    cache_dir: Path,
+) -> subprocess.CompletedProcess[str]:
+    """执行 pip download：先用 ``--no-index`` 离线解析，失败回退到在线解析下载."""
     # 先用 --no-index 从本地缓存解析（离线模式），命中则跳过网络查询；
     # 缓存不完整或条件依赖未满足时回退到在线解析+下载
     result = _run_pip([*base_args, "--no-index", *filtered], f"检查缓存 {len(filtered)} 个依赖", suppress_error=True)
     if result is None:
         _logger.info("缓存解析失败，回退到在线解析下载")
-        result = _download_online(filtered, base_args, py, py_version, platform_tags, pypi_index, cache_dir)
-    else:
-        _logger.info("缓存解析成功，跳过网络查询")
-    assert result is not None  # 回退路径 suppress_error=False，要么返回结果要么抛异常
+        return _download_online(filtered, base_args, py, py_version, platform_tags, pypi_index, cache_dir)
+    _logger.info("缓存解析成功，跳过网络查询")
+    return result
 
-    wheel_names = _parse_pip_download_wheels(result.stdout)
-    used_fallback = False
-    if not wheel_names:
-        _logger.warning("pip download 输出解析失败，回退到目录扫描")
-        wheel_names = sorted(f.name for f in cache_dir.glob("*.whl"))
-        # 目录扫描可能包含其他项目遗留的 wheel，不可作为本 deps_key 的缓存，
-        # 否则下次命中缓存会返回错误依赖列表（如 requests 命中却返回 pygame wheel）。
-        used_fallback = True
 
-    wheels = [cache_dir / name for name in wheel_names if (cache_dir / name).is_file()]
-    if wheels and not used_fallback:
-        _save_deps_cache(cache_dir, deps_key, wheels)
-    if stage is not None:
-        new_wheels = [w for w in wheels if w.name not in before]
-        existing_wheels = [w for w in wheels if w.name in before]
-        if new_wheels:
-            stage.add_bytes(sum(w.stat().st_size for w in new_wheels))
-        if existing_wheels:
-            stage.hit_cache(len(existing_wheels))
-        stage.processed(len(wheels))
-        cache_status = "缓存命中" if not new_wheels else f"新增 {len(new_wheels)}"
-        stage.set_detail(f"{len(wheels)} wheels, {cache_status}")
-    return wheels
+def _parse_wheel_names(stdout: str, cache_dir: Path) -> tuple[list[str], bool]:
+    """解析 pip download stdout 获取 wheel 文件名列表.
+
+    Returns:
+        (wheel 文件名列表, 是否回退到目录扫描). 回退扫描时不可作为 deps_key 缓存，
+        否则下次命中缓存会返回错误依赖列表（如 requests 命中却返回 pygame wheel）。
+
+    """
+    wheel_names = _parse_pip_download_wheels(stdout)
+    if wheel_names:
+        return wheel_names, False
+    _logger.warning("pip download 输出解析失败，回退到目录扫描")
+    # 目录扫描可能包含其他项目遗留的 wheel，不可作为本 deps_key 的缓存
+    return sorted(f.name for f in cache_dir.glob("*.whl")), True
+
+
+def _record_wheel_stage(stage: StageRecorder, wheels: list[Path], before: set[str]) -> None:
+    """回写 wheel 下载阶段统计到 stage：新增字节数、缓存命中数、总数."""
+    new_wheels = [w for w in wheels if w.name not in before]
+    existing_wheels = [w for w in wheels if w.name in before]
+    if new_wheels:
+        stage.add_bytes(sum(w.stat().st_size for w in new_wheels))
+    if existing_wheels:
+        stage.hit_cache(len(existing_wheels))
+    stage.processed(len(wheels))
+    cache_status = "缓存命中" if not new_wheels else f"新增 {len(new_wheels)}"
+    stage.set_detail(f"{len(wheels)} wheels, {cache_status}")
 
 
 def _find_pip_python() -> str:
