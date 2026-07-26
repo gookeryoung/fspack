@@ -1023,7 +1023,7 @@ def test_download_online_uv_resolved_uses_no_deps(tmp_path: Path, monkeypatch: p
     monkeypatch.setattr("fspack.packaging.wheels._find_uv", lambda: "/usr/bin/uv")
     monkeypatch.setattr(
         "fspack.packaging.wheels._resolve_with_uv",
-        lambda pkgs, pv, pt, idx: ["numpy==1.24.0", "requests==2.31.0"],
+        lambda pkgs, pv, pt, idx, **kw: ["numpy==1.24.0", "requests==2.31.0"],
     )
     captured: dict[str, list[str]] = {}
 
@@ -1050,7 +1050,9 @@ def test_download_online_uv_fails_falls_back_to_pip(tmp_path: Path, monkeypatch:
     monkeypatch.setattr("fspack.packaging.wheels._find_uv", lambda: "/usr/bin/uv")
     monkeypatch.setattr(
         "fspack.packaging.wheels._resolve_with_uv",
-        lambda pkgs, pv, pt, idx: (_ for _ in ()).throw(subprocess.CalledProcessError(1, "uv", stderr="fail")),
+        lambda pkgs, pv, pt, idx, **kw: (_ for _ in ()).throw(
+            subprocess.CalledProcessError(1, "uv", stderr="fail")
+        ),
     )
     captured: dict[str, list[str]] = {}
 
@@ -1133,7 +1135,7 @@ def test_download_wheels_uv_path_integration(tmp_path: Path, monkeypatch: pytest
     monkeypatch.setattr("fspack.packaging.wheels._find_uv", lambda: "/usr/bin/uv")
     monkeypatch.setattr(
         "fspack.packaging.wheels._resolve_with_uv",
-        lambda pkgs, pv, pt, idx: ["numpy==1.24.0"],
+        lambda pkgs, pv, pt, idx, **kw: ["numpy==1.24.0"],
     )
 
     # --no-index 走 subprocess.run 失败，pip --no-deps 走 _stream_subprocess 成功
@@ -1161,7 +1163,7 @@ def test_download_online_uv_sdist_fallback(tmp_path: Path, monkeypatch: pytest.M
     monkeypatch.setattr("fspack.packaging.wheels._find_uv", lambda: "/usr/bin/uv")
     monkeypatch.setattr(
         "fspack.packaging.wheels._resolve_with_uv",
-        lambda pkgs, pv, pt, idx: ["win-unicode-console==0.5"],
+        lambda pkgs, pv, pt, idx, **kw: ["win-unicode-console==0.5"],
     )
     call_count = {"pip_download": 0, "pip_wheel": 0}
 
@@ -1406,3 +1408,316 @@ def test_run_pip_stream_file_not_found_raises_dependency_error(tmp_path: Path, m
     )
     with pytest.raises(DependencyError, match="未找到 pip"):
         _run_pip(["/missing/pip"], "label", stream=True)
+
+
+# ---------- 私有包源（extra_index_urls / find_links）----------
+
+
+def test_deps_cache_key_includes_private_sources() -> None:
+    """私有包源变化时缓存键不同，避免误命中旧缓存."""
+    k1 = _deps_cache_key(("numpy",), "3.11.9", ("win_amd64",))
+    k2 = _deps_cache_key(("numpy",), "3.11.9", ("win_amd64",), ("https://pypi.company.com/simple/",))
+    k3 = _deps_cache_key(("numpy",), "3.11.9", ("win_amd64",), (), ("./wheels",))
+    k4 = _deps_cache_key(("numpy",), "3.11.9", ("win_amd64",), ("https://pypi.company.com/simple/",), ("./wheels",))
+    assert k1 != k2, "extra_index_urls 变化应产生不同缓存键"
+    assert k1 != k3, "find_links 变化应产生不同缓存键"
+    assert k1 != k4, "私有包源变化应产生不同缓存键"
+    assert k2 != k4, "find_links 增减应产生不同缓存键"
+
+
+def test_deps_cache_key_private_sources_order_independent() -> None:
+    """私有包源顺序不影响缓存键（list 序列化顺序敏感，但同顺序应稳定）."""
+    k1 = _deps_cache_key(("numpy",), "3.11.9", ("win_amd64",), ("a", "b"), ("c",))
+    k2 = _deps_cache_key(("numpy",), "3.11.9", ("win_amd64",), ("a", "b"), ("c",))
+    assert k1 == k2
+
+
+def test_resolve_with_uv_passes_extra_index_urls(monkeypatch: pytest.MonkeyPatch) -> None:
+    """uv pip compile 命令含 --extra-index-url 参数."""
+    monkeypatch.setattr("fspack.packaging.wheels._find_uv", lambda: "/usr/bin/uv")
+    captured: dict[str, list[str]] = {}
+
+    def fake_run(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, stdout="pkg==1.0\n", stderr="")
+
+    monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
+    _resolve_with_uv(
+        ("pkg",),
+        "3.11.9",
+        ("win_amd64",),
+        "https://idx/simple",
+        extra_index_urls=("https://pypi.company.com/simple/", "https://mirror.example.com/pypi"),
+    )
+    cmd = captured["cmd"]
+    assert cmd.count("--extra-index-url") == 2
+    assert "https://pypi.company.com/simple/" in cmd
+    assert "https://mirror.example.com/pypi" in cmd
+
+
+def test_resolve_with_uv_passes_find_links(monkeypatch: pytest.MonkeyPatch) -> None:
+    """uv pip compile 命令含 --find-links 参数."""
+    monkeypatch.setattr("fspack.packaging.wheels._find_uv", lambda: "/usr/bin/uv")
+    captured: dict[str, list[str]] = {}
+
+    def fake_run(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, stdout="pkg==1.0\n", stderr="")
+
+    monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
+    _resolve_with_uv(
+        ("pkg",),
+        "3.11.9",
+        ("win_amd64",),
+        "https://idx/simple",
+        find_links=("./wheels", "https://example.com/wheels/"),
+    )
+    cmd = captured["cmd"]
+    assert cmd.count("--find-links") == 2
+    assert "./wheels" in cmd
+    assert "https://example.com/wheels/" in cmd
+
+
+def test_resolve_with_uv_no_private_sources_omits_args(monkeypatch: pytest.MonkeyPatch) -> None:
+    """无私有包源时 uv 命令不含 --extra-index-url/--find-links."""
+    monkeypatch.setattr("fspack.packaging.wheels._find_uv", lambda: "/usr/bin/uv")
+    captured: dict[str, list[str]] = {}
+
+    def fake_run(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, stdout="pkg==1.0\n", stderr="")
+
+    monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
+    _resolve_with_uv(("pkg",), "3.11.9", ("win_amd64",), "https://idx/simple")
+    cmd = captured["cmd"]
+    assert "--extra-index-url" not in cmd
+    assert "--find-links" not in cmd
+
+
+def test_download_online_uv_resolved_passes_extra_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """uv 解析成功路径：pip download --no-deps 命令含私有包源参数."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setattr("fspack.packaging.wheels._find_uv", lambda: "/usr/bin/uv")
+
+    def fake_resolve(pkgs, pv, pt, idx, extra_index_urls=(), find_links=()):  # noqa: PLR0913
+        # 验证 uv 解析也收到私有包源
+        assert extra_index_urls == ("https://pypi.company.com/simple/",)
+        assert find_links == ("./wheels",)
+        return ["numpy==1.24.0"]
+
+    monkeypatch.setattr("fspack.packaging.wheels._resolve_with_uv", fake_resolve)
+    captured: dict[str, list[str]] = {}
+
+    def fake_stream(cmd: list[str]) -> _Completed:
+        captured["cmd"] = cmd
+        return _Completed()
+
+    monkeypatch.setattr("fspack.packaging.wheels._stream_subprocess", fake_stream)
+    base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
+    _download_online(
+        ["numpy>=1.0"],
+        base_args,
+        "/py/python",
+        "3.11.9",
+        ("win_amd64",),
+        "https://idx/simple",
+        cache,
+        extra_index_urls=("https://pypi.company.com/simple/",),
+        find_links=("./wheels",),
+    )
+    cmd = captured["cmd"]
+    assert "--extra-index-url" in cmd
+    assert "https://pypi.company.com/simple/" in cmd
+    assert "--find-links" in cmd
+    assert "./wheels" in cmd
+
+
+def test_download_online_pip_full_passes_extra_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """uv 不可用时 pip 完整解析+下载命令含私有包源参数."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setattr("fspack.packaging.wheels._find_uv", lambda: None)
+    captured: dict[str, list[str]] = {}
+
+    def fake_stream(cmd: list[str]) -> _Completed:
+        captured["cmd"] = cmd
+        return _Completed()
+
+    monkeypatch.setattr("fspack.packaging.wheels._stream_subprocess", fake_stream)
+    base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
+    _download_online(
+        ["numpy"],
+        base_args,
+        "/py/python",
+        "3.11.9",
+        ("win_amd64",),
+        "https://idx/simple",
+        cache,
+        extra_index_urls=("https://pypi.company.com/simple/",),
+        find_links=("./wheels",),
+    )
+    cmd = captured["cmd"]
+    assert "--extra-index-url" in cmd
+    assert "https://pypi.company.com/simple/" in cmd
+    assert "--find-links" in cmd
+    assert "./wheels" in cmd
+
+
+def test_download_online_sdist_fallback_passes_extra_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """sdist 回退路径：pip wheel 命令含私有包源参数."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setattr("fspack.packaging.wheels._find_uv", lambda: None)
+    call_count = {"index_download": 0, "pip_wheel": 0}
+    whl_name = "odfpy-1.4.1-py3-none-any.whl"
+    pip_wheel_cmds: list[list[str]] = []
+
+    class _Result:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_stream(cmd: list[str]) -> _Result:
+        if "wheel" in cmd and "--no-deps" in cmd:
+            call_count["pip_wheel"] += 1
+            pip_wheel_cmds.append(cmd)
+            (cache / whl_name).write_bytes(b"odfpy")
+            return _Result()
+        call_count["index_download"] += 1
+        if call_count["index_download"] == 1:
+            raise subprocess.CalledProcessError(
+                1,
+                cmd,
+                stderr="ERROR: Could not find a version that satisfies the requirement odfpy>=1.4.1 (from versions: none)\n"
+                "ERROR: No matching distribution found for odfpy>=1.4.1",
+            )
+        r = _Result()
+        r.stdout = f"Saved {whl_name}\n"
+        return r
+
+    monkeypatch.setattr("fspack.packaging.wheels._stream_subprocess", fake_stream)
+    base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
+    _download_online(
+        ["odfpy>=1.4.1"],
+        base_args,
+        "/py/python",
+        "3.8.10",
+        ("win_amd64",),
+        "https://idx/simple",
+        cache,
+        extra_index_urls=("https://pypi.company.com/simple/",),
+        find_links=("./wheels",),
+    )
+    assert call_count["index_download"] == 2  # 第一次失败，第二次成功
+    assert call_count["pip_wheel"] == 1  # sdist 构建一次
+    assert len(pip_wheel_cmds) == 1
+    wheel_cmd = pip_wheel_cmds[0]
+    assert "--extra-index-url" in wheel_cmd
+    assert "https://pypi.company.com/simple/" in wheel_cmd
+    assert "--find-links" in wheel_cmd
+    assert "./wheels" in wheel_cmd
+
+
+def test_build_sdist_wheels_with_extra_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """pip wheel --no-deps 命令含私有包源参数."""
+    captured: list[list[str]] = []
+
+    def fake_stream(cmd: list[str]) -> _Completed:
+        captured.append(cmd)
+        return _Completed()
+
+    monkeypatch.setattr("fspack.packaging.wheels._stream_subprocess", fake_stream)
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    _build_sdist_wheels(
+        ["odfpy>=1.4.1"],
+        "/py/python",
+        "https://idx/simple",
+        cache,
+        extra_index_urls=("https://pypi.company.com/simple/",),
+        find_links=("./wheels",),
+    )
+    assert len(captured) == 1
+    cmd = captured[0]
+    assert "--extra-index-url" in cmd
+    assert "https://pypi.company.com/simple/" in cmd
+    assert "--find-links" in cmd
+    assert "./wheels" in cmd
+
+
+def test_build_sdist_wheels_no_extra_sources_omits_args(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """无私有包源时 pip wheel 命令不含 --extra-index-url/--find-links."""
+    captured: list[list[str]] = []
+
+    def fake_stream(cmd: list[str]) -> _Completed:
+        captured.append(cmd)
+        return _Completed()
+
+    monkeypatch.setattr("fspack.packaging.wheels._stream_subprocess", fake_stream)
+    _build_sdist_wheels(["odfpy>=1.4.1"], "/py/python", "https://idx/simple", tmp_path / "cache")
+    cmd = captured[0]
+    assert "--extra-index-url" not in cmd
+    assert "--find-links" not in cmd
+
+
+def test_download_wheels_passes_extra_sources_to_pip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """download_wheels 顶层接口透传私有包源给 pip download（回退路径）."""
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        calls.append(cmd)
+        raise subprocess.CalledProcessError(1, "pip", stderr="not in cache")
+
+    def fake_stream(cmd: list[str]) -> _Completed:
+        calls.append(cmd)
+        return _Completed()
+
+    monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.wheels._stream_subprocess", fake_stream)
+    monkeypatch.setattr("fspack.packaging.wheels._find_pip_python", lambda: "/py/python")
+    monkeypatch.setattr("fspack.packaging.wheels._find_uv", lambda: None)
+    download_wheels(
+        ("numpy",),
+        "3.11.9",
+        "https://idx/simple",
+        tmp_path / "cache",
+        extra_index_urls=("https://pypi.company.com/simple/",),
+        find_links=("./wheels",),
+    )
+    # 回退路径的 pip download 命令应含私有包源参数
+    pip_download_cmd = next(c for c in calls if "download" in c and "-i" in c)
+    assert "--extra-index-url" in pip_download_cmd
+    assert "https://pypi.company.com/simple/" in pip_download_cmd
+    assert "--find-links" in pip_download_cmd
+    assert "./wheels" in pip_download_cmd
+
+
+def test_download_wheels_cache_miss_when_private_sources_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """私有包源变化时依赖解析缓存不命中，重新调用 pip."""
+    call_count = {"pip_run": 0}
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        call_count["pip_run"] += 1
+        return _Completed()
+
+    monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.wheels._find_pip_python", lambda: "/py/python")
+    cache = tmp_path / "cache"
+    # 第一次：无私有包源
+    download_wheels(("numpy",), "3.11.9", "https://idx/simple", cache)
+    first_count = call_count["pip_run"]
+    assert first_count >= 1
+    # 第二次：添加私有包源，缓存键不同，应重新调用 pip
+    download_wheels(
+        ("numpy",),
+        "3.11.9",
+        "https://idx/simple",
+        cache,
+        extra_index_urls=("https://pypi.company.com/simple/",),
+    )
+    assert call_count["pip_run"] > first_count, "私有包源变化时应跳过缓存重新调用 pip"

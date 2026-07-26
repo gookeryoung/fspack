@@ -46,6 +46,8 @@ def download_wheels(  # noqa: PLR0913
     platform_tags: Sequence[str] = ("win_amd64",),
     *,
     stage: StageRecorder | None = None,
+    extra_index_urls: Sequence[str] = (),
+    find_links: Sequence[str] = (),
 ) -> list[Path]:
     """用 dev python 的 pip 下载指定平台 wheel 到 cache_dir，返回本次依赖的 wheel 路径列表。
 
@@ -72,6 +74,11 @@ def download_wheels(  # noqa: PLR0913
     （uv venv 默认不含 pip）。
 
     ``stage`` 用于回写缓存命中数、下载字节数与 wheel 数到 BuildTracker。
+
+    ``extra_index_urls`` 为额外 PyPI 索引 URL 列表（私有 PyPI 服务器），
+    透传给 pip/uv 的 ``--extra-index-url`` 参数。
+    ``find_links`` 为本地/远程 wheel 目录列表，透传给 pip/uv 的 ``--find-links`` 参数。
+    二者用于支持私有包下载，PyPI 仍由 ``pypi_index`` 指定。
     """
     cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -80,7 +87,7 @@ def download_wheels(  # noqa: PLR0913
         return []
 
     # 尝试读取依赖解析缓存，命中则跳过 pip 调用
-    deps_key = _deps_cache_key(filtered, py_version, platform_tags)
+    deps_key = _deps_cache_key(filtered, py_version, platform_tags, extra_index_urls, find_links)
     cached_wheels = _load_deps_cache(cache_dir, deps_key)
     if cached_wheels is not None:
         _logger.info("依赖解析缓存命中，跳过 pip 调用")
@@ -96,7 +103,17 @@ def download_wheels(  # noqa: PLR0913
     _logger.info("下载依赖 wheel: %s", " ".join(filtered))
     before = {f.name for f in cache_dir.glob("*.whl")}
 
-    result = _run_pip_download(filtered, base_args, py, py_version, platform_tags, pypi_index, cache_dir)
+    result = _run_pip_download(
+        filtered,
+        base_args,
+        py,
+        py_version,
+        platform_tags,
+        pypi_index,
+        cache_dir,
+        extra_index_urls=extra_index_urls,
+        find_links=find_links,
+    )
 
     wheel_names, used_fallback = _parse_wheel_names(result.stdout, cache_dir)
     wheels = [cache_dir / name for name in wheel_names if (cache_dir / name).is_file()]
@@ -156,6 +173,8 @@ def _run_pip_download(  # noqa: PLR0913
     platform_tags: Sequence[str],
     pypi_index: str,
     cache_dir: Path,
+    extra_index_urls: Sequence[str] = (),
+    find_links: Sequence[str] = (),
 ) -> subprocess.CompletedProcess[str]:
     """执行 pip download：先用 ``--no-index`` 离线解析，失败回退到在线解析下载."""
     # 先用 --no-index 从本地缓存解析（离线模式），命中则跳过网络查询；
@@ -163,7 +182,17 @@ def _run_pip_download(  # noqa: PLR0913
     result = _run_pip([*base_args, "--no-index", *filtered], f"检查缓存 {len(filtered)} 个依赖", suppress_error=True)
     if result is None:
         _logger.info("缓存解析失败，回退到在线解析下载")
-        return _download_online(filtered, base_args, py, py_version, platform_tags, pypi_index, cache_dir)
+        return _download_online(
+            filtered,
+            base_args,
+            py,
+            py_version,
+            platform_tags,
+            pypi_index,
+            cache_dir,
+            extra_index_urls=extra_index_urls,
+            find_links=find_links,
+        )
     _logger.info("缓存解析成功，跳过网络查询")
     return result
 
@@ -227,7 +256,9 @@ def _find_pip_python() -> str:
                 seen.add(str(candidate))
     for py in candidates:
         try:
-            subprocess.run([py, "-m", "pip", "--version"], check=True, capture_output=True, encoding="utf-8", errors="replace")
+            subprocess.run(
+                [py, "-m", "pip", "--version"], check=True, capture_output=True, encoding="utf-8", errors="replace"
+            )
         except (subprocess.CalledProcessError, FileNotFoundError):
             continue
         return py
@@ -243,11 +274,13 @@ def _find_uv() -> str | None:
     return shutil.which("uv")
 
 
-def _resolve_with_uv(
+def _resolve_with_uv(  # noqa: PLR0913
     packages: Sequence[str],
     py_version: str,
     platform_tags: Sequence[str],
     pypi_index: str,
+    extra_index_urls: Sequence[str] = (),
+    find_links: Sequence[str] = (),
 ) -> list[str]:
     """用 ``uv pip compile`` 解析依赖图，返回精确版本需求列表。
 
@@ -276,8 +309,13 @@ def _resolve_with_uv(
         "--no-header",
         "--index-url",
         pypi_index,
-        "-",
     ]
+    # 私有包源：额外索引与 wheel 目录
+    for url in extra_index_urls:
+        cmd.extend(["--extra-index-url", url])
+    for link in find_links:
+        cmd.extend(["--find-links", link])
+    cmd.append("-")
     # uv pip compile 从 stdin 读取需求列表
     stdin_data = "\n".join(packages) + "\n"
     _logger.info("uv pip compile 解析依赖图: %s", " ".join(packages))
@@ -301,6 +339,9 @@ def _download_online(  # noqa: PLR0913
     platform_tags: Sequence[str],
     pypi_index: str,
     cache_dir: Path,
+    *,
+    extra_index_urls: Sequence[str] = (),
+    find_links: Sequence[str] = (),
 ) -> subprocess.CompletedProcess[str]:
     """在线解析并下载依赖 wheel。
 
@@ -313,11 +354,25 @@ def _download_online(  # noqa: PLR0913
     uv 不可用或解析失败时回退到 ``pip download`` 完整解析+下载（stream=True），
     保留 sdist 回退（``pip wheel --no-deps`` 从 sdist 构建纯 Python wheel）。
     """
+    # 构造私有包源参数：透传给 pip download 与 pip wheel
+    extra_args: list[str] = []
+    for url in extra_index_urls:
+        extra_args.extend(["--extra-index-url", url])
+    for link in find_links:
+        extra_args.extend(["--find-links", link])
+
     # 尝试用 uv 解析依赖图
     resolved: list[str] | None = None
     if _find_uv() is not None:
         try:
-            resolved = _resolve_with_uv(filtered, py_version, platform_tags, pypi_index)
+            resolved = _resolve_with_uv(
+                filtered,
+                py_version,
+                platform_tags,
+                pypi_index,
+                extra_index_urls=extra_index_urls,
+                find_links=find_links,
+            )
         except (DependencyError, subprocess.CalledProcessError) as e:
             _logger.warning("uv 解析失败，回退到 pip 完整解析: %s", e)
 
@@ -329,7 +384,7 @@ def _download_online(  # noqa: PLR0913
         req_file.write_text("\n".join(resolved) + "\n", encoding="utf-8")
         try:
             result = _run_pip(
-                [*base_args, "--no-deps", "--progress-bar", "on", "-r", str(req_file)],
+                [*base_args, "--no-deps", "--progress-bar", "on", *extra_args, "-r", str(req_file)],
                 f"pip download {len(resolved)} 个已解析依赖",
                 stream=True,
             )
@@ -338,11 +393,13 @@ def _download_online(  # noqa: PLR0913
         except DependencyError as e:
             # sdist 回退：uv 解析出的某些包可能只有 sdist 无 wheel
             # （如 win-unicode-console==0.5），--only-binary=:all: 无法下载
-            _handle_sdist_fallback(e, py, pypi_index, cache_dir)
+            _handle_sdist_fallback(
+                e, py, pypi_index, cache_dir, extra_index_urls=extra_index_urls, find_links=find_links
+            )
             # 构建后用 -i index 重试：sdist 构建的 wheel 在本地缓存（--find-links），
             # 其他包从网络下载（第一次整体失败可能未下载到缓存）
             result = _run_pip(
-                [*base_args, "--no-deps", "--progress-bar", "on", "-i", pypi_index, "-r", str(req_file)],
+                [*base_args, "--no-deps", "--progress-bar", "on", "-i", pypi_index, *extra_args, "-r", str(req_file)],
                 f"pip download 重试 {len(resolved)} 个已解析依赖",
                 stream=True,
             )
@@ -354,7 +411,7 @@ def _download_online(  # noqa: PLR0913
     # uv 不可用或解析失败：回退到 pip 完整解析+下载
     try:
         result = _run_pip(
-            [*base_args, "-i", pypi_index, *filtered],
+            [*base_args, "-i", pypi_index, *extra_args, *filtered],
             f"pip download {len(filtered)} 个依赖",
             stream=True,
         )
@@ -362,9 +419,9 @@ def _download_online(  # noqa: PLR0913
         return result
     except DependencyError as e:
         # sdist 回退：解析无 wheel 的包，用 pip wheel 从 sdist 构建后重试
-        _handle_sdist_fallback(e, py, pypi_index, cache_dir)
+        _handle_sdist_fallback(e, py, pypi_index, cache_dir, extra_index_urls=extra_index_urls, find_links=find_links)
         result = _run_pip(
-            [*base_args, "-i", pypi_index, *filtered],
+            [*base_args, "-i", pypi_index, *extra_args, *filtered],
             f"pip download 重试 {len(filtered)} 个依赖",
             stream=True,
         )
@@ -446,25 +503,38 @@ def _parse_missing_packages(stderr: str) -> list[str]:
     return result
 
 
-def _handle_sdist_fallback(
+def _handle_sdist_fallback(  # noqa: PLR0913
     e: DependencyError,
     py: str,
     pypi_index: str,
     cache_dir: Path,
+    *,
+    extra_index_urls: Sequence[str] = (),
+    find_links: Sequence[str] = (),
 ) -> list[str]:
     """处理 sdist 回退：解析缺失包并构建无 wheel 的包，返回缺失包列表。
 
     无缺失包时重新抛出原异常（无法用 sdist 回退解决）。调用方据此重试下载。
+
+    ``extra_index_urls``/``find_links`` 透传给 ``pip wheel``，确保私有 PyPI 服务器
+    或本地 wheel 目录中的 sdist 也能被构建为 wheel。
     """
     missing = _parse_missing_packages(str(e))
     if not missing:
         raise e from None
     _logger.info("尝试用 pip wheel 构建无 wheel 的包: %s", ", ".join(missing))
-    _build_sdist_wheels(missing, py, pypi_index, cache_dir)
+    _build_sdist_wheels(missing, py, pypi_index, cache_dir, extra_index_urls, find_links)
     return missing
 
 
-def _build_sdist_wheels(packages: list[str], py: str, pypi_index: str, cache_dir: Path) -> None:
+def _build_sdist_wheels(  # noqa: PLR0913
+    packages: list[str],
+    py: str,
+    pypi_index: str,
+    cache_dir: Path,
+    extra_index_urls: Sequence[str] = (),
+    find_links: Sequence[str] = (),
+) -> None:
     """用 ``pip wheel --no-deps`` 从 sdist 构建 wheel（纯 Python 包无 wheel 时回退）。
 
     ``pip download --only-binary=:all:`` 无法下载无 wheel 的包（如 odfpy 仅有 sdist）。
@@ -473,9 +543,17 @@ def _build_sdist_wheels(packages: list[str], py: str, pypi_index: str, cache_dir
 
     构建失败仅 warning（可能是 C 扩展包无法在当前环境编译），
     不影响后续重试——重试失败时抛出原始下载错误。
+
+    ``extra_index_urls``/``find_links`` 透传给 ``pip wheel``，确保私有包源中的
+    sdist 也能被构建。
     """
+    extra_args: list[str] = []
+    for url in extra_index_urls:
+        extra_args.extend(["--extra-index-url", url])
+    for link in find_links:
+        extra_args.extend(["--find-links", link])
     for pkg in packages:
-        cmd = [py, "-m", "pip", "wheel", "--no-deps", "-w", str(cache_dir), "-i", pypi_index, pkg]
+        cmd = [py, "-m", "pip", "wheel", "--no-deps", "-w", str(cache_dir), "-i", pypi_index, *extra_args, pkg]
         try:
             _stream_subprocess(cmd)
         except subprocess.CalledProcessError as e:
@@ -488,13 +566,17 @@ def _deps_cache_key(
     packages: tuple[str, ...] | list[str],
     py_version: str,
     platform_tags: Sequence[str],
+    extra_index_urls: Sequence[str] = (),
+    find_links: Sequence[str] = (),
 ) -> str:
-    """根据依赖列表、Python 版本与平台标签计算缓存键。
+    """根据依赖列表、Python 版本、平台标签与私有包源计算缓存键。
 
-    不同组合产生不同键，确保跨项目/跨版本/跨平台不会误命中。
+    不同组合产生不同键，确保跨项目/跨版本/跨平台/跨私有源不会误命中。
+    私有包源纳入键：切换 ``--extra-index-url``/``--find-links`` 后强制重新解析，
+    避免旧缓存返回来自其他源的 wheel。
     返回 16 位 hex 摘要，用于 ``.deps-<key>.json`` 文件名。
     """
-    data = f"{sorted(packages)}|{py_version}|{list(platform_tags)}"
+    data = f"{sorted(packages)}|{py_version}|{list(platform_tags)}|{list(extra_index_urls)}|{list(find_links)}"
     return hashlib.sha256(data.encode("utf-8")).hexdigest()[:16]
 
 

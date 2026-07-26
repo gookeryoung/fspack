@@ -252,7 +252,8 @@ def _precompile_pyc(  # noqa: PLR0913
             [str(py_exe), "-m", "compileall", str(d), "-q", "-j", "0", "-o", str(optimize)],
             check=False,
             capture_output=True,
-            encoding="utf-8", errors="replace",
+            encoding="utf-8",
+            errors="replace",
         )
         if result.returncode != 0:
             _logger.warning("compileall 失败 %s: %s", d, result.stderr.strip())
@@ -428,6 +429,8 @@ def build(  # noqa: PLR0913
     embed_cache: Path | None = None,
     target: Platform | None = None,
     options: BuildOptions | None = None,
+    extra_index_urls: Sequence[str] = (),
+    find_links: Sequence[str] = (),
 ) -> ProjectInfo:
     """执行完整构建流水线，返回项目信息。
 
@@ -446,6 +449,10 @@ def build(  # noqa: PLR0913
     默认关闭。Nuitka 模式下 ``pyc_optimize`` 与 ``pyc_strip`` 仍生效于
     site-packages（第三方依赖保持 .pyc），用户源码以 .pyd 替代 .pyc。
     交叉构建时（构建机平台 ≠ 目标平台）Nuitka 跳过（无法生成目标平台 .pyd）。
+
+    ``extra_index_urls``/``find_links`` 为 CLI 指定的私有包源，与
+    ``[tool.fspack] extra-index-urls``/``find-links`` 合并（CLI 追加在配置之后，
+    去重保留首次出现），透传给 pip/uv 用于私有 PyPI 服务器或本地 wheel 目录下载。
     """
     opts = options or BuildOptions()
     tracker = BuildTracker()
@@ -457,6 +464,11 @@ def build(  # noqa: PLR0913
 
     with tracker.stage("解析项目") as st:
         info = resolve_project_info(project_dir, py_version, target)
+        # 合并 CLI 私有包源到 info（CLI 追加在配置之后，去重保留首次出现）
+        merged_extra = tuple(dict.fromkeys((*info.extra_index_urls, *extra_index_urls)))
+        merged_links = tuple(dict.fromkeys((*info.find_links, *find_links)))
+        if merged_extra != info.extra_index_urls or merged_links != info.find_links:
+            info = replace(info, extra_index_urls=merged_extra, find_links=merged_links)
         _logger.info("项目: %s %s (%s) 目标: %s", info.name, info.version, info.app_type.value, target.value)
         st.set_detail(f"{info.name} {info.version} ({info.app_type.value})")
 
@@ -645,6 +657,8 @@ def _download_dependencies(ctx: BuildContext, site_packages: Path, report: Depen
                     wheel_cache,
                     platform_tags=wheel_platform_tags(target),
                     stage=st,
+                    extra_index_urls=ctx.info.extra_index_urls,
+                    find_links=ctx.info.find_links,
                 )
             with ctx.tracker.stage("解压 wheel(精简)") as st:
                 unpack_wheels(wheels, site_packages, report.ast_submodules, ctx.opts.keep_modules, stage=st)

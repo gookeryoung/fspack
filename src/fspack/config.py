@@ -188,6 +188,8 @@ class ProjectInfo:
     icon: Path | None = None
     exclude_dirs: tuple[str, ...] = ()
     build_defaults: BuildDefaults = field(default_factory=BuildDefaults)
+    extra_index_urls: tuple[str, ...] = ()
+    find_links: tuple[str, ...] = ()
 
     @classmethod
     def from_dir(cls, project_dir: Path, py_version: str | None = None) -> ProjectInfo:
@@ -436,6 +438,9 @@ def parse_project(project_dir: Path, py_version: str | None = None) -> ProjectIn
     exclude_dirs = _parse_exclude_dirs(fspack_cfg.get("exclude"))
     # [tool.fspack] 构建默认值：CLI 标志覆盖
     build_defaults = _parse_build_defaults(fspack_cfg)
+    # [tool.fspack] 私有包源：extra-index-urls / find-links 透传给 pip/uv
+    extra_index_urls = _parse_string_list(fspack_cfg.get("extra-index-urls"), "extra-index-urls")
+    find_links = _parse_string_list(fspack_cfg.get("find-links"), "find-links")
 
     if entries_tbl:
         entries = _parse_entries(project_dir, entries_tbl)
@@ -454,6 +459,8 @@ def parse_project(project_dir: Path, py_version: str | None = None) -> ProjectIn
             icon=icon_path,
             exclude_dirs=exclude_dirs,
             build_defaults=build_defaults,
+            extra_index_urls=extra_index_urls,
+            find_links=find_links,
         )
 
     entry_module, entry_file, app_type = detect_entry(project_dir, name, deps)
@@ -470,6 +477,8 @@ def parse_project(project_dir: Path, py_version: str | None = None) -> ProjectIn
         icon=icon_path,
         exclude_dirs=exclude_dirs,
         build_defaults=build_defaults,
+        extra_index_urls=extra_index_urls,
+        find_links=find_links,
     )
 
 
@@ -518,6 +527,18 @@ def _parse_exclude_dirs(value: object) -> tuple[str, ...]:
             raise ProjectError(f"[tool.fspack] exclude 元素必须是非空字符串，得到 {item!r}")
         result.append(item.strip())
     return tuple(result)
+
+
+def _parse_string_list(value: object, cfg_key: str) -> tuple[str, ...]:
+    """解析 ``[tool.fspack]`` 字符串列表配置项（如 ``extra-index-urls``/``find-links``）。
+
+    接受字符串列表，每个元素为 URL 或路径。非列表或元素非字符串时报错。
+    """
+    if value is None:
+        return ()
+    if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+        raise ProjectError(f"[tool.fspack] {cfg_key} 必须是字符串列表，得到 {value!r}")
+    return tuple(x.strip() for x in value if x.strip())
 
 
 # [tool.fspack] 构建默认值键名与 BuildDefaults 字段的映射

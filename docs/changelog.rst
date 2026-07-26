@@ -4,6 +4,7 @@
 v0.2.7（未发布）
 ----------------
 
+- feat: 新增 ``--extra-index-url``/``--find-links`` 私有包源支持，可多次指定；与 ``[tool.fspack] extra-index-urls``/``find-links`` 配置合并（CLI 追加在后、去重保留首次出现），透传给 pip/uv 的 ``--extra-index-url``/``--find-links``；私有包源纳入依赖解析缓存键，切换源后强制重新解析；sdist 回退路径（``pip wheel``）同步透传私有包源
 - feat: 新增 ``--nuitka`` 编译模式，用户源码编译为 .pyd 本机执行（速度提升 30-50%）；按 Python 版本锁定 Nuitka 版本（3.8/3.9→2.5.1，3.10+→4.1.3），自动装到本地缓存 ``~/.fspack/cache/nuitka/`` 不污染 dist/runtime；Windows 用缓存的 standalone python 运行编译，避免 embed python 触发 reExecute fork bomb；入口文件保留 .py 兼容 ``runpy.run_path()``；stamp 缓存命中跳过整个阶段；缺 pip 时 ensurepip/uv 两轮自救
 - feat: 新增 ``--pyc-optimize`` 字节码优化级别与 ``--no-site`` 禁用 site.py 加载选项
 - feat: QtWebEngine 资源按需保留（.debug.pak 无条件剥离，icudtl.dat/QtWebEngineProcess 按 WebEngine 使用情况保留）

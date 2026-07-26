@@ -565,6 +565,109 @@ def test_build_prefers_declared_over_ast(tmp_path: Path, monkeypatch: pytest.Mon
     assert captured["packages"] == ("ordered-set", "lxml")
 
 
+def test_build_merges_cli_private_sources_with_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """build() 将 CLI 私有包源与 [tool.fspack] 配置合并（CLI 追加在后，去重）."""
+    proj = tmp_path / "app"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\ndependencies = ["requests"]\n\n'
+        "[tool.fspack]\n"
+        'extra-index-urls = ["https://pypi.company.com/simple/", "https://mirror.example.com/pypi"]\n'
+        'find-links = ["./wheels"]\n'
+    )
+    (proj / "app.py").write_text("import requests\ndef main():\n    pass\n")
+
+    monkeypatch.setattr("fspack.builder.download_embed", lambda v, m, c, **kw: tmp_path / "fake.zip")
+    monkeypatch.setattr(
+        "fspack.builder.extract_embed",
+        lambda zip_path, runtime_dir: (
+            runtime_dir.mkdir(parents=True, exist_ok=True),
+            (runtime_dir / "python311.dll").write_bytes(b""),
+            (runtime_dir / "Lib" / "site-packages").mkdir(parents=True, exist_ok=True),
+        )[-1],
+    )
+    captured: dict[str, Any] = {}
+
+    def fake_download(
+        packages: tuple[str, ...] | list[str], py_version: str, index: str, cache_dir: Path, **kw: Any
+    ) -> list[Path]:
+        captured["extra_index_urls"] = kw.get("extra_index_urls", ())
+        captured["find_links"] = kw.get("find_links", ())
+        return []
+
+    monkeypatch.setattr("fspack.builder.download_wheels", fake_download)
+    monkeypatch.setattr("fspack.builder.unpack_wheels", lambda *a, **k: 0)
+    monkeypatch.setattr(
+        "fspack.builder.compile_loader",
+        lambda source, out_exe, app_type, work_dir, platform, **kw: (
+            out_exe.parent.mkdir(parents=True, exist_ok=True),
+            out_exe.write_text(source),
+        )[-1],
+    )
+
+    # CLI 追加一个新的 extra-index-url 与 find-links，与配置合并
+    build(
+        proj,
+        get_mirror("huawei"),
+        "3.11.9",
+        target=Platform.WINDOWS,
+        extra_index_urls=("https://pypi.company.com/simple/", "https://cli.example.com/pypi"),
+        find_links=("./wheels", "./cli-wheels"),
+    )
+    # 去重保留首次出现：配置的在前，CLI 的在后
+    assert captured["extra_index_urls"] == (
+        "https://pypi.company.com/simple/",
+        "https://mirror.example.com/pypi",
+        "https://cli.example.com/pypi",
+    )
+    assert captured["find_links"] == ("./wheels", "./cli-wheels")
+
+
+def test_build_passes_config_private_sources_without_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """无 CLI 私有包源时，build() 仅用 [tool.fspack] 配置的私有包源."""
+    proj = tmp_path / "app"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\ndependencies = ["requests"]\n\n'
+        "[tool.fspack]\n"
+        'extra-index-urls = ["https://pypi.company.com/simple/"]\n'
+        'find-links = ["./wheels"]\n'
+    )
+    (proj / "app.py").write_text("import requests\ndef main():\n    pass\n")
+
+    monkeypatch.setattr("fspack.builder.download_embed", lambda v, m, c, **kw: tmp_path / "fake.zip")
+    monkeypatch.setattr(
+        "fspack.builder.extract_embed",
+        lambda zip_path, runtime_dir: (
+            runtime_dir.mkdir(parents=True, exist_ok=True),
+            (runtime_dir / "python311.dll").write_bytes(b""),
+            (runtime_dir / "Lib" / "site-packages").mkdir(parents=True, exist_ok=True),
+        )[-1],
+    )
+    captured: dict[str, Any] = {}
+
+    def fake_download(
+        packages: tuple[str, ...] | list[str], py_version: str, index: str, cache_dir: Path, **kw: Any
+    ) -> list[Path]:
+        captured["extra_index_urls"] = kw.get("extra_index_urls", ())
+        captured["find_links"] = kw.get("find_links", ())
+        return []
+
+    monkeypatch.setattr("fspack.builder.download_wheels", fake_download)
+    monkeypatch.setattr("fspack.builder.unpack_wheels", lambda *a, **k: 0)
+    monkeypatch.setattr(
+        "fspack.builder.compile_loader",
+        lambda source, out_exe, app_type, work_dir, platform, **kw: (
+            out_exe.parent.mkdir(parents=True, exist_ok=True),
+            out_exe.write_text(source),
+        )[-1],
+    )
+
+    build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
+    assert captured["extra_index_urls"] == ("https://pypi.company.com/simple/",)
+    assert captured["find_links"] == ("./wheels",)
+
+
 def test_build_skips_download_when_site_packages_has_deps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """site-packages 已有 dist-info 时跳过下载解压，记录跳过数."""
     proj = tmp_path / "app"

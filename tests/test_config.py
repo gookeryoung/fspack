@@ -861,3 +861,83 @@ def test_parse_project_exclude_and_defaults_in_multi_entry_py310(tmp_path: Path)
     info = parse_project(tmp_path)
     assert info.exclude_dirs == ("tests",)
     assert info.build_defaults.nuitka is True
+
+
+# ---------- 私有包源（extra-index-urls / find-links）----------
+
+
+def test_parse_project_no_private_sources_returns_empty(tmp_path: Path) -> None:
+    """无 [tool.fspack] 私有包源配置时 extra_index_urls/find_links 为空元组."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    info = parse_project(tmp_path)
+    assert info.extra_index_urls == ()
+    assert info.find_links == ()
+
+
+def test_parse_project_with_extra_index_urls(tmp_path: Path) -> None:
+    """[tool.fspack] extra-index-urls 解析为元组."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n'
+        '[tool.fspack]\nextra-index-urls = ["https://pypi.company.com/simple/", "https://mirror.example.com/pypi"]\n'
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    info = parse_project(tmp_path)
+    assert info.extra_index_urls == ("https://pypi.company.com/simple/", "https://mirror.example.com/pypi")
+
+
+def test_parse_project_with_find_links(tmp_path: Path) -> None:
+    """[tool.fspack] find-links 解析为元组，支持本地路径与 URL."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n'
+        '[tool.fspack]\nfind-links = ["./wheels", "https://example.com/wheels/"]\n'
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    info = parse_project(tmp_path)
+    assert info.find_links == ("./wheels", "https://example.com/wheels/")
+
+
+def test_parse_project_extra_index_urls_strips_whitespace(tmp_path: Path) -> None:
+    """extra-index-urls 元素首尾空白被 strip，空字符串元素被过滤."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n'
+        '[tool.fspack]\nextra-index-urls = ["  https://pypi.company.com/simple/  ", "", "  "]\n'
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    info = parse_project(tmp_path)
+    assert info.extra_index_urls == ("https://pypi.company.com/simple/",)
+
+
+def test_parse_project_extra_index_urls_not_list_raises(tmp_path: Path) -> None:
+    """extra-index-urls 非列表时报错."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n'
+        '[tool.fspack]\nextra-index-urls = "https://pypi.company.com/simple/"\n'
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    with pytest.raises(ProjectError, match="extra-index-urls 必须是字符串列表"):
+        parse_project(tmp_path)
+
+
+def test_parse_project_find_links_non_string_element_raises(tmp_path: Path) -> None:
+    """find-links 元素非字符串时报错."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nfind-links = [123]\n'
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    with pytest.raises(ProjectError, match="find-links 必须是字符串列表"):
+        parse_project(tmp_path)
+
+
+def test_parse_project_private_sources_in_multi_entry(tmp_path: Path) -> None:
+    """多入口项目也正确解析私有包源配置."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n'
+        '[tool.fspack]\nextra-index-urls = ["https://pypi.company.com/simple/"]\n'
+        'find-links = ["./wheels"]\n\n'
+        '[tool.fspack.entries]\ncli = "cli.py"\n'
+    )
+    (tmp_path / "cli.py").write_text("def main():\n    pass\n")
+    info = parse_project(tmp_path)
+    assert info.extra_index_urls == ("https://pypi.company.com/simple/",)
+    assert info.find_links == ("./wheels",)

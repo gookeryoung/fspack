@@ -113,6 +113,28 @@ def _add_build_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser
             "编译成功删除 .py，失败保留回退 .pyc。风险由用户承担（动态导入/元编程可能不兼容）"
         ),
     )
+    p.add_argument(
+        "--extra-index-url",
+        action="append",
+        default=None,
+        metavar="URL",
+        dest="extra_index_urls",
+        help=(
+            "额外 PyPI 索引 URL（私有 PyPI 服务器，可多次指定），透传给 pip/uv 的 --extra-index-url。"
+            "与 [tool.fspack] extra-index-urls 合并（CLI 追加在配置之后，去重保留首次出现）"
+        ),
+    )
+    p.add_argument(
+        "--find-links",
+        action="append",
+        default=None,
+        metavar="PATH_OR_URL",
+        dest="find_links",
+        help=(
+            "本地 wheel 目录或远程 wheel 索引页（可多次指定），透传给 pip/uv 的 --find-links。"
+            "与 [tool.fspack] find-links 合并（CLI 追加在配置之后，去重保留首次出现）"
+        ),
+    )
 
 
 def _add_run_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -200,6 +222,8 @@ def main(argv: list[str] | None = None) -> None:
             ns.py_version,
             target=_parse_target(ns.target),
             options=options,
+            extra_index_urls=tuple(ns.extra_index_urls or ()),
+            find_links=tuple(ns.find_links or ()),
         )
     elif command in ("run", "r"):
         from fspack.runner import run as run_cmd

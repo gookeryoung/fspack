@@ -50,12 +50,16 @@ def _capture_build() -> tuple[dict[str, Any], Any]:
         embed_cache: Path | None = None,
         target: Platform | None = None,
         options: BuildOptions | None = None,
+        extra_index_urls: tuple[str, ...] = (),
+        find_links: tuple[str, ...] = (),
     ) -> None:
         captured["project"] = project
         captured["mirror"] = mirror
         captured["py_version"] = py_version
         captured["target"] = target
         captured["options"] = options
+        captured["extra_index_urls"] = extra_index_urls
+        captured["find_links"] = find_links
 
     return captured, fake_build
 
@@ -342,3 +346,65 @@ def test_drop_separator() -> None:
 def test_invalid_mirror_rejected(tmp_path: Path) -> None:
     with pytest.raises(SystemExit):
         cli.main(["b", str(tmp_path), "--mirror", "nope"])
+
+
+# ---------- 私有包源（--extra-index-url / --find-links）----------
+
+
+def test_build_extra_index_url_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """--extra-index-url 可多次指定，作为元组透传给 build()."""
+    _make_minimal_project(tmp_path)
+    called, fake_build = _capture_build()
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    cli.main(
+        [
+            "b",
+            str(tmp_path),
+            "--extra-index-url",
+            "https://pypi.company.com/simple/",
+            "--extra-index-url",
+            "https://mirror.example.com/pypi",
+        ]
+    )
+    assert called["extra_index_urls"] == (
+        "https://pypi.company.com/simple/",
+        "https://mirror.example.com/pypi",
+    )
+
+
+def test_build_find_links_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """--find-links 可多次指定，作为元组透传给 build()."""
+    _make_minimal_project(tmp_path)
+    called, fake_build = _capture_build()
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    cli.main(["b", str(tmp_path), "--find-links", "./wheels", "--find-links", "https://example.com/wheels/"])
+    assert called["find_links"] == ("./wheels", "https://example.com/wheels/")
+
+
+def test_build_no_private_sources_defaults_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """未指定 --extra-index-url/--find-links 时传空元组给 build()."""
+    _make_minimal_project(tmp_path)
+    called, fake_build = _capture_build()
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    cli.main(["b", str(tmp_path)])
+    assert called["extra_index_urls"] == ()
+    assert called["find_links"] == ()
+
+
+def test_build_extra_index_url_combined_with_find_links(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """同时指定 --extra-index-url 与 --find-links，二者各自透传."""
+    _make_minimal_project(tmp_path)
+    called, fake_build = _capture_build()
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    cli.main(
+        [
+            "b",
+            str(tmp_path),
+            "--extra-index-url",
+            "https://pypi.company.com/simple/",
+            "--find-links",
+            "./wheels",
+        ]
+    )
+    assert called["extra_index_urls"] == ("https://pypi.company.com/simple/",)
+    assert called["find_links"] == ("./wheels",)
