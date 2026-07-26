@@ -40,6 +40,17 @@ import os
 import runpy
 import sys
 
+# GUI 子系统（pythonw.exe / -mwindows loader）下 sys.stdout/stderr/stdin 为 None，
+# 第三方库（如 loguru logger.add(sys.stderr)）写 None 会触发 __fastfail 崩溃
+# （0xC0000409 STATUS_STACK_BUFFER_OVERRUN）。用 os.devnull 替代 None，
+# 使日志写入静默丢弃而非崩溃。console 子系统下三者非 None，不受影响。
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w", encoding="utf-8", errors="replace")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w", encoding="utf-8", errors="replace")
+if sys.stdin is None:
+    sys.stdin = open(os.devnull, "r", encoding="utf-8", errors="replace")
+
 _DIST_DIR = os.path.dirname(os.path.abspath(__file__))
 _RUNTIME_DIR = os.path.join(_DIST_DIR, "runtime")
 

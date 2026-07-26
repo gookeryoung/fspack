@@ -238,3 +238,17 @@ def test_generate_wrapper_source_includes_site_packages_detection() -> None:
     assert '"python", "lib", "python3.*", "site-packages"' in source
     # 显式加入 sys.path
     assert "sys.path.insert(0, _SITE_PACKAGES)" in source
+
+
+def test_generate_wrapper_source_gui_subsystem_null_streams() -> None:
+    """GUI 子系统（pythonw.exe / -mwindows loader）下 sys.stdout/stderr/stdin 为 None.
+
+    第三方库（如 loguru ``logger.add(sys.stderr)``）写 None 会触发 __fastfail
+    崩溃（0xC0000409 STATUS_STACK_BUFFER_OVERRUN）。wrapper 须用 os.devnull
+    替代 None，使日志写入静默丢弃而非崩溃。console 子系统下三者非 None 不受影响。
+    """
+    source = EntryWrapper.generate_wrapper_source("app", None, "app.py")
+    assert "if sys.stdout is None:" in source
+    assert "if sys.stderr is None:" in source
+    assert "if sys.stdin is None:" in source
+    assert "os.devnull" in source
