@@ -70,7 +70,6 @@ nuitka = true
 pyc_strip = true
 no_site = true
 ccache = true
-nuitka_packages = ["rich"]
 
 [tool.fspack.entries]
 fsp = "src/fspack/cli.py"
