@@ -64,12 +64,10 @@ packages = ["src/fspack"]
 "src/fspack/py.typed" = "fspack/py.typed"
 
 [tool.fspack]
-# 自身打包配置：排除示例目录，启用 Nuitka 编译与 .pyc 剥离优化
+# 自身打包配置：排除示例目录，启用 .pyc 剥离优化
 exclude = ["examples", "templates"]
-nuitka = true
 pyc_strip = true
 no_site = true
-ccache = true
 
 [tool.fspack.entries]
 fsp = "src/fspack/cli.py"
