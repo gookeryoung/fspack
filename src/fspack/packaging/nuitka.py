@@ -773,6 +773,100 @@ class NuitkaCompiler:
             stage.set_detail(f"编译 {compiled} 个，剥离 {stripped} 个 .py")
 
     @classmethod
+    def compile_packages(  # noqa: PLR0913
+        cls,
+        site_packages: Path,
+        packages: tuple[str, ...],
+        runtime_dir: Path,
+        py_version: str,
+        target: Platform,
+        nuitka_cache: Path,
+        *,
+        stage: StageRecorder,
+        build_python_exe: Path | None = None,
+        ccache: bool = False,
+        cache_root: Path | None = None,
+    ) -> None:
+        """编译 ``site-packages`` 中指定的第三方包为 ``.pyd``/``.so``.
+
+        用户通过 ``[tool.fspack] nuitka_packages = ["rich", "click"]`` 或 CLI
+        ``--nuitka-pkg <name>`` 手动指定需编译的包名。编译成功后删除 ``.py``
+        （``.pyd`` 优先级高于 ``.pyc``，自动加载本机代码），失败保留 ``.py``
+        回退到 ``.pyc``。
+
+        与 :meth:`compile_src` 区别：
+
+        - :meth:`compile_src` 编译用户源码（``dist/src``），必须编译
+        - 本方法编译第三方依赖（``site-packages``），用户可选
+        - 两者复用 :meth:`_compile_files` 单文件编译机制与 :meth:`_strip_compiled_sources`
+
+        **风险提示**：动态导入（``importlib.import_module``）、元编程（装饰器栈、
+        ``__init_subclass__``）的包可能不兼容，风险由用户承担。C 扩展包（如 numpy）
+        编译无收益（核心已是 ``.pyd``），不建议指定。
+
+        Args:
+            site_packages: site-packages 目录路径。
+            packages: 待编译的包名元组（已去重）。
+            runtime_dir: runtime 根目录（用于回退解析编译 python）。
+            py_version: Python 完整版本号。
+            target: 目标平台。
+            nuitka_cache: nuitka 缓存目录。
+            stage: 阶段记录器。
+            build_python_exe: standalone python 路径。
+            ccache: 启用 ccache 缓存。
+            cache_root: ccache 缓存根目录。
+        """
+        if not packages:
+            return
+
+        py_exe = cls._resolve_compile_python(build_python_exe, runtime_dir, py_version, target, stage)
+        if py_exe is None:
+            return
+
+        if not cls._is_nuitka_cached(nuitka_cache):
+            _logger.warning("Nuitka 包编译跳过: 缓存目录无 nuitka %s", nuitka_cache)
+            return
+
+        # 收集所有指定包的 .py 文件
+        py_files: list[Path] = []
+        missing: list[str] = []
+        for pkg in packages:
+            pkg_dir = site_packages / pkg
+            if not pkg_dir.is_dir():
+                missing.append(pkg)
+                continue
+            py_files.extend(cls._collect_py_files(pkg_dir, None))
+
+        if missing:
+            _logger.warning("未找到包目录，跳过编译: %s", ", ".join(missing))
+
+        if not py_files:
+            _logger.info("Nuitka 包编译: 无 .py 文件可编译（packages=%s）", packages)
+            return
+
+        _logger.info("Nuitka 包编译: %d 个 .py 文件（packages=%s）", len(py_files), packages)
+
+        # ccache 就绪
+        ccache_exe = None
+        if ccache and cache_root is not None:
+            ccache_exe = cls._ensure_ccache(cache_root, target, stage)
+
+        bootstrap_script = cls._create_bootstrap_script(nuitka_cache)
+        try:
+            compiled_files, failed = cls._compile_files(
+                py_exe, bootstrap_script, py_files, stage, target=target, ccache_exe=ccache_exe
+            )
+        finally:
+            shutil.rmtree(bootstrap_script.parent, ignore_errors=True)
+
+        stripped = cls._strip_compiled_sources(compiled_files, stage)
+        compiled = len(compiled_files)
+        if failed:
+            _logger.warning("Nuitka 包编译完成: 成功 %d 个，失败 %d 个，剥离 %d 个 .py", compiled, failed, stripped)
+        else:
+            _logger.info("Nuitka 包编译完成: 成功 %d 个，剥离 %d 个 .py", compiled, stripped)
+
+    @classmethod
     def _resolve_compile_python(
         cls,
         build_python_exe: Path | None,
@@ -944,16 +1038,18 @@ class NuitkaCompiler:
         nuitka_version: str,
         py_version: str,
         entry_rels: frozenset[str] | None = None,
+        nuitka_packages: tuple[str, ...] = (),
     ) -> str:
         """计算 Nuitka 编译 stamp 键.
 
-        四要素：
+        五要素：
 
         - ``nuitka_version``：切换 Nuitka 版本时强制重编（如 3.10 从 4.1.3 升级到 4.2）
         - ``py_version``：切换 Python 版本时强制重编（.pyd ABI 绑定）
         - ``src_fingerprint``：用户源码变化时强制重编（按 ``rule-01`` 闭环要求）
         - ``entry_rels``：入口文件集合变化时强制重编（影响哪些文件被跳过，
           避免上次编译删除了 .py、本次新增入口跳过但 .py 已不在导致 run_path 失败）
+        - ``nuitka_packages``：第三方包编译列表变化时强制重编（影响 site-packages 编译范围）
 
         ``pyc_optimize`` 不纳入：Nuitka 编译不受 .pyc 优化级别影响，
         site-packages 的 .pyc 由 :func:`_precompile_pyc` 单独缓存。
@@ -963,7 +1059,21 @@ class NuitkaCompiler:
         src_fp = source_fingerprint(src_dir) if src_dir.is_dir() else ""
         # entry_rels 排序后拼接，避免集合迭代顺序不稳定导致 stamp 抖动
         entry_part = ",".join(sorted(entry_rels)) if entry_rels else ""
-        return f"{nuitka_version}|{py_version}|{src_fp}|{entry_part}"
+        # nuitka_packages 已是去重 tuple，排序拼接保证稳定性
+        pkg_part = ",".join(nuitka_packages) if nuitka_packages else ""
+        return f"{nuitka_version}|{py_version}|{src_fp}|{entry_part}|{pkg_part}"
+
+    @staticmethod
+    def _site_packages_dir(runtime_dir: Path, py_version: str, target: Platform) -> Path:
+        """推导 runtime 的 site-packages 路径.
+
+        Windows: ``runtime/Lib/site-packages``
+        Linux: ``runtime/python/lib/python{major}.{minor}/site-packages``
+        """
+        if target is Platform.WINDOWS:
+            return runtime_dir / "Lib" / "site-packages"
+        major, minor = py_version.split(".")[:2]
+        return runtime_dir / "python" / "lib" / f"python{major}.{minor}" / "site-packages"
 
     @classmethod
     def compile_with_stamp(  # noqa: PLR0913
@@ -979,6 +1089,7 @@ class NuitkaCompiler:
         stage: StageRecorder,
         entry_rels: frozenset[str] | None = None,
         ccache: bool = False,
+        nuitka_packages: tuple[str, ...] = (),
     ) -> None:
         """整合 ensure_env + standalone python + stamp 缓存 + compile_src 的入口.
 
@@ -1015,7 +1126,7 @@ class NuitkaCompiler:
         """
         nuitka_ver = nuitka_version_for(py_version)
         stamp = cls._stamp_path(dist_dir)
-        stamp_key = cls._stamp_key(src_dir, nuitka_ver, py_version, entry_rels)
+        stamp_key = cls._stamp_key(src_dir, nuitka_ver, py_version, entry_rels, nuitka_packages)
 
         # stamp 命中：跳过整个 Nuitka 阶段
         try:
@@ -1063,6 +1174,25 @@ class NuitkaCompiler:
             ccache=ccache,
             cache_root=cache_root,
         )
+
+        # 编译用户指定的第三方包（site-packages 中的纯 Python 包）
+        if nuitka_packages:
+            site_packages = cls._site_packages_dir(runtime_dir, py_version, target)
+            if site_packages.is_dir():
+                cls.compile_packages(
+                    site_packages,
+                    nuitka_packages,
+                    runtime_dir,
+                    py_version,
+                    target,
+                    nuitka_cache,
+                    stage=stage,
+                    build_python_exe=build_python_exe,
+                    ccache=ccache,
+                    cache_root=cache_root,
+                )
+            else:
+                _logger.warning("site-packages 不存在，跳过包编译: %s", site_packages)
 
         # 编译后写 stamp（即使部分文件失败也写，避免下次重复尝试）
         stamp.parent.mkdir(parents=True, exist_ok=True)

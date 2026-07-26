@@ -1186,10 +1186,10 @@ def test_stamp_key_includes_nuitka_version_py_version_src_fingerprint(
     key = NuitkaCompiler._stamp_key(src, "4.1.3", "3.11.9")
     assert "4.1.3" in key
     assert "3.11.9" in key
-    # 四段式：version|py_version|src_fp|entry_part（entry_rels=None 时 entry_part 为空）
-    assert key.count("|") == 3
-    # 末尾为空 entry_part（None 时）
-    assert key.endswith("|")
+    # 五段式：version|py_version|src_fp|entry_part|pkg_part（entry_rels=None 时 entry_part 为空）
+    assert key.count("|") == 4
+    # 末尾两段为空（entry_rels=None + nuitka_packages=()）
+    assert key.endswith("||")
 
 
 def test_stamp_key_includes_entry_rels(tmp_path: Path) -> None:
@@ -1424,6 +1424,136 @@ def test_compile_with_stamp_compile_src_failure_does_not_fall_back(
     # compile_src 正常调用 → stamp 写入（非回退路径）
     assert NuitkaCompiler._stamp_path(dist).is_file()
     assert "回退" not in st._detail
+
+
+# ---- compile_packages 测试 ----
+
+
+def test_compile_packages_empty_packages_noop(tmp_path: Path) -> None:
+    """packages 为空时 compile_packages 直接返回，不调用任何编译逻辑."""
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "python.exe").write_bytes(b"")
+    cache = _make_nuitka_cache(tmp_path / "cache")
+    sp = tmp_path / "site-packages"
+    sp.mkdir()
+    st = StageRecorder("Nuitka 包编译")
+    # 不应抛异常，不应调用 _resolve_compile_python
+    NuitkaCompiler.compile_packages(sp, (), runtime, "3.11.9", Platform.WINDOWS, cache, stage=st)
+    assert st._hits == 0
+
+
+def test_compile_packages_missing_package_warns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """指定包在 site-packages 不存在时 warning 并跳过."""
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "python.exe").write_bytes(b"")
+    cache = _make_nuitka_cache(tmp_path / "cache")
+    sp = tmp_path / "site-packages"
+    sp.mkdir()
+    # nonexistent_pkg 不存在
+    st = StageRecorder("Nuitka 包编译")
+    with caplog.at_level("WARNING", logger="fspack.packaging.nuitka"):
+        NuitkaCompiler.compile_packages(sp, ("nonexistent_pkg",), runtime, "3.11.9", Platform.WINDOWS, cache, stage=st)
+    assert any("未找到包目录" in r.message for r in caplog.records)
+
+
+def test_compile_packages_compiles_specified_package(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """compile_packages 编译指定包下的 .py 文件（跳过 __init__.py）."""
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "python.exe").write_bytes(b"")
+    cache = _make_nuitka_cache(tmp_path / "cache")
+    sp = tmp_path / "site-packages"
+    pkg = sp / "rich"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    (pkg / "_extension.py").write_text("x = 1")
+    (pkg / "console.py").write_text("y = 2")
+
+    captured: list[list[Path]] = []
+
+    def fake_compile_files(
+        cls: Any, py_exe: Path, bootstrap: Path, py_files: list[Path], stage: Any, **kw: Any
+    ) -> tuple[set[Path], int]:
+        captured.append(py_files)
+        return (set(py_files), 0)
+
+    monkeypatch.setattr(NuitkaCompiler, "_compile_files", classmethod(fake_compile_files))
+
+    st = StageRecorder("Nuitka 包编译")
+    NuitkaCompiler.compile_packages(sp, ("rich",), runtime, "3.11.9", Platform.WINDOWS, cache, stage=st)
+
+    # 收集了 _extension.py 与 console.py（跳过 __init__.py）
+    assert len(captured) == 1
+    names = {p.name for p in captured[0]}
+    assert names == {"_extension.py", "console.py"}
+    # 编译成功的 .py 被删除
+    assert not (pkg / "_extension.py").exists()
+    assert not (pkg / "console.py").exists()
+    # __init__.py 保留
+    assert (pkg / "__init__.py").is_file()
+
+
+def test_compile_with_stamp_passes_nuitka_packages_to_compile_packages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """compile_with_stamp 透传 nuitka_packages 到 compile_packages."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("print('hi')")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "python.exe").write_bytes(b"")
+    cache_root = tmp_path / "nuitka_cache"
+
+    monkeypatch.setattr(NuitkaCompiler, "ensure_env", classmethod(lambda cls, *a, **kw: "4.1.3"))
+    fake_py = tmp_path / "fake_python.exe"
+    fake_py.write_text("")
+    monkeypatch.setattr(NuitkaCompiler, "_ensure_build_python", classmethod(lambda cls, *a, **kw: fake_py))
+    monkeypatch.setattr(NuitkaCompiler, "compile_src", classmethod(lambda cls, *a, **kw: None))
+
+    # 创建 site-packages 目录使 compile_with_stamp 进入 compile_packages 分支
+    (runtime / "Lib" / "site-packages").mkdir(parents=True)
+
+    captured_pkgs: list[tuple[str, ...]] = []
+
+    def fake_compile_packages(cls: Any, *args: Any, **kwargs: Any) -> None:
+        captured_pkgs.append(args[1] if len(args) > 1 else kwargs.get("packages", ()))
+
+    monkeypatch.setattr(NuitkaCompiler, "compile_packages", classmethod(fake_compile_packages))
+
+    st = StageRecorder("Nuitka 编译")
+    NuitkaCompiler.compile_with_stamp(
+        src,
+        dist,
+        runtime,
+        "3.11.9",
+        Platform.WINDOWS,
+        get_mirror("aliyun"),
+        cache_root,
+        stage=st,
+        nuitka_packages=("rich", "click"),
+    )
+
+    assert captured_pkgs == [("rich", "click")]
+    # stamp 写入（含 pkg_part）
+    assert NuitkaCompiler._stamp_path(dist).is_file()
+
+
+def test_stamp_key_includes_nuitka_packages(tmp_path: Path) -> None:
+    """nuitka_packages 纳入 stamp key：包列表变化时 stamp 失效."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("x")
+    key_empty = NuitkaCompiler._stamp_key(src, "4.1.3", "3.11.9", None, ())
+    key_with_pkgs = NuitkaCompiler._stamp_key(src, "4.1.3", "3.11.9", None, ("rich", "click"))
+    assert key_empty != key_with_pkgs
+    assert "rich,click" in key_with_pkgs
 
 
 # ---- _stream_compile 流式输出测试 ----

@@ -101,6 +101,18 @@ def _add_build_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser
             "后续构建缓存 gcc 编译结果加速重复编译。需配合 --nuitka 使用；默认关闭"
         ),
     )
+    p.add_argument(
+        "--nuitka-pkg",
+        action="append",
+        default=None,
+        metavar="PACKAGE",
+        dest="nuitka_pkg",
+        help=(
+            "指定第三方依赖包名用 Nuitka 编译为 .pyd（可多次指定）。"
+            "需配合 --nuitka 使用；编译 site-packages/<package>/ 下 .py 为 .pyd，"
+            "编译成功删除 .py，失败保留回退 .pyc。风险由用户承担（动态导入/元编程可能不兼容）"
+        ),
+    )
 
 
 def _add_run_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -180,6 +192,7 @@ def main(argv: list[str] | None = None) -> None:
             no_site=ns.no_site or base.no_site,
             nuitka=ns.nuitka or base.nuitka,
             ccache=ns.ccache or base.ccache,
+            nuitka_packages=tuple(dict.fromkeys((*base.nuitka_packages, *(ns.nuitka_pkg or [])))),
         )
         build(
             project,

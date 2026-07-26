@@ -686,6 +686,7 @@ def _compile_user_sources(ctx: BuildContext, src_dst: Path) -> None:
                 stage=st,
                 entry_rels=entry_rels,
                 ccache=ctx.opts.ccache,
+                nuitka_packages=ctx.opts.nuitka_packages,
             )
 
     # 预编译字节码：用 runtime 自身 python 编译 src + site-packages 为 .pyc，加速首次启动。

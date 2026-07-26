@@ -1743,6 +1743,7 @@ def test_build_with_nuitka_invokes_compiler(tmp_path: Path, monkeypatch: pytest.
         stage: StageRecorder,
         entry_rels: frozenset[str] | None = None,
         ccache: bool = False,
+        nuitka_packages: tuple[str, ...] = (),
     ) -> None:
         nuitka_called["src_dir"] = src_dir
         nuitka_called["dist_dir"] = dist_dir
@@ -1751,6 +1752,7 @@ def test_build_with_nuitka_invokes_compiler(tmp_path: Path, monkeypatch: pytest.
         nuitka_called["cache_root"] = cache_root
         nuitka_called["entry_rels"] = entry_rels
         nuitka_called["ccache"] = ccache
+        nuitka_called["nuitka_packages"] = nuitka_packages
         stage.processed()
         stage.set_detail("mock 编译")
 

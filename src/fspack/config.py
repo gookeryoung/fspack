@@ -168,6 +168,7 @@ class BuildDefaults:
     no_pyc: bool | None = None
     no_stdlib_trim: bool | None = None
     ccache: bool | None = None
+    nuitka_packages: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -282,6 +283,7 @@ class BuildOptions:
     no_site: bool = False
     nuitka: bool = False
     ccache: bool = False
+    nuitka_packages: tuple[str, ...] = ()
 
 
 def build_options_from_defaults(defaults: BuildDefaults) -> BuildOptions:
@@ -305,6 +307,7 @@ def build_options_from_defaults(defaults: BuildDefaults) -> BuildOptions:
         no_site=defaults.no_site if defaults.no_site is not None else base.no_site,
         nuitka=defaults.nuitka if defaults.nuitka is not None else base.nuitka,
         ccache=defaults.ccache if defaults.ccache is not None else base.ccache,
+        nuitka_packages=defaults.nuitka_packages,
     )
 
 
@@ -533,10 +536,10 @@ def _parse_build_defaults(fspack_cfg: dict[str, Any]) -> BuildDefaults:
     """从 ``[tool.fspack]`` 解析构建默认值.
 
     识别 ``nuitka``/``pyc_strip``/``pyc_optimize``/``no_site``/``no_pyc``/
-    ``no_stdlib_trim``/``ccache`` 键，其余键忽略（如 ``icon``/``entries``/``exclude``）。
-    类型不匹配时报错，避免静默忽略错误配置。
+    ``no_stdlib_trim``/``ccache``/``nuitka_packages`` 键，其余键忽略
+    （如 ``icon``/``entries``/``exclude``）。类型不匹配时报错，避免静默忽略错误配置。
     """
-    kwargs: dict[str, bool | int | None] = {}
+    kwargs: dict[str, bool | int | None | tuple[str, ...]] = {}
     for cfg_key, field_name in _BUILD_DEFAULT_KEYS.items():
         raw = fspack_cfg.get(cfg_key)
         if raw is None:
@@ -549,6 +552,12 @@ def _parse_build_defaults(fspack_cfg: dict[str, Any]) -> BuildDefaults:
             if not isinstance(raw, bool):
                 raise ProjectError(f"[tool.fspack] {cfg_key} 必须是布尔值，得到 {raw!r}")
             kwargs[field_name] = raw
+    # nuitka_packages 为字符串列表，单独解析
+    raw_pkgs = fspack_cfg.get("nuitka_packages")
+    if raw_pkgs is not None:
+        if not isinstance(raw_pkgs, list) or not all(isinstance(x, str) for x in raw_pkgs):
+            raise ProjectError(f"[tool.fspack] nuitka_packages 必须是字符串列表，得到 {raw_pkgs!r}")
+        kwargs["nuitka_packages"] = tuple(raw_pkgs)
     return BuildDefaults(**kwargs)  # type: ignore[arg-type]
 
 
