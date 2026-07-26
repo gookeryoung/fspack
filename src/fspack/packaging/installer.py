@@ -211,6 +211,22 @@ def _release_base(info: ProjectInfo, platform_suffix: str) -> str:
 # ---- NSIS 安装包（Windows）----
 
 
+# 构建中间文件/缓存文件，打包时排除（仅用于增量构建，对最终用户无用）.
+# - .dep_cache.json: 依赖分析缓存（dist 根目录）
+# - .nuitka_compile_stamp: Nuitka 编译 stamp（dist 根目录）
+# - .pyc_stamp: pyc 预编译 stamp（dist 根目录）
+# - *.build: Nuitka 临时构建目录（src 子目录下，--remove-output 仅成功时清理）
+_DIST_INTERMEDIATE_EXCLUDES: tuple[str, ...] = (
+    ".dep_cache.json",
+    ".nuitka_compile_stamp",
+    ".pyc_stamp",
+    "*.build",
+)
+
+# NSIS File /x 参数列表（空格分隔的 /x <pattern> 序列）
+_NSIS_EXCLUDE_INTERMEDIATE = " ".join(f"/x {pat}" for pat in _DIST_INTERMEDIATE_EXCLUDES)
+
+
 _NSIS_TEMPLATE = """\
 !include "MUI2.nsh"
 
@@ -230,8 +246,9 @@ Unicode True
 
 Section "Main"
   SetOutPath "$INSTDIR"
-  # /x 排除 fspack 自身产物（installer.nsi/release）与 uv build 重叠产物（*.whl/*.tar.gz）
-  File /r /x installer.nsi /x release /x *.whl /x *.tar.gz *.*
+  # /x 排除 fspack 自身产物（installer.nsi/release）、uv build 重叠产物（*.whl/*.tar.gz）
+  # 与构建中间文件（.dep_cache.json/.nuitka_compile_stamp/.pyc_stamp/*.build）
+  File /r /x installer.nsi /x release /x *.whl /x *.tar.gz {nsis_exclude_intermediate}*.*
   WriteUninstaller "$INSTDIR\\uninstall.exe"
 {shortcut_block}
 {registry_block}
@@ -300,6 +317,7 @@ def generate_nsis_script(project: ProjectInfo, dist_dir: Path, release_dir: Path
         name=project.name,
         version=project.version,
         out_setup=out_setup_win,
+        nsis_exclude_intermediate=_NSIS_EXCLUDE_INTERMEDIATE + " " if _NSIS_EXCLUDE_INTERMEDIATE else "",
         shortcut_block=_build_shortcut_block(project),
         uninstall_shortcut_block=_build_uninstall_shortcut_block(project),
         registry_block=_build_registry_block(project),
@@ -378,7 +396,8 @@ def compile_installer(nsi_path: Path, out_setup: Path) -> Path:
 # ---- Linux 安装包（tar.gz + .deb）----
 
 
-_LINUX_IGNORE = shutil.ignore_patterns("release")
+# Linux 打包排除模式：release 目录 + 构建中间文件（与 NSIS /x 排除一致）
+_LINUX_IGNORE = shutil.ignore_patterns("release", *_DIST_INTERMEDIATE_EXCLUDES)
 
 
 class LinuxInstaller(Installer):

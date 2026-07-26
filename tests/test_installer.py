@@ -56,7 +56,12 @@ def test_generate_nsis_script_cli(tmp_path: Path) -> None:
     assert 'Name "app 1.0"' in content
     assert 'OutFile "release\\app-1.0-py3.11.9-windows-slim-setup.exe"' in content
     assert 'InstallDir "$PROGRAMFILES64\\app"' in content
-    assert "File /r /x installer.nsi /x release /x *.whl /x *.tar.gz *.*" in content
+    # NSIS 排除构建中间文件（.dep_cache.json/.nuitka_compile_stamp/.pyc_stamp/*.build）
+    assert "File /r /x installer.nsi /x release /x *.whl /x *.tar.gz" in content
+    assert "/x .dep_cache.json" in content
+    assert "/x .nuitka_compile_stamp" in content
+    assert "/x .pyc_stamp" in content
+    assert "/x *.build" in content
     assert 'WriteUninstaller "$INSTDIR\\uninstall.exe"' in content
     # 所有应用默认生成开始菜单程序快捷方式、卸载快捷方式与桌面快捷方式
     assert 'CreateDirectory "$SMPROGRAMS\\app"' in content
@@ -410,15 +415,30 @@ def test_build_zip_with_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_build_tarball_release_no_build_success(tmp_path: Path) -> None:
-    """build_tarball_release 直接生成 tar.gz（无外部工具依赖）."""
+    """build_tarball_release 直接生成 tar.gz（无外部工具依赖），排除构建中间文件."""
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0"\n')
     (tmp_path / "app.py").write_text("def main():\n    pass\n")
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "app").write_bytes(b"")  # Linux 可执行文件无后缀
+    # 预创建构建中间文件，验证打包时被排除
+    (dist / ".dep_cache.json").write_text("{}")
+    (dist / ".nuitka_compile_stamp").write_text("stamp")
+    (dist / ".pyc_stamp").write_text("stamp")
+    (dist / "src" / "pkg.build").mkdir(parents=True)
+    (dist / "src" / "pkg.build" / "artifact.o").write_bytes(b"")
     result = build_tarball_release(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True)
     assert result.is_file()
     assert result.name == "app-1.0-py3.11.9-linux-slim.tar.gz"
+    # 验证 tar.gz 中不包含构建中间文件
+    import tarfile
+
+    with tarfile.open(result, "r:gz") as tf:
+        names = tf.getnames()
+    assert not any(".dep_cache.json" in n for n in names), ".dep_cache.json 不应打包"
+    assert not any(".nuitka_compile_stamp" in n for n in names), ".nuitka_compile_stamp 不应打包"
+    assert not any(".pyc_stamp" in n for n in names), ".pyc_stamp 不应打包"
+    assert not any(n.endswith(".build") or "/.build/" in n for n in names), "*.build 目录不应打包"
 
 
 def test_build_tarball_release_missing_exe(tmp_path: Path) -> None:
