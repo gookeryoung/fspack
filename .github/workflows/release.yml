@@ -223,15 +223,22 @@ jobs:
           ls -la release-files/
           echo "::endgroup::"
 
-      - name: Create GitHub Release & Upload
+      - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ github.ref_name }}
+        # 幂等：release 已存在则上传产物（--clobber 覆盖同名 asset），不存在则创建。
+        # 处理重打 tag 触发 release.yml 时上一次 run 已创建 release 的冲突场景。
         run: |
-          gh release create "$TAG_NAME" \
-            --title "Release $TAG_NAME" \
-            --generate-notes \
-            release-files/*
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            echo "Release $TAG_NAME 已存在，上传产物（覆盖同名 asset）..."
+            gh release upload "$TAG_NAME" release-files/* --clobber
+          else
+            gh release create "$TAG_NAME" \
+              --title "Release $TAG_NAME" \
+              --generate-notes \
+              release-files/*
+          fi
 
       - name: Report failure (if any upstream job failed)
         if: contains(needs.pypi.result, 'failure') || contains(needs.pack-windows.result, 'failure') || contains(needs.pack-linux.result, 'failure')
