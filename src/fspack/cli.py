@@ -121,7 +121,11 @@ def _add_package_subparser(sub: argparse._SubParsersAction[argparse.ArgumentPars
     p.add_argument("--mirror", default=None, choices=list(MIRRORS), help="镜像源")
     p.add_argument("--py-version", default=None, help="embed python 版本，如 3.11.9")
     p.add_argument("--target", default=None, choices=["windows", "linux"], help="目标平台（默认当前平台）")
-    p.add_argument("--no-build", action="store_true", help="跳过重建，直接打包已有 dist")
+    p.add_argument(
+        "--no-build",
+        action="store_true",
+        help="不自动构建，dist 缺失时报错（默认 dist 存在则复用，避免 fsp b 后 fsp p 重复构建）",
+    )
     p.add_argument(
         "--format",
         default="auto",

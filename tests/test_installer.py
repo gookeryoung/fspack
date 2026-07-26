@@ -654,3 +654,102 @@ def test_build_options_from_defaults_translation() -> None:
     # 未指定的字段保留默认值
     assert opts.pyc_strip is False
     assert opts.no_stdlib_trim is False
+
+
+def test_prepare_dist_skips_build_when_dist_and_exe_ready(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``fsp p`` 默认（``no_build=False``）且 dist+exe 已就绪时跳过 build，避免重复构建.
+
+    验证 ``fsp b`` 后 ``fsp p`` 不再重新跑 build（尤其 Nuitka 启用场景耗时较长）。
+    """
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0"\n')
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "app.exe").write_bytes(b"")  # 模拟 fsp b 已产出的可执行文件
+
+    build_calls = 0
+
+    def fake_build(*args: object, **kwargs: object) -> ProjectInfo:
+        nonlocal build_calls
+        build_calls += 1
+        raise AssertionError("dist+exe 已就绪时不应调用 build()")
+
+    monkeypatch.setattr("fspack.packaging.installer.build", fake_build)
+    # 走 build_installer 路径（NsisInstaller），no_build=False
+    build_installer(tmp_path, get_mirror("huawei"), "3.11.9", no_build=False)
+    assert build_calls == 0
+
+
+def test_prepare_dist_rebuilds_when_dist_exists_but_exe_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """dist 存在但可执行文件缺失时（默认 ``no_build=False``）自动重建修复.
+
+    避免用户手动 ``fsp c`` 清理，dist 部分损坏时 ``fsp p`` 自动重建。
+    """
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0"\n')
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    # dist 存在但 app.exe 缺失（部分损坏）
+
+    build_calls = 0
+
+    def fake_build(  # noqa: PLR0913
+        project_dir: Path,
+        mirror: object,
+        py_version: str,
+        *,
+        dist_dir: Path | None = None,
+        target: object = None,
+        options: BuildOptions | None = None,
+    ) -> ProjectInfo:
+        nonlocal build_calls
+        build_calls += 1
+        d = dist_dir or project_dir / "dist"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "app.exe").write_bytes(b"")
+        return ProjectInfo(
+            name="app",
+            version="1.0",
+            src_dir=project_dir,
+            entry_module="app",
+            entry_file=project_dir / "app.py",
+            app_type=AppType.CLI,
+            dependencies=(),
+            py_version=py_version,
+        )
+
+    monkeypatch.setattr("fspack.packaging.installer.build", fake_build)
+    build_installer(tmp_path, get_mirror("huawei"), "3.11.9", no_build=False)
+    assert build_calls == 1
+
+
+def test_prepare_dist_no_build_true_still_errors_on_missing_dist(tmp_path: Path) -> None:
+    """``--no-build`` 显式声明且 dist 不存在时仍报错（保持原语义）."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0"\n')
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    with pytest.raises(InstallerError, match="未找到 dist"):
+        build_installer(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True)
+
+
+def test_exe_exists_and_exe_path_helpers(tmp_path: Path) -> None:
+    """``_exe_exists``/``_exe_path`` 按 target 返回正确可执行文件名."""
+    from fspack.packaging.installer import _exe_exists, _exe_path
+
+    info = _make_info(tmp_path, name="myapp")
+    assert _exe_path(info, Platform.WINDOWS) == "myapp.exe"
+    assert _exe_path(info, Platform.LINUX) == "myapp"
+
+    # dist 目录初始无可执行文件
+    assert _exe_exists(tmp_path, info, Platform.WINDOWS) is False
+    assert _exe_exists(tmp_path, info, Platform.LINUX) is False
+
+    # 创建 .exe 后 Windows 命中
+    (tmp_path / "myapp.exe").write_bytes(b"")
+    assert _exe_exists(tmp_path, info, Platform.WINDOWS) is True
+    assert _exe_exists(tmp_path, info, Platform.LINUX) is False
+
+    # 创建无扩展名可执行文件后 Linux 也命中
+    (tmp_path / "myapp").write_bytes(b"")
+    assert _exe_exists(tmp_path, info, Platform.LINUX) is True

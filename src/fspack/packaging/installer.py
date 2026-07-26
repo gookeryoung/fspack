@@ -153,9 +153,14 @@ def _prepare_dist(  # noqa: PLR0913
 ) -> tuple[Path, ProjectInfo]:
     """通用编排：可选 ``build()`` 构建项目到 dist，返回 ``(dist_dir, info)``。
 
+    跳过 build 的两种情况：
+
+    - ``no_build=True``：用户显式声明 dist 已就绪，dist 目录缺失时报错
+    - ``no_build=False``（默认）：dist 存在且可执行文件就绪时复用，避免 ``fsp b``
+      后 ``fsp p`` 重复构建（尤其 Nuitka 编译耗时较长）；dist 或可执行文件缺失时
+      调用 :func:`build` 重建，并透传 ``[tool.fspack]`` 配置的构建默认值
+
     不校验可执行文件存在（由调用方按平台 ``exe_filename`` 自行校验）。
-    ``no_build=True`` 时仅检查 dist 目录存在；否则调用 :func:`build` 重新构建，
-    并透传 ``[tool.fspack]`` 配置的构建默认值（如 ``nuitka``/``pyc_strip``）。
     """
     project_dir = Path(project_dir).resolve()
     dist = dist_dir or project_dir / "dist"
@@ -163,18 +168,30 @@ def _prepare_dist(  # noqa: PLR0913
         if not dist.is_dir():
             raise InstallerError(f"未找到 dist 目录: {dist}（请先执行 fsp b）")
         info = resolve_project_info(project_dir, py_version, target)
-    else:
-        info = resolve_project_info(project_dir, py_version, target)
-        options = build_options_from_defaults(info.build_defaults)
-        info = build(project_dir, mirror, py_version, dist_dir=dist, target=target, options=options)
+        return dist, info
+    # no_build=False：dist+exe 已就绪则复用，避免 fsp b 后 fsp p 重复构建
+    info = resolve_project_info(project_dir, py_version, target)
+    if dist.is_dir() and _exe_exists(dist, info, target):
+        return dist, info
+    options = build_options_from_defaults(info.build_defaults)
+    info = build(project_dir, mirror, py_version, dist_dir=dist, target=target, options=options)
     return dist, info
+
+
+def _exe_path(info: ProjectInfo, target: Platform) -> str:
+    """返回目标平台期望的可执行文件名（Windows 为 ``<name>.exe``，Linux 为 ``<name>``）。"""
+    return info.exe_name if target is Platform.WINDOWS else info.name
+
+
+def _exe_exists(dist: Path, info: ProjectInfo, target: Platform) -> bool:
+    """判断 dist 内可执行文件是否就绪（用于 ``_prepare_dist`` 决定是否跳过 build）。"""
+    return (dist / _exe_path(info, target)).is_file()
 
 
 def _check_exe(dist: Path, info: ProjectInfo, target: Platform) -> None:
     """校验已构建的可执行文件存在（Windows 为 <name>.exe，Linux 为 <name>）。"""
-    exe_name = info.exe_name if target is Platform.WINDOWS else info.name
-    if not (dist / exe_name).is_file():
-        raise InstallerError(f"未找到已构建的可执行文件: {dist / exe_name}（请先执行 fsp b）")
+    if not _exe_exists(dist, info, target):
+        raise InstallerError(f"未找到已构建的可执行文件: {dist / _exe_path(info, target)}（请先执行 fsp b）")
 
 
 def _py_tag(info: ProjectInfo) -> str:
