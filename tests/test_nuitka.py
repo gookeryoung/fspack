@@ -635,7 +635,7 @@ def test_compile_src_skips_entry_files(tmp_path: Path, monkeypatch: pytest.Monke
         Platform.WINDOWS,
         cache,
         stage=st,
-        entry_rels={"snake.py"},
+        entry_rels=frozenset({"snake.py"}),
     )
 
     # 只编译非入口文件：game_logic.py 和 utils.py
@@ -1198,8 +1198,8 @@ def test_stamp_key_includes_entry_rels(tmp_path: Path) -> None:
     (src / "util.py").write_text("x = 1")
 
     key_no_entry = NuitkaCompiler._stamp_key(src, "4.1.3", "3.11.9")
-    key_with_entry = NuitkaCompiler._stamp_key(src, "4.1.3", "3.11.9", {"snake.py"})
-    key_different_entry = NuitkaCompiler._stamp_key(src, "4.1.3", "3.11.9", {"util.py"})
+    key_with_entry = NuitkaCompiler._stamp_key(src, "4.1.3", "3.11.9", frozenset({"snake.py"}))
+    key_different_entry = NuitkaCompiler._stamp_key(src, "4.1.3", "3.11.9", frozenset({"util.py"}))
 
     # entry_rels 不同则 stamp key 不同
     assert key_no_entry != key_with_entry
@@ -1214,8 +1214,8 @@ def test_stamp_key_entry_rels_order_independent(tmp_path: Path) -> None:
     src = tmp_path / "src"
     src.mkdir()
     (src / "a.py").write_text("")
-    key1 = NuitkaCompiler._stamp_key(src, "4.1.3", "3.11.9", {"snake.py", "util.py"})
-    key2 = NuitkaCompiler._stamp_key(src, "4.1.3", "3.11.9", {"util.py", "snake.py"})
+    key1 = NuitkaCompiler._stamp_key(src, "4.1.3", "3.11.9", frozenset({"snake.py", "util.py"}))
+    key2 = NuitkaCompiler._stamp_key(src, "4.1.3", "3.11.9", frozenset({"util.py", "snake.py"}))
     assert key1 == key2
 
 

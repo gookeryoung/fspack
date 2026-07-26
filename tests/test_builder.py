@@ -1032,6 +1032,66 @@ def test_precompile_pyc_strip_keeps_init_py(tmp_path: Path, monkeypatch: pytest.
     assert not (src / "main.py").exists()
 
 
+def test_precompile_pyc_strip_keeps_entry_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """strip_py=True 时保留 entry_rels 中的入口文件（runpy.run_module 需 .py 定位模块）.
+
+    入口文件跳过 Nuitka 编译（保留 .py），若 pyc_strip 再删除入口 .py，
+    ``runpy.run_module`` 会因 ``find_spec`` 找不到模块而 ``ImportError``：
+    ``__pycache__`` 下的 ``.pyc`` 不在 ``FileFinder`` 搜索范围。
+    """
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    (runtime / "python.exe").write_bytes(b"")
+    dist = tmp_path / "dist"
+    src = dist / "src"
+    src.mkdir(parents=True)
+    # 模拟 fspack 包结构：src/fspack/__init__.py + cli.py（入口）+ utils.py（非入口）
+    pkg = src / "fspack"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("")
+    (pkg / "cli.py").write_text("def main(): pass")  # 入口文件
+    (pkg / "utils.py").write_text("x = 1")  # 非入口文件
+
+    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
+
+    st = StageRecorder("预编译字节码")
+    _precompile_pyc(
+        dist,
+        runtime,
+        "3.11.9",
+        Platform.WINDOWS,
+        strip_py=True,
+        stage=st,
+        entry_rels=frozenset({"fspack/cli.py"}),
+    )
+
+    # __init__.py 保留（包标识）
+    assert (pkg / "__init__.py").is_file()
+    # 入口文件保留（runpy.run_module 需 .py 定位）
+    assert (pkg / "cli.py").is_file()
+    # 非入口 .py 被删除
+    assert not (pkg / "utils.py").exists()
+
+
+def test_strip_py_sources_skips_entry_rels(tmp_path: Path) -> None:
+    """``_strip_py_sources`` 单元测试：entry_rels 中的文件跳过剥离."""
+    from fspack.builder import _strip_py_sources
+
+    src = tmp_path / "src"
+    pkg = src / "app"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    (pkg / "main.py").write_text("m")  # 入口
+    (pkg / "helper.py").write_text("h")  # 非入口
+
+    stripped = _strip_py_sources([src], frozenset({"app/main.py"}))
+
+    assert stripped == 1  # 仅 helper.py 被删
+    assert (pkg / "main.py").is_file()  # 入口保留
+    assert not (pkg / "helper.py").exists()  # 非入口删除
+    assert (pkg / "__init__.py").is_file()  # __init__.py 保留
+
+
 def test_precompile_pyc_python_missing_skips(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """runtime python 未就绪时跳过 compileall，不调 subprocess."""
     runtime = tmp_path / "runtime"
@@ -1244,11 +1304,17 @@ def test_build_no_stdlib_trim_skips_trim_stage(tmp_path: Path, monkeypatch: pyte
 
 
 def test_build_pyc_strip_deletes_non_init_py(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """pyc_strip=True 时 build() 调 _precompile_pyc 剥离非 __init__.py 源码."""
+    """pyc_strip=True 时 build() 剥离非 __init__.py 非入口的 .py，但保留入口文件.
+
+    入口文件需保留 .py 以供 ``runpy.run_module`` 定位（``__pycache__`` 下 .pyc
+    不在 ``FileFinder`` 搜索范围，.pyd 无字节码无法被 runpy 执行）。
+    """
     proj = tmp_path / "app"
     proj.mkdir()
     (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
     (proj / "app.py").write_text("def main():\n    pass\n")
+    # 非入口 .py 文件，应被剥离
+    (proj / "helper.py").write_text("x = 1")
 
     _setup_embed_mocks(tmp_path, monkeypatch, "3.11.9")
     # 让 python.exe 就绪，使 _precompile_pyc 真正执行 strip
@@ -1262,9 +1328,10 @@ def test_build_pyc_strip_deletes_non_init_py(tmp_path: Path, monkeypatch: pytest
     build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, options=BuildOptions(pyc_strip=True))
 
     src = proj / "dist" / "src"
-    # app.py 被剥离
-    assert not (src / "app.py").exists()
-    # 但 _entry_app.py 是 wrapper（在 dist 根，非 src），不受影响
+    # app.py 是入口文件，保留（runpy.run_module 需 .py 定位）
+    assert (src / "app.py").is_file()
+    # helper.py 非入口，被剥离
+    assert not (src / "helper.py").exists()
 
 
 def test_build_default_keeps_py_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -541,7 +541,7 @@ class NuitkaCompiler:
         *,
         stage: StageRecorder,
         build_python_exe: Path | None = None,
-        entry_rels: set[str] | None = None,
+        entry_rels: frozenset[str] | None = None,
     ) -> None:
         """编译 ``src_dir`` 下所有 ``.py`` 为 ``.pyd``/``.so``，编译后删除 ``.py`` 源码.
 
@@ -634,7 +634,7 @@ class NuitkaCompiler:
         return py_exe
 
     @staticmethod
-    def _collect_py_files(src_dir: Path, entry_rels: set[str] | None) -> list[Path]:
+    def _collect_py_files(src_dir: Path, entry_rels: frozenset[str] | None) -> list[Path]:
         """收集待编译的 .py 文件，排除 Nuitka 残留目录、__init__.py 与入口文件.
 
         排除规则：
@@ -774,7 +774,7 @@ class NuitkaCompiler:
         src_dir: Path,
         nuitka_version: str,
         py_version: str,
-        entry_rels: set[str] | None = None,
+        entry_rels: frozenset[str] | None = None,
     ) -> str:
         """计算 Nuitka 编译 stamp 键.
 
@@ -808,7 +808,7 @@ class NuitkaCompiler:
         cache_root: Path,
         *,
         stage: StageRecorder,
-        entry_rels: set[str] | None = None,
+        entry_rels: frozenset[str] | None = None,
     ) -> None:
         """整合 ensure_env + standalone python + stamp 缓存 + compile_src 的入口.
 

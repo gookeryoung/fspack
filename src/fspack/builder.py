@@ -195,6 +195,7 @@ def _precompile_pyc(  # noqa: PLR0913
     strip_py: bool,
     stage: StageRecorder,
     optimize: int = 0,
+    entry_rels: frozenset[str] = frozenset(),
 ) -> None:
     """预编译 src 与 site-packages 的 .py 为 .pyc，加速首次启动。
 
@@ -213,7 +214,8 @@ def _precompile_pyc(  # noqa: PLR0913
     属性，依赖文档字符串的程序（如 Sphinx 运行时）应使用 ``0`` 或 ``1``。
 
     ``strip_py=True`` 时额外删除非 ``__init__.py`` 的 ``.py`` 源码（保留包标识，
-    避免 PEP 420 命名空间包导致 ``.pyc`` 不被加载）。
+    避免 PEP 420 命名空间包导致 ``.pyc`` 不被加载）。``entry_rels`` 中的入口文件
+    跳过剥离（入口包装器需 ``.py`` 存在以供 ``runpy`` 定位）。
 
     重复构建时用 ``dist/.pyc_stamp``（src 指纹 + site-packages 指纹 + strip_py +
     optimize）跳过 compileall，避免 subprocess 启动与文件遍历开销。
@@ -261,7 +263,7 @@ def _precompile_pyc(  # noqa: PLR0913
     stamp.parent.mkdir(parents=True, exist_ok=True)
     stamp.write_text(stamp_key, encoding="utf-8")
 
-    stripped = _strip_py_sources(targets) if strip_py else 0
+    stripped = _strip_py_sources(targets, entry_rels) if strip_py else 0
     if stripped:
         stage.skip(stripped)
         stage.set_detail(f"编译 {compiled} 目录，剥离 {stripped} 个 .py")
@@ -269,15 +271,26 @@ def _precompile_pyc(  # noqa: PLR0913
         stage.set_detail(f"编译 {compiled} 目录")
 
 
-def _strip_py_sources(targets: list[Path]) -> int:
+def _strip_py_sources(targets: list[Path], entry_rels: frozenset[str] = frozenset()) -> int:
     """删除 targets 中非 ``__init__.py`` 的 ``.py`` 源码，返回剥离数量。
 
     保留 ``__init__.py`` 维持包标识，避免 PEP 420 命名空间包导致 ``.pyc`` 不被加载。
+
+    ``entry_rels`` 为入口文件相对 ``targets[0]``（dist/src）的 POSIX 路径集合，
+    这些文件会被跳过：入口包装器用 ``runpy.run_module``/``run_path`` 调用用户代码，
+    需 ``.py`` 存在才能被 ``find_spec`` 定位（``__pycache__`` 下的 ``.pyc`` 不在
+    ``FileFinder`` 搜索范围，``.pyd`` 模块无 Python 字节码无法被 ``runpy`` 执行）。
     """
     stripped = 0
     for d in targets:
         for py in d.rglob("*.py"):
             if py.name == "__init__.py":
+                continue
+            try:
+                rel = py.relative_to(d).as_posix()
+            except ValueError:  # pragma: no cover - rglob 结果必在 d 下
+                rel = ""
+            if rel in entry_rels:
                 continue
             py.unlink()
             stripped += 1
@@ -613,17 +626,18 @@ def _compile_user_sources(ctx: BuildContext, src_dst: Path) -> None:
     nuitka 装到本地缓存 ~/.fspack/cache/nuitka/<py_version>/，不污染 dist/runtime；
     编译时用 -c 注入 sys.path 绕过 _pth 对 PYTHONPATH 的限制。
     stamp 命中跳过整个阶段（含 ensure_env 与 compile_src）。
-    入口文件跳过编译：入口包装器用 runpy.run_path() 显式指定 .py 路径调用用户代码，
-    若入口 .py 被 Nuitka 编译后删除，run_path 会 FileNotFoundError。
+    入口文件跳过编译与剥离：入口包装器用 ``runpy.run_module``/``run_path`` 调用
+    用户代码，需 ``.py`` 存在才能被 ``find_spec`` 定位（``.pyd`` 无字节码无法被
+    ``runpy`` 执行，``__pycache__`` 下的 ``.pyc`` 不在 ``FileFinder`` 搜索范围）。
     """
     target = ctx.cfg.target
+    # 入口文件相对 src 的 POSIX 路径集合：Nuitka 编译与 pyc_strip 剥离均跳过这些文件
+    entry_rels = frozenset(ep.entry_rel(ctx.info.src_dir) for ep in ctx.info.all_entries)
     if ctx.opts.nuitka and target is detect_platform():
         with ctx.tracker.stage("Nuitka 编译") as st:
             from fspack.packaging.nuitka import NuitkaCompiler
 
             nuitka_cache_root = Path.home() / ".fspack" / "cache" / "nuitka"
-            # 入口文件相对 src 的 POSIX 路径集合：Nuitka 编译跳过这些文件
-            entry_rels = {ep.entry_rel(ctx.info.src_dir) for ep in ctx.info.all_entries}
             NuitkaCompiler.compile_with_stamp(
                 src_dst,
                 ctx.cfg.dist_dir,
@@ -651,6 +665,7 @@ def _compile_user_sources(ctx: BuildContext, src_dst: Path) -> None:
                 strip_py=ctx.opts.pyc_strip,
                 stage=st,
                 optimize=ctx.opts.pyc_optimize,
+                entry_rels=entry_rels,
             )
 
 
