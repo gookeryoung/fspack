@@ -67,12 +67,16 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
 
-      # windows-2025 镜像移除了 NSIS；mingw-w64 提供 x86_64-w64-mingw32-gcc 前缀的交叉编译器
+      # windows-2025 镜像移除了 NSIS；mingw-w64 提供 x86_64-w64-mingw32-gcc 前缀的交叉编译器。
+      # 注意：windows-latest 默认 shell 是 pwsh，PowerShell 访问环境变量必须用 $env: 前缀，
+      # 直接写 $GITHUB_PATH 会被当作 PowerShell 变量（值为 $null），PATH 不会写入文件，
+      # 导致后续步骤找不到 makensis。Add-Content 在 pwsh 7 下默认 utf8NoBOM 编码安全。
       - name: Install NSIS & mingw-w64
+        shell: pwsh
         run: |
           choco install nsis mingw -y --no-progress
-          echo "C:\Program Files (x86)\NSIS" >> $GITHUB_PATH
-          echo "C:\Program Files\mingw-w64\mingw64\bin" >> $GITHUB_PATH
+          Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files (x86)\NSIS"
+          Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files\mingw-w64\mingw64\bin"
 
       - name: Sync dependencies
         run: uv sync --frozen
