@@ -763,6 +763,193 @@ class TestSlimUnpack:
         assert count == 1
         assert (dest / "different_pkg" / "core.pyd").is_file()
 
+    def test_split_wheel_essentials_shared_keep_subs(self, tmp_path: Path) -> None:
+        """PySide6 拆分 wheel（pyside6_essentials）共享主包 keep_subs.
+
+        PySide6 6.6+ 将包拆为 pyside6/pyside6_essentials/pyside6_addons 三个 wheel，
+        后两者文件名归一化包名（pyside6-essentials/pyside6-addons）与顶层目录
+        PySide6（归一化为 pyside6）不一致。``_detect_top_pkg`` 回退匹配使
+        QtSlimSpec 识别这些拆分 wheel，共享 ``merged["pyside6"]`` 的 keep_subs，
+        按子模块选择性保留而非全量解压。
+        """
+        whl = tmp_path / "wh" / "pyside6_essentials-6.11.1-cp310-abi3-win_amd64.whl"
+        whl.parent.mkdir()
+        _make_wheel(
+            whl,
+            {
+                "PySide6/__init__.py": b"",
+                "PySide6/QtCore.pyi": b"core_pyi",
+                "PySide6/QtWidgets.pyi": b"widgets_pyi",
+                "PySide6/Qt3DCore.pyi": b"3dcore_pyi",
+                "PySide6/Qt6Core.dll": b"qt6core",
+                "PySide6/Qt6Widgets.dll": b"qt6widgets",
+                "PySide6/Qt6Charts.dll": b"qt6charts",
+                "PySide6/translations/qt_ar.qm": b"qm",
+                "PySide6/include/pyside.h": b"h",
+                "PySide6/designer.exe": b"tool",
+                "PySide6/plugins/platforms/qwindows.dll": b"plugin",
+                "pyside6_essentials-6.11.1.dist-info/METADATA": b"meta",
+            },
+        )
+        dest = tmp_path / "sp"
+        # 用户 import QtCore/QtWidgets，闭包自动加入 Gui/Core
+        count = slim_unpack([whl], dest, {"PySide6": frozenset({"QtCore", "QtWidgets"})})
+        assert count == 1
+        # 闭包内子模块保留
+        assert (dest / "PySide6" / "QtCore.pyi").is_file()
+        assert (dest / "PySide6" / "QtWidgets.pyi").is_file()
+        assert (dest / "PySide6" / "Qt6Core.dll").is_file()
+        assert (dest / "PySide6" / "Qt6Widgets.dll").is_file()
+        # 闭包外子模块剥离
+        assert not (dest / "PySide6" / "Qt3DCore.pyi").exists()
+        assert not (dest / "PySide6" / "Qt6Charts.dll").exists()
+        # _QT_EXCLUDE_SUBDIRS 生效（拆分 wheel 也应用 Qt 精简规则）
+        assert not (dest / "PySide6" / "translations").exists()
+        assert not (dest / "PySide6" / "include").exists()
+        # STRIP_EXTS 生效
+        assert not (dest / "PySide6" / "designer.exe").exists()
+        # 基础插件保留
+        assert (dest / "PySide6" / "plugins" / "platforms" / "qwindows.dll").is_file()
+        # 元数据保留
+        assert (dest / "pyside6_essentials-6.11.1.dist-info" / "METADATA").is_file()
+
+    def test_split_wheel_addons_shared_keep_subs(self, tmp_path: Path) -> None:
+        """PySide6 拆分 wheel（pyside6_addons）共享主包 keep_subs."""
+        whl = tmp_path / "wh" / "pyside6_addons-6.11.1-cp310-abi3-win_amd64.whl"
+        whl.parent.mkdir()
+        _make_wheel(
+            whl,
+            {
+                "PySide6/QtMultimedia.pyi": b"mm_pyi",
+                "PySide6/Qt6Multimedia.dll": b"qt6mm",
+                "PySide6/avcodec-61.dll": b"ffmpeg",
+                "PySide6/QtAsyncio/__init__.py": b"asyncio",
+                "PySide6/metatypes/qt6core_metatypes.json": b"json",
+                "pyside6_addons-6.11.1.dist-info/METADATA": b"meta",
+            },
+        )
+        dest = tmp_path / "sp"
+        # 用户仅 import QtCore/QtWidgets，闭包不含 Multimedia
+        count = slim_unpack([whl], dest, {"PySide6": frozenset({"QtCore", "QtWidgets"})})
+        assert count == 1
+        # Multimedia 闭包外 → .pyi/.dll/FFmpeg 剥离
+        assert not (dest / "PySide6" / "QtMultimedia.pyi").exists()
+        assert not (dest / "PySide6" / "Qt6Multimedia.dll").exists()
+        assert not (dest / "PySide6" / "avcodec-61.dll").exists()
+        # _QT_EXCLUDE_SUBDIRS 生效
+        assert not (dest / "PySide6" / "QtAsyncio").exists()
+        assert not (dest / "PySide6" / "metatypes").exists()
+        # 元数据保留
+        assert (dest / "pyside6_addons-6.11.1.dist-info" / "METADATA").is_file()
+
+    def test_split_wheel_no_keep_subs_still_excludes(self, tmp_path: Path) -> None:
+        """拆分 wheel 在 keep_subs 为空时仍应用剥离规则（顶层 import 场景）."""
+        whl = tmp_path / "wh" / "pyside6_essentials-6.11.1-cp310-abi3-win_amd64.whl"
+        whl.parent.mkdir()
+        _make_wheel(
+            whl,
+            {
+                "PySide6/__init__.py": b"",
+                "PySide6/QtCore.pyi": b"core_pyi",
+                "PySide6/Qt6Core.dll": b"qt6core",
+                "PySide6/translations/qt_ar.qm": b"qm",
+                "PySide6/include/pyside.h": b"h",
+                "PySide6/designer.exe": b"tool",
+                "pyside6_essentials-6.11.1.dist-info/METADATA": b"meta",
+            },
+        )
+        dest = tmp_path / "sp"
+        # 无 submodule_usage：keep_subs 为空集，等价于全量解压 + 应用剥离规则
+        count = slim_unpack([whl], dest)
+        assert count == 1
+        # 子模块文件全保留（keep_subs 为空）
+        assert (dest / "PySide6" / "QtCore.pyi").is_file()
+        assert (dest / "PySide6" / "Qt6Core.dll").is_file()
+        # 但剥离规则仍生效
+        assert not (dest / "PySide6" / "translations").exists()
+        assert not (dest / "PySide6" / "include").exists()
+        assert not (dest / "PySide6" / "designer.exe").exists()
+
+    def test_split_wheel_multi_wheel_share_keep_subs(self, tmp_path: Path) -> None:
+        """pyside6 + pyside6_essentials + pyside6_addons 三个 wheel 共享 keep_subs."""
+        whl_dir = tmp_path / "wh"
+        whl_dir.mkdir()
+        # 主 wheel：仅 .pyi
+        _make_wheel(
+            whl_dir / "pyside6-6.11.1-cp310-abi3-win_amd64.whl",
+            {
+                "PySide6/__init__.py": b"",
+                "PySide6/QtCore.pyi": b"core_pyi",
+                "PySide6/QtCharts.pyi": b"charts_pyi",
+                "pyside6-6.11.1.dist-info/METADATA": b"meta",
+            },
+        )
+        # essentials wheel：核心 DLL
+        _make_wheel(
+            whl_dir / "pyside6_essentials-6.11.1-cp310-abi3-win_amd64.whl",
+            {
+                "PySide6/Qt6Core.dll": b"qt6core",
+                "PySide6/Qt6Charts.dll": b"qt6charts",
+                "PySide6/translations/qt_ar.qm": b"qm",
+                "pyside6_essentials-6.11.1.dist-info/METADATA": b"meta",
+            },
+        )
+        # addons wheel：附加模块 DLL
+        _make_wheel(
+            whl_dir / "pyside6_addons-6.11.1-cp310-abi3-win_amd64.whl",
+            {
+                "PySide6/Qt6Multimedia.dll": b"qt6mm",
+                "PySide6/avcodec-61.dll": b"ffmpeg",
+                "PySide6/metatypes/qt6core_metatypes.json": b"json",
+                "pyside6_addons-6.11.1.dist-info/METADATA": b"meta",
+            },
+        )
+        dest = tmp_path / "sp"
+        wheels = sorted(whl_dir.glob("*.whl"))
+        count = slim_unpack(wheels, dest, {"PySide6": frozenset({"QtCore"})})
+        assert count == 3
+        # 主 wheel：QtCore.pyi 保留，QtCharts.pyi 剥离
+        assert (dest / "PySide6" / "QtCore.pyi").is_file()
+        assert not (dest / "PySide6" / "QtCharts.pyi").exists()
+        # essentials：Qt6Core.dll 保留，Qt6Charts.dll 剥离，translations 剥离
+        assert (dest / "PySide6" / "Qt6Core.dll").is_file()
+        assert not (dest / "PySide6" / "Qt6Charts.dll").exists()
+        assert not (dest / "PySide6" / "translations").exists()
+        # addons：Multimedia 闭包外 → Qt6Multimedia.dll/avcodec 剥离，metatypes 剥离
+        assert not (dest / "PySide6" / "Qt6Multimedia.dll").exists()
+        assert not (dest / "PySide6" / "avcodec-61.dll").exists()
+        assert not (dest / "PySide6" / "metatypes").exists()
+        # 三个 wheel 的 dist-info 均保留
+        assert (dest / "pyside6-6.11.1.dist-info" / "METADATA").is_file()
+        assert (dest / "pyside6_essentials-6.11.1.dist-info" / "METADATA").is_file()
+        assert (dest / "pyside6_addons-6.11.1.dist-info" / "METADATA").is_file()
+
+    def test_split_wheel_numpy_libs_not_matched(self, tmp_path: Path) -> None:
+        """numpy.libs 辅助目录不被回退匹配（DefaultSlimSpec 是兜底）.
+
+        回归：``_detect_top_pkg`` 回退匹配仅识别非兜底 spec（如 QtSlimSpec），
+        避免 numpy wheel 中的 ``numpy.libs/`` 辅助目录被误识别为 top_pkg。
+        """
+        whl = tmp_path / "wh" / "numpy-1.0-cp39-none-win_amd64.whl"
+        whl.parent.mkdir()
+        _make_wheel(
+            whl,
+            {
+                # numpy.libs 出现在 numpy 之前，但不应被回退匹配
+                "numpy.libs/libopenblas.dll": b"blas",
+                "numpy/__init__.py": b"",
+                "numpy/core.pyd": b"core",
+                "numpy-1.0.dist-info/METADATA": b"meta",
+            },
+        )
+        dest = tmp_path / "sp"
+        count = slim_unpack([whl], dest, {"numpy": frozenset({"core"})})
+        assert count == 1
+        # numpy 顶层目录被正确识别（whl_pkg 严格匹配）
+        assert (dest / "numpy" / "core.pyd").is_file()
+        # numpy.libs 也被解压（属于跨包 shared，DefaultSlimSpec 不剥离）
+        assert (dest / "numpy.libs" / "libopenblas.dll").is_file()
+
     def test_keep_module_without_dot_skipped(self, tmp_path: Path) -> None:
         """keep_modules 中无 '.' 的条目被跳过，走全量解压."""
         whl = tmp_path / "wh" / "PySide2-5.15.2.1-cp39-none-win_amd64.whl"

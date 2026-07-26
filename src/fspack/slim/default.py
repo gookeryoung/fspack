@@ -35,6 +35,9 @@ class DefaultSlimSpec(SlimSpec):
     （无库专属剥离）。
     """
 
+    # 标记为兜底规则，供 :func:`_detect_top_pkg` 回退匹配时跳过
+    is_fallback: bool = True
+
     @classmethod
     @override
     def match(cls, whl_pkg: str) -> bool:

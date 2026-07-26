@@ -89,6 +89,11 @@ class SlimSpec(abc.ABC):
     # 子模块扩展名：仅这些文件按子模块名选择性保留
     SUBMODULE_EXTS: frozenset[str] = frozenset({".pyd", ".pyi", ".so"})
 
+    # 是否为兜底规则（``match`` 始终 True）。``DefaultSlimSpec`` 覆盖为 True，
+    # 其他 spec 为 False。用于 :func:`_detect_top_pkg` 回退匹配时跳过兜底 spec，
+    # 避免 ``numpy.libs`` 等辅助目录被误识别为 top_pkg。
+    is_fallback: bool = False
+
     # 通用剥离文件扩展名：编译时/调试/缓存文件，运行时不需要，所有 spec 共享
     # - .h/.hpp/.hxx/.hh：C/C++ 头文件（编译 C 扩展用）
     # - .cpp/.cc/.cxx/.c：C/C++ 源码
@@ -373,16 +378,32 @@ def classify_entry(
 
 
 def _detect_top_pkg(zf: zipfile.ZipFile, whl_pkg: str) -> str | None:
-    """从已打开的 ZipFile 中找出与 whl_pkg 归一化名匹配的顶层目录名。
+    """从已打开的 ZipFile 中找出与 whl_pkg 关联的顶层目录名。
 
-    遍历 wheel 条目，返回第一个 ``normalize_name`` 后等于 ``whl_pkg`` 的目录名。
-    无匹配时返回 None（调用方走全量解压）。
+    优先返回 ``normalize_name(top) == whl_pkg`` 的目录（wheel 文件名与顶层目录一致
+    的常规场景）。无匹配时回退到第一个能匹配某个**非兜底** spec 的顶层目录——
+    用于支持拆分 wheel：PySide6 6.6+ 将包拆为 ``pyside6``/``pyside6_essentials``
+    /``pyside6_addons`` 三个 wheel，后两者的文件名归一化包名分别为
+    ``pyside6-essentials``/``pyside6-addons``，但 wheel 内顶层目录均为 ``PySide6``
+    （归一化为 ``pyside6``）。回退匹配使 ``QtSlimSpec`` 识别这些拆分 wheel，
+    共享 ``PySide6`` 的 keep_subs 与精简规则。
+
+    无任何匹配时返回 None（调用方走全量解压）。
     """
+    fallback: str | None = None
     for name in zf.namelist():
         top = name.split("/")[0]
-        if not top.endswith(".dist-info") and normalize_name(top) == whl_pkg:
+        if top.endswith(".dist-info"):
+            continue
+        if normalize_name(top) == whl_pkg:
             return top
-    return None
+        # 回退：记录第一个能匹配非兜底 spec 的顶层目录
+        # （避免误匹配 numpy.libs 等辅助目录，这些目录应走 DefaultSlimSpec 兜底）
+        if fallback is None:
+            spec = get_spec(normalize_name(top))
+            if not spec.is_fallback:
+                fallback = top
+    return fallback
 
 
 def _full_unpack(whl: Path, dest: Path) -> None:
@@ -423,11 +444,15 @@ def _slim_extract(zf: zipfile.ZipFile, dest: Path, top_pkg: str, keep_subs: set[
         _logger.info("精简 %s: 跳过 %d 个未用子模块文件", Path(zf.filename).name, skipped)
 
 
-def _unpack_one_wheel(whl: Path, dest: Path, whl_pkg: str, keep_subs: set[str]) -> None:
+def _unpack_one_wheel(whl: Path, dest: Path, whl_pkg: str, merged: dict[str, set[str]]) -> None:
     """解压单个可解析文件名的 wheel：检测 top_pkg 后选择全量或精简解压。
 
     单次 ``zipfile.ZipFile`` 打开同时完成 top_pkg 检测与解压，避免重复打开。
     坏 zip 抛 :class:`DependencyError`。
+
+    ``keep_subs`` 通过 ``normalize_name(top_pkg)`` 从 ``merged`` 查找（而非用
+    ``whl_pkg``），使拆分 wheel（如 ``pyside6_essentials``）能共享主包
+    ``PySide6`` 的保留集合——详见 :func:`_detect_top_pkg` 回退匹配逻辑。
     """
     try:
         with zipfile.ZipFile(whl) as zf:
@@ -436,6 +461,8 @@ def _unpack_one_wheel(whl: Path, dest: Path, whl_pkg: str, keep_subs: set[str]) 
                 # wheel 顶层目录与归一化包名不匹配 → 兜底全量解压
                 zf.extractall(dest)
                 return
+            # 用 top_pkg 的归一化名查找 keep_subs，支持拆分 wheel 共享主包保留集合
+            keep_subs = merged.get(normalize_name(top_pkg), set())
             if keep_subs:
                 _logger.info("精简解压 %s: 保留子模块 %s", whl.name, ", ".join(sorted(keep_subs)))
             else:
@@ -500,8 +527,7 @@ def slim_unpack(
             _full_unpack(whl, site_packages_dir)
         else:
             whl_pkg = normalize_name(info.name)
-            keep_subs = merged.get(whl_pkg, set())
-            _unpack_one_wheel(whl, site_packages_dir, whl_pkg, keep_subs)
+            _unpack_one_wheel(whl, site_packages_dir, whl_pkg, merged)
         count += 1
     if stage is not None and count:
         stage.set_detail(f"{count} wheels 解压")
