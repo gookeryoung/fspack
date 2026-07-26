@@ -526,13 +526,13 @@ class NuitkaCompiler:
 
         1. 解析编译用 python 路径（优先 standalone，回退 runtime）并检查缓存目录有 nuitka
         2. 创建临时 bootstrap 脚本注入 sys.path 调用 nuitka ``--module`` 逐个编译 ``.py``
-        3. 删除 ``.py`` 源码（保留 ``__init__.py`` 维持包标识，避免 PEP 420
-           命名空间包导致 ``.pyd`` 不被识别为包成员）
+           （跳过 ``__init__.py``：包标识文件通常为空或仅含 import，编译无收益）
+        3. 删除成功编译的 ``.py`` 源码（``.pyd`` 已生成可替代）
         4. 清理 Nuitka 临时构建文件（``.build/`` 目录）
 
-        单文件编译失败仅告警不中断，已成功编译的 ``.pyd`` 仍可用。``.py`` 删除
-        策略与 :func:`fspack.builder._strip_py_sources` 一致：保留 ``__init__.py``
-        维持包标识。
+        单文件编译失败仅告警不中断，已成功编译的 ``.pyd`` 仍可用。``__init__.py``
+        不编译不删除，保留 ``.py`` 维持包标识（与 :func:`fspack.builder._strip_py_sources`
+        策略一致，避免 PEP 420 命名空间包导致 ``.pyd``/``.pyc`` 不被识别为包成员）。
 
         **入口文件跳过**（``entry_rels``）：入口包装器用 ``runpy.run_path()`` 显式
         指定 ``.py`` 路径调用用户代码（按 project_memory 约定，用户拒绝直接 import
@@ -571,12 +571,16 @@ class NuitkaCompiler:
             stage.set_detail("nuitka 未安装，跳过（回退到 .pyc 模式）")
             return
 
-        # 收集 .py 文件时排除 Nuitka 残留的 <name>.build/ 目录：
-        # --remove-output 只在编译成功时清理 <name>.build/，失败时残留。
-        # 下次构建若不排除会扫到 scons-debug.py 等产物并尝试编译（无意义且可能失败）。
-        # Nuitka 构建目录命名规则：<source_name>.build（如 snake.py -> snake.build）
+        # 收集 .py 文件时排除：
+        # 1. Nuitka 残留的 <name>.build/ 目录：--remove-output 只在编译成功时清理，
+        #    失败时残留。下次构建若不排除会扫到 scons-debug.py 等产物并尝试编译。
+        # 2. __init__.py：包标识文件通常为空或仅含 import，编译为 .pyd 无收益且
+        #    增加 subprocess 开销。.py 保留作包标识（PEP 420），.pyc 预编译提供
+        #    字节码优化。跳过后 compiled_files 不含 __init__.py，删除循环天然跳过。
         py_files = sorted(
-            p for p in src_dir.rglob("*.py") if not any(part.lower().endswith(".build") for part in p.parts)
+            p
+            for p in src_dir.rglob("*.py")
+            if not any(part.lower().endswith(".build") for part in p.parts) and p.name != "__init__.py"
         )
         # 入口文件跳过：入口包装器用 runpy.run_path() 显式指定 .py 路径，编译后 .py
         # 被删除会导致 FileNotFoundError。入口文件保留 .py 形态，由 .pyc 优化。
@@ -661,14 +665,11 @@ class NuitkaCompiler:
         finally:
             shutil.rmtree(bootstrap_dir, ignore_errors=True)
 
-        # 仅删除成功编译的非 __init__.py 源码（.pyd 已生成可替代）。
+        # 仅删除成功编译的 .py 源码（.pyd 已生成可替代）。
         # 失败的 .py 必须保留：运行时可回退到 .pyc 加载，避免编译失败导致 dist/src 无可用代码。
-        # 保留 __init__.py 维持包标识，与 pyc_strip 策略一致（避免 PEP 420 命名空间包
-        # 导致 .pyd/.pyc 不被识别为包成员）。
+        # __init__.py 不在 compiled_files 中（收集时已跳过），无需额外检查。
         stripped = 0
         for py_file in compiled_files:
-            if py_file.name == "__init__.py":
-                continue
             try:
                 py_file.unlink()
                 stripped += 1

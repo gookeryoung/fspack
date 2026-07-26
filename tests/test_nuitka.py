@@ -392,8 +392,8 @@ def test_compile_src_invokes_bootstrap_script_with_sys_path_injection(
         assert "from nuitka.__main__ import main" in content
 
 
-def test_compile_src_deletes_non_init_py(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """编译后删除非 __init__.py 的 .py，保留 __init__.py 维持包标识."""
+def test_compile_src_skips_init_py_not_compiled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """__init__.py 不编译不删除：跳过编译（无收益），保留 .py 维持包标识."""
     runtime = tmp_path / "runtime"
     runtime.mkdir()
     (runtime / "python.exe").write_bytes(b"")
@@ -406,17 +406,29 @@ def test_compile_src_deletes_non_init_py(tmp_path: Path, monkeypatch: pytest.Mon
     (src / "sub" / "mod.py").write_text("x = 1")
     cache = _make_nuitka_cache(tmp_path / "cache")
 
-    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(lambda cmd: (0, "", "")))
+    captured: list[list[str]] = []
+
+    def fake_stream(cmd: list[str]) -> tuple[int, str, str]:
+        captured.append(cmd)
+        return (0, "", "")
+
+    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(fake_stream))
 
     st = StageRecorder("Nuitka 编译")
     NuitkaCompiler.compile_src(src, runtime, "3.11.9", Platform.WINDOWS, cache, stage=st)
 
-    # __init__.py 保留
+    # __init__.py 保留（不编译不删除）
     assert (src / "__init__.py").is_file()
     assert (src / "sub" / "__init__.py").is_file()
-    # 非 __init__.py 被删
+    # 非 __init__.py 被删（.pyd 已生成）
     assert not (src / "app.py").exists()
     assert not (src / "sub" / "mod.py").exists()
+    # 仅编译非 __init__.py 文件（app.py + sub/mod.py = 2 次，__init__.py 跳过）
+    assert len(captured) == 2
+    compiled_names = [Path(cmd[-1]).name for cmd in captured]
+    assert "__init__.py" not in compiled_names
+    assert "app.py" in compiled_names
+    assert "mod.py" in compiled_names
 
 
 def test_compile_src_prefers_standalone_python_over_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -547,8 +559,8 @@ def test_compile_src_records_stage_metrics(tmp_path: Path, monkeypatch: pytest.M
 
     # 2 个非 __init__.py 被剥离（__init__.py 保留维持包标识）
     assert st._skipped == 2
-    # 3 个 .py 编译成功（__init__.py + app.py + util.py）
-    assert st._items == 3
+    # 2 个非 __init__.py 编译成功（app.py + util.py，__init__.py 收集时跳过不编译）
+    assert st._items == 2
 
 
 def test_compile_src_excludes_nuitka_build_artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
