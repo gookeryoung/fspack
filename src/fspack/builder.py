@@ -8,7 +8,7 @@ import logging
 import re
 import shutil
 import subprocess
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Sequence
 
@@ -56,6 +56,23 @@ _logger = logging.getLogger(__name__)
 
 # 默认 icon：打包在 fspack 包内，随 wheel 分发
 _DEFAULT_ICON = Path(__file__).parent / "assets" / "icons" / "app.ico"
+
+
+@dataclass(frozen=True)
+class BuildContext:
+    """构建流水线共享上下文，聚合阶段函数共用的构建配置与状态.
+
+    避免 :func:`_prepare_runtime`/:func:`_analyze_dependencies`/
+    :func:`_download_dependencies`/:func:`_compile_user_sources`/
+    :func:`_build_entry_loaders` 等阶段函数重复接收 6-8 个参数。
+    目标平台通过 :attr:`cfg.target` 访问，无需单独字段。
+    """
+
+    tracker: BuildTracker
+    info: ProjectInfo
+    cfg: BuildConfig
+    opts: BuildOptions
+    runtime_dir: Path
 
 
 def default_icon_path() -> Path:
@@ -393,9 +410,11 @@ def build(  # noqa: PLR0913
         st.set_detail(f"{info.name} {info.version} ({info.app_type.value})")
 
     runtime_dir = cfg.dist_dir / "runtime"
-    site_packages = _prepare_runtime(tracker, info, cfg, opts, runtime_dir, target)
-    report = _analyze_dependencies(tracker, project_dir, info, cfg)
-    has_tkinter = _download_dependencies(tracker, info, cfg, opts, site_packages, runtime_dir, target, report)
+    ctx = BuildContext(tracker=tracker, info=info, cfg=cfg, opts=opts, runtime_dir=runtime_dir)
+
+    site_packages = _prepare_runtime(ctx)
+    report = _analyze_dependencies(ctx)
+    has_tkinter = _download_dependencies(ctx, site_packages, report)
 
     if target is Platform.WINDOWS:
         # tkinter 补充到 runtime/Lib/tkinter/，需将 Lib 加入 _pth 使其可被 import
@@ -408,7 +427,7 @@ def build(  # noqa: PLR0913
         with spinner(f"复制 {info.name} 源码"):
             copy_source(project_dir, src_dst, extra_excludes=info.exclude_dirs)
 
-    _compile_user_sources(tracker, info, cfg, opts, src_dst, runtime_dir, target)
+    _compile_user_sources(ctx, src_dst)
 
     # icon 优先级：CLI --icon > 项目 [tool.fspack] icon > 自动搜索 favicon.* > 默认 app.ico（仅 Windows）
     # Linux 目标无图标资源概念，统一传 None
@@ -417,7 +436,7 @@ def build(  # noqa: PLR0913
         if resolved_icon is not None:
             st.set_detail(str(resolved_icon.name))
 
-    exes = _build_entry_loaders(tracker, info, cfg, target, resolved_icon, has_tkinter)
+    exes = _build_entry_loaders(ctx, resolved_icon, has_tkinter)
 
     console.rich.print(tracker.summary())
     if len(exes) == 1:
@@ -429,14 +448,7 @@ def build(  # noqa: PLR0913
     return info
 
 
-def _prepare_runtime(  # noqa: PLR0913
-    tracker: BuildTracker,
-    info: ProjectInfo,
-    cfg: BuildConfig,
-    opts: BuildOptions,
-    runtime_dir: Path,
-    target: Platform,
-) -> Path:
+def _prepare_runtime(ctx: BuildContext) -> Path:
     """下载/解压运行时、精简标准库，返回 site-packages 路径.
 
     分支：
@@ -446,97 +458,94 @@ def _prepare_runtime(  # noqa: PLR0913
 
     runtime 已就绪（dll/python bin 存在）时跳过下载解压，两 stage 均 ``hit_cache``。
     """
+    target = ctx.cfg.target
     if target is Platform.LINUX:
-        site_packages = _prepare_linux_runtime(tracker, info, runtime_dir)
+        site_packages = _prepare_linux_runtime(ctx)
     else:
-        site_packages = _prepare_windows_runtime(tracker, info, cfg, runtime_dir)
+        site_packages = _prepare_windows_runtime(ctx)
     site_packages.mkdir(parents=True, exist_ok=True)
 
     # Win7 兼容性：Python 3.9+ 官方不再支持 Win7，注入 api-ms-win-core-path-l1-1-0.dll
     # 使 embed python 3.9+ 在 Win7 SP1 / Server 2008 R2 SP1 上也能运行。
     # 仅 Windows 目标需要（Linux standalone 不存在此问题）。
-    if target is Platform.WINDOWS and _needs_win7_compat_dll(info.py_version):
-        _inject_win7_compat_dll(runtime_dir)
+    if target is Platform.WINDOWS and _needs_win7_compat_dll(ctx.info.py_version):
+        _inject_win7_compat_dll(ctx.runtime_dir)
 
     # 标准库精简：剥离 Linux standalone 中 test/ensurepip/idlelib 等运行时无用模块。
     # Windows embed 标准库在 python3XX.zip 内（官方已精简），阶段内自动跳过。
-    if not opts.no_stdlib_trim:
-        with tracker.stage("精简标准库") as st:
-            _trim_stdlib(runtime_dir, info.py_version, target, st)
+    if not ctx.opts.no_stdlib_trim:
+        with ctx.tracker.stage("精简标准库") as st:
+            _trim_stdlib(ctx.runtime_dir, ctx.info.py_version, target, st)
 
     return site_packages
 
 
-def _prepare_linux_runtime(tracker: BuildTracker, info: ProjectInfo, runtime_dir: Path) -> Path:
+def _prepare_linux_runtime(ctx: BuildContext) -> Path:
     """下载并解压 python-build-standalone 到 runtime_dir（Linux 目标）."""
-    major, minor = info.py_version.split(".")[:2]
-    python_bin = runtime_dir / "python" / "bin" / f"python{major}.{minor}"
+    major, minor = ctx.info.py_version.split(".")[:2]
+    python_bin = ctx.runtime_dir / "python" / "bin" / f"python{major}.{minor}"
     runtime_ready = python_bin.is_file()
     standalone_cache = Path.home() / ".fspack" / "cache" / "standalone"
     tar_path: Path | None = None
-    with tracker.stage("下载运行时") as st:
+    with ctx.tracker.stage("下载运行时") as st:
         if runtime_ready:
             st.hit_cache()
             st.set_detail("runtime 已就绪")
         else:
-            tar_path = download_standalone(info.py_version, STANDALONE_RELEASE_TAG, standalone_cache, stage=st)
+            tar_path = download_standalone(ctx.info.py_version, STANDALONE_RELEASE_TAG, standalone_cache, stage=st)
             st.set_detail("python-build-standalone")
-    with tracker.stage("解压运行时") as st:
+    with ctx.tracker.stage("解压运行时") as st:
         if runtime_ready:
             st.hit_cache()
             st.set_detail("runtime 已就绪")
         else:
             assert tar_path is not None
-            extract_standalone(tar_path, runtime_dir)
+            extract_standalone(tar_path, ctx.runtime_dir)
             st.processed(1)
             st.set_detail("python-build-standalone")
-    return runtime_dir / "python" / "lib" / f"python{major}.{minor}" / "site-packages"
+    return ctx.runtime_dir / "python" / "lib" / f"python{major}.{minor}" / "site-packages"
 
 
-def _prepare_windows_runtime(tracker: BuildTracker, info: ProjectInfo, cfg: BuildConfig, runtime_dir: Path) -> Path:
+def _prepare_windows_runtime(ctx: BuildContext) -> Path:
     """下载并解压 embed python 到 runtime_dir（Windows 目标）."""
-    dll_marker = runtime_dir / f"{embed_dirname(info.py_version)}.dll"
+    dll_marker = ctx.runtime_dir / f"{embed_dirname(ctx.info.py_version)}.dll"
     runtime_ready = dll_marker.is_file()
     zip_path: Path | None = None
-    with tracker.stage("下载运行时") as st:
+    with ctx.tracker.stage("下载运行时") as st:
         if runtime_ready:
             st.hit_cache()
             st.set_detail("runtime 已就绪")
         else:
-            zip_path = download_embed(info.py_version, cfg.mirror, cfg.embed_cache_dir, stage=st)
+            zip_path = download_embed(ctx.info.py_version, ctx.cfg.mirror, ctx.cfg.embed_cache_dir, stage=st)
             st.set_detail("embed python")
-    with tracker.stage("解压运行时") as st:
+    with ctx.tracker.stage("解压运行时") as st:
         if runtime_ready:
             st.hit_cache()
             st.set_detail("runtime 已就绪")
         else:
             assert zip_path is not None
-            extract_embed(zip_path, runtime_dir)
+            extract_embed(zip_path, ctx.runtime_dir)
             st.processed(1)
             st.set_detail("embed python")
-    return runtime_dir / "Lib" / "site-packages"
+    return ctx.runtime_dir / "Lib" / "site-packages"
 
 
-def _analyze_dependencies(
-    tracker: BuildTracker,
-    project_dir: Path,
-    info: ProjectInfo,
-    cfg: BuildConfig,
-) -> DependencyReport:
+def _analyze_dependencies(ctx: BuildContext) -> DependencyReport:
     """分析依赖（源码指纹缓存命中则跳过 AST 扫描）."""
-    with tracker.stage("分析依赖") as st:
+    project_dir = ctx.cfg.project_dir
+    with ctx.tracker.stage("分析依赖") as st:
         # 源码指纹缓存：源码未变时跳过 AST 分析，重复构建加速 ~478ms
         from fspack.analyzer import source_fingerprint
 
         fingerprint = source_fingerprint(project_dir)
-        report = _dep_cache_load(cfg.dist_dir, fingerprint, info.dependencies)
+        report = _dep_cache_load(ctx.cfg.dist_dir, fingerprint, ctx.info.dependencies)
         if report is not None:
             st.hit_cache()
             ast_count = len(report.ast_third_party)
             st.set_detail(f"缓存命中，AST {ast_count} 个第三方")
         else:
-            report = DependencyReport.from_src(project_dir, info.name, info.dependencies)
-            _dep_cache_save(cfg.dist_dir, fingerprint, report)
+            report = DependencyReport.from_src(project_dir, ctx.info.name, ctx.info.dependencies)
+            _dep_cache_save(ctx.cfg.dist_dir, fingerprint, report)
             if report.missing:
                 _logger.info("AST 发现未声明依赖: %s", ", ".join(report.missing))
             ast_count = len(report.ast_third_party)
@@ -545,29 +554,21 @@ def _analyze_dependencies(
     return report
 
 
-def _download_dependencies(  # noqa: PLR0913
-    tracker: BuildTracker,
-    info: ProjectInfo,
-    cfg: BuildConfig,
-    opts: BuildOptions,
-    site_packages: Path,
-    runtime_dir: Path,
-    target: Platform,
-    report: DependencyReport,
-) -> bool:
+def _download_dependencies(ctx: BuildContext, site_packages: Path, report: DependencyReport) -> bool:
     """下载并解压第三方依赖 wheel 到 site-packages，返回是否补充了 tkinter.
 
     补充内置库 tkinter（embed python 缺失，AST 检测到使用时从 python-build-standalone 提取）。
     下载用包名优先 declared（PyPI 包名权威），declared 为空时回退 ast_third_party。
     """
+    target = ctx.cfg.target
     # 补充内置库：embed python 缺失 tkinter（纯 Python 包 + _tkinter.pyd + Tcl/Tk 脚本），
     # 若 AST 检测到 tkinter 使用则从 python-build-standalone Windows 构建提取并补充到 runtime。
     # Linux standalone 已含全部 stdlib，无需补充。
     has_tkinter = False
     if TkinterBundler.is_needed(report.ast_stdlib, target):
         builtin_cache = Path.home() / ".fspack" / "cache"
-        with tracker.stage("补充内置库") as st:
-            TkinterBundler.ensure(runtime_dir, info.py_version, builtin_cache, stage=st)
+        with ctx.tracker.stage("补充内置库") as st:
+            TkinterBundler.ensure(ctx.runtime_dir, ctx.info.py_version, builtin_cache, stage=st)
             has_tkinter = True
             st.set_detail("tkinter")
 
@@ -579,37 +580,29 @@ def _download_dependencies(  # noqa: PLR0913
 
     if packages_to_download:
         if _site_packages_has_deps(site_packages, packages_to_download):
-            with tracker.stage("下载依赖") as st:
+            with ctx.tracker.stage("下载依赖") as st:
                 _logger.info("site-packages 已有依赖，跳过下载解压")
                 st.skip(len(packages_to_download))
                 st.set_detail("已存在跳过")
         else:
             wheel_cache = fspack_wheel_cache_dir()
-            with tracker.stage("下载依赖") as st:
+            with ctx.tracker.stage("下载依赖") as st:
                 wheels = download_wheels(
                     packages_to_download,
-                    info.py_version,
-                    cfg.mirror.pypi_index,
+                    ctx.info.py_version,
+                    ctx.cfg.mirror.pypi_index,
                     wheel_cache,
                     platform_tags=wheel_platform_tags(target),
                     stage=st,
                 )
-            with tracker.stage("解压 wheel(精简)") as st:
-                unpack_wheels(wheels, site_packages, report.ast_submodules, opts.keep_modules, stage=st)
+            with ctx.tracker.stage("解压 wheel(精简)") as st:
+                unpack_wheels(wheels, site_packages, report.ast_submodules, ctx.opts.keep_modules, stage=st)
     else:
         _logger.info("无第三方依赖，跳过 wheel 下载")
     return has_tkinter
 
 
-def _compile_user_sources(  # noqa: PLR0913
-    tracker: BuildTracker,
-    info: ProjectInfo,
-    cfg: BuildConfig,
-    opts: BuildOptions,
-    src_dst: Path,
-    runtime_dir: Path,
-    target: Platform,
-) -> None:
+def _compile_user_sources(ctx: BuildContext, src_dst: Path) -> None:
     """编译用户源码：Nuitka 编译（可选）+ 字节码预编译.
 
     Nuitka 编译模式：用 runtime python -c "sys.path.insert(0, <nuitka_cache>); ..." 调用
@@ -623,20 +616,21 @@ def _compile_user_sources(  # noqa: PLR0913
     入口文件跳过编译：入口包装器用 runpy.run_path() 显式指定 .py 路径调用用户代码，
     若入口 .py 被 Nuitka 编译后删除，run_path 会 FileNotFoundError。
     """
-    if opts.nuitka and target is detect_platform():
-        with tracker.stage("Nuitka 编译") as st:
+    target = ctx.cfg.target
+    if ctx.opts.nuitka and target is detect_platform():
+        with ctx.tracker.stage("Nuitka 编译") as st:
             from fspack.packaging.nuitka import NuitkaCompiler
 
             nuitka_cache_root = Path.home() / ".fspack" / "cache" / "nuitka"
             # 入口文件相对 src 的 POSIX 路径集合：Nuitka 编译跳过这些文件
-            entry_rels = {ep.entry_rel(info.src_dir) for ep in info.all_entries}
+            entry_rels = {ep.entry_rel(ctx.info.src_dir) for ep in ctx.info.all_entries}
             NuitkaCompiler.compile_with_stamp(
                 src_dst,
-                cfg.dist_dir,
-                runtime_dir,
-                info.py_version,
+                ctx.cfg.dist_dir,
+                ctx.runtime_dir,
+                ctx.info.py_version,
                 target,
-                cfg.mirror,
+                ctx.cfg.mirror,
                 nuitka_cache_root,
                 stage=st,
                 entry_rels=entry_rels,
@@ -647,40 +641,34 @@ def _compile_user_sources(  # noqa: PLR0913
     # 交叉构建时（构建机平台 ≠ 目标平台）runtime python 无法执行，跳过预编译。
     # Nuitka 模式下 src 已编译为 .pyd，compileall 会跳过（找不到 .py 不生成 .pyc），
     # site-packages 仍按 pyc_optimize 编译，故本步保留不跳过。
-    if not opts.no_pyc and target is detect_platform():
-        with tracker.stage("预编译字节码") as st:
+    if not ctx.opts.no_pyc and target is detect_platform():
+        with ctx.tracker.stage("预编译字节码") as st:
             _precompile_pyc(
-                cfg.dist_dir,
-                runtime_dir,
-                info.py_version,
+                ctx.cfg.dist_dir,
+                ctx.runtime_dir,
+                ctx.info.py_version,
                 target,
-                strip_py=opts.pyc_strip,
+                strip_py=ctx.opts.pyc_strip,
                 stage=st,
-                optimize=opts.pyc_optimize,
+                optimize=ctx.opts.pyc_optimize,
             )
 
 
-def _build_entry_loaders(  # noqa: PLR0913
-    tracker: BuildTracker,
-    info: ProjectInfo,
-    cfg: BuildConfig,
-    target: Platform,
-    resolved_icon: Path | None,
-    has_tkinter: bool,
-) -> list[Path]:
+def _build_entry_loaders(ctx: BuildContext, resolved_icon: Path | None, has_tkinter: bool) -> list[Path]:
     """为每个入口生成 C loader 与入口包装器，返回生成的 exe 路径列表."""
+    target = ctx.cfg.target
     exes: list[Path] = []
-    with tracker.stage("生成 C loader") as st:
-        source = generate_loader_source(info.py_xy, target)
-        build_dir = cfg.dist_dir / "build"
-        for ep in info.all_entries:
-            entry_rel = ep.entry_rel(info.src_dir)
-            result = EntryWrapper.dotted_module_name(info.src_dir, ep.file)
+    with ctx.tracker.stage("生成 C loader") as st:
+        source = generate_loader_source(ctx.info.py_xy, target)
+        build_dir = ctx.cfg.dist_dir / "build"
+        for ep in ctx.info.all_entries:
+            entry_rel = ep.entry_rel(ctx.info.src_dir)
+            result = EntryWrapper.dotted_module_name(ctx.info.src_dir, ep.file)
             module_dotted = result[0] if result is not None else None
             pkg_root_rel = result[1] if result is not None else "."
             # 生成入口包装器：处理 sys.path、Qt 插件路径与包上下文（相对导入）
             wrapper_name = f"_entry_{ep.name}.py"
-            wrapper_path = cfg.dist_dir / wrapper_name
+            wrapper_path = ctx.cfg.dist_dir / wrapper_name
             wrapper_path.write_text(
                 EntryWrapper.generate_wrapper_source(
                     ep.name, module_dotted, entry_rel, pkg_root_rel, has_tkinter=has_tkinter
@@ -688,14 +676,14 @@ def _build_entry_loaders(  # noqa: PLR0913
                 encoding="utf-8",
             )
             # .entry 指向 wrapper（loader 读 .entry 路径运行）
-            if info.entries:
+            if ctx.info.entries:
                 # 多入口模式：每个入口写 <name>.entry
-                (cfg.dist_dir / f"{ep.name}.entry").write_text(wrapper_name, encoding="utf-8")
+                (ctx.cfg.dist_dir / f"{ep.name}.entry").write_text(wrapper_name, encoding="utf-8")
             else:
                 # 单入口模式：写 .entry（向后兼容）
-                (cfg.dist_dir / ".entry").write_text(wrapper_name, encoding="utf-8")
+                (ctx.cfg.dist_dir / ".entry").write_text(wrapper_name, encoding="utf-8")
             exe_name = f"{ep.name}.exe" if target is Platform.WINDOWS else ep.name
-            exe = cfg.dist_dir / exe_name
+            exe = ctx.cfg.dist_dir / exe_name
             compile_loader(source, exe, ep.app_type, build_dir, target, icon=resolved_icon, stage=st)
             exes.append(exe)
         st.processed(len(exes))
