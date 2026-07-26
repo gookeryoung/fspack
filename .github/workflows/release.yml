@@ -226,9 +226,12 @@ jobs:
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           TAG_NAME: ${{ github.ref_name }}
         # 幂等：release 已存在则上传产物（--clobber 覆盖同名 asset），不存在则创建。
         # 处理重打 tag 触发 release.yml 时上一次 run 已创建 release 的冲突场景。
+        # release job 无 actions/checkout（无 .git 目录），gh 无法从 git remote 推断
+        # owner/repo，必须用 GH_REPO 环境变量显式指定仓库。
         run: |
           if gh release view "$TAG_NAME" >/dev/null 2>&1; then
             echo "Release $TAG_NAME 已存在，上传产物（覆盖同名 asset）..."
