@@ -100,7 +100,56 @@ def _unpack_one_wheel(whl, dest, whl_pkg, merged):
 
 ## 遗留事项
 
-- 待用户实际重新打包 RimSort 验证精简效果（需清除 `dist/runtime/Lib/site-packages/PySide6/` 后重新构建）
+无。
+
+## 二次修复：WebEngineCore DLL 加载失败
+
+### 问题
+
+用户重新打包 RimSort 后运行报错：
+```
+ImportError: DLL load failed while importing QtWebEngineCore: 找不到指定的模块。
+```
+
+### 根因
+
+`_QT_MODULE_DEPS` 中 WebEngineCore/WebEngineWidgets 的 C 层 DLL 依赖不完整。
+通过 dumpbin 分析实际 DLL 导入表：
+
+- `Qt6WebEngineCore.dll` 直接导入 `Qt6Quick.dll`（Chromium 用 QML 渲染）
+- `Qt6WebEngineWidgets.dll` 直接导入 `Qt6Quick.dll`/`Qt6QuickWidgets.dll`/`Qt6PrintSupport.dll`
+
+原映射仅含 `{Network, Positioning, Gui, Core}` / `{WebEngineCore, Widgets, Gui, Core}`，
+缺少 Quick/QuickWidgets/PrintSupport，导致这些 DLL 被剥离，.pyd 加载时找不到依赖。
+
+### 修复
+
+[qt.py:230-240](../../src/fspack/slim/qt.py#L230-L240) 更新 WebEngine 闭包：
+
+```python
+"WebEngineCore": frozenset({"Network", "Positioning", "Quick", "Gui", "Core"}),
+"WebEngineWidgets": frozenset(
+    {"WebEngineCore", "Quick", "QuickWidgets", "PrintSupport", "Widgets", "Gui", "Core"}
+),
+```
+
+### 联动影响
+
+WebEngineWidgets 闭包扩展后含 Quick，Quick 在 `_QT_QML_DEPS` 与 `_QT_OPENGL_DEPS` 中，
+导致 qml/ 目录、opengl32sw.dll、pyside6qml.abi3.dll 联动保留（WebEngine 应用必需）。
+
+### 测试调整
+
+- `test_qt_webengine_dynamic_expansion`：qml/ 目录断言由剥离改为保留
+- `test_qt_auxiliary_dll_without_deps_excluded`：改用纯 Widgets 场景测试剥离逻辑
+  （避免 WebEngineWidgets 闭包扩展引入 Quick/Qml 干扰）
+
+### 最终验证
+
+- ruff check / format / pyrefly：0 错误
+- pytest：956 passed, 21 deselected
+- 覆盖率：97.10%（slim 模块全部 100%）
+- 用户重新打包 RimSort 后 `QtWebEngineCore` 加载成功（待用户验证）
 
 ## 下一轮计划
 

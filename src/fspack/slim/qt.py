@@ -228,9 +228,13 @@ _QT_MODULE_DEPS: dict[str, frozenset[str]] = {
     "Help": frozenset({"Widgets", "Gui", "Core"}),
     "Designer": frozenset({"Xml", "Widgets", "Gui", "Core"}),
     # Web
+    # WebEngineCore/WebEngineWidgets 的 C 层 DLL 依赖（dumpbin 验证）：
+    # - Qt6WebEngineCore.dll 直接导入 Qt6Quick.dll（Chromium 用 QML 渲染）
+    # - Qt6WebEngineWidgets.dll 直接导入 Qt6Quick.dll/Qt6QuickWidgets.dll/Qt6PrintSupport.dll
+    # 故闭包须含 Quick/QuickWidgets/PrintSupport，否则 .pyd 加载时 DLL load failed。
     "WebEngine": frozenset({"Network", "Gui", "Core"}),
-    "WebEngineCore": frozenset({"Network", "Positioning", "Gui", "Core"}),
-    "WebEngineWidgets": frozenset({"WebEngineCore", "Widgets", "Gui", "Core"}),
+    "WebEngineCore": frozenset({"Network", "Positioning", "Quick", "Gui", "Core"}),
+    "WebEngineWidgets": frozenset({"WebEngineCore", "Quick", "QuickWidgets", "PrintSupport", "Widgets", "Gui", "Core"}),
     "WebEngineQuick": frozenset({"WebEngineCore", "Quick", "Qml", "Gui", "Core"}),
     # 设备/位置
     "Bluetooth": frozenset({"Core"}),

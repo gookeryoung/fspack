@@ -1129,7 +1129,11 @@ class TestSlimUnpack:
         assert (dest / "PySide2-5.15.2.1.dist-info" / "METADATA").is_file()
 
     def test_qt_webengine_dynamic_expansion(self, tmp_path: Path) -> None:
-        """import PySide2.QtWebEngineWidgets 时联动保留 resources 与 qtwebengine plugins."""
+        """import PySide2.QtWebEngineWidgets 时联动保留 resources、qtwebengine plugins 与 qml.
+
+        WebEngineWidgets 闭包含 Quick（Qt6WebEngineWidgets.dll C 层依赖 Qt6Quick.dll），
+        Quick 在 ``_QT_QML_DEPS`` 中，故 qml/ 目录联动保留。
+        """
         whl = tmp_path / "wh" / "PySide2-5.15.2.1-cp39-none-win_amd64.whl"
         whl.parent.mkdir()
         _make_wheel(
@@ -1159,8 +1163,8 @@ class TestSlimUnpack:
         # resources 依赖 WebEngineCore/WebEngineWidgets → 保留
         assert (dest / "PySide2" / "resources" / "icudtl.dat").is_file()
         assert (dest / "PySide2" / "resources" / "qtwebengine_resources.pak").is_file()
-        # qml 依赖 Qml/Quick，保留集合无 → 剥离
-        assert not (dest / "PySide2" / "qml" / "QtQuick.2" / "qmldir").exists()
+        # qml 依赖 Qml/Quick，WebEngineWidgets 闭包含 Quick → 联动保留
+        assert (dest / "PySide2" / "qml" / "QtQuick.2" / "qmldir").is_file()
         # translations 始终剥离
         assert not (dest / "PySide2" / "translations" / "qtbase_ar.qm").exists()
 
@@ -1247,10 +1251,9 @@ class TestSlimUnpack:
     def test_qt_auxiliary_dll_without_deps_excluded(self, tmp_path: Path) -> None:
         """闭包不含 Multimedia/Qml/OpenGL 模块时 FFmpeg/QML ABI/opengl32sw DLL 剥离.
 
-        回归测试：ref/RimSort 闭包 = {Widgets, Gui, Core, WebEngineWidgets,
-        WebEngineCore, Network, Positioning}，无 Multimedia/Qml/OpenGL 等，
-        FFmpeg 系列（18MB）/QML ABI（0.08MB）/opengl32sw.dll（20MB）应被剥离。
-        WebEngineCore 自带 Chromium GPU 加速，不依赖 opengl32sw.dll。
+        用纯 Widgets 场景测试（不含 WebEngine，避免 WebEngineWidgets 闭包扩展
+        引入 Quick/Qml 导致 opengl32sw.dll 与 pyside6qml.abi3.dll 联动保留）。
+        WebEngine 场景的联动保留由 ``test_qt_webengine_dynamic_expansion`` 覆盖。
         """
         whl = tmp_path / "wh" / "PySide6-6.5.0-cp39-none-win_amd64.whl"
         whl.parent.mkdir()
@@ -1261,15 +1264,9 @@ class TestSlimUnpack:
                 "PySide6/QtCore.pyd": b"core",
                 "PySide6/QtGui.pyd": b"gui",
                 "PySide6/QtWidgets.pyd": b"widgets",
-                "PySide6/QtWebEngineCore.pyd": b"we-core",
-                "PySide6/QtWebEngineWidgets.pyd": b"we-widgets",
                 "PySide6/Qt6Core.dll": b"c",
                 "PySide6/Qt6Gui.dll": b"g",
                 "PySide6/Qt6Widgets.dll": b"w",
-                "PySide6/Qt6WebEngineCore.dll": b"we-c",
-                "PySide6/Qt6WebEngineWidgets.dll": b"we-w",
-                "PySide6/Qt6Network.dll": b"net",
-                "PySide6/Qt6Positioning.dll": b"pos",
                 # FFmpeg 系列（无 Multimedia → 剥离）
                 "PySide6/avcodec-61.dll": b"avcodec",
                 "PySide6/avformat-61.dll": b"avformat",
@@ -1296,13 +1293,12 @@ class TestSlimUnpack:
         count = slim_unpack(
             [whl],
             dest,
-            {"PySide6": frozenset({"QtCore", "QtGui", "QtWidgets", "QtWebEngineCore", "QtWebEngineWidgets"})},
+            {"PySide6": frozenset({"QtCore", "QtGui", "QtWidgets"})},
         )
         assert count == 1
         # 基础子模块保留
         assert (dest / "PySide6" / "QtCore.pyd").is_file()
         assert (dest / "PySide6" / "QtWidgets.pyd").is_file()
-        assert (dest / "PySide6" / "QtWebEngineWidgets.pyd").is_file()
         # FFmpeg 系列：闭包无 Multimedia → 剥离
         assert not (dest / "PySide6" / "avcodec-61.dll").exists()
         assert not (dest / "PySide6" / "avformat-61.dll").exists()
