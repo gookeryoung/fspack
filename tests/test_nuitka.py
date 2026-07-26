@@ -1787,6 +1787,73 @@ def test_ensure_ccache_windows_uses_exe_extension(tmp_path: Path, monkeypatch: p
     assert result == ccache_exe
 
 
+def test_ensure_ccache_migrates_nested_local_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """本地缓存根目录无 ccache 但有 ccache-<ver>-<platform>/ 子目录时自动迁移复用.
+
+    用户已下载旧版 ccache（解压后子目录结构未迁移），_ensure_ccache 应识别并
+    迁移到根目录，避免重新下载。覆盖 Windows 反复下载的真实场景。
+    """
+    from fspack.packaging.nuitka import NuitkaCompiler
+    from fspack.progress import StageRecorder
+
+    cache_root = tmp_path / "nuitka"
+    ccache_dir = tmp_path / "ccache"
+    nested_dir = ccache_dir / "ccache-4.10.2-windows-x86_64"
+    nested_dir.mkdir(parents=True)
+    (nested_dir / "ccache.exe").write_bytes(b"fake-exe")
+    (nested_dir / "LICENSE.html").write_bytes(b"license")
+    # 根目录无 ccache.exe（旧 bug 导致未迁移）
+
+    monkeypatch.setattr("fspack.packaging.nuitka.shutil.which", lambda name: None)
+    # 拦截下载，确保不触发
+    download_called = {"n": 0}
+    monkeypatch.setattr(
+        NuitkaCompiler,
+        "_download_and_extract_ccache",
+        staticmethod(lambda *a, **kw: download_called.__setitem__("n", download_called["n"] + 1)),
+    )
+
+    st = StageRecorder("Nuitka 编译")
+    result = NuitkaCompiler._ensure_ccache(cache_root, Platform.WINDOWS, st)
+
+    # 返回迁移后的根目录 ccache.exe
+    assert result == ccache_dir / "ccache.exe"
+    assert (ccache_dir / "ccache.exe").is_file()
+    # 子目录已清理
+    assert not nested_dir.exists()
+    assert not list(ccache_dir.glob("ccache-*/"))
+    # 未触发下载
+    assert download_called["n"] == 0
+
+
+def test_ensure_ccache_migrates_nested_local_cache_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Linux 本地缓存子目录结构同样支持自动迁移."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+    from fspack.progress import StageRecorder
+
+    cache_root = tmp_path / "nuitka"
+    ccache_dir = tmp_path / "ccache"
+    nested_dir = ccache_dir / "ccache-4.10.2-linux-x86_64"
+    nested_dir.mkdir(parents=True)
+    (nested_dir / "ccache").write_bytes(b"#!/bin/sh\nexit 0\n")
+
+    monkeypatch.setattr("fspack.packaging.nuitka.shutil.which", lambda name: None)
+    download_called = {"n": 0}
+    monkeypatch.setattr(
+        NuitkaCompiler,
+        "_download_and_extract_ccache",
+        staticmethod(lambda *a, **kw: download_called.__setitem__("n", download_called["n"] + 1)),
+    )
+
+    st = StageRecorder("Nuitka 编译")
+    result = NuitkaCompiler._ensure_ccache(cache_root, Platform.LINUX, st)
+
+    assert result == ccache_dir / "ccache"
+    assert (ccache_dir / "ccache").is_file()
+    assert not list(ccache_dir.glob("ccache-*/"))
+    assert download_called["n"] == 0
+
+
 def test_ensure_ccache_unsupported_platform_returns_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """无预编译二进制的平台（理论上所有平台都有，但 mock URL 缺失时）返回 None."""
     from fspack.packaging.nuitka import NuitkaCompiler
@@ -1968,9 +2035,16 @@ def _make_ccache_linux_tarball(dest: Path) -> None:
 
 
 def _make_ccache_windows_zip(dest: Path) -> None:
-    """构造 ccache Windows zip：内含 ccache.exe."""
+    """构造 ccache Windows zip：内含 ccache-<ver>-windows-x86_64/ccache.exe.
+
+    真实 ccache releases 的 Windows zip 解压后是 ``ccache-<ver>-windows-x86_64/``
+    子目录，内含 ``ccache.exe`` 与 LICENSE/MANUAL 等附属文件。
+    """
+    inner_dir = "ccache-4.10.2-windows-x86_64"
     with zipfile.ZipFile(dest, "w") as zf:
-        zf.writestr("ccache.exe", b"fake-exe")
+        zf.writestr(f"{inner_dir}/ccache.exe", b"fake-exe")
+        zf.writestr(f"{inner_dir}/LICENSE.html", b"license")
+        zf.writestr(f"{inner_dir}/README.md", b"readme")
 
 
 def test_download_and_extract_ccache_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1999,7 +2073,7 @@ def test_download_and_extract_ccache_linux(tmp_path: Path, monkeypatch: pytest.M
 
 
 def test_download_and_extract_ccache_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Windows zip 解压后 ccache.exe 在根目录."""
+    """Windows zip 解压后 ccache.exe 从 ccache-<ver>-windows-x86_64/ 移到根目录."""
     from fspack.packaging.nuitka import NuitkaCompiler
 
     ccache_dir = tmp_path / "ccache"
@@ -2015,7 +2089,11 @@ def test_download_and_extract_ccache_windows(tmp_path: Path, monkeypatch: pytest
     monkeypatch.setattr("fspack.packaging.net.Downloader", _StubDownloader)
     NuitkaCompiler._download_and_extract_ccache("http://fake/ccache.zip", ccache_dir, Platform.WINDOWS)
 
+    # ccache.exe 已从内层目录移到根
     assert (ccache_dir / "ccache.exe").is_file()
+    # 内层目录（含 LICENSE/README 等）已清理
+    assert not list(ccache_dir.glob("ccache-*/"))
+    # zip 已删除
     assert not (ccache_dir / "ccache.zip").exists()
 
 

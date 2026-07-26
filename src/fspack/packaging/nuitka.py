@@ -412,7 +412,7 @@ class NuitkaCompiler:
         return env
 
     @classmethod
-    def _ensure_ccache(
+    def _ensure_ccache(  # noqa: PLR0911
         cls,
         cache_root: Path,
         target: Platform,
@@ -434,7 +434,7 @@ class NuitkaCompiler:
         Returns:
             ccache 可执行文件路径；不可用返回 None。
         """
-        # 1. 系统已安装
+        # 1. 系统已安装（任意版本均可用，ccache 4.x 协议稳定）
         found = shutil.which("ccache")
         if found:
             _logger.info("使用系统 ccache: %s", found)
@@ -442,9 +442,23 @@ class NuitkaCompiler:
 
         # 2. 本地缓存
         ccache_dir = cache_root.parent / "ccache"
-        ccache_exe = ccache_dir / ("ccache.exe" if target is Platform.WINDOWS else "ccache")
+        exe_name = "ccache.exe" if target is Platform.WINDOWS else "ccache"
+        ccache_exe = ccache_dir / exe_name
         if ccache_exe.is_file():
             _logger.info("使用本地缓存 ccache: %s", ccache_exe)
+            return ccache_exe
+
+        # 2.1 容错：本地缓存根目录无 ccache，但存在旧版子目录结构
+        # （ccache-<ver>-<platform>/ccache[.exe]），自动迁移到根目录复用，避免重新下载
+        nested: list[Path] = list(ccache_dir.glob(f"ccache-*/{exe_name}")) if ccache_dir.is_dir() else []
+        if nested:
+            nested[0].rename(ccache_exe)
+            for d in ccache_dir.glob("ccache-*/"):
+                shutil.rmtree(d, ignore_errors=True)
+            if target is Platform.LINUX:
+                with contextlib.suppress(OSError):
+                    ccache_exe.chmod(0o755)
+            _logger.info("迁移本地缓存 ccache 到根目录: %s", ccache_exe)
             return ccache_exe
 
         # 3. 下载预编译二进制
@@ -504,6 +518,13 @@ class NuitkaCompiler:
             with zipfile.ZipFile(archive) as zf:
                 zf.extractall(ccache_dir)
             archive.unlink()
+            # 归档内 ccache.exe 在 ccache-<ver>-windows-x86_64/ccache.exe，移动到根目录
+            extracted = list(ccache_dir.glob("ccache-*/ccache.exe"))
+            if extracted:
+                extracted[0].rename(ccache_dir / "ccache.exe")
+                # 清理子目录（LICENSE/MANUAL/README 等）
+                for d in ccache_dir.glob("ccache-*/"):
+                    shutil.rmtree(d, ignore_errors=True)
 
     @staticmethod
     def _has_pip(python_exe: str) -> bool:
