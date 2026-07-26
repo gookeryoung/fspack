@@ -201,7 +201,12 @@ _QT_MODULE_DEPS: dict[str, frozenset[str]] = {
     "Qml": frozenset({"QmlModels", "QmlWorkerScript", "Network", "Core"}),
     "QmlModels": frozenset({"Qml", "Core"}),
     "QmlWorkerScript": frozenset({"Qml", "Core"}),
-    "Quick": frozenset({"QmlModels", "Qml", "Gui", "Core"}),
+    # QmlMeta：QML 元对象/注册系统，Qt6Quick.dll 隐式依赖（dumpbin 验证）
+    "QmlMeta": frozenset({"Qml", "QmlModels", "QmlWorkerScript", "Core"}),
+    # Quick 的 C 层 DLL 依赖（dumpbin 验证 Qt6Quick.dll 导入表）：
+    # - Qt6OpenGL.dll：Quick 默认用 OpenGL 渲染场景图
+    # - Qt6QmlMeta.dll：Quick 元类型注册
+    "Quick": frozenset({"QmlModels", "Qml", "QmlMeta", "OpenGL", "Gui", "Core"}),
     "QuickWidgets": frozenset({"Quick", "Qml", "Widgets", "Gui", "Core"}),
     "Quick3D": frozenset({"Quick", "Gui", "Core"}),
     "QuickShapes": frozenset({"Quick", "Gui", "Core"}),

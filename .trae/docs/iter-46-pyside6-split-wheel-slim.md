@@ -102,55 +102,59 @@ def _unpack_one_wheel(whl, dest, whl_pkg, merged):
 
 无。
 
-## 二次修复：WebEngineCore DLL 加载失败
+## 二次修复：WebEngineCore DLL 加载失败（Quick 闭包不完整）
 
 ### 问题
 
-用户重新打包 RimSort 后运行报错：
+首次修复（补全 WebEngineCore/WebEngineWidgets 的 Quick/QuickWidgets/PrintSupport 依赖）
+后重新打包，仍报：
 ```
 ImportError: DLL load failed while importing QtWebEngineCore: 找不到指定的模块。
 ```
 
 ### 根因
 
-`_QT_MODULE_DEPS` 中 WebEngineCore/WebEngineWidgets 的 C 层 DLL 依赖不完整。
-通过 dumpbin 分析实际 DLL 导入表：
+`Quick` 的 C 层 DLL 依赖不完整。通过 dumpbin 分析 Qt6Quick.dll 导入表，发现还依赖：
 
-- `Qt6WebEngineCore.dll` 直接导入 `Qt6Quick.dll`（Chromium 用 QML 渲染）
-- `Qt6WebEngineWidgets.dll` 直接导入 `Qt6Quick.dll`/`Qt6QuickWidgets.dll`/`Qt6PrintSupport.dll`
+- `Qt6OpenGL.dll`（对应子模块 `OpenGL`）：Quick 默认用 OpenGL 渲染场景图
+- `Qt6QmlMeta.dll`（对应子模块 `QmlMeta`）：Quick 元类型注册，**原映射完全缺失此模块**
 
-原映射仅含 `{Network, Positioning, Gui, Core}` / `{WebEngineCore, Widgets, Gui, Core}`，
-缺少 Quick/QuickWidgets/PrintSupport，导致这些 DLL 被剥离，.pyd 加载时找不到依赖。
+原映射 `Quick: {QmlModels, Qml, Gui, Core}` 缺少 `OpenGL`/`QmlMeta`，导致这两个 DLL 被剥离，
+Qt6Quick.dll 加载失败 → 级联导致 Qt6WebEngineCore.dll 加载失败。
 
 ### 修复
 
-[qt.py:230-240](../../src/fspack/slim/qt.py#L230-L240) 更新 WebEngine 闭包：
+[qt.py:204-209](../../src/fspack/slim/qt.py#L204-L209)：
 
 ```python
-"WebEngineCore": frozenset({"Network", "Positioning", "Quick", "Gui", "Core"}),
-"WebEngineWidgets": frozenset(
-    {"WebEngineCore", "Quick", "QuickWidgets", "PrintSupport", "Widgets", "Gui", "Core"}
-),
+# QmlMeta：QML 元对象/注册系统，Qt6Quick.dll 隐式依赖（dumpbin 验证）
+"QmlMeta": frozenset({"Qml", "QmlModels", "QmlWorkerScript", "Core"}),
+# Quick 的 C 层 DLL 依赖（dumpbin 验证 Qt6Quick.dll 导入表）：
+# - Qt6OpenGL.dll：Quick 默认用 OpenGL 渲染场景图
+# - Qt6QmlMeta.dll：Quick 元类型注册
+"Quick": frozenset({"QmlModels", "Qml", "QmlMeta", "OpenGL", "Gui", "Core"}),
 ```
 
-### 联动影响
+### 闭包完整性验证
 
-WebEngineWidgets 闭包扩展后含 Quick，Quick 在 `_QT_QML_DEPS` 与 `_QT_OPENGL_DEPS` 中，
-导致 qml/ 目录、opengl32sw.dll、pyside6qml.abi3.dll 联动保留（WebEngine 应用必需）。
+编写 `_verify_closure.py` 脚本，遍历 wheel 中所有 Qt6*.dll 的实际依赖（正则提取导入表），
+与修复后的 `_QT_MODULE_DEPS` 闭包对比，确认 **RimSort 闭包内所有 Qt6*.dll 的依赖都已完整**：
 
-### 测试调整
-
-- `test_qt_webengine_dynamic_expansion`：qml/ 目录断言由剥离改为保留
-- `test_qt_auxiliary_dll_without_deps_excluded`：改用纯 Widgets 场景测试剥离逻辑
-  （避免 WebEngineWidgets 闭包扩展引入 Quick/Qml 干扰）
+```
+RimSort 闭包: [Core, Gui, Network, OpenGL, Positioning, PrintSupport,
+               Qml, QmlMeta, QmlModels, QmlWorkerScript, Quick, QuickWidgets,
+               WebChannel, WebEngineCore, WebEngineWidgets, Widgets]
+检查闭包内 Qt6*.dll 的依赖完整性:
+  所有依赖都在闭包内 ✓
+```
 
 ### 最终验证
 
 - ruff check / format / pyrefly：0 错误
 - pytest：956 passed, 21 deselected
 - 覆盖率：97.10%（slim 模块全部 100%）
-- 用户重新打包 RimSort 后 `QtWebEngineCore` 加载成功（待用户验证）
+- 闭包完整性脚本验证通过
 
 ## 下一轮计划
 
-无。本次修复闭环完成，待用户验证。
+无。本次修复闭环完成，待用户删除 `dist/runtime/Lib/site-packages/PySide6/` 后重新构建验证。
