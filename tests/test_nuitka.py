@@ -373,6 +373,9 @@ def test_compile_src_invokes_bootstrap_script_with_sys_path_injection(
         assert "--module" in cmd
         assert "--no-pyi-file" in cmd
         assert "--remove-output" in cmd
+        # --assume-yes-for-downloads：Nuitka 4.x 内置 zig 作为可选 C 编译器，自动接受下载
+        # 避免交互式询问阻塞构建（实际已通过 CC 环境变量指定 gcc/mingw 避免 zig，此为兜底）
+        assert "--assume-yes-for-downloads" in cmd
         assert "--show-progress" not in cmd
         assert "--quiet" not in cmd
         # 不再使用 --python-for-scons：改用 standalone python（完整 CPython）运行 nuitka，
@@ -1708,33 +1711,42 @@ def test_resolve_jobs_returns_cpu_count() -> None:
     assert jobs == (os.cpu_count() or 4)
 
 
-def test_build_ccache_env_returns_none_when_no_ccache() -> None:
-    """ccache_exe 为 None 时返回 None（继承环境，不注入 CC）."""
+def test_build_compile_env_without_ccache_sets_cc_compiler() -> None:
+    """ccache_exe 为 None 时仍设置 CC 指定 C 编译器，避免 Nuitka 选择 zig 触发下载."""
     from fspack.packaging.nuitka import NuitkaCompiler
 
-    assert NuitkaCompiler._build_ccache_env(Platform.LINUX, None) is None
-    assert NuitkaCompiler._build_ccache_env(Platform.WINDOWS, None) is None
+    # Linux：CC=gcc
+    env_linux = NuitkaCompiler._build_compile_env(Platform.LINUX, None)
+    assert env_linux is not None
+    assert env_linux["CC"] == "gcc"
+    assert "CCACHE_DIR" not in env_linux
+
+    # Windows：CC=x86_64-w64-mingw32-gcc
+    env_win = NuitkaCompiler._build_compile_env(Platform.WINDOWS, None)
+    assert env_win is not None
+    assert env_win["CC"] == "x86_64-w64-mingw32-gcc"
+    assert "CCACHE_DIR" not in env_win
 
 
-def test_build_ccache_env_sets_cc_linux(tmp_path: Path) -> None:
+def test_build_compile_env_with_ccache_linux(tmp_path: Path) -> None:
     """Linux ccache 环境设置 CC="ccache gcc"."""
     from fspack.packaging.nuitka import NuitkaCompiler
 
     ccache_exe = tmp_path / "ccache"
     ccache_exe.write_bytes(b"")
-    env = NuitkaCompiler._build_ccache_env(Platform.LINUX, ccache_exe)
+    env = NuitkaCompiler._build_compile_env(Platform.LINUX, ccache_exe)
     assert env is not None
     assert env["CC"] == f"{ccache_exe} gcc"
     assert "CCACHE_DIR" in env
 
 
-def test_build_ccache_env_sets_cc_windows_mingw(tmp_path: Path) -> None:
+def test_build_compile_env_with_ccache_windows_mingw(tmp_path: Path) -> None:
     """Windows ccache 环境设置 CC="ccache x86_64-w64-mingw32-gcc"."""
     from fspack.packaging.nuitka import NuitkaCompiler
 
     ccache_exe = tmp_path / "ccache.exe"
     ccache_exe.write_bytes(b"")
-    env = NuitkaCompiler._build_ccache_env(Platform.WINDOWS, ccache_exe)
+    env = NuitkaCompiler._build_compile_env(Platform.WINDOWS, ccache_exe)
     assert env is not None
     assert "x86_64-w64-mingw32-gcc" in env["CC"]
 

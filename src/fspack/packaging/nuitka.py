@@ -387,28 +387,37 @@ class NuitkaCompiler:
         return os.cpu_count() or 4
 
     @staticmethod
-    def _build_ccache_env(target: Platform, ccache_exe: Path | None) -> dict[str, str] | None:
-        """构建注入 Nuitka 子进程的环境变量，启用 ccache 时设置 ``CC="ccache <compiler>"``.
+    def _build_compile_env(target: Platform, ccache_exe: Path | None) -> dict[str, str]:
+        """构建注入 Nuitka 子进程的环境变量，始终设置 ``CC`` 指定 C 编译器.
 
-        scons 读取 ``CC`` 环境变量决定 C 编译器路径。设 ``CC="ccache gcc"`` 让 scons
-        通过 ccache 调用 gcc，ccache 透明缓存编译结果（源码未变时直接返回 .o 缓存）。
+        **为何始终设置 ``CC``**：Nuitka 4.x 内置 zig 作为可选 C 编译器，默认交互式
+        询问是否下载。即使用 ``--assume-yes-for-downloads`` 自动接受，离线时仍会
+        等待下载超时。显式设置 ``CC`` 让 scons 直接用指定编译器，Nuitka 不会选择
+        zig，从根源上避免 zig 下载。:meth:`ensure_env` 已校验 gcc/mingw 可用。
+
+        scons 读取 ``CC`` 环境变量决定 C 编译器路径：
+
+        - ccache 启用：``CC="ccache <compiler>"``，ccache 透明缓存编译结果
+          （源码未变时直接返回 .o 缓存），并设 ``CCACHE_DIR`` 指定缓存目录
+        - ccache 未启用：``CC="<compiler>"``，直接用 gcc/mingw 编译
 
         Linux 用 ``gcc``，Windows 用 mingw 交叉编译器 ``x86_64-w64-mingw32-gcc``
         （与 :func:`fspack.packaging.loader.MINGW_GCC` 一致）。
-        ccache_exe 为 None 时返回 None（继承当前环境，不修改 CC）。
         """
-        if ccache_exe is None:
-            return None
         from fspack.packaging.loader import LINUX_GCC, MINGW_GCC
 
         compiler = LINUX_GCC if target is Platform.LINUX else MINGW_GCC
         env = os.environ.copy()
-        env["CC"] = f"{ccache_exe} {compiler}"
-        # ccache 缓存目录：默认 ~/.cache/ccache，显式指定到 fspack 缓存根便于管理
-        ccache_dir = Path.home() / ".fspack" / "cache" / "ccache-cache"
-        ccache_dir.mkdir(parents=True, exist_ok=True)
-        env["CCACHE_DIR"] = str(ccache_dir)
-        _logger.info("启用 ccache: CC=%s, CCACHE_DIR=%s", env["CC"], env["CCACHE_DIR"])
+        if ccache_exe is not None:
+            env["CC"] = f"{ccache_exe} {compiler}"
+            # ccache 缓存目录：默认 ~/.cache/ccache，显式指定到 fspack 缓存根便于管理
+            ccache_dir = Path.home() / ".fspack" / "cache" / "ccache-cache"
+            ccache_dir.mkdir(parents=True, exist_ok=True)
+            env["CCACHE_DIR"] = str(ccache_dir)
+            _logger.info("启用 ccache: CC=%s, CCACHE_DIR=%s", env["CC"], env["CCACHE_DIR"])
+        else:
+            env["CC"] = compiler
+            _logger.info("使用系统 C 编译器: CC=%s", env["CC"])
         return env
 
     @classmethod
@@ -980,8 +989,9 @@ class NuitkaCompiler:
         (os._exit 退出子进程 A，Windows close_fds=True 导致子进程 B 不继承 PIPE) 使得
         _stream_compile 的 PIPE 捕获不可靠。用心跳线程保证用户看到编译进度。
         """
-        # 构建 ccache 环境变量：CC="ccache gcc" 让 scons 通过 ccache 调用 gcc
-        compile_env = cls._build_ccache_env(target, ccache_exe)
+        # 构建编译环境变量：CC="<compiler>" 或 CC="ccache <compiler>"（启用 ccache 时）
+        # 始终设置 CC 指定 C 编译器，避免 Nuitka 4.x 选择 zig 触发交互式下载
+        compile_env = cls._build_compile_env(target, ccache_exe)
         jobs = cls._resolve_jobs()
         compiled_files: set[Path] = set()
         failed = 0
@@ -1011,6 +1021,10 @@ class NuitkaCompiler:
                         f"--output-dir={py_file.parent}",
                         "--no-pyi-file",
                         "--remove-output",
+                        # --assume-yes-for-downloads：Nuitka 4.x 内置 zig 作为可选 C 编译器，
+                        # 默认交互式询问 "Is it OK to download and put it in local user cache"。
+                        # 自动接受避免阻塞构建（zig 缓存到 ~/.cache/nuitka 或 %APPDATA%/Nuitka）。
+                        "--assume-yes-for-downloads",
                         # --jobs=N：必须用 = 形式传参。Nuitka 4.x 的 argparse 配置要求
                         # --jobs=N 格式，用空格分隔（"--jobs", "N"）会报错：
                         # "The '--jobs' option requires an argument with '--jobs='."
