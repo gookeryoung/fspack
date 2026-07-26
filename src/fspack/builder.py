@@ -252,7 +252,7 @@ def _precompile_pyc(  # noqa: PLR0913
             [str(py_exe), "-m", "compileall", str(d), "-q", "-j", "0", "-o", str(optimize)],
             check=False,
             capture_output=True,
-            text=True,
+            encoding="utf-8", errors="replace",
         )
         if result.returncode != 0:
             _logger.warning("compileall 失败 %s: %s", d, result.stderr.strip())

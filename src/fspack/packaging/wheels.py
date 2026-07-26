@@ -227,7 +227,7 @@ def _find_pip_python() -> str:
                 seen.add(str(candidate))
     for py in candidates:
         try:
-            subprocess.run([py, "-m", "pip", "--version"], check=True, capture_output=True, text=True)
+            subprocess.run([py, "-m", "pip", "--version"], check=True, capture_output=True, encoding="utf-8", errors="replace")
         except (subprocess.CalledProcessError, FileNotFoundError):
             continue
         return py
@@ -281,7 +281,7 @@ def _resolve_with_uv(
     # uv pip compile 从 stdin 读取需求列表
     stdin_data = "\n".join(packages) + "\n"
     _logger.info("uv pip compile 解析依赖图: %s", " ".join(packages))
-    result = subprocess.run(cmd, input=stdin_data, check=True, capture_output=True, text=True)
+    result = subprocess.run(cmd, input=stdin_data, check=True, capture_output=True, encoding="utf-8", errors="replace")
     resolved: list[str] = []
     for line in result.stdout.splitlines():
         m = _UV_RESOLVED_LINE_RE.match(line.strip())
@@ -599,7 +599,7 @@ def _run_pip(
         if stream:
             return _stream_subprocess(cmd)
         with spinner(label):
-            return subprocess.run(cmd, check=True, capture_output=True, text=True)
+            return subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8", errors="replace")
     except FileNotFoundError as e:
         raise DependencyError(f"未找到 pip: {cmd[0]}") from e
     except subprocess.CalledProcessError as e:

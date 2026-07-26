@@ -385,7 +385,7 @@ def compile_installer(nsi_path: Path, out_setup: Path) -> Path:
     cmd = ["makensis", str(nsi_path)]
     _logger.info("编译安装包: %s", " ".join(cmd))
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True, cwd=nsi_path.parent)
+        subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8", errors="replace", cwd=nsi_path.parent)
     except FileNotFoundError as e:
         raise InstallerError("未找到 makensis，请安装 NSIS（如 sudo apt install -y nsis）") from e
     except subprocess.CalledProcessError as e:
@@ -502,7 +502,7 @@ def build_deb(dist_dir: Path, info: ProjectInfo, release_dir: Path) -> Path:
     cmd = ["dpkg-deb", "--build", str(staging), str(deb_path)]
     _logger.info("构建 .deb: %s", " ".join(cmd))
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8", errors="replace")
     except FileNotFoundError as e:
         raise InstallerError("未找到 dpkg-deb，请安装 dpkg-dev（如 sudo apt install -y dpkg-dev）") from e
     except subprocess.CalledProcessError as e:

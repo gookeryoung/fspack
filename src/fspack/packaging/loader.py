@@ -413,7 +413,7 @@ class LoaderCompiler(abc.ABC):
         _logger.info("编译 loader: %s", " ".join(cmd))
         try:
             with spinner(f"编译 loader ({cls.compiler_name})"):
-                subprocess.run(cmd, check=True, capture_output=True, text=True)
+                subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8", errors="replace")
         except FileNotFoundError as e:
             raise LoaderError(f"未找到编译器 {cls.compiler_name}，请安装 {cls.install_hint}") from e
         except subprocess.CalledProcessError as e:
@@ -629,7 +629,7 @@ def _compile_icon_resource(icon: Path, work_dir: Path) -> Path | None:
     cmd = [windres, "--input", str(rc_file), "--output", str(obj_file), "--output-format=coff"]
     _logger.info("编译 icon 资源: %s", " ".join(cmd))
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True, cwd=work_dir)
+        subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8", errors="replace", cwd=work_dir)
     except FileNotFoundError as e:
         _logger.warning("windres 不可用，跳过图标嵌入: %s", e)
         return None
