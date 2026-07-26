@@ -281,6 +281,76 @@ def test_ensure_build_python_missing_exe_after_extract_raises(tmp_path: Path, mo
         NuitkaCompiler._ensure_build_python(tmp_path / "cache", "3.11.9", Platform.WINDOWS, stage=st)
 
 
+def test_ensure_build_python_injects_win7_compat_dll_on_extract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """解压 standalone python 后注入 api-ms-win-core-path-l1-1-0.dll 到 python.exe 同目录.
+
+    Python 3.9+ 在 Win7 上启动需此 DLL，standalone python 同样需要（与 embed runtime
+    同样需要）。未注入会导致 fspack 自身打包后在 Win7 上调用 standalone python
+    运行 nuitka 时启动失败。
+    """
+    ver = KNOWN_STANDALONE_VERSIONS["3.11"]
+    cache_root = tmp_path / "cache"
+
+    class _OKDownloader:
+        """Downloader 桩：写入真实 tarball 供解压流程测试."""
+
+        def __init__(self, timeout: int = 0) -> None:
+            pass
+
+        def download(self, url: str, dest: Path, *, stage: object = None, label: str = "") -> int:
+            _make_standalone_tarball(dest, ver, STANDALONE_RELEASE_TAG)
+            return dest.stat().st_size
+
+    monkeypatch.setattr("fspack.packaging.net.Downloader", _OKDownloader)
+
+    st = StageRecorder("standalone python")
+    py_exe = NuitkaCompiler._ensure_build_python(cache_root, "3.11.9", Platform.WINDOWS, stage=st)
+
+    # standalone python 目录应有 Win7 兼容 DLL（与 python.exe 同目录）
+    dll = py_exe.parent / "api-ms-win-core-path-l1-1-0.dll"
+    assert dll.is_file()
+    # DLL 应为非空二进制（~114KB x64 构建）
+    assert dll.stat().st_size > 10000
+
+
+def test_ensure_build_python_injects_win7_compat_dll_on_cache_hit(
+    tmp_path: Path,
+) -> None:
+    """缓存命中时也注入 Win7 兼容 DLL（用户清理过 DLL 但保留 python.exe 时补充）.
+
+    注入逻辑幂等：DLL 已存在则跳过，缺失则补充。覆盖缓存命中场景下 DLL 缺失的修复。
+    """
+    ver = KNOWN_STANDALONE_VERSIONS["3.11"]
+    cache_root = tmp_path / "cache"
+    build_dir = NuitkaCompiler._build_python_cache_dir(cache_root, ver)
+    py_exe = NuitkaCompiler._build_python_exe(build_dir, ver, Platform.WINDOWS)
+    py_exe.parent.mkdir(parents=True)
+    py_exe.write_bytes(b"fake-python")
+    # 不预置 DLL，模拟用户清理过 DLL 但保留 python.exe
+
+    st = StageRecorder("standalone python")
+    result = NuitkaCompiler._ensure_build_python(cache_root, "3.11.9", Platform.WINDOWS, stage=st)
+
+    assert result == py_exe
+    # 缓存命中后仍补充注入 DLL
+    dll = py_exe.parent / "api-ms-win-core-path-l1-1-0.dll"
+    assert dll.is_file()
+    assert dll.stat().st_size > 10000
+
+
+def test_ensure_build_python_skips_win7_compat_dll_for_linux(tmp_path: Path) -> None:
+    """Linux 分支早返回，不下载 standalone python 也不注入 Win7 兼容 DLL."""
+    cache_root = tmp_path / "cache"
+    st = StageRecorder("standalone python")
+    result = NuitkaCompiler._ensure_build_python(cache_root, "3.11.15", Platform.LINUX, stage=st)
+    assert result == Path()
+    # Linux 不创建缓存目录，自然无 DLL 注入
+    assert not cache_root.exists()
+
+
 # ---- compile_src 测试 ----
 
 

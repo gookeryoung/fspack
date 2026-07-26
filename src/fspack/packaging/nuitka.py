@@ -188,15 +188,23 @@ class NuitkaCompiler:
             )
             stage.hit_cache()
             stage.set_detail(f"python {standalone_version} 已就绪")
-            return py_exe
+        else:
+            archive_path = cls._download_standalone_python(build_python_dir, standalone_version, stage)
+            cls._extract_standalone_python(archive_path, build_python_dir, standalone_version)
 
-        archive_path = cls._download_standalone_python(build_python_dir, standalone_version, stage)
-        cls._extract_standalone_python(archive_path, build_python_dir, standalone_version)
+            if not py_exe.is_file():
+                raise NuitkaError(f"standalone python 解压后未找到 {py_exe}，请检查缓存目录 {build_python_dir}")
 
-        if not py_exe.is_file():
-            raise NuitkaError(f"standalone python 解压后未找到 {py_exe}，请检查缓存目录 {build_python_dir}")
+            stage.set_detail(f"python {standalone_version} 安装完成")
 
-        stage.set_detail(f"python {standalone_version} 安装完成")
+        # Win7 兼容性：Python 3.9+ 官方不再支持 Win7，standalone python 启动需
+        # api-ms-win-core-path-l1-1-0.dll（与 embed runtime 同样需要）。复用 builder
+        # 的注入逻辑：惰性导入避免 nuitka → builder 顶层循环依赖（builder 函数体内
+        # 才惰性导入 nuitka）。注入幂等，缓存命中与新建均安全。
+        # KNOWN_STANDALONE_VERSIONS 最低 3.10，故 standalone python 始终需要此 DLL。
+        from fspack.builder import _inject_win7_compat_dll
+
+        _inject_win7_compat_dll(py_exe.parent)
         return py_exe
 
     @classmethod
