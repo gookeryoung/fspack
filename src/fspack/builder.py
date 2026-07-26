@@ -263,7 +263,7 @@ def _precompile_pyc(  # noqa: PLR0913
     stamp.parent.mkdir(parents=True, exist_ok=True)
     stamp.write_text(stamp_key, encoding="utf-8")
 
-    stripped = _strip_py_sources(targets, entry_rels) if strip_py else 0
+    stripped = _strip_py_sources(targets, entry_rels, optimize=optimize, py_version=py_version) if strip_py else 0
     if stripped:
         stage.skip(stripped)
         stage.set_detail(f"编译 {compiled} 目录，剥离 {stripped} 个 .py")
@@ -271,16 +271,38 @@ def _precompile_pyc(  # noqa: PLR0913
         stage.set_detail(f"编译 {compiled} 目录")
 
 
-def _strip_py_sources(targets: list[Path], entry_rels: frozenset[str] = frozenset()) -> int:
+def _strip_py_sources(
+    targets: list[Path],
+    entry_rels: frozenset[str] = frozenset(),
+    *,
+    optimize: int = 0,
+    py_version: str = "",
+) -> int:
     """删除 targets 中非 ``__init__.py`` 的 ``.py`` 源码，返回剥离数量。
 
     保留 ``__init__.py`` 维持包标识，避免 PEP 420 命名空间包导致 ``.pyc`` 不被加载。
+
+    **PEP 3147 迁移**：删除 ``.py`` 前，将对应的
+    ``__pycache__/{stem}.cpython-{ver}{opt}.pyc`` 迁移到 ``{stem}.pyc``（legacy 布局）。
+    PEP 3147 规定 ``__pycache__`` 中的 ``.pyc`` 仅在源码 ``.py`` 存在时才被加载，
+    删除 ``.py`` 后 Python 不会从 ``__pycache__`` 加载 ``.pyc``，必须迁移到 legacy
+    布局才能被 :class:`importlib.machinery.SourcelessFileLoader` 加载。
+    若 ``.pyc`` 不存在（编译失败），保留 ``.py`` 避免模块完全丢失。
 
     ``entry_rels`` 为入口文件相对 ``targets[0]``（dist/src）的 POSIX 路径集合，
     这些文件会被跳过：入口包装器用 ``runpy.run_module``/``run_path`` 调用用户代码，
     需 ``.py`` 存在才能被 ``find_spec`` 定位（``__pycache__`` 下的 ``.pyc`` 不在
     ``FileFinder`` 搜索范围，``.pyd`` 模块无 Python 字节码无法被 ``runpy`` 执行）。
     """
+    # 推导 .pyc 文件名后缀：cpython-{major}{minor}[-opt-N]
+    if py_version:
+        major, minor = py_version.split(".")[:2]
+        ver_tag = f"cpython-{major}{minor}"
+    else:  # pragma: no cover - py_version 始终由 _precompile_pyc 传入
+        ver_tag = "cpython-*"
+    opt_suffix = "" if optimize == 0 else f".opt-{optimize}"
+    pyc_name_pattern = f"{{stem}}.{ver_tag}{opt_suffix}.pyc"
+
     stripped = 0
     for d in targets:
         for py in d.rglob("*.py"):
@@ -291,6 +313,21 @@ def _strip_py_sources(targets: list[Path], entry_rels: frozenset[str] = frozense
             except ValueError:  # pragma: no cover - rglob 结果必在 d 下
                 rel = ""
             if rel in entry_rels:
+                continue
+            # 迁移 .pyc 到 legacy 布局，确保无源码时仍可加载
+            pyc_in_cache = py.parent / "__pycache__" / pyc_name_pattern.format(stem=py.stem)
+            if pyc_in_cache.is_file():
+                legacy_pyc = py.parent / f"{py.stem}.pyc"
+                try:
+                    # 已存在同名 legacy .pyc 时先删除（避免 rename 失败）
+                    if legacy_pyc.is_file():
+                        legacy_pyc.unlink()
+                    pyc_in_cache.rename(legacy_pyc)
+                except OSError as e:  # pragma: no cover - 文件系统异常容错
+                    _logger.warning("迁移 .pyc 到 legacy 布局失败 %s: %s", pyc_in_cache, e)
+                    continue
+            else:
+                # .pyc 不存在（编译失败），保留 .py 避免模块完全丢失
                 continue
             py.unlink()
             stripped += 1

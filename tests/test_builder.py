@@ -985,7 +985,10 @@ def test_precompile_pyc_linux_uses_python3_bin(tmp_path: Path, monkeypatch: pyte
 
 
 def test_precompile_pyc_strip_deletes_non_init_py(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """strip_py=True 删除非 __init__.py 的 .py，保留 __init__.py 维持包结构."""
+    """strip_py=True 删除非 __init__.py 的 .py，保留 __init__.py 维持包结构.
+
+    PEP 3147 迁移：删除 .py 前将 __pycache__/{stem}.cpython-{ver}.pyc 移到 {stem}.pyc。
+    """
     runtime = tmp_path / "runtime"
     runtime.mkdir(parents=True, exist_ok=True)
     (runtime / "python.exe").write_bytes(b"")
@@ -999,7 +1002,7 @@ def test_precompile_pyc_strip_deletes_non_init_py(tmp_path: Path, monkeypatch: p
     (src / "sub" / "__init__.py").write_text("")
     (src / "sub" / "mod.py").write_text("x")
 
-    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
+    monkeypatch.setattr("fspack.builder.subprocess.run", _fake_compileall_runner)
 
     st = StageRecorder("预编译字节码")
     _precompile_pyc(dist, runtime, "3.11.9", Platform.WINDOWS, strip_py=True, stage=st)
@@ -1010,6 +1013,47 @@ def test_precompile_pyc_strip_deletes_non_init_py(tmp_path: Path, monkeypatch: p
     # 非 __init__.py 被删
     assert not (src / "app.py").exists()
     assert not (src / "sub" / "mod.py").exists()
+    # .pyc 已迁移到 legacy 布局
+    assert (src / "app.pyc").is_file()
+    assert (src / "sub" / "mod.pyc").is_file()
+
+
+def _fake_compileall_runner(cmd: list[str], **kw: Any) -> Any:
+    """模拟 subprocess.run 调用 compileall：解析命令并生成真实 .pyc 文件.
+
+    供 ``_precompile_pyc`` 测试使用，使 ``_strip_py_sources`` 能迁移真实的 .pyc。
+    用 :func:`py_compile.compile` 生成指定 Python 版本标签的 .pyc 文件名
+    （``cpython-{major}{minor}[-opt-N].pyc``），而非当前解释器版本。
+    需从命令中解析 ``-o <optimize>`` 与目标目录，py_version 由调用方在 ``cmd`` 中
+    无法获取，故用模块级 ``_FAKE_COMPILE_PY_VERSION`` 变量传递（默认 "3.11"）。
+    """
+    target_dir = None
+    optimize = 0
+    for i, arg in enumerate(cmd):
+        if arg == "-o":
+            optimize = int(cmd[i + 1])
+        elif not arg.startswith("-") and Path(arg).is_dir():
+            target_dir = Path(arg)
+    if target_dir:
+        _compile_dir_with_pyc(target_dir, _FAKE_COMPILE_PY_VERSION, optimize)
+    return _CompileCompleted()
+
+
+_FAKE_COMPILE_PY_VERSION = "3.11"
+
+
+def _compile_dir_with_pyc(target_dir: Path, py_version: str, optimize: int) -> None:
+    """用 py_compile 为 target_dir 下所有 .py 生成指定版本标签的 .pyc 文件."""
+    import py_compile
+
+    major, minor = py_version.split(".")[:2]
+    ver_tag = f"cpython-{major}{minor}"
+    opt_suffix = "" if optimize == 0 else f".opt-{optimize}"
+    for py in target_dir.rglob("*.py"):
+        pycache = py.parent / "__pycache__"
+        pycache.mkdir(exist_ok=True)
+        pyc_file = pycache / f"{py.stem}.{ver_tag}{opt_suffix}.pyc"
+        py_compile.compile(str(py), cfile=str(pyc_file), optimize=optimize)
 
 
 def test_precompile_pyc_strip_keeps_init_py(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1023,13 +1067,15 @@ def test_precompile_pyc_strip_keeps_init_py(tmp_path: Path, monkeypatch: pytest.
     (src / "__init__.py").write_text("PKG = 1")
     (src / "main.py").write_text("print('main')")
 
-    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
+    monkeypatch.setattr("fspack.builder.subprocess.run", _fake_compileall_runner)
 
     st = StageRecorder("预编译字节码")
     _precompile_pyc(dist, runtime, "3.11.9", Platform.WINDOWS, strip_py=True, stage=st)
 
     assert (src / "__init__.py").is_file()
     assert not (src / "main.py").exists()
+    # main.py 的 .pyc 已迁移到 legacy 布局
+    assert (src / "main.pyc").is_file()
 
 
 def test_precompile_pyc_strip_keeps_entry_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1052,7 +1098,7 @@ def test_precompile_pyc_strip_keeps_entry_files(tmp_path: Path, monkeypatch: pyt
     (pkg / "cli.py").write_text("def main(): pass")  # 入口文件
     (pkg / "utils.py").write_text("x = 1")  # 非入口文件
 
-    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
+    monkeypatch.setattr("fspack.builder.subprocess.run", _fake_compileall_runner)
 
     st = StageRecorder("预编译字节码")
     _precompile_pyc(
@@ -1071,10 +1117,15 @@ def test_precompile_pyc_strip_keeps_entry_files(tmp_path: Path, monkeypatch: pyt
     assert (pkg / "cli.py").is_file()
     # 非入口 .py 被删除
     assert not (pkg / "utils.py").exists()
+    # utils.py 的 .pyc 已迁移到 legacy 布局
+    assert (pkg / "utils.pyc").is_file()
 
 
 def test_strip_py_sources_skips_entry_rels(tmp_path: Path) -> None:
-    """``_strip_py_sources`` 单元测试：entry_rels 中的文件跳过剥离."""
+    """``_strip_py_sources`` 单元测试：entry_rels 中的文件跳过剥离.
+
+    新增 PEP 3147 迁移：删除 .py 前需有对应 .pyc 才会剥离，否则保留 .py。
+    """
     from fspack.builder import _strip_py_sources
 
     src = tmp_path / "src"
@@ -1083,13 +1134,95 @@ def test_strip_py_sources_skips_entry_rels(tmp_path: Path) -> None:
     (pkg / "__init__.py").write_text("")
     (pkg / "main.py").write_text("m")  # 入口
     (pkg / "helper.py").write_text("h")  # 非入口
+    # 为 helper.py 预生成 .pyc（模拟 compileall 输出），否则新逻辑保留 .py
+    _make_pyc_file(pkg / "helper.py", "3.11", optimize=0)
 
-    stripped = _strip_py_sources([src], frozenset({"app/main.py"}))
+    stripped = _strip_py_sources([src], frozenset({"app/main.py"}), optimize=0, py_version="3.11.9")
 
     assert stripped == 1  # 仅 helper.py 被删
     assert (pkg / "main.py").is_file()  # 入口保留
     assert not (pkg / "helper.py").exists()  # 非入口删除
     assert (pkg / "__init__.py").is_file()  # __init__.py 保留
+    # .pyc 已迁移到 legacy 布局（helper.pyc）
+    assert (pkg / "helper.pyc").is_file()
+
+
+def _make_pyc_file(py_file: Path, py_version: str = "3.11", optimize: int = 0) -> Path:
+    """生成 ``__pycache__/{stem}.cpython-{ver}{opt}.pyc`` 文件，返回路径.
+
+    用 :func:`py_compile.compile` 生成真实的 .pyc 字节码（非空文件），
+    供 ``_strip_py_sources`` 的 PEP 3147 迁移逻辑测试使用。
+    """
+    import py_compile
+
+    major, minor = py_version.split(".")[:2]
+    ver_tag = f"cpython-{major}{minor}"
+    opt_suffix = "" if optimize == 0 else f".opt-{optimize}"
+    pycache = py_file.parent / "__pycache__"
+    pycache.mkdir(exist_ok=True)
+    pyc_file = pycache / f"{py_file.stem}.{ver_tag}{opt_suffix}.pyc"
+    py_compile.compile(str(py_file), cfile=str(pyc_file), optimize=optimize)
+    return pyc_file
+
+
+def test_strip_py_sources_migrates_pyc_to_legacy_layout(tmp_path: Path) -> None:
+    """``_strip_py_sources`` 删除 .py 前将 __pycache__ 中的 .pyc 迁移到 legacy 布局.
+
+    PEP 3147 规定 __pycache__ 中的 .pyc 仅在源码 .py 存在时才被加载，
+    删除 .py 后必须迁移到 {stem}.pyc 才能被 SourcelessFileLoader 加载。
+    """
+    from fspack.builder import _strip_py_sources
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "__init__.py").write_text("")
+    (src / "mod.py").write_text("VALUE = 42")
+    # 预生成 .pyc（optimize=2，对应 .opt-2.pyc）
+    _make_pyc_file(src / "mod.py", "3.11", optimize=2)
+
+    stripped = _strip_py_sources([src], py_version="3.11.9", optimize=2)
+
+    assert stripped == 1
+    assert not (src / "mod.py").exists()  # .py 已删
+    assert (src / "mod.pyc").is_file()  # .pyc 迁移到 legacy 布局
+    # __pycache__ 中的 .pyc 已被移走
+    pycache_dir = src / "__pycache__"
+    pycache_files: list[Path] = list(pycache_dir.glob("mod.*.pyc")) if pycache_dir.exists() else []
+    assert not pycache_files
+
+
+def test_strip_py_sources_keeps_py_when_pyc_missing(tmp_path: Path) -> None:
+    """``.pyc`` 不存在（编译失败）时保留 ``.py``，避免模块完全丢失."""
+    from fspack.builder import _strip_py_sources
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "__init__.py").write_text("")
+    (src / "broken.py").write_text("syntax error!!!")
+    # 不生成 .pyc（模拟 compileall 失败）
+
+    stripped = _strip_py_sources([src], py_version="3.11.9", optimize=0)
+
+    assert stripped == 0  # 无 .pyc 不剥离
+    assert (src / "broken.py").is_file()  # .py 保留
+
+
+def test_strip_py_sources_optimize_level_matches_pyc(tmp_path: Path) -> None:
+    """optimize 级别必须匹配 .pyc 文件名后缀（.opt-N），否则不剥离."""
+    from fspack.builder import _strip_py_sources
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "__init__.py").write_text("")
+    (src / "mod.py").write_text("x = 1")
+    # 生成 optimize=2 的 .pyc，但调用时 optimize=0 → 文件名不匹配
+    _make_pyc_file(src / "mod.py", "3.11", optimize=2)
+
+    # optimize=0 查找 mod.cpython-311.pyc，但实际是 mod.cpython-311.opt-2.pyc
+    stripped = _strip_py_sources([src], py_version="3.11.9", optimize=0)
+
+    assert stripped == 0  # 文件名不匹配，不剥离
+    assert (src / "mod.py").is_file()  # .py 保留
 
 
 def test_precompile_pyc_python_missing_skips(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1308,6 +1441,7 @@ def test_build_pyc_strip_deletes_non_init_py(tmp_path: Path, monkeypatch: pytest
 
     入口文件需保留 .py 以供 ``runpy.run_module`` 定位（``__pycache__`` 下 .pyc
     不在 ``FileFinder`` 搜索范围，.pyd 无字节码无法被 runpy 执行）。
+    PEP 3147 迁移：剥离 .py 前将 __pycache__ 中的 .pyc 移到 legacy 布局。
     """
     proj = tmp_path / "app"
     proj.mkdir()
@@ -1321,7 +1455,7 @@ def test_build_pyc_strip_deletes_non_init_py(tmp_path: Path, monkeypatch: pytest
     runtime = proj / "dist" / "runtime"
     runtime.mkdir(parents=True, exist_ok=True)
     (runtime / "python.exe").write_bytes(b"")
-    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
+    monkeypatch.setattr("fspack.builder.subprocess.run", _fake_compileall_runner)
     # 模拟同平台构建（CI 可能在 Linux 上跑 Windows 目标测试，交叉构建会跳过预编译）
     monkeypatch.setattr("fspack.builder.detect_platform", lambda: Platform.WINDOWS)
 
@@ -1332,6 +1466,8 @@ def test_build_pyc_strip_deletes_non_init_py(tmp_path: Path, monkeypatch: pytest
     assert (src / "app.py").is_file()
     # helper.py 非入口，被剥离
     assert not (src / "helper.py").exists()
+    # helper.py 的 .pyc 已迁移到 legacy 布局
+    assert (src / "helper.pyc").is_file()
 
 
 def test_build_default_keeps_py_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
