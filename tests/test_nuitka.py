@@ -860,6 +860,8 @@ def test_strip_compiled_sources_verify_preserves_py_when_pyd_corrupt(
     site_packages = tmp_path / "site-packages"
     rich_dir = site_packages / "rich"
     rich_dir.mkdir(parents=True)
+    # __init__.py 让 _find_package_root 推导包根为 site-packages/，模块名 rich.errors
+    (rich_dir / "__init__.py").write_text("")
     py_file = rich_dir / "errors.py"
     py_file.write_text("class ConsoleError(Exception): pass")
     pyd_file = rich_dir / "errors.cp313-win_amd64.pyd"
@@ -894,6 +896,8 @@ def test_strip_compiled_sources_verify_deletes_py_when_pyd_ok(tmp_path: Path, mo
     site_packages = tmp_path / "site-packages"
     rich_dir = site_packages / "rich"
     rich_dir.mkdir(parents=True)
+    # __init__.py 让 _find_package_root 推导包根为 site-packages/，模块名 rich.errors
+    (rich_dir / "__init__.py").write_text("")
     py_file = rich_dir / "errors.py"
     py_file.write_text("class ConsoleError(Exception): pass")
     pyd_file = rich_dir / "errors.cp313-win_amd64.pyd"
@@ -932,6 +936,8 @@ def test_strip_compiled_sources_verify_fallback_to_individual_on_crash(
     site_packages = tmp_path / "site-packages"
     rich_dir = site_packages / "rich"
     rich_dir.mkdir(parents=True)
+    # __init__.py 让 _find_package_root 推导包根为 site-packages/，模块名 rich.errors/rich.console
+    (rich_dir / "__init__.py").write_text("")
     # 两个模块：errors 可加载，console 损坏
     errors_py = rich_dir / "errors.py"
     errors_py.write_text("class ConsoleError(Exception): pass")
@@ -974,33 +980,44 @@ def test_verify_compiled_modules_empty_input() -> None:
     """_verify_compiled_modules 空输入返回空集合."""
     from fspack.packaging.nuitka import NuitkaCompiler
 
-    verified, artifacts = NuitkaCompiler._verify_compiled_modules(Path("python.exe"), Path("/tmp"), set())
+    verified, artifacts = NuitkaCompiler._verify_compiled_modules(Path("python.exe"), set())
     assert verified == set()
     assert artifacts == []
 
 
-def test_verify_compiled_modules_py_outside_search_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """_verify_compiled_modules 在 .py 不在 search_root 下时信任编译结果.
+def test_find_package_root_derives_package_root(tmp_path: Path) -> None:
+    """_find_package_root 自动推导包根，兼容 flat/src layout.
 
-    理论上不会发生（compiled_files 来自 search_root 下的扫描），但防御性处理。
+    - site-packages/rich/errors.py → site-packages/（rich/ 有 __init__.py）
+    - dist/src/src/fspack/builder.py → dist/src/src/（fspack/ 有 __init__.py，src/ 无）
+    - dist/src/main.py → dist/src/（main.py 父目录无 __init__.py）
     """
     from fspack.packaging.nuitka import NuitkaCompiler
 
-    # py_file 在 tmp_path 下，但 search_root 是另一个目录
-    py_file = tmp_path / "mod.py"
-    py_file.write_text("x = 1")
-    other_root = tmp_path / "other"
-    other_root.mkdir()
+    # flat layout: site-packages/rich/errors.py
+    sp = tmp_path / "site-packages"
+    rich_dir = sp / "rich"
+    rich_dir.mkdir(parents=True)
+    (rich_dir / "__init__.py").write_text("")
+    errors_py = rich_dir / "errors.py"
+    errors_py.write_text("")
+    assert NuitkaCompiler._find_package_root(errors_py) == sp
 
-    # 不应调用 subprocess（无法推导模块名，直接返回信任结果）
-    def _fail_run(cmd: list[str], **kwargs: Any) -> Any:
-        raise AssertionError("不应调用 subprocess 验证")
+    # src layout: dist/src/src/fspack/builder.py
+    src_root = tmp_path / "dist" / "src" / "src"
+    fspack_dir = src_root / "fspack"
+    fspack_dir.mkdir(parents=True)
+    (fspack_dir / "__init__.py").write_text("")
+    builder_py = fspack_dir / "builder.py"
+    builder_py.write_text("")
+    assert NuitkaCompiler._find_package_root(builder_py) == src_root
 
-    monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", _fail_run)
-
-    verified, artifacts = NuitkaCompiler._verify_compiled_modules(Path("python.exe"), other_root, {py_file})
-    assert verified == {py_file}, "无法推导模块名时信任编译结果"
-    assert artifacts == []
+    # 顶层模块: dist/src/main.py
+    dist_src = tmp_path / "dist2" / "src"
+    dist_src.mkdir(parents=True)
+    main_py = dist_src / "main.py"
+    main_py.write_text("")
+    assert NuitkaCompiler._find_package_root(main_py) == dist_src
 
 
 def test_batch_import_test_returns_none_on_crash(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1012,7 +1029,7 @@ def test_batch_import_test_returns_none_on_crash(tmp_path: Path, monkeypatch: py
         lambda cmd, **kwargs: _CrashResult(),
     )
 
-    result = NuitkaCompiler._batch_import_test(tmp_path / "python.exe", tmp_path, ["rich.errors"])
+    result = NuitkaCompiler._batch_import_test(tmp_path / "python.exe", [tmp_path], ["rich.errors"])
     assert result is None
 
 
@@ -1025,7 +1042,7 @@ def test_batch_import_test_returns_importable_set(tmp_path: Path, monkeypatch: p
         lambda cmd, **kwargs: _VerifyResult({"rich.errors": True, "rich.console": False}),
     )
 
-    result = NuitkaCompiler._batch_import_test(tmp_path / "python.exe", tmp_path, ["rich.errors", "rich.console"])
+    result = NuitkaCompiler._batch_import_test(tmp_path / "python.exe", [tmp_path], ["rich.errors", "rich.console"])
     assert result == {"rich.errors"}
 
 
@@ -1039,7 +1056,9 @@ def test_individual_import_test_locates_corrupt_pyd(tmp_path: Path, monkeypatch:
         _IndividualRunner({"rich.errors"}),
     )
 
-    result = NuitkaCompiler._individual_import_test(tmp_path / "python.exe", tmp_path, ["rich.errors", "rich.console"])
+    result = NuitkaCompiler._individual_import_test(
+        tmp_path / "python.exe", [tmp_path], ["rich.errors", "rich.console"]
+    )
     assert result == {"rich.errors"}
 
 

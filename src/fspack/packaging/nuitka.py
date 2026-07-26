@@ -795,7 +795,18 @@ class NuitkaCompiler:
         finally:
             shutil.rmtree(bootstrap_script.parent, ignore_errors=True)
 
-        stripped = cls._strip_compiled_sources(compiled_files, stage)
+        # 验证 .pyd 可加载才删除 .py：Nuitka 4.x 在 Python 3.13+ Windows 上忽略 CC
+        # 环境变量自动回退到 zig 编译器，zig 编译的 .pyd 可能损坏（运行时访问违例）。
+        # 用 runtime python（.pyd ABI 绑定 runtime）批量 import 验证，损坏的 .pyd
+        # 删除产物保留 .py，回退到 .pyc 加载。
+        runtime_py_exe = cls._runtime_python(runtime_dir, py_version, target)
+        verify_py_exe = runtime_py_exe if runtime_py_exe.is_file() else None
+        stripped = cls._strip_compiled_sources(
+            compiled_files,
+            stage,
+            verify_py_exe=verify_py_exe,
+            verify_search_root=src_dir if verify_py_exe is not None else None,
+        )
         # 清理 Nuitka 编译失败的 .build 残留目录（--remove-output 仅成功时清理）
         cls._cleanup_build_dirs(src_dir)
         compiled = len(compiled_files)
@@ -1095,9 +1106,14 @@ class NuitkaCompiler:
         # 可选 import 验证：防止 zig 编译的损坏 .pyd 导致运行时崩溃
         files_to_strip = compiled_files
         if verify_py_exe is not None and verify_search_root is not None and compiled_files:
-            verified_files, unverified_artifacts = cls._verify_compiled_modules(
-                verify_py_exe, verify_search_root, compiled_files
-            )
+            verified_files: set[Path] = set(compiled_files)
+            unverified_artifacts: list[Path] = []
+            try:
+                verified_files, unverified_artifacts = cls._verify_compiled_modules(verify_py_exe, compiled_files)
+            except OSError as e:
+                # runtime python 不可执行（如测试桩空文件）或 subprocess 启动失败，
+                # 跳过验证信任编译结果（运行时 .pyd 加载失败会回退到 .pyc）
+                _logger.warning("验证 .pyd 可加载性失败，跳过验证: %s", e)
             # 删除损坏的 .pyd/.so，避免运行时优先加载损坏的产物（.pyd 优先级高于 .pyc）
             for artifact in unverified_artifacts:
                 try:
@@ -1125,11 +1141,31 @@ class NuitkaCompiler:
             stage.skip(stripped)
         return stripped
 
+    @staticmethod
+    def _find_package_root(py_file: Path) -> Path:
+        """推导 .py 文件所在包的根目录（第一个无 ``__init__.py`` 的祖先目录）.
+
+        用于 :meth:`_verify_compiled_modules` 自动推导模块名，兼容 flat layout
+        与 src layout：
+
+        - ``site-packages/rich/errors.py`` → ``site-packages/``（rich/ 有 __init__.py，
+          site-packages/ 无），模块名 ``rich.errors``
+        - ``dist/src/src/fspack/builder.py`` → ``dist/src/src/``（fspack/ 有 __init__.py，
+          src/ 无），模块名 ``fspack.builder``
+        - ``dist/src/main.py`` → ``dist/src/``（main.py 父目录无 __init__.py），模块名 ``main``
+
+        从 .py 文件的父目录开始向上查找，当当前目录无 ``__init__.py`` 时停止，
+        该目录即为包根（sys.path 应包含此目录才能 import 该模块）。
+        """
+        current = py_file.parent
+        while (current / "__init__.py").is_file():
+            current = current.parent
+        return current
+
     @classmethod
     def _verify_compiled_modules(
         cls,
         py_exe: Path,
-        search_root: Path,
         compiled_files: set[Path],
     ) -> tuple[set[Path], list[Path]]:
         """用 subprocess 批量验证 .pyd 可加载，返回 (可加载的 .py 集合, 损坏 .pyd 路径列表).
@@ -1143,12 +1179,13 @@ class NuitkaCompiler:
         开销（100ms × N）。如果批量测试因损坏 .pyd 崩溃（returncode != 0），
         回退到逐个模块测试定位损坏的 .pyd。
 
-        模块名推导：``search_root/rich/_extension.py`` → ``rich._extension``；
-        ``__init__.py`` 不会在 ``compiled_files`` 中（收集时已跳过）。
+        **模块名推导**：对每个 .py 文件调用 :meth:`_find_package_root` 自动推导包根
+        （第一个无 ``__init__.py`` 的祖先目录），再用 .py 相对于包根的路径推导模块名。
+        这样兼容 flat layout（``site-packages/rich/``）与 src layout
+        （``dist/src/src/fspack/``），无需调用方传入 search_root。
 
         Args:
             py_exe: runtime python 可执行文件（.pyd ABI 绑定 runtime，必须用 runtime 验证）。
-            search_root: 模块搜索根目录（site-packages 或 dist/src）。
             compiled_files: 编译成功的 .py 文件集合。
 
         Returns:
@@ -1158,23 +1195,23 @@ class NuitkaCompiler:
         if not compiled_files:
             return set(), []
 
-        # 构建模块名 → .py 文件路径映射
+        # 构建模块名 → .py 文件路径映射，同时收集所有包根（去重）
         module_to_py: dict[str, Path] = {}
-        # 同时记录每个 .py 对应的 .pyd/.so 产物路径（用于损坏时清理）
         py_to_artifacts: dict[Path, list[Path]] = {}
+        package_roots: set[Path] = set()
         for py_file in compiled_files:
+            # 自动推导包根（兼容 flat/src layout），不再依赖 search_root 推导模块名
+            pkg_root = cls._find_package_root(py_file)
+            package_roots.add(pkg_root)
             try:
-                rel = py_file.relative_to(search_root)
-            except ValueError:
-                # .py 不在 search_root 下（理论上不会发生），跳过验证信任编译结果
+                rel = py_file.relative_to(pkg_root)
+            except ValueError:  # pragma: no cover - pkg_root 必为 py_file 祖先
                 continue
-            # 推导模块名：去掉 .py 后缀，路径分隔符转为 .
             parts = rel.with_suffix("").parts
             module_name = ".".join(parts)
             if module_name.endswith(".__init__"):
                 module_name = module_name[:-9]
             module_to_py[module_name] = py_file
-            # 收集 .pyd/.so 产物路径
             stem = py_file.stem
             artifacts = list(py_file.parent.glob(f"{stem}.*.pyd"))
             artifacts.extend(py_file.parent.glob(f"{stem}.*.so"))
@@ -1184,13 +1221,13 @@ class NuitkaCompiler:
             # 无法推导模块名，信任编译结果
             return compiled_files, []
 
-        # 一次 subprocess 批量测试所有模块
-        importable_modules = cls._batch_import_test(py_exe, search_root, list(module_to_py.keys()))
+        # 一次 subprocess 批量测试所有模块（所有包根加入 sys.path）
+        importable_modules = cls._batch_import_test(py_exe, sorted(package_roots), list(module_to_py.keys()))
 
         # 批量测试崩溃，逐个模块测试定位损坏的 .pyd
         if importable_modules is None:
             _logger.warning("批量验证 .pyd 崩溃，逐个模块测试定位损坏的 .pyd")
-            importable_modules = cls._individual_import_test(py_exe, search_root, list(module_to_py.keys()))
+            importable_modules = cls._individual_import_test(py_exe, sorted(package_roots), list(module_to_py.keys()))
 
         # 构建结果：可加载的 .py 集合 + 损坏 .pyd 路径列表
         verified_files: set[Path] = set()
@@ -1207,7 +1244,7 @@ class NuitkaCompiler:
     @staticmethod
     def _batch_import_test(
         py_exe: Path,
-        search_root: Path,
+        search_roots: list[Path],
         module_names: list[str],
     ) -> set[str] | None:
         """一次 subprocess 批量测试模块可加载性，返回可加载模块集合.
@@ -1217,13 +1254,17 @@ class NuitkaCompiler:
 
         用 ``importlib.import_module`` 而非 ``__import__``：支持含 ``-`` 等特殊字符
         的模块名（如 ``rich._unicode_data.unicode10-0-0``，不是合法 Python 标识符）。
+
+        ``search_roots`` 支持多个包根（src layout 下可能有 ``dist/src/src/`` 与
+        ``dist/src/`` 等多个根），测试脚本会把所有根加入 sys.path。
         """
         import json
 
+        # 构造 sys.path 注入代码：所有包根都加入 sys.path
+        path_inserts = ";".join(f"sys.path.insert(0, r'{root}')" for root in search_roots)
         # 构造测试脚本：导入所有模块并输出 JSON 结果
-        # 用 \n 分隔避免单行脚本过长；JSON 输出在最后一行
         test_code = (
-            f"import sys; sys.path.insert(0, r'{search_root}')\n"
+            f"import sys; {path_inserts}\n"
             "import importlib, json\n"
             f"modules = {module_names!r}\n"
             "results = {}\n"
@@ -1257,21 +1298,20 @@ class NuitkaCompiler:
     @staticmethod
     def _individual_import_test(
         py_exe: Path,
-        search_root: Path,
+        search_roots: list[Path],
         module_names: list[str],
     ) -> set[str]:
         """逐个模块测试可加载性，返回可加载模块集合.
 
         用于 :meth:`_batch_import_test` 崩溃时定位损坏的 .pyd。每个模块独立 subprocess，
         单个模块崩溃不影响其他模块测试。开销 O(N) subprocess 启动，仅在批量测试崩溃时触发。
+
+        ``search_roots`` 支持多个包根，测试脚本会把所有根加入 sys.path。
         """
+        path_inserts = ";".join(f"sys.path.insert(0, r'{root}')" for root in search_roots)
         importable: set[str] = set()
         for mod in module_names:
-            test_code = (
-                f"import sys; sys.path.insert(0, r'{search_root}')\n"
-                "import importlib\n"
-                f"importlib.import_module({mod!r})\n"
-            )
+            test_code = f"import sys; {path_inserts}\nimport importlib\nimportlib.import_module({mod!r})\n"
             result = subprocess.run(
                 [str(py_exe), "-c", test_code],
                 capture_output=True,
