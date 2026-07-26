@@ -994,6 +994,12 @@ class NuitkaCompiler:
         3. :meth:`compile_src` 用 standalone python 运行 nuitka 逐文件编译 ``.py`` 为 ``.pyd``
         4. 写入 stamp 文件供下次构建比对
 
+        **回退机制**：Nuitka 是可选优化（默认关闭），环境就绪失败时不应中断构建。
+        :meth:`ensure_env`（nuitka 安装、C 编译器检查）与 :meth:`_ensure_build_python`
+        （standalone python 下载）任一抛 :class:`NuitkaError` 时，warning 并 return，
+        回退到 .pyc 模式（由 :func:`fspack.builder._precompile_pyc` 接管）。
+        :meth:`compile_src` 的单文件编译失败不触发回退（已有 warning 继续）。
+
         Args:
             src_dir: 用户源码目录（``dist/src``）。
             dist_dir: dist 根目录（stamp 文件写入位置）。
@@ -1006,9 +1012,6 @@ class NuitkaCompiler:
             stage: 阶段记录器。
             entry_rels: 入口文件相对 ``src_dir`` 的 POSIX 路径集合（如 ``{"snake.py"}``）。
                 传给 :meth:`compile_src` 跳过编译与删除，并纳入 stamp key。
-
-        Raises:
-            NuitkaError: C 编译器缺失，或 nuitka 安装失败，或 standalone python 下载失败。
         """
         nuitka_ver = nuitka_version_for(py_version)
         stamp = cls._stamp_path(dist_dir)
@@ -1024,22 +1027,29 @@ class NuitkaCompiler:
         except OSError:
             pass
 
-        # 未命中：ensure_env + ensure_build_python + compile_src + 写 stamp
-        cls.ensure_env(cache_root, py_version, target, mirror, stage=stage)
-        nuitka_cache = cls._nuitka_cache_dir(cache_root, py_version)
+        # 环境就绪阶段（ensure_env + ensure_build_python）失败时回退到 .pyc 模式：
+        # Nuitka 是可选优化，网络不可用/C 编译器缺失/下载失败不应中断构建。
+        # compile_src 不在捕获范围（单文件编译失败已有 warning 继续，非环境问题）。
+        try:
+            cls.ensure_env(cache_root, py_version, target, mirror, stage=stage)
+            nuitka_cache = cls._nuitka_cache_dir(cache_root, py_version)
 
-        # Windows 编译环境：下载 python-build-standalone 完整发行版运行 nuitka
-        # embed runtime python 不完整（无 .py 源码、_pth 限制 sys.path），Nuitka 的
-        # reExecute 机制（os._exit 子进程 + scons 调用）会反复衍生 python.exe 子进程
-        # 导致 CPU 卡死（Nuitka 官方文档称此为 Fork Bomb）。
-        # standalone python 是完整 CPython，sys.executable 可被 nuitka/scons 安全调用。
-        # Linux runtime 已是 standalone，返回空 Path 占位（compile_src 内部回退到 runtime python）。
-        build_python_exe = cls._ensure_build_python(
-            cache_root.parent / "python",
-            py_version,
-            target,
-            stage=stage,
-        )
+            # Windows 编译环境：下载 python-build-standalone 完整发行版运行 nuitka
+            # embed runtime python 不完整（无 .py 源码、_pth 限制 sys.path），Nuitka 的
+            # reExecute 机制（os._exit 子进程 + scons 调用）会反复衍生 python.exe 子进程
+            # 导致 CPU 卡死（Nuitka 官方文档称此为 Fork Bomb）。
+            # standalone python 是完整 CPython，sys.executable 可被 nuitka/scons 安全调用。
+            # Linux runtime 已是 standalone，返回空 Path 占位（compile_src 内部回退到 runtime python）。
+            build_python_exe = cls._ensure_build_python(
+                cache_root.parent / "python",
+                py_version,
+                target,
+                stage=stage,
+            )
+        except NuitkaError as e:
+            _logger.warning("Nuitka 环境就绪失败，回退到 .pyc 模式: %s", e)
+            stage.set_detail(f"回退到 .pyc 模式: {e}")
+            return
 
         cls.compile_src(
             src_dir,

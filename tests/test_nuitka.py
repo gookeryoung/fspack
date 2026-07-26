@@ -1309,6 +1309,123 @@ def test_compile_with_stamp_write_oserror_warns(
     assert any("写入 Nuitka stamp 失败" in r.message for r in caplog.records)
 
 
+# ---- compile_with_stamp 环境就绪失败回退测试 ----
+
+
+def test_compile_with_stamp_ensure_env_failure_falls_back_to_pyc(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """ensure_env 抛 NuitkaError（如 pip install 失败、C 编译器缺失）时回退到 .pyc 模式.
+
+    Nuitka 是可选优化，环境就绪失败不应中断构建。回退后不写 stamp（下次构建仍会尝试）。
+    """
+
+    def _fail_ensure_env(cls: Any, *a: Any, **kw: Any) -> str:
+        raise NuitkaError("pip install nuitka==4.1.3 失败（退出码 1）")
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("print('hi')")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    cache_root = tmp_path / "nuitka_cache"
+
+    monkeypatch.setattr(NuitkaCompiler, "ensure_env", classmethod(_fail_ensure_env))
+    compile_called = {"n": 0}
+    monkeypatch.setattr(
+        NuitkaCompiler,
+        "compile_src",
+        classmethod(lambda cls, *a, **kw: compile_called.__setitem__("n", compile_called["n"] + 1)),
+    )
+
+    st = StageRecorder("Nuitka 编译")
+    with caplog.at_level("WARNING", logger="fspack.packaging.nuitka"):
+        # 不抛异常即通过（回退到 .pyc 模式）
+        NuitkaCompiler.compile_with_stamp(
+            src, dist, runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), cache_root, stage=st
+        )
+
+    assert any("回退到 .pyc 模式" in r.message for r in caplog.records)
+    assert "回退到 .pyc 模式" in st._detail
+    # 回退后不调用 compile_src
+    assert compile_called["n"] == 0
+    # 回退后不写 stamp（下次构建仍会尝试，避免永久跳过 Nuitka）
+    assert not NuitkaCompiler._stamp_path(dist).is_file()
+
+
+def test_compile_with_stamp_ensure_build_python_failure_falls_back_to_pyc(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """_ensure_build_python 抛 NuitkaError（如 standalone python 下载失败）时回退到 .pyc 模式."""
+
+    def _fail_build_python(cls: Any, *a: Any, **kw: Any) -> Path:
+        raise NuitkaError("下载 standalone python 失败: network unreachable")
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("print('hi')")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    cache_root = tmp_path / "nuitka_cache"
+
+    monkeypatch.setattr(NuitkaCompiler, "ensure_env", classmethod(lambda cls, *a, **kw: "4.1.3"))
+    monkeypatch.setattr(NuitkaCompiler, "_ensure_build_python", classmethod(_fail_build_python))
+    compile_called = {"n": 0}
+    monkeypatch.setattr(
+        NuitkaCompiler,
+        "compile_src",
+        classmethod(lambda cls, *a, **kw: compile_called.__setitem__("n", compile_called["n"] + 1)),
+    )
+
+    st = StageRecorder("Nuitka 编译")
+    with caplog.at_level("WARNING", logger="fspack.packaging.nuitka"):
+        NuitkaCompiler.compile_with_stamp(
+            src, dist, runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), cache_root, stage=st
+        )
+
+    assert any("回退到 .pyc 模式" in r.message for r in caplog.records)
+    assert compile_called["n"] == 0
+    assert not NuitkaCompiler._stamp_path(dist).is_file()
+
+
+def test_compile_with_stamp_compile_src_failure_does_not_fall_back(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """compile_src 内部单文件编译失败已有 warning 继续，不触发回退机制.
+
+    回退仅捕获环境就绪阶段（ensure_env + _ensure_build_python）的 NuitkaError，
+    不捕获 compile_src 的编译失败（那是用户代码问题，非环境问题）。
+    此处验证 compile_src 被 mock 为正常返回时，stamp 正常写入（不回退）。
+    """
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("print('hi')")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    cache_root = tmp_path / "nuitka_cache"
+
+    monkeypatch.setattr(NuitkaCompiler, "ensure_env", classmethod(lambda cls, *a, **kw: "4.1.3"))
+    fake_py = tmp_path / "fake_python.exe"
+    fake_py.write_text("")
+    monkeypatch.setattr(NuitkaCompiler, "_ensure_build_python", classmethod(lambda cls, *a, **kw: fake_py))
+    monkeypatch.setattr(NuitkaCompiler, "compile_src", classmethod(lambda cls, *a, **kw: None))
+
+    st = StageRecorder("Nuitka 编译")
+    NuitkaCompiler.compile_with_stamp(
+        src, dist, runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), cache_root, stage=st
+    )
+
+    # compile_src 正常调用 → stamp 写入（非回退路径）
+    assert NuitkaCompiler._stamp_path(dist).is_file()
+    assert "回退" not in st._detail
+
+
 # ---- _stream_compile 流式输出测试 ----
 
 
