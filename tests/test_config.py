@@ -16,6 +16,7 @@ from fspack.config import (
     EntryPoint,
     MirrorConfig,
     ProjectInfo,
+    _satisfies,
     detect_entry,
     get_mirror,
     infer_app_type,
@@ -509,6 +510,53 @@ def test_resolve_py_version_pyside2app_example() -> None:
     info = parse_project(_EXAMPLES / "pyside2_app")
     resolved = resolve_py_version(_EXAMPLES / "pyside2_app", None, info.requires_python)
     assert resolved == "3.10.11"
+
+
+# --- _satisfies PEP 440 规范符匹配测试 ---
+
+
+def test_satisfies_wildcard_prefix_match() -> None:
+    """``==3.12.*`` 前缀匹配任意 3.12.x 版本（PEP 440 version prefix match）."""
+    assert _satisfies("3.12.0", "==3.12.*") is True
+    assert _satisfies("3.12.10", "==3.12.*") is True
+    assert _satisfies("3.12", "==3.12.*") is True
+    assert _satisfies("3.13.0", "==3.12.*") is False
+    assert _satisfies("3.11.9", "==3.12.*") is False
+
+
+def test_satisfies_wildcard_not_match() -> None:
+    """``!=3.12.*`` 排除所有 3.12.x 版本."""
+    assert _satisfies("3.12.10", "!=3.12.*") is False
+    assert _satisfies("3.13.0", "!=3.12.*") is True
+
+
+def test_satisfies_wildcard_multi_segment_prefix() -> None:
+    """``==3.12.1.*`` 支持多段前缀匹配."""
+    assert _satisfies("3.12.1", "==3.12.1.*") is True
+    assert _satisfies("3.12.1.5", "==3.12.1.*") is True
+    assert _satisfies("3.12.2", "==3.12.1.*") is False
+
+
+def test_satisfies_wildcard_combined_with_other_specifiers() -> None:
+    """``==3.12.*`` 与其他规范符组合使用."""
+    assert _satisfies("3.12.10", ">=3.11,==3.12.*") is True
+    assert _satisfies("3.11.9", ">=3.11,==3.12.*") is False
+    assert _satisfies("3.13.0", ">=3.11,==3.12.*") is False
+
+
+def test_satisfies_exact_match_no_wildcard() -> None:
+    """无通配符 ``==3.12.0`` 走精确匹配（向后兼容）."""
+    assert _satisfies("3.12.0", "==3.12.0") is True
+    assert _satisfies("3.12.10", "==3.12.0") is False
+
+
+def test_resolve_py_version_wildcard_requires_python(tmp_path: Path) -> None:
+    """``requires-python: ==3.12.*`` 自动选最高兼容 3.12.x 版本."""
+    # Windows embed 最高 3.12.x 为 3.12.10
+    assert resolve_py_version(tmp_path, None, "==3.12.*") == "3.12.10"
+    # .python-version=3.12 满足 ==3.12.* 直接使用
+    (tmp_path / ".python-version").write_text("3.12")
+    assert resolve_py_version(tmp_path, None, "==3.12.*") == "3.12.10"
 
 
 # --- 多入口解析测试 ---

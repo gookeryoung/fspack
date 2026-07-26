@@ -395,8 +395,8 @@ def _ver_key(v: str) -> tuple[int, ...]:
     return tuple(int(x) for x in v.split("."))
 
 
-# PEP 440 版本规范符正则
-_SPEC_RE = re.compile(r"(>=|<=|==|!=|~=|>|<)\s*(\d+(?:\.\d+)*)")
+# PEP 440 版本规范符正则：第三组捕获可选 ``.*`` 后缀（``==3.12.*`` 前缀匹配）
+_SPEC_RE = re.compile(r"(>=|<=|==|!=|~=|>|<)\s*(\d+(?:\.\d+)*)(\.\*)?")
 
 _GUI_HINTS = frozenset({"tkinter", "PySide2", "PySide6", "PyQt5", "PyQt6", "matplotlib", "wx", "win32gui", "pygame"})
 
@@ -677,11 +677,32 @@ def resolve_py_version(
     return default
 
 
+def _satisfies_wildcard(ver_parts: tuple[int, ...], op: str, spec_parts: tuple[int, ...]) -> bool:
+    """PEP 440 通配符前缀匹配：``==3.12.*`` 匹配任意以 ``3.12`` 开头的版本.
+
+    版本前缀与规范版本比较，短的补 0 后取规范版本长度范围内的部分对比。
+    """
+    length = max(len(ver_parts), len(spec_parts))
+    ver_prefix = ver_parts + (0,) * (length - len(ver_parts))
+    ver_head = ver_prefix[: len(spec_parts)]
+    if op == "==":
+        return ver_head == spec_parts
+    return ver_head != spec_parts  # !=
+
+
 def _satisfies(version: str, specifiers: str) -> bool:
-    """检查版本是否满足 PEP 440 ``requires-python`` 规范符."""
+    """检查版本是否满足 PEP 440 ``requires-python`` 规范符.
+
+    支持通配符前缀匹配：``==3.12.*`` 匹配任意以 ``3.12`` 开头的版本
+    （PEP 440 version prefix match），``!=3.12.*`` 则相反。
+    """
     ver_parts = tuple(int(x) for x in version.split("."))
-    for op, spec_ver in _SPEC_RE.findall(specifiers):
+    for op, spec_ver, wildcard in _SPEC_RE.findall(specifiers):
         spec_parts = tuple(int(x) for x in spec_ver.split("."))
+        if wildcard:
+            if not _satisfies_wildcard(ver_parts, op, spec_parts):
+                return False
+            continue
         length = max(len(ver_parts), len(spec_parts))
         ver = ver_parts + (0,) * (length - len(ver_parts))
         spec = spec_parts + (0,) * (length - len(spec_parts))
