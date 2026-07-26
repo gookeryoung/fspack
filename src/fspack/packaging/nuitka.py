@@ -796,6 +796,8 @@ class NuitkaCompiler:
             shutil.rmtree(bootstrap_script.parent, ignore_errors=True)
 
         stripped = cls._strip_compiled_sources(compiled_files, stage)
+        # 清理 Nuitka 编译失败的 .build 残留目录（--remove-output 仅成功时清理）
+        cls._cleanup_build_dirs(src_dir)
         compiled = len(compiled_files)
         if failed:
             stage.set_detail(f"编译 {compiled} 个，失败 {failed} 个，剥离 {stripped} 个 .py")
@@ -803,7 +805,7 @@ class NuitkaCompiler:
             stage.set_detail(f"编译 {compiled} 个，剥离 {stripped} 个 .py")
 
     @classmethod
-    def compile_packages(  # noqa: PLR0913
+    def compile_packages(  # noqa: PLR0913, PLR0912
         cls,
         site_packages: Path,
         packages: tuple[str, ...],
@@ -890,6 +892,11 @@ class NuitkaCompiler:
             shutil.rmtree(bootstrap_script.parent, ignore_errors=True)
 
         stripped = cls._strip_compiled_sources(compiled_files, stage)
+        # 清理 Nuitka 编译失败的 .build 残留目录（--remove-output 仅成功时清理）
+        for pkg in packages:
+            pkg_dir = site_packages / pkg
+            if pkg_dir.is_dir():
+                cls._cleanup_build_dirs(pkg_dir)
         compiled = len(compiled_files)
         if failed:
             _logger.warning("Nuitka 包编译完成: 成功 %d 个，失败 %d 个，剥离 %d 个 .py", compiled, failed, stripped)
@@ -1046,13 +1053,30 @@ class NuitkaCompiler:
 
     @staticmethod
     def _strip_compiled_sources(compiled_files: set[Path], stage: StageRecorder) -> int:
-        """删除成功编译的 .py 源码（.pyd 已生成可替代），返回删除数.
+        """删除成功编译的 .py 源码（.pyd/.so 已生成可替代），返回删除数.
 
-        失败的 .py 必须保留：运行时可回退到 .pyc 加载，避免编译失败导致 dist/src 无可用代码。
+        **必须验证 .pyd/.so 真的存在才删除 .py**：Nuitka 可能 returncode==0 但未生成
+        .pyd（如文件名含 ``-`` 触发 Nuitka 内部静默失败），此时删除 .py 会导致运行时
+        ImportError/访问违例。验证产物存在避免误删。
+
+        Nuitka ``--module`` 输出文件名格式：
+        - Windows: ``{stem}.cp{major}{minor}-{platform}.pyd``
+        - Linux: ``{stem}.cpython-{major}{minor}-{platform}.so``
+
+        用 ``{stem}.*.pyd`` / ``{stem}.*.so`` glob 匹配覆盖所有命名变体。
+
+        失败的 .py 保留：运行时回退到 .pyc 加载，避免编译失败导致 dist/src 无可用代码。
         ``__init__.py`` 不在 ``compiled_files`` 中（收集时已跳过），无需额外检查。
         """
         stripped = 0
         for py_file in compiled_files:
+            stem = py_file.stem
+            # 检查 .pyd/.so 产物是否真实存在（glob 的 * 跨 . 匹配所有命名变体）
+            artifacts = list(py_file.parent.glob(f"{stem}.*.pyd"))
+            artifacts.extend(py_file.parent.glob(f"{stem}.*.so"))
+            if not artifacts:
+                _logger.warning("编译标记成功但未找到 .pyd/.so 产物，保留 .py 避免运行时缺失: %s", py_file)
+                continue
             try:
                 py_file.unlink()
                 stripped += 1
@@ -1061,6 +1085,28 @@ class NuitkaCompiler:
         if stripped:
             stage.skip(stripped)
         return stripped
+
+    @staticmethod
+    def _cleanup_build_dirs(base_dir: Path) -> int:
+        """清理 Nuitka 残留的 ``<name>.build/`` 目录，返回清理数.
+
+        Nuitka ``--remove-output`` 只在编译成功时清理 ``.build/``，失败时残留。
+        残留的 ``.build/`` 目录含 scons 中间文件（.c/.o/.const 等），对最终用户无用，
+        且会被下次 ``_collect_py_files`` 扫到（已通过 ``endswith(".build")`` 排除）。
+        编译后统一清理避免污染 dist 产物。
+        """
+        cleaned = 0
+        for build_dir in base_dir.rglob("*.build"):
+            if not build_dir.is_dir():
+                continue
+            try:
+                shutil.rmtree(build_dir)
+                cleaned += 1
+            except OSError as e:
+                _logger.warning("清理 .build 目录失败 %s: %s", build_dir, e)
+        if cleaned:
+            _logger.info("清理 Nuitka 残留 .build 目录: %d 个", cleaned)
+        return cleaned
 
     @staticmethod
     def _stamp_path(dist_dir: Path) -> Path:

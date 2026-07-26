@@ -418,6 +418,9 @@ def test_compile_src_skips_init_py_not_compiled(tmp_path: Path, monkeypatch: pyt
 
     def fake_stream(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int, str, str]:
         captured.append(cmd)
+        # 模拟 Nuitka 生成 .pyd 产物（_strip_compiled_sources 验证 .pyd 存在才删 .py）
+        py_file = Path(cmd[-1])
+        (py_file.parent / f"{py_file.stem}.cp311-win_amd64.pyd").write_bytes(b"")
         return (0, "", "")
 
     monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(fake_stream))
@@ -505,6 +508,9 @@ def test_compile_src_failure_warns_continues(
         # cmd 最后一个元素是 py_file 路径
         if "bad.py" in cmd[-1]:
             return (1, "", "syntax error")
+        # 模拟 Nuitka 生成 .pyd 产物（_strip_compiled_sources 验证 .pyd 存在才删 .py）
+        py_file = Path(cmd[-1])
+        (py_file.parent / f"{py_file.stem}.cp311-win_amd64.pyd").write_bytes(b"")
         return (0, "", "")
 
     monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(fake_stream))
@@ -560,7 +566,13 @@ def test_compile_src_records_stage_metrics(tmp_path: Path, monkeypatch: pytest.M
     (src / "util.py").write_text("x = 1")
     cache = _make_nuitka_cache(tmp_path / "cache")
 
-    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(lambda cmd, **kw: (0, "", "")))
+    def fake_stream(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int, str, str]:
+        # 模拟 Nuitka 生成 .pyd 产物（_strip_compiled_sources 验证 .pyd 存在才删 .py）
+        py_file = Path(cmd[-1])
+        (py_file.parent / f"{py_file.stem}.cp311-win_amd64.pyd").write_bytes(b"")
+        return (0, "", "")
+
+    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(fake_stream))
 
     st = StageRecorder("Nuitka 编译")
     NuitkaCompiler.compile_src(src, runtime, "3.11.9", Platform.WINDOWS, cache, stage=st)
@@ -595,6 +607,9 @@ def test_compile_src_excludes_nuitka_build_artifacts(tmp_path: Path, monkeypatch
     def fake_stream(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int, str, str]:
         # cmd 最后一个元素是 py_file 路径
         captured_files.append(cmd[-1])
+        # 模拟 Nuitka 生成 .pyd 产物（_strip_compiled_sources 验证 .pyd 存在才删 .py）
+        py_file = Path(cmd[-1])
+        (py_file.parent / f"{py_file.stem}.cp311-win_amd64.pyd").write_bytes(b"")
         return (0, "", "")
 
     monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(fake_stream))
@@ -631,6 +646,9 @@ def test_compile_src_skips_entry_files(tmp_path: Path, monkeypatch: pytest.Monke
 
     def fake_stream(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int, str, str]:
         captured_files.append(cmd[-1])
+        # 模拟 Nuitka 生成 .pyd 产物（_strip_compiled_sources 验证 .pyd 存在才删 .py）
+        py_file = Path(cmd[-1])
+        (py_file.parent / f"{py_file.stem}.cp311-win_amd64.pyd").write_bytes(b"")
         return (0, "", "")
 
     monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(fake_stream))
@@ -673,7 +691,13 @@ def test_compile_src_unlink_failure_warns(
     (src / "app.py").write_text("print('hi')")
     cache = _make_nuitka_cache(tmp_path / "cache")
 
-    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(lambda cmd, **kw: (0, "", "")))
+    def fake_stream(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int, str, str]:
+        # 模拟 Nuitka 生成 .pyd 产物（_strip_compiled_sources 验证 .pyd 存在才尝试 unlink）
+        py_file = Path(cmd[-1])
+        (py_file.parent / f"{py_file.stem}.cp311-win_amd64.pyd").write_bytes(b"")
+        return (0, "", "")
+
+    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(fake_stream))
 
     # 让 Path.unlink 抛 OSError
     def fake_unlink(self: Path) -> None:
@@ -691,6 +715,108 @@ def test_compile_src_unlink_failure_warns(
     assert st._skipped == 0
     # 编译仍计入
     assert st._items == 1
+
+
+def test_strip_compiled_sources_preserves_py_when_pyd_missing(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """_strip_compiled_sources 验证 .pyd/.so 存在才删 .py：产物缺失时保留源码.
+
+    Nuitka 可能 returncode==0 但未生成 .pyd（如文件名含 ``-`` 触发静默失败），
+    此时删除 .py 会导致运行时 ImportError/访问违例。验证产物缺失时保留 .py 并告警。
+    """
+    from fspack.packaging.nuitka import NuitkaCompiler
+    from fspack.progress import StageRecorder
+
+    # 模拟 Nuitka returncode==0 但未生成 .pyd 的场景（rich._unicode_data.unicode10-0-0.py）
+    py_file = tmp_path / "unicode10-0-0.py"
+    py_file.write_text("x = 1")
+    # 不创建 .pyd 产物
+
+    st = StageRecorder("Nuitka 编译")
+    with caplog.at_level("WARNING", logger="fspack.packaging.nuitka"):
+        stripped = NuitkaCompiler._strip_compiled_sources({py_file}, st)
+
+    # 未删除任何 .py（.pyd 缺失）
+    assert stripped == 0
+    assert py_file.is_file(), "产物缺失时应保留 .py 避免运行时 ImportError"
+    # 告警提示未找到产物
+    assert any("未找到 .pyd/.so 产物" in r.message for r in caplog.records)
+    # stage 不计剥离
+    assert st._skipped == 0
+
+
+def test_strip_compiled_sources_deletes_py_when_pyd_exists(tmp_path: Path) -> None:
+    """_strip_compiled_sources 在 .pyd 存在时删除 .py（正常路径）."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+    from fspack.progress import StageRecorder
+
+    py_file = tmp_path / "app.py"
+    py_file.write_text("x = 1")
+    # 模拟 Nuitka 生成 .pyd 产物
+    (tmp_path / "app.cp311-win_amd64.pyd").write_bytes(b"fake-pyd")
+
+    st = StageRecorder("Nuitka 编译")
+    stripped = NuitkaCompiler._strip_compiled_sources({py_file}, st)
+
+    assert stripped == 1
+    assert not py_file.exists()
+    assert (tmp_path / "app.cp311-win_amd64.pyd").is_file()
+    assert st._skipped == 1
+
+
+def test_strip_compiled_sources_deletes_py_when_so_exists(tmp_path: Path) -> None:
+    """Linux 平台 .so 产物同样支持验证."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+    from fspack.progress import StageRecorder
+
+    py_file = tmp_path / "mod.py"
+    py_file.write_text("x = 1")
+    (tmp_path / "mod.cpython-311-x86_64-linux-gnu.so").write_bytes(b"fake-so")
+
+    st = StageRecorder("Nuitka 编译")
+    stripped = NuitkaCompiler._strip_compiled_sources({py_file}, st)
+
+    assert stripped == 1
+    assert not py_file.exists()
+
+
+def test_cleanup_build_dirs_removes_residual(tmp_path: Path) -> None:
+    """_cleanup_build_dirs 清理 Nuitka 编译失败的 .build 残留目录."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+
+    # 模拟编译失败残留的 .build 目录
+    build1 = tmp_path / "rich" / "_unicode_data" / "unicode10-0-0.build"
+    build1.mkdir(parents=True)
+    (build1 / "module.unicode10-0-0.c").write_text("// c source")
+    (build1 / "__constants.o").write_bytes(b"object")
+
+    build2 = tmp_path / "app.build"
+    build2.mkdir()
+    (build2 / "scons-debug.py").write_text("# scons")
+
+    # 非 .build 目录不清理
+    keep_dir = tmp_path / "rich" / "_unicode_data"
+    (keep_dir / "__init__.py").write_text("")
+
+    cleaned = NuitkaCompiler._cleanup_build_dirs(tmp_path)
+
+    assert cleaned == 2
+    assert not build1.exists()
+    assert not build2.exists()
+    # 非 .build 目录与文件保留
+    assert keep_dir.is_dir()
+    assert (keep_dir / "__init__.py").is_file()
+
+
+def test_cleanup_build_dirs_no_match(tmp_path: Path) -> None:
+    """_cleanup_build_dirs 无 .build 目录时返回 0."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+
+    (tmp_path / "app.py").write_text("x = 1")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "mod.py").write_text("y = 2")
+
+    cleaned = NuitkaCompiler._cleanup_build_dirs(tmp_path)
+    assert cleaned == 0
 
 
 # ---- nuitka_version_for 字典查询测试 ----
@@ -1464,7 +1590,10 @@ def test_compile_packages_missing_package_warns(
 
 
 def test_compile_packages_compiles_specified_package(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """compile_packages 编译指定包下的 .py 文件（跳过 __init__.py）."""
+    """compile_packages 编译指定包下的 .py 文件（跳过 __init__.py）.
+
+    fake_compile_files 同时创建 .pyd 产物，验证 _strip_compiled_sources 删除 .py 前检查 .pyd 存在。
+    """
     runtime = tmp_path / "runtime"
     runtime.mkdir()
     (runtime / "python.exe").write_bytes(b"")
@@ -1482,6 +1611,9 @@ def test_compile_packages_compiles_specified_package(tmp_path: Path, monkeypatch
         cls: Any, py_exe: Path, bootstrap: Path, py_files: list[Path], stage: Any, **kw: Any
     ) -> tuple[set[Path], int]:
         captured.append(py_files)
+        # 模拟 Nuitka --module 生成 .pyd 产物（{stem}.cp{ver}-{platform}.pyd）
+        for py in py_files:
+            (py.parent / f"{py.stem}.cp311-win_amd64.pyd").write_bytes(b"fake-pyd")
         return (set(py_files), 0)
 
     monkeypatch.setattr(NuitkaCompiler, "_compile_files", classmethod(fake_compile_files))
@@ -1493,9 +1625,12 @@ def test_compile_packages_compiles_specified_package(tmp_path: Path, monkeypatch
     assert len(captured) == 1
     names = {p.name for p in captured[0]}
     assert names == {"_extension.py", "console.py"}
-    # 编译成功的 .py 被删除
+    # 编译成功的 .py 被删除（.pyd 已生成）
     assert not (pkg / "_extension.py").exists()
     assert not (pkg / "console.py").exists()
+    # .pyd 产物保留
+    assert (pkg / "_extension.cp311-win_amd64.pyd").is_file()
+    assert (pkg / "console.cp311-win_amd64.pyd").is_file()
     # __init__.py 保留
     assert (pkg / "__init__.py").is_file()
 
