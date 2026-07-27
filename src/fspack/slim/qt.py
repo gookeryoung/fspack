@@ -5,8 +5,9 @@
 - 基础依赖白名单：``__init__.py``、``_*.py``、``pyside2.abi3.dll``、VC++ 运行时、
   ``plugins/platforms``、``plugins/imageformats``、``plugins/styles`` 等基础插件
 - 子模块动态扩展：根据源码 import 的子模块（如 ``PySide2.QtMultimedia``），
-  保留对应 ``.pyd``/``.pyi`` 与 ``Qt5Xxx.dll``/``Qt6Xxx.dll``，并按依赖映射保留
+  保留对应 ``.pyd`` 与 ``Qt5Xxx.dll``/``Qt6Xxx.dll``，并按依赖映射保留
   相关 plugins（如 ``plugins/mediaservice``）与 resources
+  （``.pyi`` 已由 :attr:`SlimSpec.STRIP_EXTS` 统一剥离）
 - 非必要目录剥离：``examples``/``translations``/``include``/``typesystems``/
   ``metatypes``/``lib``/``QtAsyncio`` 等始终跳过
 - 按需加载的辅助 DLL 智能识别：
@@ -384,7 +385,8 @@ class QtSlimSpec(SlimSpec):
           （由 :meth:`_classify_top_or_meta` 统一处理，含跨包）
         - 顶层 ``QtWebEngineProcess[.exe]``/``icudtl.dat`` → 仅 WebEngine 子模块
           保留时归 shared（须在 STRIP_EXTS 之前拦截，避免 .exe 误剥离）
-        - 顶层 ``.pyd``/``.pyi``/``.so`` → submodule（归一化子模块名）
+        - 顶层 ``.pyd``/``.so`` → submodule（归一化子模块名；``.pyi`` 已由
+          :meth:`_is_strip_ext` 在更早阶段统一剥离）
         - 顶层 ``Qt5Xxx.dll``/``Qt6Xxx.dll`` → submodule（归一化子模块名）；
           PySide2/PySide6 的 abi3.dll 隐式依赖 Qml/Network DLL → 归 shared
         - 顶层 FFmpeg 系列 DLL（``avcodec-*``/``avformat-*`` 等）→ submodule，
@@ -429,7 +431,7 @@ class QtSlimSpec(SlimSpec):
             # （Path.stem 会保留 ABI 标签导致与 keep_subs 不匹配，详见 base.py 同处注释）
             stem = filename.split(".")[0]
             if suffix in cls.SUBMODULE_EXTS:
-                # .pyd/.pyi/.so 按归一化子模块名选择性保留
+                # .pyd/.so 按归一化子模块名选择性保留（.pyi 已被 STRIP_EXTS 剥离）
                 return ("submodule", _normalize_qt_sub(stem))
             if suffix == ".dll":
                 # Qt5Xxx.dll/Qt6Xxx.dll 按子模块选择性保留

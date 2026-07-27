@@ -3,7 +3,8 @@
 非 Qt 库（如 numpy、requests 等）采用保守精简策略：
 
 - 顶层 ``__init__.py``/``_*.py`` 归 shared 始终保留
-- 顶层 ``.pyd``/``.pyi``/``.so`` 按原文件名归类为子模块，仅当子模块在保留集合时保留
+- 顶层 ``.pyd``/``.so`` 按原文件名归类为子模块，仅当子模块在保留集合时保留
+  （``.pyi`` 已由 :attr:`SlimSpec.STRIP_EXTS` 统一剥离，运行时不需要）
 - 其他顶层文件（``.py``/``.dll``/``.py.typed`` 等）归 shared 始终保留
 - 通用非必要子目录（``examples``/``docs``/``tests`` 等，见
   :attr:`SlimSpec.COMMON_EXCLUDE_SUBDIRS`）归 exclude 始终剥离

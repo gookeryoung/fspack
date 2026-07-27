@@ -4,6 +4,7 @@
 v0.2.7（未发布）
 ----------------
 
+- perf: ``.pyi`` 类型存根文件纳入 ``STRIP_EXTS`` 统一剥离（mypy/pyrefly 等类型检查工具用，应用运行时不需要），所有 spec 共享，无需专门处理；从 ``SUBMODULE_EXTS`` 移除避免按子模块选择性保留
 - feat: 新增 scikit-learn 精简规则，剥离 datasets/descr/ 描述文件与 datasets/images/ 示例图片（保留 data/ 运行时必需），fit/predict/transform 等算法 API 不受影响
 - feat: 新增 pyarrow 精简规则，剥离 includes/ C++ 头文件与 Cython 定义目录（.pxd 文件需本 spec 覆盖，.h 已由 STRIP_EXTS 剥离），顶层 C 扩展（lib.pyd 等）始终保留
 - feat: 构建汇总表新增"节省"列，wheel 精简与标准库精简阶段累计剥离字节数直观显示（如 "45.2MB"），无需翻阅逐 wheel 日志；无剥离时显示 "-" 避免误导

@@ -134,8 +134,9 @@ class MatplotlibSlimSpec(SlimSpec):
       （``mpl_toolkits/<sub>/tests/``、``matplotlib/tests/`` 等）
     - 顶层 C 扩展始终保留：``ft2font.pyd`` 是 ``__init__._check_versions()``
       硬依赖（``from . import ft2font``），剥离即 ImportError。通过
-      ``top_ext_always_shared=True`` 将顶层 ``.pyd``/``.pyi``/``.so`` 归
-      shared 始终保留，不做子模块选择性剥离。
+      ``top_ext_always_shared=True`` 将顶层 ``.pyd``/``.so`` 归
+      shared 始终保留，不做子模块选择性剥离（``.pyi`` 已由 :attr:`STRIP_EXTS`
+      统一剥离，无需 spec 处理）。
 
     运行时保留：``matplotlib/mpl-data/``（字体/样式）、``matplotlib/backends/``、
     ``matplotlib.libs/``（共享 DLL）、``mpl_toolkits/``（非 tests 部分）、
@@ -266,9 +267,10 @@ class PyarrowSlimSpec(SlimSpec):
        二级目录覆盖
 
      顶层 C 扩展（``lib.pyd``/``_compute.pyd`` 等）是 ``pyarrow.__init__`` 硬依赖
-     （``from pyarrow.lib import ...``），剥离即 ImportError。通过
-     ``top_ext_always_shared=True`` 将顶层 ``.pyd``/``.pyi``/``.so`` 归 shared
-     始终保留，不做子模块选择性剥离（与 :class:`MatplotlibSlimSpec` 同模式）。
+    （``from pyarrow.lib import ...``），剥离即 ImportError。通过
+    ``top_ext_always_shared=True`` 将顶层 ``.pyd``/``.so`` 归 shared
+    始终保留，不做子模块选择性剥离（``.pyi`` 已由 :attr:`STRIP_EXTS`
+    统一剥离，与 :class:`MatplotlibSlimSpec` 同模式）。
 
      与 :class:`LxmlSlimSpec` 模式一致（lxml 剥离 ``includes/`` C 头文件目录）。
      嵌套 ``tests/`` 由 :attr:`SlimSpec.NESTED_TEST_DIRS` 自动剥离。

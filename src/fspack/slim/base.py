@@ -88,19 +88,21 @@ class SlimSpec(abc.ABC):
     """
 
     # 子模块扩展名：仅这些文件按子模块名选择性保留
-    SUBMODULE_EXTS: frozenset[str] = frozenset({".pyd", ".pyi", ".so"})
+    # 注：.pyi 类型存根文件运行时不需要（仅类型检查工具用），归 STRIP_EXTS 剥离
+    SUBMODULE_EXTS: frozenset[str] = frozenset({".pyd", ".so"})
 
     # 是否为兜底规则（``match`` 始终 True）。``DefaultSlimSpec`` 覆盖为 True，
     # 其他 spec 为 False。用于 :func:`_detect_top_pkg` 回退匹配时跳过兜底 spec，
     # 避免 ``numpy.libs`` 等辅助目录被误识别为 top_pkg。
     is_fallback: bool = False
 
-    # 通用剥离文件扩展名：编译时/调试/缓存文件，运行时不需要，所有 spec 共享
+    # 通用剥离文件扩展名：编译时/调试/缓存/类型存根文件，运行时不需要，所有 spec 共享
     # - .h/.hpp/.hxx/.hh：C/C++ 头文件（编译 C 扩展用）
     # - .cpp/.cc/.cxx/.c：C/C++ 源码
     # - .lib/.a：静态库/导入库（链接时用）
     # - .pdb/.exp/.ilk：Windows 链接/调试中间产物
     # - .pyc/.pyo：字节码缓存（Python 自动重建）
+    # - .pyi：类型存根文件（mypy/pyrefly 等类型检查工具用，运行时不需要）
     # - .exe：辅助工具可执行文件（如 designer.exe，运行时不需要）
     STRIP_EXTS: frozenset[str] = frozenset(
         {
@@ -119,6 +121,7 @@ class SlimSpec(abc.ABC):
             ".ilk",
             ".pyc",
             ".pyo",
+            ".pyi",
             ".exe",
         }
     )
@@ -286,9 +289,11 @@ class SlimSpec(abc.ABC):
           → exclude（用于 ``scipy/<sub>/tests/``、``mpl_toolkits/tests/``）
         - 跨包文件 → shared
         - ``__init__.*``/``_*`` → shared
-        - 顶层 ``.pyd``/``.pyi``/``.so`` → submodule（按原文件名 stem）；
+        - 顶层 ``.pyd``/``.so`` → submodule（按原文件名 stem）；
           ``top_ext_always_shared=True`` 时改归 shared（用于顶层 C 扩展是
-          ``__init__`` 硬依赖的库，如 matplotlib 的 ``ft2font.pyd``）
+          ``__init__`` 硬依赖的库，如 matplotlib 的 ``ft2font.pyd``）。
+          注：``.pyi`` 已由 :meth:`_is_strip_ext` 在更早阶段统一剥离，
+          不会到达此分支。
         - 其他文件 → shared
         - 子目录在 ``COMMON_EXCLUDE_SUBDIRS`` 或 ``extra_excludes`` 中 → exclude
         - 其他子目录 → shared

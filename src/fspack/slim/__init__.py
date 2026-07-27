@@ -17,7 +17,8 @@
 - :class:`fspack.slim.libs.PyarrowSlimSpec`：pyarrow 剥离 ``includes`` C++ 头文件
   与 Cython 定义目录（``.h`` 已由 STRIP_EXTS 剥离，``.pxd`` 需本 spec 覆盖）
 - :class:`fspack.slim.default.DefaultSlimSpec`：兜底规则，非 Qt 库按子模块
-  选择性保留 ``.pyd``/``.pyi``/``.so``，其他全保留
+  选择性保留 ``.pyd``/``.so``，其他全保留（``.pyi`` 由 :attr:`STRIP_EXTS`
+  统一剥离，运行时不需要）
 
 新增包精简规则只需继承 ``SlimSpec`` 并在下方 ``register_spec`` 注册，
 ``slim_unpack``/``classify_entry`` 自动分发。

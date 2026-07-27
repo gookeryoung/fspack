@@ -35,7 +35,8 @@ class TestClassifyEntry:
         assert classify_entry("PySide2/QtCore.pyd", "PySide2") == ("submodule", "Core")
 
     def test_pyi_file(self) -> None:
-        assert classify_entry("PySide2/QtCore.pyi", "PySide2") == ("submodule", "Core")
+        """Qt 库 .pyi 类型存根归 exclude（运行时不需要，仅类型检查工具用）."""
+        assert classify_entry("PySide2/QtCore.pyi", "PySide2") == ("exclude", None)
 
     def test_pyd_file_3d(self) -> None:
         """Qt3DCore.pyd 归一化为 3DCore."""
@@ -779,9 +780,9 @@ class TestSlimUnpack:
             whl,
             {
                 "PySide6/__init__.py": b"",
-                "PySide6/QtCore.pyi": b"core_pyi",
-                "PySide6/QtWidgets.pyi": b"widgets_pyi",
-                "PySide6/Qt3DCore.pyi": b"3dcore_pyi",
+                "PySide6/QtCore.pyd": b"core_pyd",
+                "PySide6/QtWidgets.pyd": b"widgets_pyd",
+                "PySide6/Qt3DCore.pyd": b"3dcore_pyd",
                 "PySide6/Qt6Core.dll": b"qt6core",
                 "PySide6/Qt6Widgets.dll": b"qt6widgets",
                 "PySide6/Qt6Charts.dll": b"qt6charts",
@@ -796,13 +797,13 @@ class TestSlimUnpack:
         # 用户 import QtCore/QtWidgets，闭包自动加入 Gui/Core
         count = slim_unpack([whl], dest, {"PySide6": frozenset({"QtCore", "QtWidgets"})})
         assert count == 1
-        # 闭包内子模块保留
-        assert (dest / "PySide6" / "QtCore.pyi").is_file()
-        assert (dest / "PySide6" / "QtWidgets.pyi").is_file()
+        # 闭包内子模块保留（.pyd 归一化后匹配 keep_subs）
+        assert (dest / "PySide6" / "QtCore.pyd").is_file()
+        assert (dest / "PySide6" / "QtWidgets.pyd").is_file()
         assert (dest / "PySide6" / "Qt6Core.dll").is_file()
         assert (dest / "PySide6" / "Qt6Widgets.dll").is_file()
         # 闭包外子模块剥离
-        assert not (dest / "PySide6" / "Qt3DCore.pyi").exists()
+        assert not (dest / "PySide6" / "Qt3DCore.pyd").exists()
         assert not (dest / "PySide6" / "Qt6Charts.dll").exists()
         # _QT_EXCLUDE_SUBDIRS 生效（拆分 wheel 也应用 Qt 精简规则）
         assert not (dest / "PySide6" / "translations").exists()
@@ -821,7 +822,7 @@ class TestSlimUnpack:
         _make_wheel(
             whl,
             {
-                "PySide6/QtMultimedia.pyi": b"mm_pyi",
+                "PySide6/QtMultimedia.pyd": b"mm_pyd",
                 "PySide6/Qt6Multimedia.dll": b"qt6mm",
                 "PySide6/avcodec-61.dll": b"ffmpeg",
                 "PySide6/QtAsyncio/__init__.py": b"asyncio",
@@ -833,8 +834,8 @@ class TestSlimUnpack:
         # 用户仅 import QtCore/QtWidgets，闭包不含 Multimedia
         count = slim_unpack([whl], dest, {"PySide6": frozenset({"QtCore", "QtWidgets"})})
         assert count == 1
-        # Multimedia 闭包外 → .pyi/.dll/FFmpeg 剥离
-        assert not (dest / "PySide6" / "QtMultimedia.pyi").exists()
+        # Multimedia 闭包外 → .pyd/.dll/FFmpeg 剥离
+        assert not (dest / "PySide6" / "QtMultimedia.pyd").exists()
         assert not (dest / "PySide6" / "Qt6Multimedia.dll").exists()
         assert not (dest / "PySide6" / "avcodec-61.dll").exists()
         # _QT_EXCLUDE_SUBDIRS 生效
@@ -851,7 +852,7 @@ class TestSlimUnpack:
             whl,
             {
                 "PySide6/__init__.py": b"",
-                "PySide6/QtCore.pyi": b"core_pyi",
+                "PySide6/QtCore.pyd": b"core_pyd",
                 "PySide6/Qt6Core.dll": b"qt6core",
                 "PySide6/translations/qt_ar.qm": b"qm",
                 "PySide6/include/pyside.h": b"h",
@@ -864,7 +865,7 @@ class TestSlimUnpack:
         count = slim_unpack([whl], dest)
         assert count == 1
         # 子模块文件全保留（keep_subs 为空）
-        assert (dest / "PySide6" / "QtCore.pyi").is_file()
+        assert (dest / "PySide6" / "QtCore.pyd").is_file()
         assert (dest / "PySide6" / "Qt6Core.dll").is_file()
         # 但剥离规则仍生效
         assert not (dest / "PySide6" / "translations").exists()
@@ -875,13 +876,13 @@ class TestSlimUnpack:
         """pyside6 + pyside6_essentials + pyside6_addons 三个 wheel 共享 keep_subs."""
         whl_dir = tmp_path / "wh"
         whl_dir.mkdir()
-        # 主 wheel：仅 .pyi
+        # 主 wheel：仅 .pyd
         _make_wheel(
             whl_dir / "pyside6-6.11.1-cp310-abi3-win_amd64.whl",
             {
                 "PySide6/__init__.py": b"",
-                "PySide6/QtCore.pyi": b"core_pyi",
-                "PySide6/QtCharts.pyi": b"charts_pyi",
+                "PySide6/QtCore.pyd": b"core_pyd",
+                "PySide6/QtCharts.pyd": b"charts_pyd",
                 "pyside6-6.11.1.dist-info/METADATA": b"meta",
             },
         )
@@ -909,9 +910,9 @@ class TestSlimUnpack:
         wheels = sorted(whl_dir.glob("*.whl"))
         count = slim_unpack(wheels, dest, {"PySide6": frozenset({"QtCore"})})
         assert count == 3
-        # 主 wheel：QtCore.pyi 保留，QtCharts.pyi 剥离
-        assert (dest / "PySide6" / "QtCore.pyi").is_file()
-        assert not (dest / "PySide6" / "QtCharts.pyi").exists()
+        # 主 wheel：QtCore.pyd 保留，QtCharts.pyd 剥离
+        assert (dest / "PySide6" / "QtCore.pyd").is_file()
+        assert not (dest / "PySide6" / "QtCharts.pyd").exists()
         # essentials：Qt6Core.dll 保留，Qt6Charts.dll 剥离，translations 剥离
         assert (dest / "PySide6" / "Qt6Core.dll").is_file()
         assert not (dest / "PySide6" / "Qt6Charts.dll").exists()
@@ -1614,7 +1615,7 @@ class TestDefaultSlimSpec:
         assert DefaultSlimSpec.classify_entry("mypkg/_config.py", "mypkg", set()) == ("shared", None)
 
     def test_classify_other_top_level_shared(self) -> None:
-        """非 .pyd/.pyi/.so 的顶层文件归 shared（.dll/.py/.py.typed 等）。."""
+        """非 .pyd/.so 的顶层文件归 shared（.dll/.py/.py.typed 等）。."""
         from fspack.slim.default import DefaultSlimSpec
 
         assert DefaultSlimSpec.classify_entry("mypkg/py.typed", "mypkg", set()) == ("shared", None)
@@ -1992,12 +1993,12 @@ class TestMatplotlibSlimSpec:
                 f"{pyd} 应当归 shared"
             )
 
-    def test_classify_top_pyi_always_shared(self) -> None:
-        """matplotlib 顶层 .pyi 归 shared（top_ext_always_shared 覆盖所有 SUBMODULE_EXTS）."""
+    def test_classify_top_pyi_stripped(self) -> None:
+        """matplotlib 顶层 .pyi 归 exclude（.pyi 在 STRIP_EXTS 中，运行时不需要）."""
         from fspack.slim.libs import MatplotlibSlimSpec
 
         assert MatplotlibSlimSpec.classify_entry("matplotlib/pyplot.pyi", "matplotlib", set()) == (
-            "shared",
+            "exclude",
             None,
         )
 
@@ -2686,12 +2687,13 @@ class TestStripExts:
             ".ilk",
             ".pyc",
             ".pyo",
+            ".pyi",
             ".exe",
         )
         for ext in strip_exts:
             assert SlimSpec._is_strip_ext(f"foo{ext}") is True, f"{ext} 应当剥离"
         # 不在 STRIP_EXTS 中的扩展名
-        for ext in (".py", ".pyd", ".pyi", ".dll", ".so", ".json", ".txt"):
+        for ext in (".py", ".pyd", ".dll", ".so", ".json", ".txt"):
             assert SlimSpec._is_strip_ext(f"foo{ext}") is False, f"{ext} 不应剥离"
 
     def test_is_strip_ext_case_insensitive(self) -> None:
@@ -2763,9 +2765,9 @@ class TestStripExts:
         """.py 不受 STRIP_EXTS 影响."""
         assert classify_entry("mypkg/foo.py", "mypkg") == ("shared", None)
 
-    def test_default_spec_pyi_not_stripped(self) -> None:
-        """.pyi 不受 STRIP_EXTS 影响（仍归 submodule）."""
-        assert classify_entry("mypkg/core.pyi", "mypkg") == ("submodule", "core")
+    def test_default_spec_pyi_stripped(self) -> None:
+        """.pyi 受 STRIP_EXTS 影响（运行时不需要，归 exclude）."""
+        assert classify_entry("mypkg/core.pyi", "mypkg") == ("exclude", None)
 
     def test_qt_spec_strip_h_in_subdir(self) -> None:
         """Qt spec 子目录内 .h 剥离（如 PySide2/plugins/foo.h）."""
