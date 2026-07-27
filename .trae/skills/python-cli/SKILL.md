@@ -5,7 +5,7 @@ description: "Python CLI 开发技能：Click/Typer 命令行应用开发，涵�
 
 # Python CLI 开发
 
-自包含的命令行应用开发指南：命令结构、参数选项、子命令组、输出格式化、交互确认、配置管理、错误处理、测试与打包入口。新项目推荐 Typer（类型注解驱动、API 简洁）；复杂命令树/自定义补全用 Click。所有示例遵循 `rule-11-python-standards.md`（类型注解、中文 docstring、`from __future__ import annotations`）。
+自包含的命令行应用开发指南：命令结构、参数选项、子命令组、输出格式化、交互确认、配置管理、错误处理、测试与打包入口。新项目推荐 Typer（类型注解驱动、API 简洁）；复杂命令树/自定义补全用 Click。所有示例遵循 `python-standards` SKILL（类型注解、中文 docstring、`from __future__ import annotations`）。
 
 ## 何时调用
 
@@ -33,7 +33,7 @@ description: "Python CLI 开发技能：Click/Typer 命令行应用开发，涵�
 | 测试支持 | 手动调用 | `CliRunner` | `CliRunner`（基于 click） |
 
 决策准则：
-- **新项目首选 Typer**：类型注解驱动、代码量少、自动生成帮助，与 `rule-11` 类型注解要求天然契合。
+- **新项目首选 Typer**：类型注解驱动、代码量少、自动生成帮助，与 `python-standards` SKILL 类型注解要求天然契合。
 - **复杂命令树/嵌套 group/自定义补全** 用 Click：Typer 底层即 Click，复杂场景直接用 Click 更可控。
 - **零依赖脚本** 用 argparse：标准库自带，仅适合单文件简单工具。
 - 现有 `fspack` 的 `cli.py` 默认用 argparse；引入 Typer 时在 `pyproject.toml` 加 `typer>=0.12.0` 依赖。
@@ -117,7 +117,7 @@ def main() -> None:  # pragma: no cover
 - 入口函数 `main()` 加 `# pragma: no cover`，覆盖率工具自动排除（见 `pyproject.toml` `exclude_lines`）。
 - `no_args_is_help=True`（Typer）/ `invoke_without_command` 避免无参数时空跑。
 - `__all__` 显式导出 `app`/`cli` 与 `main`。
-- 帮助文本用中文，与 `rule-11` 一致。
+- 帮助文本用中文，与 `python-standards` SKILL 一致。
 
 ## 参数与选项
 
@@ -584,7 +584,7 @@ def _do_request(url: str) -> str:
 - `exit_code` 类属性定义语义化退出码；脚本可据此分支处理。
 - `raise NewError(...) from exc` 保留因果链，调试时可见原始异常。
 - 业务异常转 `ClickException`；`KeyboardInterrupt` 由 Click/Typer 自动处理为退出码 1。
-- 禁止 `except Exception: pass`（见 `rule-11`）；捕获后必须记录/包装/重抛。
+- 禁止 `except Exception: pass`（见 `python-standards` SKILL）；捕获后必须记录/包装/重抛。
 - 退出码约定在模块文档注释中声明，便于调用方脚本判断。
 
 ## 测试 CLI
@@ -653,7 +653,7 @@ Click 测试同理（`from click.testing import CliRunner`，`runner.invoke(cli,
 - `CliRunner.invoke(app, [args])` 在进程内调用，不启动子进程，速度快。
 - `result.exit_code` 断言退出码；`result.stdout` 捕获标准输出。
 - `result.exception` 捕获抛出的异常（配合 `catch_exceptions=False` 可不捕获）。
-- 环境变量用 `monkeypatch.setenv`（见 `rule-11` Mock 优先级）。
+- 环境变量用 `monkeypatch.setenv`（见 `python-standards` SKILL Mock 优先级）。
 - 交互式命令测试：`input="值\n值\n"` 模拟 stdin 逐行输入。
 - `main()` 入口加 `# pragma: no cover`，通过 `app`/`cli` 对象测试覆盖逻辑。
 
@@ -701,7 +701,7 @@ def run_external(cmd: list[str]) -> str:
 - 入口函数必须是零参数可调用对象（`def main() -> None`）。
 - Typer/Click/rich 作为 `optional-dependencies` 的 `cli` extra，按需安装；核心库不强制依赖 CLI。
 - 开发时 `uv pip install -e ".[dev]"` 安装全部 extras。
-- `subprocess.run` 必须加 `check=True`（ruff `PLW1510`）；禁用 `shell=True`（见 `rule-11` 安全章节）。
+- `subprocess.run` 必须加 `check=True`（ruff `PLW1510`）；禁用 `shell=True`（见 `python-standards` SKILL 安全章节）。
 - `main()` 加 `# pragma: no cover`；逻辑通过测试 `app`/`cli` 对象覆盖。
 
 ## 常见陷阱

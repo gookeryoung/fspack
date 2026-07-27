@@ -1,0 +1,30 @@
+# Git 行尾规范化
+# 默认所有文本文件使用 LF 行尾（跨平台一致）
+* text=auto eol=lf
+
+# Windows 脚本使用 CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# 二进制文件（不做行尾转换）
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.icns binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.tar binary
+*.tgz binary
+*.whl binary
+*.egg binary
+*.pyc binary
+*.pyo binary
+*.so binary
+*.dll binary
+*.dylib binary
+*.qrc binary
+*.qss binary

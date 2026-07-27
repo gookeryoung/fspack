@@ -5,7 +5,7 @@ description: "Python 测试技能：pytest fixture、参数化、mock、覆盖�
 
 # Python 测试
 
-自包含的 pytest 测试指南：fixture 设计、参数化、mock 策略、异常断言、覆盖率、pytest-qt GUI 测试。所有示例遵循 `rule-11-python-standards.md`（类型注解、中文 docstring、`from __future__ import annotations`）。
+自包含的 pytest 测试指南：fixture 设计、参数化、mock 策略、异常断言、覆盖率、pytest-qt GUI 测试。所有示例遵循 `python-standards` SKILL（类型注解、中文 docstring、`from __future__ import annotations`）。
 
 ## 何时调用
 

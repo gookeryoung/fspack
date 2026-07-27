@@ -5,7 +5,7 @@ description: "Python 配置管理技能：配置层次、TOML 读取、环境变
 
 # Python 配置管理
 
-自包含的配置管理指南：配置层次、TOML/env 读取、Pydantic Settings、dataclass 配置、校验、热重载、多环境。所有配置类优先用 `@dataclass(frozen=True)` 或 Pydantic BaseSettings；凭证放 `.env`/环境变量，`.gitignore` 须含 `.env`（rule-11 安全要求）；路径用 `pathlib.Path`（ruff `PTH` 强制）；类型注解必须完整（rule-11 要求）。
+自包含的配置管理指南：配置层次、TOML/env 读取、Pydantic Settings、dataclass 配置、校验、热重载、多环境。所有配置类优先用 `@dataclass(frozen=True)` 或 Pydantic BaseSettings；凭证放 `.env`/环境变量，`.gitignore` 须含 `.env`（`python-standards` SKILL 安全要求）；路径用 `pathlib.Path`（ruff `PTH` 强制）；类型注解必须完整（`python-standards` SKILL 要求）。
 
 ## 何时调用
 
@@ -161,7 +161,7 @@ def load_env_file(path: Path | None = None, override: bool = False) -> None:
 ```
 
 要点：
-- `.env` 含凭证，**禁止**提交；`.env.example` 作模板提交；`.gitignore` 须含 `.env`（rule-11 安全要求）。
+- `.env` 含凭证，**禁止**提交；`.env.example` 作模板提交；`.gitignore` 须含 `.env`（`python-standards` SKILL 安全要求）。
 - `override=False`（默认）：不覆盖已存在的系统环境变量，便于 CI/容器注入。
 - `.env` 用于本地开发；生产用真实环境变量（K8s Secret、AWS Parameter Store 等）。
 
@@ -490,7 +490,7 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
 
 1. **环境变量当字符串用不转换类型**：`os.environ["PORT"]` 是 `"8000"` 字符串，传给需要 int 的 API 报错。必须 `int()` 转换。
 2. **`bool("false")` 返回 True**：非空字符串恒为 True。用 `value.lower() in {"1","true","yes"}` 判断。
-3. **`.env` 提交到仓库**：泄露凭证。`.gitignore` 必须含 `.env`（rule-11 安全要求）；提交 `.env.example` 作模板。
+3. **`.env` 提交到仓库**：泄露凭证。`.gitignore` 必须含 `.env`（`python-standards` SKILL 安全要求）；提交 `.env.example` 作模板。
 4. **低版本 Python 用 `import tomllib` 直接报错**：3.11 才进标准库。用 `try: import tomllib except ImportError: import tomli as tomllib` 回退。
 5. **`tomllib.load()` 传文本模式**：`open("r")` 抛 `TypeError`。必须 `open("rb")` 二进制模式。
 6. **配置类可变导致线程不安全**：多线程修改共享配置实例产生竞态。用 `@dataclass(frozen=True)` 或加锁。

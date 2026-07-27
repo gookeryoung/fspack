@@ -5,7 +5,7 @@ description: "Python 性能基线、分析与优化技能：timeit/perf_counter 
 
 # Python 性能基线、分析与优化
 
-自包含的性能工程指南：测量先行 → 建立基线 → 定位热点 → 针对性优化 → 回归门禁。遵循 rule-11 硬约束：`from __future__ import annotations`、中文 docstring、`subprocess` 禁 `shell=True`。核心原则：**未测量不优化**——凭直觉的"优化"多数是噪声，必须用数据驱动。
+自包含的性能工程指南：测量先行 → 建立基线 → 定位热点 → 针对性优化 → 回归门禁。遵循 `python-standards` SKILL 硬约束：`from __future__ import annotations`、中文 docstring、`subprocess` 禁 `shell=True`。核心原则：**未测量不优化**——凭直觉的"优化"多数是噪声，必须用数据驱动。
 
 ## 何时调用
 
@@ -414,7 +414,7 @@ def find_duplicates_o_n(items: list[int]) -> list[int]:
 
 ### 2. 缓存：避免重复计算
 
-`functools.lru_cache` 缓存纯函数结果；`functools.cached_property` 缓存实例属性（rule-11 数据结构章节）。
+`functools.lru_cache` 缓存纯函数结果；`functools.cached_property` 缓存实例属性（`python-standards` SKILL 数据结构章节）。
 
 ```python
 from __future__ import annotations

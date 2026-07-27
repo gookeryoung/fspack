@@ -5,7 +5,7 @@ description: "Python 类与面向对象设计技能：dataclass、ABC、Enum、�
 
 # Python 类与面向对象设计
 
-自包含的 Python OOP 设计指南：数据建模、接口抽象、行为复用、设计模式。所有示例遵循 `rule-11-python-standards.md`（类型注解、中文 docstring、`from __future__ import annotations`）。
+自包含的 Python OOP 设计指南：数据建模、接口抽象、行为复用、设计模式。所有示例遵循 `python-standards` SKILL（类型注解、中文 docstring、`from __future__ import annotations`）。
 
 ## 何时调用
 

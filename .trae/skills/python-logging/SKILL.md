@@ -5,7 +5,7 @@ description: "Python 日志技能：标准库 logging 全链路指南，涵盖�
 
 # Python 日志
 
-自包含的日志指南：标准库 `logging` 全链路实践，涵盖模块级 Logger 约定、`dictConfig` 配置、文件轮转、自定义 Formatter、结构化 JSON 输出、分层策略、GUI/CLI 集成、性能与脱敏。禁止 `print` 残留（rule-11 强制），日志用 `%` 延迟格式化（不用 f-string），凭证/密码不进日志。所有示例遵循 `rule-11-python-standards.md`（`from __future__ import annotations`、中文 docstring、类型注解）。
+自包含的日志指南：标准库 `logging` 全链路实践，涵盖模块级 Logger 约定、`dictConfig` 配置、文件轮转、自定义 Formatter、结构化 JSON 输出、分层策略、GUI/CLI 集成、性能与脱敏。禁止 `print` 残留（`python-standards` SKILL 强制），日志用 `%` 延迟格式化（不用 f-string），凭证/密码不进日志。所有示例遵循 `python-standards` SKILL（`from __future__ import annotations`、中文 docstring、类型注解）。
 
 ## 何时调用
 
@@ -477,7 +477,7 @@ def login(username: str, password: str, token: str) -> None:
 ```
 
 要点：
-- **延迟格式化**：`logger.debug("x=%s", x)` 而非 `logger.debug(f"x={x}")`；rule-11 强制 `%` 风格。
+- **延迟格式化**：`logger.debug("x=%s", x)` 而非 `logger.debug(f"x={x}")`；`python-standards` SKILL 强制 `%` 风格。
 - **循环内慎用 DEBUG**：大列表/高频循环用 `isEnabledFor(logging.DEBUG)` 守卫，避免参数求值开销。
 - **密码/令牌不进日志**：一律脱敏（`mask_token`/`mask_password`），原文仅在内存中流转。
 - **个人信息**：手机号、身份证、邮箱、银行卡号脱敏后记录（保留前 3 后 4）。
@@ -485,7 +485,7 @@ def login(username: str, password: str, token: str) -> None:
 
 ## 常见陷阱
 
-1. **`print` 残留**：开发期 `print` 调试未删除，污染 stdout。rule-11 禁止；一律用 `logger.debug`。
+1. **`print` 残留**：开发期 `print` 调试未删除，污染 stdout。`python-standards` SKILL 禁止；一律用 `logger.debug`。
 2. **f-string 格式化日志**：`logger.debug(f"x={x}")` 立即求值，DEBUG 关闭时仍计算。用 `%s` 延迟格式化。
 3. **库代码调用 `basicConfig`**：污染调用方日志配置。库只用 `getLogger`，配置由入口负责。
 4. **每模块新建 StreamHandler**：日志重复输出 N 次。Handler 只在 `setup_logging` 配置一次。

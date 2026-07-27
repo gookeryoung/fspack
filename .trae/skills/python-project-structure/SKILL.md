@@ -7,7 +7,7 @@ description: "Python 项目结构与骨架设计技能：src layout、pyproject.
 
 # Python 项目结构与骨架设计
 
-自包含的 Python 项目骨架设计指南：目录布局、pyproject.toml、依赖声明、工具链拆分、包/测试/文档/CI 组织、项目类型差异、版本与发布。所有示例遵循 `rule-11-python-standards.md`（类型注解、中文 docstring、`from __future__ import annotations`）；优先标准库与 PEP 621/735/660 等规范；构建系统用 hatchling，包管理用 uv，版本管理用 bump-my-version。
+自包含的 Python 项目骨架设计指南：目录布局、pyproject.toml、依赖声明、工具链拆分、包/测试/文档/CI 组织、项目类型差异、版本与发布。所有示例遵循 `python-standards` SKILL（类型注解、中文 docstring、`from __future__ import annotations`）；优先标准库与 PEP 621/735/660 等规范；构建系统用 hatchling，包管理用 uv，版本管理用 bump-my-version。
 
 ## 何时调用
 
@@ -326,15 +326,15 @@ src/my_package/
 ├── services/            # 业务逻辑层
 │   ├── __init__.py
 │   └── ...
-├── utils.py             # ❌ 禁用：职责模糊，见 rule-11
+├── utils.py             # ❌ 禁用：职责模糊，见 `python-standards` SKILL
 └── helpers.py           # ❌ 禁用：同上
 ```
 
 要点：
-- **禁用 `utils.py`/`helpers.py`**（rule-11）：职责模糊易变成大杂烩；按功能命名（`path_utils` → `paths`、`string_utils` → `strings`）。
+- **禁用 `utils.py`/`helpers.py`**（`python-standards` SKILL）：职责模糊易变成大杂烩；按功能命名（`path_utils` → `paths`、`string_utils` → `strings`）。
 - **单一职责**：每模块一个明确职责；超过 500 行考虑拆分。
 - **避免循环依赖**：用惰性导入（函数体内 `import` 并注释）打破循环；优先重构层级。
-- **`exceptions.py` 集中定义**：自定义异常继承公共基类，按场景分类（rule-11 异常处理）。
+- **`exceptions.py` 集中定义**：自定义异常继承公共基类，按场景分类（`python-standards` SKILL 异常处理）。
 
 ## 测试目录组织
 
@@ -388,7 +388,7 @@ def sample_data_path() -> Path:
 - **`conftest.py` 自动发现**：pytest 自动加载同目录与父目录的 conftest，无需 import。
 - **`tests/__init__.py` 可选**：加上后 tests 成为包，便于跨测试模块 import fixture；不加则 pytest 用 rootdir 模式发现。
 - **`fixtures/` 目录放测试数据**：JSON/CSV/二进制文件，通过 `Path(__file__).parent / "fixtures"` 引用。
-- **测试覆盖 `src/` 全部公共 API**：覆盖率 ≥ 95%（rule-11 测试要求）。
+- **测试覆盖 `src/` 全部公共 API**：覆盖率 ≥ 95%（`python-standards` SKILL 测试要求）。
 
 > fixture 模式、scope 选择、参数化、Mock 策略、GUI 测试（pytest-qt）等详细测试模式见 `python-testing` SKILL。
 
@@ -689,7 +689,7 @@ src/my_package/
 ```
 
 - `[project.scripts]` 自动生成：`my-package = "my_package.cli:main"`
-- `cli.py` 推荐 Typer（类型注解驱动，与 rule-11 类型要求契合）
+- `cli.py` 推荐 Typer（类型注解驱动，与 `python-standards` SKILL 类型要求契合）
 
 ### gui（PySide2/PySide6 桌面应用）
 
@@ -707,7 +707,7 @@ src/my_package/
 
 - `dependencies`：`PySide2>=5.15.2.1; python_version <= '3.10'` + `PySide6>=6.5.0; python_version >= '3.11'`（双兼容）
 - 调用 `python-gui-pyside` SKILL 获取设计系统与代码模板（rule-03 项目场景）
-- 遵循 `rule-12-pyside-dev.md` 硬约束
+- 遵循 `python-gui-pyside` SKILL 硬约束
 
 ### web（FastAPI 服务）
 

@@ -9,8 +9,9 @@ alwaysApply: true
 
 ## 语言场景
 
-Python 项目须遵守 `rule-11-python-standards.md` 硬约束；涉及以下领域时调用对应 SKILL 获取详细参考：
+Python 项目开发前**必须**调用 `python-standards` SKILL 获取跨领域通用硬约束（工具链/类型注解/数据结构/并发/测试/日志/安全/性能/Git 等）；涉及以下领域时调用对应专项 SKILL 获取详细模式与代码模板：
 
+- Python 通用硬约束（工具链/兼容性/类型注解/数据结构/模块与导入/函数设计/异常处理/并发/测试/代码风格/Pythonic 风格/日志/路径与资源/安全/性能/Git 与提交）→ `python-standards` SKILL
 - 项目骨架（src layout/pyproject.toml 元数据/PEP 631/735 依赖声明/工具链配置拆分/包内部结构/测试文档CI 目录组织/项目类型差异/版本管理与发布流程）→ `python-project-structure` SKILL
 - 类设计（dataclass/ABC/Enum/缓存/继承组合/设计模式）→ `python-class-design` SKILL
 - 并发（threading/concurrent.futures/multiprocessing/asyncio/线程安全）→ `python-concurrency` SKILL
@@ -24,5 +25,5 @@ Python 项目须遵守 `rule-11-python-standards.md` 硬约束；涉及以下领
 
 ## 项目场景
 
-- PySide2/PySide6 GUI 项目（`project_type=gui`）：开发前**必须**调用 `python-gui-pyside` SKILL。
+- PySide2/PySide6 GUI 项目（`project_type=gui`）：开发前**必须**调用 `python-gui-pyside` SKILL（含 PySide 硬约束简表、设计系统、四区布局、信号槽、QThread、QSS 样式等）。
 - FastAPI Web 项目（`project_type=web`）：开发前**必须**调用 `python-fastapi` SKILL。

@@ -5,7 +5,7 @@ description: "Python 子进程技能：subprocess.run/Popen、命令构造、输
 
 # Python 子进程
 
-自包含的外部命令执行指南：`subprocess.run`、`Popen`、命令构造、输出捕获、流式读取、超时管理、管道链式。遵循 rule-11 安全要求：禁用 `shell=True`（优先 `list[str]` 形式），`subprocess.run` 必须 `check=True`（ruff `PLW1510`），编码显式 `encoding="utf-8"`。
+自包含的外部命令执行指南：`subprocess.run`、`Popen`、命令构造、输出捕获、流式读取、超时管理、管道链式。遵循 `python-standards` SKILL 安全要求：禁用 `shell=True`（优先 `list[str]` 形式），`subprocess.run` 必须 `check=True`（ruff `PLW1510`），编码显式 `encoding="utf-8"`。
 
 ## 何时调用
 
@@ -50,7 +50,7 @@ def git_branches(repo: Path) -> list[str]:
 
 ## 命令构造
 
-命令必须以 `list[str]` 形式传递，每个参数独立元素；禁止 `shell=True`（rule-11 安全要求）。
+命令必须以 `list[str]` 形式传递，每个参数独立元素；禁止 `shell=True`（`python-standards` SKILL 安全要求）。
 
 ```python
 from __future__ import annotations
@@ -289,7 +289,7 @@ def git_status(repo: Path) -> str:
 
 ## 安全准则
 
-rule-11 强制：禁用 `shell=True`，参数来自用户输入时必须用 `list[str]` 形式或 `shlex.quote`。
+`python-standards` SKILL 强制：禁用 `shell=True`，参数来自用户输入时必须用 `list[str]` 形式或 `shlex.quote`。
 
 ```python
 from __future__ import annotations
@@ -342,7 +342,7 @@ def call_api_with_token(endpoint: str, token: str) -> str:
 ```
 
 要点：
-- **禁用 `shell=True`**（rule-11 硬约束）：`list[str]` 形式直接传 `execv`，不经 shell，天然防注入。
+- **禁用 `shell=True`**（`python-standards` SKILL 硬约束）：`list[str]` 形式直接传 `execv`，不经 shell，天然防注入。
 - 用户输入路径：白名单正则 + `resolve()` + 父目录校验，防止越权。
 - 凭证（token/密码）**禁止**传命令行参数（`ps` 可见），用环境变量。
 - `shlex.quote()`/`shlex.join()`：仅在必须拼字符串（日志显示）时用，**不**用于执行。
@@ -488,8 +488,8 @@ def test_stream_lines_yields_output(monkeypatch: pytest.MonkeyPatch) -> None:
 
 ## 常见陷阱
 
-1. **`shell=True` 命令注入**：`subprocess.run(f"ls {user}", shell=True)` 中 `user="; rm -rf /"` 会执行 rm。禁用 `shell=True`，用 `list[str]` 形式（rule-11 硬约束）。
-2. **缺 `check=True`**：非零退出码被静默忽略，错误隐藏。ruff `PLW1510` 强制 `check=True`（rule-11 工具链）。
+1. **`shell=True` 命令注入**：`subprocess.run(f"ls {user}", shell=True)` 中 `user="; rm -rf /"` 会执行 rm。禁用 `shell=True`，用 `list[str]` 形式（`python-standards` SKILL 硬约束）。
+2. **缺 `check=True`**：非零退出码被静默忽略，错误隐藏。ruff `PLW1510` 强制 `check=True`（`python-standards` SKILL 工具链）。
 3. **不指定 `encoding`**：Windows 默认 GBK 解码 UTF-8 输出乱码。显式 `encoding="utf-8"`。
 4. **大输出 `communicate()`**：一次性读全到内存，输出过 GB 时 OOM。用 `Popen` + `readline()`/`read(chunk)`。
 5. **`Popen` 超时不回收**：`communicate(timeout=)` 超时后子进程仍在跑，必须 `kill()` + `wait()` 回收僵尸。
