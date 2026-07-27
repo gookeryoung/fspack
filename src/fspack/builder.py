@@ -13,6 +13,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Sequence
 
+from rich.table import Table
+
 from fspack.config import (
     DEFAULT_LINUX_PY_VERSION,
     DEFAULT_PY_VERSION,
@@ -41,7 +43,7 @@ from fspack.packaging.runtime import (
 )
 from fspack.packaging.wheels import download_wheels
 from fspack.platform import Platform, detect_platform, wheel_platform_tags
-from fspack.progress import BuildTracker, StageRecorder, spinner
+from fspack.progress import BuildTracker, StageRecorder, fmt_bytes, spinner
 
 __all__ = [
     "DEFAULT_PY_VERSION",
@@ -167,6 +169,36 @@ def _dir_size(path: Path) -> int:
                 # 文件被并发删除或权限问题：跳过，不阻断精简流程
                 continue
     return total
+
+
+def _print_artifacts_stats(tracker: BuildTracker, dist_dir: Path, exes: list[Path]) -> None:
+    """输出构建产物统计表：dist 总大小、各子目录大小、可执行文件大小、精简节省汇总.
+
+    在 :func:`build` 末尾 :meth:`BuildTracker.summary` 之后调用，让用户一眼看到
+    最终产物体积分布与精简效果。目录大小计算在 spinner 中执行（避免数千文件
+    stat 阻塞 UI）；精简节省从 ``tracker.records`` 累加 ``bytes_saved``，与
+    汇总表"节省"列总计一致，不重复计算。
+    """
+    with spinner("统计产物大小"):
+        dist_total = _dir_size(dist_dir) if dist_dir.is_dir() else 0
+        runtime_size = _dir_size(dist_dir / "runtime") if (dist_dir / "runtime").is_dir() else 0
+        src_size = _dir_size(dist_dir / "src") if (dist_dir / "src").is_dir() else 0
+        build_size = _dir_size(dist_dir / "build") if (dist_dir / "build").is_dir() else 0
+        exe_size = sum(e.stat().st_size for e in exes if e.is_file())
+        saved_total = sum(r.bytes_saved for r in tracker.records)
+
+    table = Table(title="构建产物统计", show_lines=False, title_style="bold green")
+    table.add_column("项目", style="bold cyan", no_wrap=True)
+    table.add_column("大小", justify="right")
+
+    table.add_row("dist 总大小", fmt_bytes(dist_total))
+    table.add_row("├ runtime", fmt_bytes(runtime_size))
+    table.add_row("├ src", fmt_bytes(src_size))
+    table.add_row("├ build", fmt_bytes(build_size))
+    table.add_row("└ 可执行文件", fmt_bytes(exe_size))
+    if saved_total:
+        table.add_row("精简节省", fmt_bytes(saved_total), style="bold yellow")
+    console.rich.print(table)
 
 
 def _site_packages_fingerprint(sp: Path) -> str:
@@ -520,6 +552,7 @@ def build(  # noqa: PLR0913
     exes = _build_entry_loaders(ctx, resolved_icon, has_tkinter)
 
     console.rich.print(tracker.summary())
+    _print_artifacts_stats(tracker, cfg.dist_dir, exes)
     if len(exes) == 1:
         console.success(f"构建完成: {exes[0]}")
     else:

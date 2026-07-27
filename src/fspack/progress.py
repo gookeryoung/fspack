@@ -33,6 +33,7 @@ __all__ = [
     "BuildTracker",
     "StageRecord",
     "StageRecorder",
+    "fmt_bytes",
     "iter_with_progress",
     "spinner",
 ]
@@ -176,8 +177,8 @@ class BuildTracker:
             total_saved += r.bytes_saved
             total_skipped += r.skipped
             cache_str = f"命中 {r.cache_hit}" if r.cache_hit else "-"
-            bytes_str = _fmt_bytes(r.bytes_downloaded) if r.bytes_downloaded else "-"
-            saved_str = _fmt_bytes(r.bytes_saved) if r.bytes_saved else "-"
+            bytes_str = fmt_bytes(r.bytes_downloaded) if r.bytes_downloaded else "-"
+            saved_str = fmt_bytes(r.bytes_saved) if r.bytes_saved else "-"
             items_str = str(r.items) if r.items else "-"
             skip_str = str(r.skipped) if r.skipped else "-"
             detail_str = r.detail or "-"
@@ -196,8 +197,8 @@ class BuildTracker:
             "总计",
             _fmt_seconds(self.total_elapsed),
             "",
-            _fmt_bytes(total_bytes) if total_bytes else "-",
-            _fmt_bytes(total_saved) if total_saved else "-",
+            fmt_bytes(total_bytes) if total_bytes else "-",
+            fmt_bytes(total_saved) if total_saved else "-",
             "",
             str(total_skipped) if total_skipped else "-",
             "",
@@ -215,7 +216,7 @@ def _fmt_seconds(s: float) -> str:
     return f"{int(s // 60)}m{s % 60:.1f}s"
 
 
-def _fmt_bytes(n: int) -> str:
+def fmt_bytes(n: int) -> str:
     """格式化字节数为人类可读字符串（KB/MB/GB）."""
     if n < 1024:
         return f"{n}B"

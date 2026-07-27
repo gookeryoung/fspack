@@ -4,6 +4,7 @@
 v0.2.7（未发布）
 ----------------
 
+- feat: 构建产物统计表，构建完成后输出 dist 总大小、runtime/src/build/可执行文件大小与精简节省汇总，让用户一眼看到产物体积分布与精简效果
 - feat: 构建汇总表新增"节省"列，wheel 精简与标准库精简阶段累计剥离字节数直观显示（如 "45.2MB"），无需翻阅逐 wheel 日志；无剥离时显示 "-" 避免误导
 - feat: 新增 ``[tool.fspack] slim-include``/``slim-exclude`` wheel 精简用户自定义规则，支持 fnmatch glob 模式强制保留/剥离特定文件；优先级 ``slim-include`` > ``slim-exclude`` > spec 自动分类；用于覆盖 AST 闭包误判、强制剥离 ``opengl32sw.dll``/``translations`` 等不需要的文件
 - feat: wheel 精简统计日志，解压完成后输出"剥离 N 个文件，节省 X.YMB / Y.YMB (Z%)"，便于评估精简效果

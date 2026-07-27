@@ -11,8 +11,8 @@ from fspack.progress import (
     BuildTracker,
     StageRecord,
     StageRecorder,
-    _fmt_bytes,
     _fmt_seconds,
+    fmt_bytes,
     iter_with_progress,
     spinner,
 )
@@ -268,22 +268,22 @@ class TestFmtSeconds:
 
 
 class TestFmtBytes:
-    """_fmt_bytes 单位切换."""
+    """fmt_bytes 单位切换."""
 
     def test_bytes(self) -> None:
-        assert _fmt_bytes(0) == "0B"
-        assert _fmt_bytes(1023) == "1023B"
+        assert fmt_bytes(0) == "0B"
+        assert fmt_bytes(1023) == "1023B"
 
     def test_kilobytes(self) -> None:
-        assert _fmt_bytes(1024) == "1.0KB"
-        assert _fmt_bytes(2048) == "2.0KB"
+        assert fmt_bytes(1024) == "1.0KB"
+        assert fmt_bytes(2048) == "2.0KB"
 
     def test_megabytes(self) -> None:
-        assert _fmt_bytes(1024 * 1024) == "1.0MB"
-        assert _fmt_bytes(10 * 1024 * 1024) == "10.0MB"
+        assert fmt_bytes(1024 * 1024) == "1.0MB"
+        assert fmt_bytes(10 * 1024 * 1024) == "10.0MB"
 
     def test_gigabytes(self) -> None:
-        assert _fmt_bytes(1024 * 1024 * 1024) == "1.00GB"
+        assert fmt_bytes(1024 * 1024 * 1024) == "1.00GB"
 
 
 class TestSpinner:
