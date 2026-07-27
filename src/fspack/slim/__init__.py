@@ -11,7 +11,11 @@
   文档扩展与跨包/嵌套 ``tests`` 目录（含 ``mpl_toolkits/tests/``）
 - :class:`fspack.slim.libs.ScipySlimSpec`：scipy 剥离各子模块下的嵌套
   ``tests`` 目录（如 ``scipy/linalg/tests/``）
+- :class:`fspack.slim.libs.SklearnSlimSpec`：scikit-learn 剥离 ``datasets/descr/``
+  描述文件与 ``datasets/images/`` 示例图片（保留 ``data/`` 运行时必需）
 - :class:`fspack.slim.libs.LxmlSlimSpec`：lxml 剥离 ``includes`` C 头文件目录
+- :class:`fspack.slim.libs.PyarrowSlimSpec`：pyarrow 剥离 ``includes`` C++ 头文件
+  与 Cython 定义目录（``.h`` 已由 STRIP_EXTS 剥离，``.pxd`` 需本 spec 覆盖）
 - :class:`fspack.slim.default.DefaultSlimSpec`：兜底规则，非 Qt 库按子模块
   选择性保留 ``.pyd``/``.pyi``/``.so``，其他全保留
 
@@ -40,14 +44,16 @@ from fspack.slim.libs import (
     LxmlSlimSpec,
     MatplotlibSlimSpec,
     NumpySlimSpec,
+    PyarrowSlimSpec,
     ScipySlimSpec,
+    SklearnSlimSpec,
 )
 from fspack.slim.qt import QT_PACKAGES, QtSlimSpec
 
 # 显式按顺序注册内置 spec：
 # - QtSlimSpec：match 限定为 Qt 包名，优先匹配
-# - NumpySlimSpec/MatplotlibSlimSpec/ScipySlimSpec/LxmlSlimSpec：match 限定为
-#   具体包名，优先于兜底
+# - NumpySlimSpec/MatplotlibSlimSpec/ScipySlimSpec/SklearnSlimSpec/
+#   LxmlSlimSpec/PyarrowSlimSpec：match 限定为具体包名，优先于兜底
 # - DefaultSlimSpec：match 始终 True，必须最后注册（兜底）
 # Python 模块只初始化一次（除 reload），无需额外去重。
 # 不依赖 from-import 顺序，避免 isort 重排导致注册顺序错误。
@@ -55,7 +61,9 @@ register_spec(QtSlimSpec)
 register_spec(NumpySlimSpec)
 register_spec(MatplotlibSlimSpec)
 register_spec(ScipySlimSpec)
+register_spec(SklearnSlimSpec)
 register_spec(LxmlSlimSpec)
+register_spec(PyarrowSlimSpec)
 register_spec(DefaultSlimSpec)
 
 __all__ = [
@@ -63,8 +71,10 @@ __all__ = [
     "LxmlSlimSpec",
     "MatplotlibSlimSpec",
     "NumpySlimSpec",
+    "PyarrowSlimSpec",
     "QtSlimSpec",
     "ScipySlimSpec",
+    "SklearnSlimSpec",
     "SlimSpec",
     "classify_entry",
     "get_spec",

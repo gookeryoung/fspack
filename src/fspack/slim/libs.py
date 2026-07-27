@@ -29,7 +29,9 @@ __all__ = [
     "LxmlSlimSpec",
     "MatplotlibSlimSpec",
     "NumpySlimSpec",
+    "PyarrowSlimSpec",
     "ScipySlimSpec",
+    "SklearnSlimSpec",
 ]
 
 
@@ -196,3 +198,105 @@ class ScipySlimSpec(SlimSpec):
     ) -> tuple[str, str | None]:
         """scipy 条目分类，委托 :meth:`_default_classify`（嵌套 tests 由基类自动剥离）."""
         return cls._default_classify(entry, top_pkg, keep_subs)
+
+
+class SklearnSlimSpec(SlimSpec):
+    """scikit-learn 精简规则：剥离 datasets 下的描述文件与示例图片。
+
+    scikit-learn 的 ``sklearn/datasets/`` 模块含三类附属资源：
+
+    - ``data/``：CSV 数据文件（iris.csv 等），``load_iris``/``load_wine`` 等函数
+      运行时读取，**不可剥离**
+    - ``descr/``：数据集描述文件（.rst），仅 ``load_iris().DESCR`` 文本展示用，
+      不影响 ``import sklearn`` 与算法运算 → 剥离
+    - ``images/``：示例图片（china.jpg 等），仅 ``load_sample_image`` 使用，
+      非核心功能 → 剥离
+
+    剥离后 ``import sklearn``、``fit``/``predict``/``transform`` 等算法 API
+    完全正常，仅 ``DESCR`` 属性返回 None 与 ``load_sample_image`` 不可用。
+    嵌套 ``tests/`` 由 :attr:`SlimSpec.NESTED_TEST_DIRS` 自动剥离。
+    """
+
+    # sklearn/datasets/ 下可剥离的三级子目录（data/ 保留，运行时必需）
+    _DATASETS_STRIP_SUBDIRS: frozenset[str] = frozenset({"descr", "images"})
+
+    @classmethod
+    @override
+    def match(cls, whl_pkg: str) -> bool:
+        """匹配归一化包名 ``scikit-learn`` 与顶层目录名 ``sklearn``.
+
+        scikit-learn wheel 文件名归一化为 ``scikit-learn``，但 wheel 内顶层
+        目录为 ``sklearn``（归一化仍为 ``sklearn``）。``_detect_top_pkg`` 用
+        顶层目录名的归一化形式查找 spec，故需同时匹配两者，否则 sklearn
+        wheel 会被当作无匹配 top_pkg 走全量解压。
+        """
+        return whl_pkg in ("scikit-learn", "sklearn")
+
+    @classmethod
+    @override
+    def classify_entry(
+        cls,
+        entry: str,
+        top_pkg: str,
+        keep_subs: set[str],
+    ) -> tuple[str, str | None]:
+        """sklearn 条目分类：剥离 datasets/descr/ 与 datasets/images/，其余委托 :meth:`_default_classify`."""
+        parts = entry.split("/")
+        # sklearn/datasets/descr/ 和 sklearn/datasets/images/ 剥离
+        # 保留 sklearn/datasets/data/（load_iris 等运行时读取）
+        if (
+            len(parts) >= 4
+            and parts[0] == top_pkg
+            and parts[1] == "datasets"
+            and parts[2] in cls._DATASETS_STRIP_SUBDIRS
+        ):
+            return ("exclude", None)
+        return cls._default_classify(entry, top_pkg, keep_subs)
+
+
+class PyarrowSlimSpec(SlimSpec):
+    """pyarrow 精简规则：剥离 C++ 头文件目录，顶层 C 扩展始终保留。
+
+     pyarrow 的 ``pyarrow/includes/`` 含 C++ 头文件（.h）与 Cython 定义文件
+    （.pxd），仅供第三方 C++/Cython 扩展编译时 ``#include`` 使用，
+     ``import pyarrow`` 运行时不读取。
+
+     - ``.h`` 文件已由 :attr:`SlimSpec.STRIP_EXTS` 剥离
+     - ``.pxd`` 文件不在 ``STRIP_EXTS`` 中，需通过本 spec 剥离整个 ``includes/``
+       二级目录覆盖
+
+     顶层 C 扩展（``lib.pyd``/``_compute.pyd`` 等）是 ``pyarrow.__init__`` 硬依赖
+     （``from pyarrow.lib import ...``），剥离即 ImportError。通过
+     ``top_ext_always_shared=True`` 将顶层 ``.pyd``/``.pyi``/``.so`` 归 shared
+     始终保留，不做子模块选择性剥离（与 :class:`MatplotlibSlimSpec` 同模式）。
+
+     与 :class:`LxmlSlimSpec` 模式一致（lxml 剥离 ``includes/`` C 头文件目录）。
+     嵌套 ``tests/`` 由 :attr:`SlimSpec.NESTED_TEST_DIRS` 自动剥离。
+    """
+
+    _EXTRA_EXCLUDES = frozenset(
+        {
+            "includes",  # C++ 头文件与 Cython 定义
+        }
+    )
+
+    @classmethod
+    @override
+    def match(cls, whl_pkg: str) -> bool:
+        """匹配归一化包名 ``pyarrow``."""
+        return whl_pkg == "pyarrow"
+
+    @classmethod
+    @override
+    def classify_entry(
+        cls,
+        entry: str,
+        top_pkg: str,
+        keep_subs: set[str],
+    ) -> tuple[str, str | None]:
+        """pyarrow 条目分类，委托 :meth:`_default_classify` + 库专属剥离集合.
+
+        ``top_ext_always_shared=True``：顶层 C 扩展（lib.pyd 等）始终保留，
+        不做子模块选择性剥离。
+        """
+        return cls._default_classify(entry, top_pkg, keep_subs, cls._EXTRA_EXCLUDES, frozenset(), True)

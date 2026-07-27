@@ -2095,6 +2095,195 @@ class TestScipySlimSpec:
         assert ScipySlimSpec.classify_entry("scipy/_lib/_util.py", "scipy", set()) == ("shared", None)
 
 
+class TestSklearnSlimSpec:
+    """scikit-learn 精简规则：剥离 datasets/descr/ 与 datasets/images/，保留 data/."""
+
+    def test_match_sklearn_only(self) -> None:
+        from fspack.slim.libs import SklearnSlimSpec
+
+        # wheel 文件名归一化为 scikit-learn，顶层目录归一化为 sklearn
+        assert SklearnSlimSpec.match("scikit-learn") is True
+        assert SklearnSlimSpec.match("sklearn") is True
+        assert SklearnSlimSpec.match("scipy") is False
+        assert SklearnSlimSpec.match("numpy") is False
+
+    def test_classify_datasets_descr_excluded(self) -> None:
+        """sklearn/datasets/descr/ 描述文件归 exclude（仅 DESCR 文本展示用）."""
+        from fspack.slim.libs import SklearnSlimSpec
+
+        assert SklearnSlimSpec.classify_entry("sklearn/datasets/descr/iris.rst", "sklearn", set()) == (
+            "exclude",
+            None,
+        )
+        assert SklearnSlimSpec.classify_entry("sklearn/datasets/descr/wine_data.rst", "sklearn", set()) == (
+            "exclude",
+            None,
+        )
+
+    def test_classify_datasets_images_excluded(self) -> None:
+        """sklearn/datasets/images/ 示例图片归 exclude（仅 load_sample_image 用）."""
+        from fspack.slim.libs import SklearnSlimSpec
+
+        assert SklearnSlimSpec.classify_entry("sklearn/datasets/images/china.jpg", "sklearn", set()) == (
+            "exclude",
+            None,
+        )
+        assert SklearnSlimSpec.classify_entry("sklearn/datasets/images/face.jpg", "sklearn", set()) == (
+            "exclude",
+            None,
+        )
+
+    def test_classify_datasets_data_kept(self) -> None:
+        """sklearn/datasets/data/ CSV 数据归 shared 保留（load_iris 运行时读取）."""
+        from fspack.slim.libs import SklearnSlimSpec
+
+        assert SklearnSlimSpec.classify_entry("sklearn/datasets/data/iris.csv", "sklearn", set()) == (
+            "shared",
+            None,
+        )
+        assert SklearnSlimSpec.classify_entry("sklearn/datasets/data/wine_data.csv", "sklearn", set()) == (
+            "shared",
+            None,
+        )
+
+    def test_classify_datasets_module_kept(self) -> None:
+        """sklearn/datasets/__init__.py 与 _base.py 归 shared 保留（模块本身可用）."""
+        from fspack.slim.libs import SklearnSlimSpec
+
+        assert SklearnSlimSpec.classify_entry("sklearn/datasets/__init__.py", "sklearn", set()) == (
+            "shared",
+            None,
+        )
+        assert SklearnSlimSpec.classify_entry("sklearn/datasets/_base.py", "sklearn", set()) == ("shared", None)
+
+    def test_classify_nested_tests_excluded(self) -> None:
+        """sklearn/<sub>/tests/ 嵌套 tests 归 exclude（NESTED_TEST_DIRS 自动处理）."""
+        from fspack.slim.libs import SklearnSlimSpec
+
+        for sub in ("cluster", "decomposition", "ensemble", "svm", "linear_model"):
+            assert SklearnSlimSpec.classify_entry(f"sklearn/{sub}/tests/test_dummy.py", "sklearn", set()) == (
+                "exclude",
+                None,
+            ), f"{sub}/tests 应当剥离"
+
+    def test_classify_runtime_subdir_kept(self) -> None:
+        """sklearn 运行时子目录（cluster/decomposition/ensemble 等非 tests）归 shared."""
+        from fspack.slim.libs import SklearnSlimSpec
+
+        for subdir in ("cluster", "decomposition", "ensemble", "svm", "linear_model", "metrics"):
+            assert SklearnSlimSpec.classify_entry(f"sklearn/{subdir}/_base.py", "sklearn", set()) == (
+                "shared",
+                None,
+            ), f"{subdir} 应当保留"
+
+    def test_classify_top_init_kept(self) -> None:
+        """sklearn 顶层 __init__.py 归 shared."""
+        from fspack.slim.libs import SklearnSlimSpec
+
+        assert SklearnSlimSpec.classify_entry("sklearn/__init__.py", "sklearn", set()) == ("shared", None)
+
+    def test_classify_dist_info(self) -> None:
+        """sklearn dist-info 元数据归 metadata."""
+        from fspack.slim.libs import SklearnSlimSpec
+
+        assert SklearnSlimSpec.classify_entry("scikit_learn-1.3.0.dist-info/METADATA", "sklearn", set()) == (
+            "metadata",
+            None,
+        )
+
+    def test_classify_strip_exts_excluded(self) -> None:
+        """sklearn .h/.pdb 文件归 exclude（STRIP_EXTS 统一处理）."""
+        from fspack.slim.libs import SklearnSlimSpec
+
+        assert SklearnSlimSpec.classify_entry("sklearn/_build_utils/header.h", "sklearn", set()) == (
+            "exclude",
+            None,
+        )
+        assert SklearnSlimSpec.classify_entry("sklearn/cluster/_k_means.pdb", "sklearn", set()) == (
+            "exclude",
+            None,
+        )
+
+
+class TestPyarrowSlimSpec:
+    """pyarrow 精简规则：剥离 includes/ C++ 头文件与 Cython 定义目录."""
+
+    def test_match_pyarrow_only(self) -> None:
+        from fspack.slim.libs import PyarrowSlimSpec
+
+        assert PyarrowSlimSpec.match("pyarrow") is True
+        assert PyarrowSlimSpec.match("lxml") is False
+        assert PyarrowSlimSpec.match("numpy") is False
+
+    def test_classify_includes_excluded(self) -> None:
+        """pyarrow/includes/ 二级目录归 exclude（C++ 头文件 + Cython 定义）."""
+        from fspack.slim.libs import PyarrowSlimSpec
+
+        # .pxd 文件（不在 STRIP_EXTS 中，需本 spec 剥离）
+        assert PyarrowSlimSpec.classify_entry("pyarrow/includes/libarrow.pxd", "pyarrow", set()) == (
+            "exclude",
+            None,
+        )
+        # .h 文件（已在 STRIP_EXTS 中，本 spec 也剥离整个目录，双重保障）
+        assert PyarrowSlimSpec.classify_entry("pyarrow/includes/arrow/api.h", "pyarrow", set()) == (
+            "exclude",
+            None,
+        )
+
+    def test_classify_runtime_module_kept(self) -> None:
+        """pyarrow 运行时模块（__init__.py/lib.pyd 等）归 shared 保留."""
+        from fspack.slim.libs import PyarrowSlimSpec
+
+        assert PyarrowSlimSpec.classify_entry("pyarrow/__init__.py", "pyarrow", set()) == ("shared", None)
+        assert PyarrowSlimSpec.classify_entry("pyarrow/lib.pyd", "pyarrow", set()) == ("shared", None)
+        assert PyarrowSlimSpec.classify_entry("pyarrow/array.py", "pyarrow", set()) == ("shared", None)
+
+    def test_classify_top_pyd_always_shared(self) -> None:
+        """pyarrow 顶层 .pyd 归 shared 始终保留（top_ext_always_shared=True）.
+
+        pyarrow 的顶层 C 扩展（lib.pyd/_compute.pyd 等）是 __init__ 硬依赖，
+        剥离即 ImportError，故全部归 shared 不做子模块选择性剥离。
+        """
+        from fspack.slim.libs import PyarrowSlimSpec
+
+        # lib.pyd（非 _ 开头）归 shared（top_ext_always_shared=True 覆盖 submodule）
+        assert PyarrowSlimSpec.classify_entry("pyarrow/lib.pyd", "pyarrow", set()) == ("shared", None)
+        # _compute.pyd（_ 开头）归 shared（私有模块 + top_ext_always_shared 双重保障）
+        assert PyarrowSlimSpec.classify_entry("pyarrow/_compute.pyd", "pyarrow", set()) == ("shared", None)
+
+    def test_classify_nested_tests_excluded(self) -> None:
+        """pyarrow/<sub>/tests/ 嵌套 tests 归 exclude（NESTED_TEST_DIRS 自动处理）."""
+        from fspack.slim.libs import PyarrowSlimSpec
+
+        assert PyarrowSlimSpec.classify_entry("pyarrow/tests/test_array.py", "pyarrow", set()) == (
+            "exclude",
+            None,
+        )
+        assert PyarrowSlimSpec.classify_entry("pyarrow/parquet/tests/test_parquet.py", "pyarrow", set()) == (
+            "exclude",
+            None,
+        )
+
+    def test_classify_dist_info(self) -> None:
+        """pyarrow dist-info 元数据归 metadata."""
+        from fspack.slim.libs import PyarrowSlimSpec
+
+        assert PyarrowSlimSpec.classify_entry("pyarrow-14.0.0.dist-info/METADATA", "pyarrow", set()) == (
+            "metadata",
+            None,
+        )
+
+    def test_classify_common_excluded(self) -> None:
+        """pyarrow 通用剥离目录（examples/docs 等）归 exclude."""
+        from fspack.slim.libs import PyarrowSlimSpec
+
+        for subdir in ("examples", "docs", "doc"):
+            assert PyarrowSlimSpec.classify_entry(f"pyarrow/{subdir}/dummy.py", "pyarrow", set()) == (
+                "exclude",
+                None,
+            ), f"{subdir} 应当剥离"
+
+
 class TestNestedExcludesBehavior:
     """_default_classify 的 nested_excludes 参数行为。."""
 
@@ -2220,6 +2409,24 @@ class TestSlimSpecRegistry:
 
         assert get_spec("matplotlib") is MatplotlibSlimSpec
         assert get_spec("scipy") is ScipySlimSpec
+
+    def test_get_spec_sklearn_pyarrow(self) -> None:
+        """scikit-learn/pyarrow 走专门的 spec（非默认兜底）."""
+        from fspack.slim import get_spec
+        from fspack.slim.libs import PyarrowSlimSpec, SklearnSlimSpec
+
+        assert get_spec("scikit-learn") is SklearnSlimSpec
+        assert get_spec("pyarrow") is PyarrowSlimSpec
+
+    def test_classify_entry_dispatches_to_sklearn(self) -> None:
+        """classify_entry 按 top_pkg 归一化名分发到 SklearnSlimSpec。."""
+        # sklearn/datasets/descr/ 剥离验证分发到 sklearn spec
+        assert classify_entry("sklearn/datasets/descr/iris.rst", "sklearn") == ("exclude", None)
+
+    def test_classify_entry_dispatches_to_pyarrow(self) -> None:
+        """classify_entry 按 top_pkg 归一化名分发到 PyarrowSlimSpec。."""
+        # pyarrow/includes/ 剥离验证分发到 pyarrow spec
+        assert classify_entry("pyarrow/includes/libarrow.pxd", "pyarrow") == ("exclude", None)
 
     def test_classify_entry_dispatches_to_matplotlib(self) -> None:
         """classify_entry 按 top_pkg 归一化名分发到 MatplotlibSlimSpec。."""
