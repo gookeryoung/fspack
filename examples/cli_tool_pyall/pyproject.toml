@@ -1,4 +1,0 @@
-[project]
-name = "cli_tool_pyall"
-version = "0.1.0"
-dependencies = ["requests"]

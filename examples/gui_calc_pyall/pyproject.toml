@@ -1,4 +1,0 @@
-[project]
-name = "gui_calc_pyall"
-version = "0.1.0"
-dependencies = ["PySide6"]
