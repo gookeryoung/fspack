@@ -211,10 +211,10 @@ def test_build_skips_runtime_when_already_prepared_windows(tmp_path: Path, monke
         nonlocal extract_called
         extract_called = True
 
-    monkeypatch.setattr("fspack.builder.download_embed", fake_download_embed)
-    monkeypatch.setattr("fspack.builder.extract_embed", fake_extract_embed)
+    monkeypatch.setattr("fspack.packaging.pipeline.download_embed", fake_download_embed)
+    monkeypatch.setattr("fspack.packaging.pipeline.extract_embed", fake_extract_embed)
     monkeypatch.setattr(
-        "fspack.builder.compile_loader",
+        "fspack.packaging.pipeline.compile_loader",
         lambda source, out_exe, app_type, work_dir, platform, **kw: (
             out_exe.parent.mkdir(parents=True, exist_ok=True),
             out_exe.write_text(source),
@@ -252,10 +252,10 @@ def test_build_skips_runtime_when_already_prepared_linux(tmp_path: Path, monkeyp
         nonlocal extract_called
         extract_called = True
 
-    monkeypatch.setattr("fspack.builder.download_standalone", fake_download_standalone)
-    monkeypatch.setattr("fspack.builder.extract_standalone", fake_extract_standalone)
+    monkeypatch.setattr("fspack.packaging.pipeline.download_standalone", fake_download_standalone)
+    monkeypatch.setattr("fspack.packaging.pipeline.extract_standalone", fake_extract_standalone)
     monkeypatch.setattr(
-        "fspack.builder.compile_loader",
+        "fspack.packaging.pipeline.compile_loader",
         lambda source, out_exe, app_type, work_dir, platform, **kw: (
             out_exe.parent.mkdir(parents=True, exist_ok=True),
             out_exe.write_text(source),
@@ -383,11 +383,11 @@ def test_build_forwards_keep_modules(tmp_path: Path, monkeypatch: pytest.MonkeyP
     (proj / "app.py").write_text("import requests\nfrom requests import get\ndef main():\n    pass\n")
 
     monkeypatch.setattr(
-        "fspack.builder.download_embed",
+        "fspack.packaging.pipeline.download_embed",
         lambda v, m, c, **kw: tmp_path / "fake.zip",
     )
     monkeypatch.setattr(
-        "fspack.builder.extract_embed",
+        "fspack.packaging.pipeline.extract_embed",
         lambda zip_path, runtime_dir: (
             runtime_dir.mkdir(parents=True, exist_ok=True),
             (runtime_dir / "python311.dll").write_bytes(b""),
@@ -395,7 +395,7 @@ def test_build_forwards_keep_modules(tmp_path: Path, monkeypatch: pytest.MonkeyP
         )[-1],
     )
     monkeypatch.setattr(
-        "fspack.builder.download_wheels",
+        "fspack.packaging.pipeline.download_wheels",
         lambda packages, py_version, index, cache_dir, platform_tags=("win_amd64",), **kw: [],
     )
 
@@ -406,9 +406,9 @@ def test_build_forwards_keep_modules(tmp_path: Path, monkeypatch: pytest.MonkeyP
         captured["keep_modules"] = keep_modules
         return 0
 
-    monkeypatch.setattr("fspack.builder.unpack_wheels", fake_unpack)
+    monkeypatch.setattr("fspack.packaging.pipeline.unpack_wheels", fake_unpack)
     monkeypatch.setattr(
-        "fspack.builder.compile_loader",
+        "fspack.packaging.pipeline.compile_loader",
         lambda source, out_exe, app_type, work_dir, platform, **kw: (
             out_exe.parent.mkdir(parents=True, exist_ok=True),
             out_exe.write_text(source),
@@ -438,15 +438,15 @@ def test_build_orchestration_helloworld(tmp_path: Path, monkeypatch: pytest.Monk
         (runtime_dir / "Lib" / "site-packages").mkdir(parents=True, exist_ok=True)
         calls["extract"] = True
 
-    monkeypatch.setattr("fspack.builder.download_embed", lambda v, m, c, **kw: tmp_path / "fake.zip")
-    monkeypatch.setattr("fspack.builder.extract_embed", fake_extract_embed)
+    monkeypatch.setattr("fspack.packaging.pipeline.download_embed", lambda v, m, c, **kw: tmp_path / "fake.zip")
+    monkeypatch.setattr("fspack.packaging.pipeline.extract_embed", fake_extract_embed)
 
     def fake_download(packages: object, py_version: str, index: str, cache_dir: Path, **kw: Any) -> list[Path]:
         calls["download"] = True
         return []
 
-    monkeypatch.setattr("fspack.builder.download_wheels", fake_download)
-    monkeypatch.setattr("fspack.builder.unpack_wheels", lambda *a, **k: 0)
+    monkeypatch.setattr("fspack.packaging.pipeline.download_wheels", fake_download)
+    monkeypatch.setattr("fspack.packaging.pipeline.unpack_wheels", lambda *a, **k: 0)
 
     def fake_compile(source: str, out_exe: Path, app_type: object, work_dir: Path, platform: object, **kw: Any) -> Path:
         out_exe.parent.mkdir(parents=True, exist_ok=True)
@@ -454,7 +454,7 @@ def test_build_orchestration_helloworld(tmp_path: Path, monkeypatch: pytest.Monk
         calls["compile_source"] = source
         return out_exe
 
-    monkeypatch.setattr("fspack.builder.compile_loader", fake_compile)
+    monkeypatch.setattr("fspack.packaging.pipeline.compile_loader", fake_compile)
 
     with console.rich.capture() as capture:
         info = build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
@@ -490,11 +490,11 @@ def test_build_orchestration_with_deps(tmp_path: Path, monkeypatch: pytest.Monke
     (proj / "app.py").write_text("import requests\ndef main():\n    pass\n")
 
     monkeypatch.setattr(
-        "fspack.builder.download_embed",
+        "fspack.packaging.pipeline.download_embed",
         lambda v, m, c, **kw: tmp_path / "fake.zip",
     )
     monkeypatch.setattr(
-        "fspack.builder.extract_embed",
+        "fspack.packaging.pipeline.extract_embed",
         lambda zip_path, runtime_dir: (
             runtime_dir.mkdir(parents=True, exist_ok=True),
             (runtime_dir / "python311.dll").write_bytes(b""),
@@ -503,14 +503,14 @@ def test_build_orchestration_with_deps(tmp_path: Path, monkeypatch: pytest.Monke
     )
     downloaded: dict[str, bool] = {}
     monkeypatch.setattr(
-        "fspack.builder.download_wheels",
+        "fspack.packaging.pipeline.download_wheels",
         lambda packages, py_version, index, cache_dir, platform_tags=("win_amd64",), **kw: (
             downloaded.__setitem__("called", True) or []
         ),
     )
-    monkeypatch.setattr("fspack.builder.unpack_wheels", lambda *a, **k: 0)
+    monkeypatch.setattr("fspack.packaging.pipeline.unpack_wheels", lambda *a, **k: 0)
     monkeypatch.setattr(
-        "fspack.builder.compile_loader",
+        "fspack.packaging.pipeline.compile_loader",
         lambda source, out_exe, app_type, work_dir, platform, **kw: (
             out_exe.parent.mkdir(parents=True, exist_ok=True),
             out_exe.write_text(source),
@@ -534,9 +534,9 @@ def test_build_prefers_declared_over_ast(tmp_path: Path, monkeypatch: pytest.Mon
     )
     (proj / "app.py").write_text("import orderedset\nimport lxml\ndef main():\n    pass\n")
 
-    monkeypatch.setattr("fspack.builder.download_embed", lambda v, m, c, **kw: tmp_path / "fake.zip")
+    monkeypatch.setattr("fspack.packaging.pipeline.download_embed", lambda v, m, c, **kw: tmp_path / "fake.zip")
     monkeypatch.setattr(
-        "fspack.builder.extract_embed",
+        "fspack.packaging.pipeline.extract_embed",
         lambda zip_path, runtime_dir: (
             runtime_dir.mkdir(parents=True, exist_ok=True),
             (runtime_dir / "python311.dll").write_bytes(b""),
@@ -551,10 +551,10 @@ def test_build_prefers_declared_over_ast(tmp_path: Path, monkeypatch: pytest.Mon
         captured["packages"] = tuple(packages)
         return []
 
-    monkeypatch.setattr("fspack.builder.download_wheels", fake_download)
-    monkeypatch.setattr("fspack.builder.unpack_wheels", lambda *a, **k: 0)
+    monkeypatch.setattr("fspack.packaging.pipeline.download_wheels", fake_download)
+    monkeypatch.setattr("fspack.packaging.pipeline.unpack_wheels", lambda *a, **k: 0)
     monkeypatch.setattr(
-        "fspack.builder.compile_loader",
+        "fspack.packaging.pipeline.compile_loader",
         lambda source, out_exe, app_type, work_dir, platform, **kw: (
             out_exe.parent.mkdir(parents=True, exist_ok=True),
             out_exe.write_text(source),
@@ -578,9 +578,9 @@ def test_build_merges_cli_private_sources_with_config(tmp_path: Path, monkeypatc
     )
     (proj / "app.py").write_text("import requests\ndef main():\n    pass\n")
 
-    monkeypatch.setattr("fspack.builder.download_embed", lambda v, m, c, **kw: tmp_path / "fake.zip")
+    monkeypatch.setattr("fspack.packaging.pipeline.download_embed", lambda v, m, c, **kw: tmp_path / "fake.zip")
     monkeypatch.setattr(
-        "fspack.builder.extract_embed",
+        "fspack.packaging.pipeline.extract_embed",
         lambda zip_path, runtime_dir: (
             runtime_dir.mkdir(parents=True, exist_ok=True),
             (runtime_dir / "python311.dll").write_bytes(b""),
@@ -596,10 +596,10 @@ def test_build_merges_cli_private_sources_with_config(tmp_path: Path, monkeypatc
         captured["find_links"] = kw.get("find_links", ())
         return []
 
-    monkeypatch.setattr("fspack.builder.download_wheels", fake_download)
-    monkeypatch.setattr("fspack.builder.unpack_wheels", lambda *a, **k: 0)
+    monkeypatch.setattr("fspack.packaging.pipeline.download_wheels", fake_download)
+    monkeypatch.setattr("fspack.packaging.pipeline.unpack_wheels", lambda *a, **k: 0)
     monkeypatch.setattr(
-        "fspack.builder.compile_loader",
+        "fspack.packaging.pipeline.compile_loader",
         lambda source, out_exe, app_type, work_dir, platform, **kw: (
             out_exe.parent.mkdir(parents=True, exist_ok=True),
             out_exe.write_text(source),
@@ -636,9 +636,9 @@ def test_build_passes_config_private_sources_without_cli(tmp_path: Path, monkeyp
     )
     (proj / "app.py").write_text("import requests\ndef main():\n    pass\n")
 
-    monkeypatch.setattr("fspack.builder.download_embed", lambda v, m, c, **kw: tmp_path / "fake.zip")
+    monkeypatch.setattr("fspack.packaging.pipeline.download_embed", lambda v, m, c, **kw: tmp_path / "fake.zip")
     monkeypatch.setattr(
-        "fspack.builder.extract_embed",
+        "fspack.packaging.pipeline.extract_embed",
         lambda zip_path, runtime_dir: (
             runtime_dir.mkdir(parents=True, exist_ok=True),
             (runtime_dir / "python311.dll").write_bytes(b""),
@@ -654,10 +654,10 @@ def test_build_passes_config_private_sources_without_cli(tmp_path: Path, monkeyp
         captured["find_links"] = kw.get("find_links", ())
         return []
 
-    monkeypatch.setattr("fspack.builder.download_wheels", fake_download)
-    monkeypatch.setattr("fspack.builder.unpack_wheels", lambda *a, **k: 0)
+    monkeypatch.setattr("fspack.packaging.pipeline.download_wheels", fake_download)
+    monkeypatch.setattr("fspack.packaging.pipeline.unpack_wheels", lambda *a, **k: 0)
     monkeypatch.setattr(
-        "fspack.builder.compile_loader",
+        "fspack.packaging.pipeline.compile_loader",
         lambda source, out_exe, app_type, work_dir, platform, **kw: (
             out_exe.parent.mkdir(parents=True, exist_ok=True),
             out_exe.write_text(source),
@@ -683,8 +683,8 @@ def test_build_skips_download_when_site_packages_has_deps(tmp_path: Path, monkey
         sp.mkdir(parents=True)
         (sp / "requests-2.31.0.dist-info").mkdir()
 
-    monkeypatch.setattr("fspack.builder.download_embed", lambda v, m, c, **kw: tmp_path / "fake.zip")
-    monkeypatch.setattr("fspack.builder.extract_embed", fake_extract_embed)
+    monkeypatch.setattr("fspack.packaging.pipeline.download_embed", lambda v, m, c, **kw: tmp_path / "fake.zip")
+    monkeypatch.setattr("fspack.packaging.pipeline.extract_embed", fake_extract_embed)
 
     download_called = False
 
@@ -693,10 +693,10 @@ def test_build_skips_download_when_site_packages_has_deps(tmp_path: Path, monkey
         download_called = True
         return []
 
-    monkeypatch.setattr("fspack.builder.download_wheels", fake_download)
-    monkeypatch.setattr("fspack.builder.unpack_wheels", lambda *a, **k: 0)
+    monkeypatch.setattr("fspack.packaging.pipeline.download_wheels", fake_download)
+    monkeypatch.setattr("fspack.packaging.pipeline.unpack_wheels", lambda *a, **k: 0)
     monkeypatch.setattr(
-        "fspack.builder.compile_loader",
+        "fspack.packaging.pipeline.compile_loader",
         lambda source, out_exe, app_type, work_dir, platform, **kw: (
             out_exe.parent.mkdir(parents=True, exist_ok=True),
             out_exe.write_text(source),
@@ -724,10 +724,10 @@ def test_build_orchestration_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         (pydir / "lib" / f"python{major}.{minor}" / "site-packages").mkdir(parents=True)
         calls["standalone"] = "3.11.9"
 
-    monkeypatch.setattr("fspack.builder.download_standalone", lambda v, r, c, **kw: tmp_path / "fake.tar.gz")
-    monkeypatch.setattr("fspack.builder.extract_standalone", fake_extract_standalone)
-    monkeypatch.setattr("fspack.builder.download_wheels", lambda *a, **k: [])
-    monkeypatch.setattr("fspack.builder.unpack_wheels", lambda *a, **k: 0)
+    monkeypatch.setattr("fspack.packaging.pipeline.download_standalone", lambda v, r, c, **kw: tmp_path / "fake.tar.gz")
+    monkeypatch.setattr("fspack.packaging.pipeline.extract_standalone", fake_extract_standalone)
+    monkeypatch.setattr("fspack.packaging.pipeline.download_wheels", lambda *a, **k: [])
+    monkeypatch.setattr("fspack.packaging.pipeline.unpack_wheels", lambda *a, **k: 0)
 
     def fake_compile(source: str, out_exe: Path, app_type: object, work_dir: Path, platform: object, **kw: Any) -> Path:
         out_exe.parent.mkdir(parents=True, exist_ok=True)
@@ -736,7 +736,7 @@ def test_build_orchestration_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         calls["compile_source"] = source
         return out_exe
 
-    monkeypatch.setattr("fspack.builder.compile_loader", fake_compile)
+    monkeypatch.setattr("fspack.packaging.pipeline.compile_loader", fake_compile)
     # mock 预编译阶段的 subprocess.run（Linux python3.11 二进制在 Windows 上无法执行）
     monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
 
@@ -761,19 +761,19 @@ def test_build_supplements_tkinter_when_needed(tmp_path: Path, monkeypatch: pyte
     (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
     (proj / "app.py").write_text("import tkinter\ndef main():\n    pass\n")
 
-    monkeypatch.setattr("fspack.builder.download_embed", lambda v, m, c, **kw: tmp_path / "fake.zip")
+    monkeypatch.setattr("fspack.packaging.pipeline.download_embed", lambda v, m, c, **kw: tmp_path / "fake.zip")
     monkeypatch.setattr(
-        "fspack.builder.extract_embed",
+        "fspack.packaging.pipeline.extract_embed",
         lambda zip_path, runtime_dir: (
             runtime_dir.mkdir(parents=True, exist_ok=True),
             (runtime_dir / "python311.dll").write_bytes(b""),
             (runtime_dir / "Lib" / "site-packages").mkdir(parents=True, exist_ok=True),
         )[-1],
     )
-    monkeypatch.setattr("fspack.builder.download_wheels", lambda *a, **k: [])
-    monkeypatch.setattr("fspack.builder.unpack_wheels", lambda *a, **k: 0)
+    monkeypatch.setattr("fspack.packaging.pipeline.download_wheels", lambda *a, **k: [])
+    monkeypatch.setattr("fspack.packaging.pipeline.unpack_wheels", lambda *a, **k: 0)
     monkeypatch.setattr(
-        "fspack.builder.compile_loader",
+        "fspack.packaging.pipeline.compile_loader",
         lambda source, out_exe, app_type, work_dir, platform, **kw: (
             out_exe.parent.mkdir(parents=True, exist_ok=True),
             out_exe.write_text(source),
@@ -782,7 +782,7 @@ def test_build_supplements_tkinter_when_needed(tmp_path: Path, monkeypatch: pyte
 
     ensure_called: dict[str, bool] = {}
     monkeypatch.setattr(
-        "fspack.builder.TkinterBundler.ensure",
+        "fspack.packaging.pipeline.TkinterBundler.ensure",
         lambda runtime_dir, version, cache_dir, stage: ensure_called.__setitem__("called", True),
     )
 
@@ -801,19 +801,19 @@ def test_build_skips_tkinter_when_not_used(tmp_path: Path, monkeypatch: pytest.M
     (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
     (proj / "app.py").write_text("import os\ndef main():\n    pass\n")
 
-    monkeypatch.setattr("fspack.builder.download_embed", lambda v, m, c, **kw: tmp_path / "fake.zip")
+    monkeypatch.setattr("fspack.packaging.pipeline.download_embed", lambda v, m, c, **kw: tmp_path / "fake.zip")
     monkeypatch.setattr(
-        "fspack.builder.extract_embed",
+        "fspack.packaging.pipeline.extract_embed",
         lambda zip_path, runtime_dir: (
             runtime_dir.mkdir(parents=True, exist_ok=True),
             (runtime_dir / "python311.dll").write_bytes(b""),
             (runtime_dir / "Lib" / "site-packages").mkdir(parents=True, exist_ok=True),
         )[-1],
     )
-    monkeypatch.setattr("fspack.builder.download_wheels", lambda *a, **k: [])
-    monkeypatch.setattr("fspack.builder.unpack_wheels", lambda *a, **k: 0)
+    monkeypatch.setattr("fspack.packaging.pipeline.download_wheels", lambda *a, **k: [])
+    monkeypatch.setattr("fspack.packaging.pipeline.unpack_wheels", lambda *a, **k: 0)
     monkeypatch.setattr(
-        "fspack.builder.compile_loader",
+        "fspack.packaging.pipeline.compile_loader",
         lambda source, out_exe, app_type, work_dir, platform, **kw: (
             out_exe.parent.mkdir(parents=True, exist_ok=True),
             out_exe.write_text(source),
@@ -822,7 +822,7 @@ def test_build_skips_tkinter_when_not_used(tmp_path: Path, monkeypatch: pytest.M
 
     ensure_called: dict[str, bool] = {}
     monkeypatch.setattr(
-        "fspack.builder.TkinterBundler.ensure",
+        "fspack.packaging.pipeline.TkinterBundler.ensure",
         lambda runtime_dir, version, cache_dir, stage: ensure_called.__setitem__("called", True),
     )
 
@@ -892,7 +892,7 @@ def test_inject_win7_compat_dll_warns_when_source_missing(
     runtime_dir = tmp_path / "runtime"
     runtime_dir.mkdir()
     # 将模块级常量改为不存在的文件名，使源路径查找失败
-    monkeypatch.setattr("fspack.builder._WIN7_COMPAT_DLL_NAME", "nonexistent-dll.dll")
+    monkeypatch.setattr("fspack.packaging.pyc._WIN7_COMPAT_DLL_NAME", "nonexistent-dll.dll")
     _inject_win7_compat_dll(runtime_dir)  # 不应抛异常
     assert not (runtime_dir / "nonexistent-dll.dll").exists()
     assert any("缺失" in r.message for r in caplog.records)
@@ -900,21 +900,21 @@ def test_inject_win7_compat_dll_warns_when_source_missing(
 
 def _setup_embed_mocks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, py_version: str) -> None:
     """为 Windows embed 构建注入公共 mock（download/extract/wheels/loader/mingw dll）."""
-    monkeypatch.setattr("fspack.builder.download_embed", lambda v, m, c, **kw: tmp_path / "fake.zip")
+    monkeypatch.setattr("fspack.packaging.pipeline.download_embed", lambda v, m, c, **kw: tmp_path / "fake.zip")
     parts = py_version.split(".", maxsplit=2)
     pyxy = f"python{parts[0]}{parts[1]}"
     monkeypatch.setattr(
-        "fspack.builder.extract_embed",
+        "fspack.packaging.pipeline.extract_embed",
         lambda zip_path, runtime_dir: (
             runtime_dir.mkdir(parents=True, exist_ok=True),
             (runtime_dir / f"{pyxy}.dll").write_bytes(b""),
             (runtime_dir / "Lib" / "site-packages").mkdir(parents=True, exist_ok=True),
         )[-1],
     )
-    monkeypatch.setattr("fspack.builder.download_wheels", lambda *a, **k: [])
-    monkeypatch.setattr("fspack.builder.unpack_wheels", lambda *a, **k: 0)
+    monkeypatch.setattr("fspack.packaging.pipeline.download_wheels", lambda *a, **k: [])
+    monkeypatch.setattr("fspack.packaging.pipeline.unpack_wheels", lambda *a, **k: 0)
     monkeypatch.setattr(
-        "fspack.builder.compile_loader",
+        "fspack.packaging.pipeline.compile_loader",
         lambda source, out_exe, app_type, work_dir, platform, **kw: (
             out_exe.parent.mkdir(parents=True, exist_ok=True),
             out_exe.write_text(source),
@@ -957,9 +957,9 @@ def test_build_skips_win7_compat_dll_for_linux(tmp_path: Path, monkeypatch: pyte
     (proj / "app.py").write_text("def main():\n    pass\n")
 
     # Linux 用 standalone mock
-    monkeypatch.setattr("fspack.builder.download_standalone", lambda v, r, c, **kw: tmp_path / "fake.tar.gz")
+    monkeypatch.setattr("fspack.packaging.pipeline.download_standalone", lambda v, r, c, **kw: tmp_path / "fake.tar.gz")
     monkeypatch.setattr(
-        "fspack.builder.extract_standalone",
+        "fspack.packaging.pipeline.extract_standalone",
         lambda tar_path, runtime_dir: (
             runtime_dir.mkdir(parents=True, exist_ok=True),
             (runtime_dir / "python" / "bin").mkdir(parents=True, exist_ok=True),
@@ -967,10 +967,10 @@ def test_build_skips_win7_compat_dll_for_linux(tmp_path: Path, monkeypatch: pyte
             (runtime_dir / "python" / "lib" / "python3.11" / "site-packages").mkdir(parents=True, exist_ok=True),
         )[-1],
     )
-    monkeypatch.setattr("fspack.builder.download_wheels", lambda *a, **k: [])
-    monkeypatch.setattr("fspack.builder.unpack_wheels", lambda *a, **k: 0)
+    monkeypatch.setattr("fspack.packaging.pipeline.download_wheels", lambda *a, **k: [])
+    monkeypatch.setattr("fspack.packaging.pipeline.unpack_wheels", lambda *a, **k: 0)
     monkeypatch.setattr(
-        "fspack.builder.compile_loader",
+        "fspack.packaging.pipeline.compile_loader",
         lambda source, out_exe, app_type, work_dir, platform, **kw: (
             out_exe.parent.mkdir(parents=True, exist_ok=True),
             out_exe.write_text(source),
@@ -1014,9 +1014,9 @@ def test_build_skips_inject_mingw_runtime_dlls_for_linux(
     (proj / "app.py").write_text("def main():\n    pass\n")
 
     # Linux 用 standalone mock
-    monkeypatch.setattr("fspack.builder.download_standalone", lambda v, r, c, **kw: tmp_path / "fake.tar.gz")
+    monkeypatch.setattr("fspack.packaging.pipeline.download_standalone", lambda v, r, c, **kw: tmp_path / "fake.tar.gz")
     monkeypatch.setattr(
-        "fspack.builder.extract_standalone",
+        "fspack.packaging.pipeline.extract_standalone",
         lambda tar_path, runtime_dir: (
             runtime_dir.mkdir(parents=True, exist_ok=True),
             (runtime_dir / "python" / "bin").mkdir(parents=True, exist_ok=True),
@@ -1024,10 +1024,10 @@ def test_build_skips_inject_mingw_runtime_dlls_for_linux(
             (runtime_dir / "python" / "lib" / "python3.11" / "site-packages").mkdir(parents=True, exist_ok=True),
         )[-1],
     )
-    monkeypatch.setattr("fspack.builder.download_wheels", lambda *a, **k: [])
-    monkeypatch.setattr("fspack.builder.unpack_wheels", lambda *a, **k: 0)
+    monkeypatch.setattr("fspack.packaging.pipeline.download_wheels", lambda *a, **k: [])
+    monkeypatch.setattr("fspack.packaging.pipeline.unpack_wheels", lambda *a, **k: 0)
     monkeypatch.setattr(
-        "fspack.builder.compile_loader",
+        "fspack.packaging.pipeline.compile_loader",
         lambda source, out_exe, app_type, work_dir, platform, **kw: (
             out_exe.parent.mkdir(parents=True, exist_ok=True),
             out_exe.write_text(source),
@@ -1156,7 +1156,7 @@ class _CompileCompleted:
 
 
 def test_precompile_pyc_windows_calls_compileall(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Windows 目标用 runtime/python.exe 调 compileall 预编译 src 与 site-packages."""
+    """Windows 目标用 runtime/python.exe 单次调 compileall 同时编译 src 与 site-packages."""
     runtime = tmp_path / "runtime"
     runtime.mkdir(parents=True, exist_ok=True)
     (runtime / "python.exe").write_bytes(b"")
@@ -1171,11 +1171,13 @@ def test_precompile_pyc_windows_calls_compileall(tmp_path: Path, monkeypatch: py
     st = StageRecorder("预编译字节码")
     _precompile_pyc(dist, runtime, "3.11.9", Platform.WINDOWS, strip_py=False, stage=st)
 
-    # 调用 2 次（src + site-packages）
-    assert len(captured) == 2
-    assert "compileall" in captured[0]
-    assert str(dist / "src") in captured[0]
-    assert str(runtime / "python.exe") in captured[0][0]
+    # 合并为单次 compileall 调用，同时编译 src 与 site-packages
+    assert len(captured) == 1
+    cmd = captured[0]
+    assert "compileall" in cmd
+    assert str(dist / "src") in cmd
+    assert str(runtime / "Lib" / "site-packages") in cmd
+    assert str(runtime / "python.exe") in cmd[0]
 
 
 def test_precompile_pyc_linux_uses_python3_bin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1239,15 +1241,18 @@ def _fake_compileall_runner(cmd: list[str], **kw: Any) -> Any:
     （``cpython-{major}{minor}[-opt-N].pyc``），而非当前解释器版本。
     需从命令中解析 ``-o <optimize>`` 与目标目录，py_version 由调用方在 ``cmd`` 中
     无法获取，故用模块级 ``_FAKE_COMPILE_PY_VERSION`` 变量传递（默认 "3.11"）。
+
+    支持多目录合并调用（iter-55 优化）：``compileall dir1 dir2 -q -j 0 -o N``
+    一次编译多目录，本函数收集所有非 flag 的目录参数逐个编译。
     """
-    target_dir = None
     optimize = 0
+    target_dirs: list[Path] = []
     for i, arg in enumerate(cmd):
         if arg == "-o":
             optimize = int(cmd[i + 1])
         elif not arg.startswith("-") and Path(arg).is_dir():
-            target_dir = Path(arg)
-    if target_dir:
+            target_dirs.append(Path(arg))
+    for target_dir in target_dirs:
         _compile_dir_with_pyc(target_dir, _FAKE_COMPILE_PY_VERSION, optimize)
     return _CompileCompleted()
 
@@ -1600,10 +1605,10 @@ def test_build_includes_new_stages_in_summary(tmp_path: Path, monkeypatch: pytes
 
     _setup_embed_mocks(tmp_path, monkeypatch, "3.11.9")
     # 覆盖 download_wheels 返回非空列表，触发「解压 wheel(精简)」阶段
-    monkeypatch.setattr("fspack.builder.download_wheels", lambda *a, **k: [tmp_path / "fake.whl"])
+    monkeypatch.setattr("fspack.packaging.pipeline.download_wheels", lambda *a, **k: [tmp_path / "fake.whl"])
     monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
     # 模拟同平台构建（CI 可能在 Linux 上跑 Windows 目标测试，交叉构建会跳过预编译）
-    monkeypatch.setattr("fspack.builder.detect_platform", lambda: Platform.WINDOWS)
+    monkeypatch.setattr("fspack.packaging.pipeline.detect_platform", lambda: Platform.WINDOWS)
 
     stage_names = _capture_stage_names(monkeypatch)
     build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
@@ -1640,7 +1645,7 @@ def test_build_no_stdlib_trim_skips_trim_stage(tmp_path: Path, monkeypatch: pyte
     _setup_embed_mocks(tmp_path, monkeypatch, "3.11.9")
     monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
     # 模拟同平台构建（CI 可能在 Linux 上跑 Windows 目标测试，交叉构建会跳过预编译）
-    monkeypatch.setattr("fspack.builder.detect_platform", lambda: Platform.WINDOWS)
+    monkeypatch.setattr("fspack.packaging.pipeline.detect_platform", lambda: Platform.WINDOWS)
 
     stage_names = _capture_stage_names(monkeypatch)
     build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, options=BuildOptions(no_stdlib_trim=True))
@@ -1670,7 +1675,7 @@ def test_build_pyc_strip_deletes_non_init_py(tmp_path: Path, monkeypatch: pytest
     (runtime / "python.exe").write_bytes(b"")
     monkeypatch.setattr("fspack.builder.subprocess.run", _fake_compileall_runner)
     # 模拟同平台构建（CI 可能在 Linux 上跑 Windows 目标测试，交叉构建会跳过预编译）
-    monkeypatch.setattr("fspack.builder.detect_platform", lambda: Platform.WINDOWS)
+    monkeypatch.setattr("fspack.packaging.pipeline.detect_platform", lambda: Platform.WINDOWS)
 
     build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, options=BuildOptions(pyc_strip=True))
 
@@ -1938,7 +1943,7 @@ def test_build_with_nuitka_invokes_compiler(tmp_path: Path, monkeypatch: pytest.
     runtime.mkdir(parents=True, exist_ok=True)
     (runtime / "python.exe").write_bytes(b"")
     monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
-    monkeypatch.setattr("fspack.builder.detect_platform", lambda: Platform.WINDOWS)
+    monkeypatch.setattr("fspack.packaging.pipeline.detect_platform", lambda: Platform.WINDOWS)
 
     # 拦截 NuitkaCompiler.compile_with_stamp 验证调用
     nuitka_called: dict[str, object] = {}
@@ -2001,7 +2006,7 @@ def test_build_nuitka_skipped_on_cross_compile(tmp_path: Path, monkeypatch: pyte
     (runtime / "python.exe").write_bytes(b"")
     monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
     # 构建机是 Linux，目标是 Windows → 交叉构建
-    monkeypatch.setattr("fspack.builder.detect_platform", lambda: Platform.LINUX)
+    monkeypatch.setattr("fspack.packaging.pipeline.detect_platform", lambda: Platform.LINUX)
 
     nuitka_called = {"n": 0}
 

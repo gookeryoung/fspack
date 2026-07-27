@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from fspack.config import SlimRules
+from fspack.config import DEFAULT_SLIM_RULES, SlimRules
 from fspack.exceptions import DependencyError
 from fspack.slim import classify_entry, slim_unpack
 
@@ -2606,6 +2606,100 @@ class TestSlimUnpackStageCallback:
             slim_unpack([whl1, whl2], dest, {"PySide6": frozenset({"QtCore"})}, stage=stage)
         # 累加：2 + 6 = 8 字节
         assert tracker.records[0].bytes_saved == 8
+
+    def test_parallel_unpack_matches_serial(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """并行解压与串行解压产出文件集合一致.
+
+        强制走并行路径（阈值调到 1），验证共享目录树 wheel（PySide6 拆分）
+        在并行解压时无文件丢失、无 FileExistsError 崩溃。
+        """
+        from fspack import slim
+        from fspack.slim.base import _unpack_wheel_dispatch
+
+        # 构造 3 个共享 PySide6/ 顶层目录的拆分 wheel
+        wheels_data = [
+            ("PySide6-6.5.0-cp39-none-win_amd64.whl", {"PySide6/__init__.py": b"", "PySide6/QtCore.pyd": b"core"}),
+            (
+                "PySide6_Essentials-6.5.0-cp39-none-win_amd64.whl",
+                {"PySide6/__init__.py": b"", "PySide6/QtGui.pyd": b"gui"},
+            ),
+            (
+                "PySide6_Addons-6.5.0-cp39-none-win_amd64.whl",
+                {"PySide6/__init__.py": b"", "PySide6/QtCharts.pyd": b"charts"},
+            ),
+        ]
+        wheels: list[Path] = []
+        for i, (name, entries) in enumerate(wheels_data):
+            whl = tmp_path / f"wh{i}" / name
+            whl.parent.mkdir()
+            _make_wheel(whl, entries)
+            wheels.append(whl)
+
+        merged = {"pyside6": {"Core", "Gui", "Charts"}}
+
+        # 串行解压
+        serial_dest = tmp_path / "serial"
+        serial_dest.mkdir()
+        for whl in wheels:
+            _unpack_wheel_dispatch(whl, serial_dest, merged, DEFAULT_SLIM_RULES)
+
+        # 并行解压（强制走并行路径）
+        monkeypatch.setattr(slim.base, "_PARALLEL_WHEEL_THRESHOLD", 1)
+        parallel_dest = tmp_path / "parallel"
+        parallel_dest.mkdir()
+        slim_unpack(wheels, parallel_dest, {"PySide6": frozenset({"Core", "Gui", "Charts"})})
+
+        # 比较两个目录的文件集合（相对路径）
+        serial_files = {p.relative_to(serial_dest).as_posix() for p in serial_dest.rglob("*") if p.is_file()}
+        parallel_files = {p.relative_to(parallel_dest).as_posix() for p in parallel_dest.rglob("*") if p.is_file()}
+        assert serial_files == parallel_files
+
+
+class TestParallelMapWithProgress:
+    """parallel_map_with_progress 单元测试."""
+
+    def test_empty_items_returns_empty(self) -> None:
+        """空 items 列表返回空结果，不创建线程池."""
+        from fspack.progress import parallel_map_with_progress
+
+        result = parallel_map_with_progress([], lambda x: x, "空任务")
+        assert result == []
+
+    def test_single_item(self) -> None:
+        """单 item 正常执行并返回结果."""
+        from fspack.progress import parallel_map_with_progress
+
+        result = parallel_map_with_progress([42], lambda x: x * 2, "单任务")
+        assert result == [84]
+
+    def test_multiple_items_all_collected(self) -> None:
+        """多 item 结果全部收集（顺序可能不同，但内容一致）."""
+        from fspack.progress import parallel_map_with_progress
+
+        result = parallel_map_with_progress(list(range(10)), lambda x: x**2, "平方")
+        assert sorted(result) == [i**2 for i in range(10)]
+
+    def test_exception_propagates(self) -> None:
+        """worker 抛异常时在 future.result() 重新抛出，与串行一致."""
+
+        from fspack.progress import parallel_map_with_progress
+
+        def fail(x: int) -> int:
+            if x == 3:
+                raise ValueError("故意失败")
+            return x
+
+        with pytest.raises(ValueError, match="故意失败"):
+            parallel_map_with_progress([1, 2, 3, 4, 5], fail, "含失败")
+
+    def test_stage_processed_incremented(self) -> None:
+        """stage.processed() 按完成项数累加."""
+        from fspack.progress import BuildTracker, parallel_map_with_progress
+
+        tracker = BuildTracker()
+        with tracker.stage("并行任务") as stage:
+            parallel_map_with_progress([1, 2, 3, 4, 5], lambda x: x * 2, "并行", stage=stage)
+        assert tracker.records[0].items == 5
 
 
 class TestWheelInfoFromFilename:

@@ -5,6 +5,8 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from fspack.analyzer import STDLIB_FALLBACK, analyze_dependencies, collect_imports, collect_submodule_imports
 
 
@@ -152,3 +154,56 @@ def test_analyze_dependencies_submodules_stdlib_filtered(tmp_path: Path) -> None
     r = analyze_dependencies(tmp_path, "main", ())
     assert "os" not in r.ast_submodules
     assert "json" not in r.ast_submodules
+
+
+def test_analyze_dependencies_parallel_matches_serial(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """并行解析路径与串行路径结果一致.
+
+    通过 monkeypatch 调低 ``_PARALLEL_THRESHOLD`` 强制走并行路径，
+    验证 ``ProcessPoolExecutor`` 分发与结果合并的正确性。
+    """
+    from fspack import analyzer
+
+    # 构造 10 个 .py 文件（足够触发并行路径，阈值调到 2）
+    pkg = tmp_path / "myproj"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    for i in range(10):
+        (pkg / f"mod_{i}.py").write_text(
+            "import os\nimport sys\nimport numpy as np\nfrom PySide2.QtWidgets import QApplication\n",
+            encoding="utf-8",
+        )
+    (tmp_path / "main.py").write_text("import os\nimport myproj\n", encoding="utf-8")
+
+    # 串行路径
+    monkeypatch.setattr(analyzer, "_PARALLEL_THRESHOLD", 10000)
+    serial = analyze_dependencies(tmp_path, "main", ())
+
+    # 并行路径
+    monkeypatch.setattr(analyzer, "_PARALLEL_THRESHOLD", 2)
+    parallel = analyze_dependencies(tmp_path, "main", ())
+
+    assert serial == parallel
+
+
+def test_parse_file_worker_skips_syntax_error(tmp_path: Path) -> None:
+    """worker 函数对语法错误文件返回空结果."""
+    from fspack.analyzer import _parse_file_worker
+
+    bad = tmp_path / "bad.py"
+    bad.write_text("def bad(:\n", encoding="utf-8")
+    tops, subs = _parse_file_worker(str(bad))
+    assert tops == []
+    assert subs == {}
+
+
+def test_parse_file_worker_normal(tmp_path: Path) -> None:
+    """worker 函数正常解析返回顶层导入与子模块."""
+    from fspack.analyzer import _parse_file_worker
+
+    py = tmp_path / "ok.py"
+    py.write_text("import os\nfrom PySide2.QtWidgets import QApplication\n", encoding="utf-8")
+    tops, subs = _parse_file_worker(str(py))
+    assert "os" in tops
+    assert "PySide2" in tops
+    assert subs["PySide2"] == frozenset({"QtWidgets"})

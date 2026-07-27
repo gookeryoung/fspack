@@ -1,8 +1,8 @@
 """构建进度跟踪与 rich 可视化展示。
 
 提供 ``BuildTracker``/``StageRecorder`` 数据类用于记录各阶段耗时与指标，
-``spinner``/``iter_with_progress`` 两个辅助函数封装 rich.progress/Live 的实时展示。
-数据与渲染分离，便于测试。
+``spinner``/``iter_with_progress``/``parallel_map_with_progress`` 三个辅助函数
+封装 rich.progress/Live 的实时展示。数据与渲染分离，便于测试。
 
 HTTP 下载（含进度条）见 :class:`fspack.packaging.net.Downloader`。
 """
@@ -11,9 +11,10 @@ from __future__ import annotations
 
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Iterator, Sequence, TypeVar
+from typing import TYPE_CHECKING, Callable, Iterator, Sequence, TypeVar
 
 from rich.progress import (
     BarColumn,
@@ -35,12 +36,14 @@ __all__ = [
     "StageRecorder",
     "fmt_bytes",
     "iter_with_progress",
+    "parallel_map_with_progress",
     "spinner",
 ]
 
 _logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+R = TypeVar("R")
 
 
 @dataclass
@@ -270,3 +273,47 @@ def iter_with_progress(
             progress.advance(task_id)
             if stage:
                 stage.processed()
+
+
+def parallel_map_with_progress(
+    items: Sequence[T],
+    fn: Callable[[T], R],
+    description: str,
+    *,
+    stage: StageRecorder | None = None,
+    max_workers: int | None = None,
+) -> list[R]:
+    """并行执行 ``fn`` 对每个 item，显示进度条，返回结果列表（按完成顺序）。
+
+    适用 I/O 密集场景（如 wheel 解压）：``ThreadPoolExecutor`` 利用 GIL 在
+    I/O 等待时释放的特性实现并发。``fn`` 必须是线程安全的（无共享可变状态
+    或自带锁）。``fn`` 抛出的异常在 ``future.result()`` 时重新抛出，与串行
+    路径错误语义一致。
+
+    ``max_workers`` 默认 ``min(8, len(items))``：上限 8 避免过多线程增加
+    调度开销，下限随任务数自适应。返回结果按**完成顺序**而非输入顺序，
+    调用方不应依赖位置对应（如需按输入顺序应改用 ``pool.map``）。
+    """
+    total = len(items)
+    if total == 0:
+        return []
+    workers = max_workers or min(8, total)
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(),
+        TextColumn("{task.completed}/{task.total}"),
+        TimeRemainingColumn(),
+        console=console.rich,
+        transient=True,
+    )
+    results: list[R] = []
+    with progress, ThreadPoolExecutor(max_workers=workers) as pool:
+        task_id = progress.add_task(description, total=total)
+        futures = [pool.submit(fn, item) for item in items]
+        for future in as_completed(futures):
+            results.append(future.result())  # 异常在此重新抛出，与串行一致
+            progress.advance(task_id)
+            if stage:
+                stage.processed()
+    return results

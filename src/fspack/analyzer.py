@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import os
 import sys
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
+from typing import Iterator
 
 from fspack.config import DependencyReport
 
@@ -365,20 +368,20 @@ def analyze_dependencies(src_dir: Path, project_name: str, declared: tuple[str, 
 
     自动排除 dist/build/.venv 等构建产物与缓存目录，避免扫描到已解包的
     embed python 或 python-build-standalone 标准库源码导致误报依赖。
+
+    文件数超过 :data:`_PARALLEL_THRESHOLD` 时使用 :class:`ProcessPoolExecutor`
+    并行解析（CPU 密集 ``ast.parse``），大项目显著提速。小项目走串行路径
+    避免进程池启动开销（Windows spawn 约 100-200ms，需足够工作量摊销）。
     """
+    py_files: list[Path] = [py for py in src_dir.rglob("*.py") if not _is_excluded(py, src_dir)]
+
     all_imports: list[str] = []
     all_submodules: dict[str, set[str]] = {}
-    for py in src_dir.rglob("*.py"):
-        if _is_excluded(py, src_dir):
-            continue
-        try:
-            tree = ast.parse(py.read_text(encoding="utf-8"))
-        except (SyntaxError, OSError):
-            continue
-        tops, subs = collect_imports_and_submodules(tree)
-        all_imports.extend(tops)
-        for pkg, sub_set in subs.items():
-            all_submodules.setdefault(pkg, set()).update(sub_set)
+
+    if len(py_files) >= _PARALLEL_THRESHOLD:
+        _parse_parallel(py_files, all_imports, all_submodules)
+    else:
+        _parse_serial(py_files, all_imports, all_submodules)
 
     local = _local_packages(src_dir, project_name)
     stdlib: list[str] = []
@@ -407,6 +410,51 @@ def analyze_dependencies(src_dir: Path, project_name: str, declared: tuple[str, 
     )
 
 
+# 并行解析阈值：低于此文件数走串行，避免进程池启动开销
+# Windows spawn 启动 ~100-200ms，需足够工作量摊销；Linux fork 较快可更低
+_PARALLEL_THRESHOLD = 200
+
+
+def _parse_file_worker(py: str) -> tuple[list[str], dict[str, frozenset[str]]]:
+    """进程池 worker：解析单个 .py 文件返回 ``(顶层导入, 子模块字典)``。
+
+    错误文件返回空结果 ``([], {})``。模块级函数确保可 pickle 跨进程传递；
+    接收 ``str`` 路径（比 ``Path`` 序列化更轻量）。
+    """
+    try:
+        tree = ast.parse(Path(py).read_text(encoding="utf-8"))
+    except (SyntaxError, OSError):
+        return [], {}
+    return collect_imports_and_submodules(tree)
+
+
+def _parse_serial(py_files: list[Path], all_imports: list[str], all_submodules: dict[str, set[str]]) -> None:
+    """串行解析所有 .py 文件，结果合并到 ``all_imports`` / ``all_submodules``."""
+    for py in py_files:
+        try:
+            tree = ast.parse(py.read_text(encoding="utf-8"))
+        except (SyntaxError, OSError):
+            continue
+        tops, subs = collect_imports_and_submodules(tree)
+        all_imports.extend(tops)
+        for pkg, sub_set in subs.items():
+            all_submodules.setdefault(pkg, set()).update(sub_set)
+
+
+def _parse_parallel(py_files: list[Path], all_imports: list[str], all_submodules: dict[str, set[str]]) -> None:
+    """进程池并行解析 .py 文件（CPU 密集 ``ast.parse``）。
+
+    ``chunksize`` 按 CPU 核心数与文件数自适应，减少 IPC 调度开销。
+    """
+    cpu_count = os.cpu_count() or 4
+    chunksize = max(1, len(py_files) // (cpu_count * 4))
+    with ProcessPoolExecutor(max_workers=cpu_count) as pool:
+        for tops, subs in pool.map(_parse_file_worker, [str(p) for p in py_files], chunksize=chunksize):
+            all_imports.extend(tops)
+            for pkg, sub_set in subs.items():
+                all_submodules.setdefault(pkg, set()).update(sub_set)
+
+
 def source_fingerprint(src_dir: Path) -> str:
     """计算源码指纹用于依赖分析缓存键。
 
@@ -414,20 +462,33 @@ def source_fingerprint(src_dir: Path) -> str:
     拼接后求 SHA-256。与 :func:`analyze_dependencies` 使用相同的排除逻辑
     （``_EXCLUDED_DIRS``），保证指纹只反映被分析的源码变化。
 
-    用 :func:`os.walk` + ``dirs[:]`` 剪枝提前排除 ``.venv``/``dist`` 等目录，
-    避免 rglob 枚举数千个无关 ``.py`` 文件（如虚拟环境 site-packages）导致耗时。
+    用 :func:`os.scandir` 递归遍历，利用 :meth:`os.DirEntry.stat` 缓存目录
+    枚举时的 stat 信息（Windows ``WIN32_FIND_DATA`` / Linux ``d_ino``），
+    避免对每个文件单独 ``stat`` 系统调用。同时按名称排序目录条目（含子目录），
+    保证跨平台/文件系统的指纹确定性（``os.walk`` 不保证目录遍历顺序）。
     """
-    import os
-
     h = hashlib.sha256()
-    for root, dirs, files in os.walk(src_dir):
-        # 剪枝：移除排除目录，阻止 os.walk 递归进入
-        dirs[:] = [d for d in dirs if d not in _EXCLUDED_DIRS and not d.endswith(".egg-info")]
-        for f in sorted(files):
-            if not f.endswith(".py"):
-                continue
-            py = Path(root) / f
-            rel = py.relative_to(src_dir).as_posix()
-            st = py.stat()
-            h.update(f"{rel}|{st.st_mtime_ns}|{st.st_size}\n".encode())
+    for rel, mtime_ns, size in _iter_py_entries(src_dir, src_dir):
+        h.update(f"{rel}|{mtime_ns}|{size}\n".encode())
     return h.hexdigest()
+
+
+def _iter_py_entries(current: Path, root: Path) -> Iterator[tuple[str, int, int]]:
+    """递归遍历 ``.py`` 文件，返回 ``(相对路径, mtime_ns, size)`` 三元组。
+
+    :func:`os.scandir` 返回的 :class:`os.DirEntry` 对象缓存了目录枚举时的
+    stat 信息，``entry.stat(follow_symlinks=False)`` 直接复用缓存避免独立
+    stat 调用。剪枝排除 ``_EXCLUDED_DIRS`` 与 ``*.egg-info`` 目录。
+
+    条目按名称排序（含子目录），保证遍历顺序跨平台确定性——``os.walk``
+    不保证目录遍历顺序，导致旧实现在不同文件系统上指纹不一致。
+    """
+    for entry in sorted(os.scandir(current), key=lambda e: e.name):
+        if entry.is_dir(follow_symlinks=False):
+            if entry.name in _EXCLUDED_DIRS or entry.name.endswith(".egg-info"):
+                continue
+            yield from _iter_py_entries(Path(entry.path), root)
+        elif entry.is_file(follow_symlinks=False) and entry.name.endswith(".py"):
+            rel = Path(entry.path).relative_to(root).as_posix()
+            st = entry.stat(follow_symlinks=False)
+            yield (rel, st.st_mtime_ns, st.st_size)
