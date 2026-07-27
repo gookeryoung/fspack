@@ -950,6 +950,162 @@ class TestSlimUnpack:
         # numpy.libs 也被解压（属于跨包 shared，DefaultSlimSpec 不剥离）
         assert (dest / "numpy.libs" / "libopenblas.dll").is_file()
 
+    # ---- 用户自定义 include/exclude 规则 ----
+
+    def test_user_include_force_keep_excluded_file(self, tmp_path: Path) -> None:
+        """slim_include 强制保留被 spec 剥离的文件（覆盖 STRIP_EXTS）."""
+        whl = tmp_path / "wh" / "PySide6-6.5.0-cp39-none-win_amd64.whl"
+        whl.parent.mkdir()
+        _make_wheel(
+            whl,
+            {
+                "PySide6/__init__.py": b"",
+                "PySide6/QtCore.pyd": b"core",
+                "PySide6/designer.exe": b"tool",  # STRIP_EXTS 剥离
+                "PySide6/Qt6Core.dll": b"c",
+            },
+        )
+        dest = tmp_path / "sp"
+        count = slim_unpack(
+            [whl],
+            dest,
+            {"PySide6": frozenset({"QtCore"})},
+            slim_include=("PySide6/designer.exe",),
+        )
+        assert count == 1
+        # 用户规则强制保留 designer.exe（覆盖 STRIP_EXTS 剥离）
+        assert (dest / "PySide6" / "designer.exe").is_file()
+
+    def test_user_exclude_force_strip_kept_file(self, tmp_path: Path) -> None:
+        """slim_exclude 强制剥离被 spec 保留的文件（覆盖 shared 保留）."""
+        whl = tmp_path / "wh" / "PySide6-6.5.0-cp39-none-win_amd64.whl"
+        whl.parent.mkdir()
+        _make_wheel(
+            whl,
+            {
+                "PySide6/__init__.py": b"",
+                "PySide6/QtCore.pyd": b"core",
+                "PySide6/Qt6Core.dll": b"c",  # 闭包内，spec 保留
+                "PySide6/Qt6Charts.dll": b"charts",  # 闭包外，spec 剥离
+            },
+        )
+        dest = tmp_path / "sp"
+        count = slim_unpack(
+            [whl],
+            dest,
+            {"PySide6": frozenset({"QtCore"})},
+            slim_exclude=("PySide6/Qt6Core.dll",),
+        )
+        assert count == 1
+        # 用户规则强制剥离 Qt6Core.dll（覆盖 spec 闭包保留）
+        assert not (dest / "PySide6" / "Qt6Core.dll").exists()
+        # 其他闭包内文件仍保留
+        assert (dest / "PySide6" / "QtCore.pyd").is_file()
+
+    def test_user_exclude_glob_pattern(self, tmp_path: Path) -> None:
+        """slim_exclude 支持 glob 模式（* 匹配任意字符含 /）."""
+        whl = tmp_path / "wh" / "PySide6-6.5.0-cp39-none-win_amd64.whl"
+        whl.parent.mkdir()
+        _make_wheel(
+            whl,
+            {
+                "PySide6/__init__.py": b"",
+                "PySide6/QtCore.pyd": b"core",
+                "PySide6/translations/qt_ar.qm": b"ar",
+                "PySide6/translations/qt_de.qm": b"de",
+                "PySide6/Qt6Core.dll": b"c",
+            },
+        )
+        dest = tmp_path / "sp"
+        count = slim_unpack(
+            [whl],
+            dest,
+            {"PySide6": frozenset({"QtCore"})},
+            slim_exclude=("PySide6/translations/*",),
+        )
+        assert count == 1
+        # glob 匹配 translations 目录所有文件
+        assert not (dest / "PySide6" / "translations" / "qt_ar.qm").exists()
+        assert not (dest / "PySide6" / "translations" / "qt_de.qm").exists()
+        # 非 translations 文件不受影响
+        assert (dest / "PySide6" / "Qt6Core.dll").is_file()
+
+    def test_user_include_priority_over_exclude(self, tmp_path: Path) -> None:
+        """slim_include 优先级高于 slim_exclude（同一文件冲突时保留）."""
+        whl = tmp_path / "wh" / "PySide6-6.5.0-cp39-none-win_amd64.whl"
+        whl.parent.mkdir()
+        _make_wheel(
+            whl,
+            {
+                "PySide6/__init__.py": b"",
+                "PySide6/QtCore.pyd": b"core",
+                "PySide6/designer.exe": b"tool",
+            },
+        )
+        dest = tmp_path / "sp"
+        count = slim_unpack(
+            [whl],
+            dest,
+            {"PySide6": frozenset({"QtCore"})},
+            slim_include=("PySide6/designer.exe",),
+            slim_exclude=("PySide6/designer.exe",),
+        )
+        assert count == 1
+        # include 优先级高于 exclude → 保留
+        assert (dest / "PySide6" / "designer.exe").is_file()
+
+    def test_user_rules_no_match_fallback_spec(self, tmp_path: Path) -> None:
+        """用户规则不匹配时走 spec 自动分类（向后兼容）."""
+        whl = tmp_path / "wh" / "PySide6-6.5.0-cp39-none-win_amd64.whl"
+        whl.parent.mkdir()
+        _make_wheel(
+            whl,
+            {
+                "PySide6/__init__.py": b"",
+                "PySide6/QtCore.pyd": b"core",
+                "PySide6/Qt3DCore.pyd": b"3d",  # 闭包外
+                "PySide6/designer.exe": b"tool",  # STRIP_EXTS
+            },
+        )
+        dest = tmp_path / "sp"
+        # 用户规则不匹配任何文件 → 行为等同无用户规则
+        count = slim_unpack(
+            [whl],
+            dest,
+            {"PySide6": frozenset({"QtCore"})},
+            slim_include=("PySide6/nonexistent.dll",),
+            slim_exclude=("PySide6/nonexistent2.dll",),
+        )
+        assert count == 1
+        # spec 自动分类生效
+        assert (dest / "PySide6" / "QtCore.pyd").is_file()
+        assert not (dest / "PySide6" / "Qt3DCore.pyd").exists()
+        assert not (dest / "PySide6" / "designer.exe").exists()
+
+    def test_user_exclude_case_sensitive(self, tmp_path: Path) -> None:
+        """用户规则大小写敏感（fnmatchcase，Windows 文件名大小写不敏感但 wheel 路径保留原样）."""
+        whl = tmp_path / "wh" / "PySide6-6.5.0-cp39-none-win_amd64.whl"
+        whl.parent.mkdir()
+        _make_wheel(
+            whl,
+            {
+                "PySide6/__init__.py": b"",
+                "PySide6/QtCore.pyd": b"core",
+                "PySide6/Qt6Core.dll": b"c",
+            },
+        )
+        dest = tmp_path / "sp"
+        # 大写模式不匹配小写路径
+        count = slim_unpack(
+            [whl],
+            dest,
+            {"PySide6": frozenset({"QtCore"})},
+            slim_exclude=("PYSIDE6/QT6CORE.DLL",),
+        )
+        assert count == 1
+        # 大写模式不匹配 → 文件保留
+        assert (dest / "PySide6" / "Qt6Core.dll").is_file()
+
     def test_keep_module_without_dot_skipped(self, tmp_path: Path) -> None:
         """keep_modules 中无 '.' 的条目被跳过，走全量解压."""
         whl = tmp_path / "wh" / "PySide2-5.15.2.1-cp39-none-win_amd64.whl"

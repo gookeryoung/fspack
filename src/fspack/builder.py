@@ -670,7 +670,15 @@ def _download_dependencies(ctx: BuildContext, site_packages: Path, report: Depen
                     find_links=ctx.info.find_links,
                 )
             with ctx.tracker.stage("解压 wheel(精简)") as st:
-                unpack_wheels(wheels, site_packages, report.ast_submodules, ctx.opts.keep_modules, stage=st)
+                unpack_wheels(
+                    wheels,
+                    site_packages,
+                    report.ast_submodules,
+                    ctx.opts.keep_modules,
+                    slim_include=ctx.info.slim_include,
+                    slim_exclude=ctx.info.slim_exclude,
+                    stage=st,
+                )
     else:
         _logger.info("无第三方依赖，跳过 wheel 下载")
     return has_tkinter
@@ -978,22 +986,33 @@ def _normalize_pkg_name(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
-def unpack_wheels(
+def unpack_wheels(  # noqa: PLR0913
     wheels: Sequence[Path],
     site_packages_dir: Path,
     submodule_usage: dict[str, frozenset[str]] | None = None,
     keep_modules: set[str] | None = None,
     *,
+    slim_include: tuple[str, ...] = (),
+    slim_exclude: tuple[str, ...] = (),
     stage: StageRecorder | None = None,
 ) -> int:
     """将给定 wheel 列表解包到 site-packages 目录，返回解包数量。
 
     当提供 ``submodule_usage`` 时按子模块分析选择性解压（精简打包），
-    否则全量解压。
+    否则全量解压。``slim_include``/``slim_exclude`` 透传给 ``slim_unpack``，
+    作为用户自定义 glob 规则覆盖 spec 自动分类。
     """
     from fspack.slim import slim_unpack
 
-    return slim_unpack(wheels, site_packages_dir, submodule_usage, keep_modules, stage=stage)
+    return slim_unpack(
+        wheels,
+        site_packages_dir,
+        submodule_usage,
+        keep_modules,
+        slim_include=slim_include,
+        slim_exclude=slim_exclude,
+        stage=stage,
+    )
 
 
 # 清理 dist 时保留的 NSIS 脚本文件名（便于改代码后重新打包分发）

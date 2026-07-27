@@ -929,6 +929,49 @@ def test_parse_project_find_links_non_string_element_raises(tmp_path: Path) -> N
         parse_project(tmp_path)
 
 
+def test_parse_project_with_slim_include_exclude(tmp_path: Path) -> None:
+    """[tool.fspack] slim-include/slim-exclude 解析为元组."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n'
+        "[tool.fspack]\n"
+        'slim-include = ["PySide6/Qt6Charts.dll"]\n'
+        'slim-exclude = ["PySide6/opengl32sw.dll", "PySide6/translations/*"]\n'
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    info = parse_project(tmp_path)
+    assert info.slim_include == ("PySide6/Qt6Charts.dll",)
+    assert info.slim_exclude == ("PySide6/opengl32sw.dll", "PySide6/translations/*")
+
+
+def test_parse_project_slim_include_not_list_raises(tmp_path: Path) -> None:
+    """slim-include 非列表时报错."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nslim-include = "PySide6/Qt6Charts.dll"\n'
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    with pytest.raises(ProjectError, match="slim-include 必须是字符串列表"):
+        parse_project(tmp_path)
+
+
+def test_parse_project_slim_exclude_empty_element_raises(tmp_path: Path) -> None:
+    """slim-exclude 元素为空字符串时报错."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nslim-exclude = [""]\n'
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    with pytest.raises(ProjectError, match="slim-exclude 元素必须是非空字符串"):
+        parse_project(tmp_path)
+
+
+def test_parse_project_slim_include_exclude_defaults_empty(tmp_path: Path) -> None:
+    """未配置 slim-include/slim-exclude 时默认为空元组."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    info = parse_project(tmp_path)
+    assert info.slim_include == ()
+    assert info.slim_exclude == ()
+
+
 def test_parse_project_private_sources_in_multi_entry(tmp_path: Path) -> None:
     """多入口项目也正确解析私有包源配置."""
     (tmp_path / "pyproject.toml").write_text(
