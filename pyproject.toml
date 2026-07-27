@@ -64,6 +64,22 @@ packages = ["src/fspack"]
 [tool.hatch.build.targets.wheel.force-include]
 "src/fspack/py.typed" = "fspack/py.typed"
 
+[tool.hatch.build.targets.sdist]
+# 排除开发内部目录与文件，仅保留源码分发必需内容（src/tests/docs/examples + 配置 + README/LICENSE）
+exclude = [
+    ".benchmarks",        # 性能测试基线数据
+    ".github",            # CI 工作流配置
+    ".trae",              # 开发流程文档（rules/docs/req/skills）
+    ".vscode",            # IDE 配置
+    "templates",          # GitHub Actions 打包模板
+    "Makefile",           # 开发脚本
+    ".copier-answers.yml", # 项目模板生成记录
+    ".python-version",    # pyenv 版本锁
+    ".bumpversion.toml",  # 版本管理工具配置
+    ".pre-commit-config.yaml", # pre-commit 钩子配置
+    ".readthedocs.yaml",  # ReadTheDocs 托管配置
+]
+
 [tool.fspack]
 # 自身打包配置：排除示例目录，启用 .pyc 剥离优化
 exclude = ["examples", "templates"]
