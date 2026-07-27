@@ -23,7 +23,9 @@ fspack 将 Python 项目打包为可执行文件与跨平台安装包：用 embe
 - **Nuitka 本机编译**：`--nuitka` 将用户源码编译为 .pyd 本机执行（速度提升 30-50%），自动按 Python 版本锁定 Nuitka 版本并装到本地缓存 `~/.fspack/cache/nuitka/`，stamp 缓存命中跳过整个阶段
 - **标准库精简**：默认剥离 Linux standalone 的 test/ensurepip/idlelib 等无用模块；`--no-stdlib-trim` 可关闭
 - **wheel 精简**：AST 扫描源码 import 推断实际使用的子模块（如 `PySide6.QtWidgets`），按依赖闭包选择性解压 wheel（剥离未用子模块的 `.pyd`/`.dll`/`.pyi`、translations/include/metatypes 等开发资源、`.exe` 工具）；`[tool.fspack] slim-include`/`slim-exclude` 支持用户自定义 glob 规则覆盖自动分类
+- **wheel 并行下载**：`uv` 解析精确版本后用 `ThreadPoolExecutor` 并行 `pip download --no-deps`，I/O 密集网络下载提速 ~17%；失败包自动 sdist 回退构建
 - **增量构建缓存**：源码指纹 + 预编译 stamp + Nuitka stamp 三层缓存，未改动文件跳过复制与重编
+- **CLI 懒加载**：`fsp` 入口延迟导入重模块（`config`/`console`/`platform`），`fsp --help` 提速 ~16%（132ms → 111ms）
 - **Win7 兼容**：Python 3.9+ 注入 api-ms-win-core-path 替代 DLL，支持在 Win7/Win2008R2 运行
 - **国内镜像**：默认清华源 PyPI 与 embed python 镜像，`--mirror` 切换（aliyun/huawei/tsinghua）
 - **彩色进度显示**：rich 驱动的步骤进度（> 准备运行时 / √ 构建完成），错误/警告/一般消息颜色区分，`-v` 开启 DEBUG 日志
@@ -138,7 +140,7 @@ fsp p [project] [--mirror <name>] [--py-version <ver>] [--target <plat>] [--no-b
 2. **下载运行时**：Windows 下载 embed python zip 并解压到 `dist/runtime/`；Linux 下载 python-build-standalone tar.gz 并解压到 `dist/runtime/python/`
 3. **分析依赖**：AST 扫描源码 import，分类标准库/本地/第三方，与 `pyproject.toml` 声明依赖比对；结果按源码指纹缓存，未改动跳过
 4. **补充内置库**（仅 Windows）：AST 检出 `tkinter` 使用时，从 python-build-standalone Windows 构建提取 tkinter 组件（纯 Python 包 + `_tkinter.pyd` + Tcl/Tk 运行时脚本）补充到 runtime，按版本缓存 zip 避免重复下载
-5. **下载 wheel**：用 dev python 的 `pip download` 拉取目标平台 wheel，解包到 `dist/runtime/Lib/site-packages/`（Windows）或 `dist/runtime/python/lib/python3.X/site-packages/`（Linux）。解包时按 AST 收集的子模块使用信息选择性保留（wheel 精简）：Qt 库按依赖闭包（如 `QtWidgets` → `Gui`/`Core`）保留对应 `.pyd`/`.dll`，剥离未用子模块、translations/include/metatypes 开发资源、`.exe` 工具；`slim-include`/`slim-exclude` 用户规则覆盖自动分类
+5. **下载 wheel**：用 `uv` 解析精确版本与平台 wheel，再 `pip download --no-deps` 并行下载（ThreadPoolExecutor，I/O 密集网络下载提速 ~17%），解包到 `dist/runtime/Lib/site-packages/`（Windows）或 `dist/runtime/python/lib/python3.X/site-packages/`（Linux）。解包时按 AST 收集的子模块使用信息选择性保留（wheel 精简）：Qt 库按依赖闭包（如 `QtWidgets` → `Gui`/`Core`）保留对应 `.pyd`/`.dll`，剥离未用子模块、translations/include/metatypes 开发资源、`.exe` 工具、`.pyi` 类型 stub；`slim-include`/`slim-exclude` 用户规则覆盖自动分类
 6. **写 _pth**（仅 Windows）：覆盖 `runtime/python3X._pth`，注册 site-packages 与 `..\src` 路径；`--no-site` 时省略 `import site` 行节省启动时间
 7. **复制源码**：项目源码复制到 `dist/src/`，排除 dist/build/.venv 等构建产物；按 mtime 跳过未改动文件
 8. **标准库精简**（默认，仅 Linux）：剥离 standalone 的 test/ensurepip/idlelib 等无用模块；`--no-stdlib-trim` 可关闭
@@ -375,6 +377,42 @@ make build    # 构建分发包
 make clean    # 清理构建产物
 make bump PART=patch  # 版本号 bump
 ```
+
+### 模块索引
+
+源码位于 `src/fspack/`，按职责分包，每个子包通过 facade 模式暴露公开 API（详见各 `__init__.py` docstring）：
+
+| 模块 | 职责 |
+|------|------|
+| `cli.py` | CLI 入口（cargo 风格短命令 `fsp b/c/r/p`），延迟导入重模块使 `--help` 提速 |
+| `builder.py` | 高层构建 facade，re-export `pipeline.build`/`runtime`/`loader`/`sync` 等 |
+| `analyzer.py` | AST 扫描源码 import，分类标准库/本地/第三方依赖 |
+| `runner.py` | 运行已打包项目（Linux 原生，Windows 自动用 wine） |
+| `console.py` | rich 驱动的彩色输出与日志配置 |
+| `platform.py` | 平台检测（Windows/Linux）与 `Platform` 枚举 |
+| `progress.py` | `BuildTracker`/`StageRecorder`/`spinner` 进度显示 |
+| `exceptions.py` | 自定义异常层次（`FspackError`/`DependencyError`/`NuitkaError` 等） |
+| `_compat.py` | 版本兼容层（`override` 装饰器等） |
+| `config/` | 配置 facade：`models`（数据结构）+ `parsing`（pyproject.toml 解析）+ `versions`（Python/Nuitka 版本映射） |
+| `packaging/` | 打包流程 facade，子模块各司其职（见下） |
+| `slim/` | wheel 精简规则 facade：`base`（抽象基类）+ `qt`/`libs`/`default`（具体 spec）+ `unpack`（解压）+ `spec`（注册表） |
+
+`packaging/` 子模块职责：
+
+| 子模块 | 职责 |
+|--------|------|
+| `pipeline.py` | 构建流水线编排（`build()` 入口，10+ 阶段调度） |
+| `runtime.py` | `RuntimeDownloader`：embed python / python-build-standalone 下载解压 |
+| `loader.py` / `loader_source.py` / `loader_compile.py` | C loader facade：源码模板 + 编译流程 + icon 资源 + MinGW 运行时 DLL 注入 |
+| `installer.py` / `installer_nsis.py` / `installer_linux.py` / `installer_zip.py` | 安装包 facade：NSIS / .deb + tar.gz / 跨平台 zip |
+| `wheels.py` / `wheel_pip.py` / `wheel_cache.py` / `wheel_markers.py` | wheel 下载 facade：pip/uv 调用 + sdist 回退 + 并行下载 + 依赖解析缓存 + python_version 标记预过滤 |
+| `nuitka.py` / `nuitka_env.py` / `nuitka_compile.py` / `nuitka_verify.py` | Nuitka 编译 facade：环境就绪 + 编译流程 + 产物验证 |
+| `pyc.py` | 字节码预编译（`compileall` + stamp 缓存） |
+| `sync.py` | 源码同步（`copy_source` + 增量同步 + site-packages 指纹） |
+| `builtin.py` | `TkinterBundler`：从 standalone 提取 tkinter 补充到 embed python |
+| `entry.py` | `EntryWrapper`：入口包装器源码生成 |
+| `icon.py` | favicon 自动搜索与图片格式转换（Pillow 可选） |
+| `net.py` | `Downloader`：HTTP 下载器（SSL + 进度条） |
 
 ## 文档
 

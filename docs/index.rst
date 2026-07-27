@@ -19,6 +19,32 @@ fspack 将 Python 项目打包为可执行文件与跨平台安装包：用 embe
 NSIS 生成 Windows 安装包、dpkg-deb 生成 Linux .deb 与 tar.gz 便携包。命令风格参考
 cargo，常用操作均可用两字母短命令完成。
 
+架构概览
+========
+
+源码位于 ``src/fspack/``，按职责分包，每个子包通过 facade 模式暴露公开 API：
+
+- **顶层模块**：``cli``（cargo 风格短命令）/``builder``（构建 facade）/``analyzer``
+  （AST 依赖分析）/``runner``（运行打包产物）/``platform``/``progress``/``exceptions``
+- **``config/``**：配置 facade，拆分为 ``models``（数据结构）+ ``parsing``（pyproject.toml
+  解析）+ ``versions``（Python/Nuitka 版本映射）
+- **``packaging/``**：打包流程 facade，子模块按职责拆分
+
+  - 流水线编排：``pipeline``
+  - 运行时下载：``runtime``
+  - C loader：``loader`` facade + ``loader_source`` + ``loader_compile``
+  - 安装包：``installer`` facade + ``installer_nsis`` + ``installer_linux`` + ``installer_zip``
+  - wheel 下载：``wheels`` facade + ``wheel_pip`` + ``wheel_cache`` + ``wheel_markers``
+  - Nuitka 编译：``nuitka`` facade + ``nuitka_env`` + ``nuitka_compile`` + ``nuitka_verify``
+  - 字节码预编译：``pyc``；源码同步：``sync``；内置库补充：``builtin``；
+    入口包装：``entry``；图标处理：``icon``；HTTP 下载：``net``
+
+- **``slim/``**：wheel 精简 facade，``base``（抽象基类）+ ``spec``（注册表）+
+  ``qt``/``libs``/``default``（具体 spec）+ ``unpack``（按需解压）
+
+完整模块职责索引与 API 参考见 `README <https://github.com/gookeryoung/fspack#readme>`_
+的"模块索引"章节与 :doc:`api`。
+
 安装
 ====
 
