@@ -49,6 +49,7 @@ class StageRecord:
     name: str
     elapsed: float
     bytes_downloaded: int = 0
+    bytes_saved: int = 0
     cache_hit: int = 0
     items: int = 0
     skipped: int = 0
@@ -62,7 +63,7 @@ class StageRecorder:
     累积数据，退出 ``with`` 块时由 ``BuildTracker`` 收集为不可变 ``StageRecord``。
     """
 
-    __slots__ = ("_bytes", "_detail", "_hits", "_items", "_name", "_skipped", "_start")
+    __slots__ = ("_bytes", "_detail", "_hits", "_items", "_name", "_saved", "_skipped", "_start")
 
     def __init__(self, name: str) -> None:
         """初始化阶段记录器，开始计时."""
@@ -71,6 +72,7 @@ class StageRecorder:
         self._hits = 0
         self._items = 0
         self._skipped = 0
+        self._saved = 0
         self._detail = ""
         self._start = time.perf_counter()
 
@@ -83,6 +85,11 @@ class StageRecorder:
         """累加下载字节数."""
         if n > 0:
             self._bytes += n
+
+    def add_saved_bytes(self, n: int) -> None:
+        """累加精简节省字节数（wheel 精简剥离的文件总大小）."""
+        if n > 0:
+            self._saved += n
 
     def hit_cache(self, n: int = 1) -> None:
         """累加缓存命中次数."""
@@ -109,6 +116,7 @@ class StageRecorder:
             name=self._name,
             elapsed=time.perf_counter() - self._start,
             bytes_downloaded=self._bytes,
+            bytes_saved=self._saved,
             cache_hit=self._hits,
             items=self._items,
             skipped=self._skipped,
@@ -155,27 +163,41 @@ class BuildTracker:
         table.add_column("耗时", justify="right")
         table.add_column("缓存", justify="right")
         table.add_column("下载", justify="right")
+        table.add_column("节省", justify="right")
         table.add_column("项数", justify="right")
         table.add_column("跳过", justify="right")
         table.add_column("备注", style="dim")
 
         total_bytes = 0
+        total_saved = 0
         total_skipped = 0
         for r in self._records:
             total_bytes += r.bytes_downloaded
+            total_saved += r.bytes_saved
             total_skipped += r.skipped
             cache_str = f"命中 {r.cache_hit}" if r.cache_hit else "-"
             bytes_str = _fmt_bytes(r.bytes_downloaded) if r.bytes_downloaded else "-"
+            saved_str = _fmt_bytes(r.bytes_saved) if r.bytes_saved else "-"
             items_str = str(r.items) if r.items else "-"
             skip_str = str(r.skipped) if r.skipped else "-"
             detail_str = r.detail or "-"
-            table.add_row(r.name, _fmt_seconds(r.elapsed), cache_str, bytes_str, items_str, skip_str, detail_str)
+            table.add_row(
+                r.name,
+                _fmt_seconds(r.elapsed),
+                cache_str,
+                bytes_str,
+                saved_str,
+                items_str,
+                skip_str,
+                detail_str,
+            )
 
         table.add_row(
             "总计",
             _fmt_seconds(self.total_elapsed),
             "",
             _fmt_bytes(total_bytes) if total_bytes else "-",
+            _fmt_bytes(total_saved) if total_saved else "-",
             "",
             str(total_skipped) if total_skipped else "-",
             "",

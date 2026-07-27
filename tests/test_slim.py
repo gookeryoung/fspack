@@ -1111,6 +1111,88 @@ class TestSlimUnpack:
         # 大写模式不匹配 → 文件保留
         assert (dest / "PySide6" / "Qt6Core.dll").is_file()
 
+    def test_slim_stats_stripped_files_and_bytes(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        """精简统计日志输出剥离文件数与节省字节数."""
+        whl = tmp_path / "wh" / "PySide6-6.5.0-cp39-none-win_amd64.whl"
+        whl.parent.mkdir()
+        # 构造可剥离的文件：designer.exe（STRIP_EXTS）、Qt3DCore.pyd（闭包外）
+        _make_wheel(
+            whl,
+            {
+                "PySide6/__init__.py": b"",
+                "PySide6/QtCore.pyd": b"core",
+                "PySide6/Qt3DCore.pyd": b"3d",
+                "PySide6/designer.exe": b"tool",
+                "PySide6/examples/dummy.py": b"example",
+            },
+        )
+        dest = tmp_path / "sp"
+        with caplog.at_level("INFO", logger="fspack.slim.base"):
+            slim_unpack([whl], dest, {"PySide6": frozenset({"QtCore"})})
+        # 统计日志包含"剥离 N 个文件，节省 X.YMB"
+        stats_logs = [r for r in caplog.records if "剥离" in r.getMessage() and "节省" in r.getMessage()]
+        assert len(stats_logs) == 1
+        msg = stats_logs[0].getMessage()
+        assert "剥离 3 个文件" in msg  # designer.exe + Qt3DCore.pyd + examples/dummy.py
+        assert "节省" in msg
+        assert "MB" in msg
+
+    def test_slim_stats_no_log_when_nothing_stripped(self, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+        """无剥离时不输出统计日志."""
+        whl = tmp_path / "wh" / "pkg-1.0-py3-none-any.whl"
+        whl.parent.mkdir()
+        _make_wheel(whl, {"pkg/__init__.py": b""})
+        dest = tmp_path / "sp"
+        with caplog.at_level("INFO", logger="fspack.slim.base"):
+            slim_unpack([whl], dest)
+        # 统计日志特征：同时含"剥离"和"节省"（区别于"解压...应用剥离规则"日志）
+        stats_logs = [r for r in caplog.records if "剥离" in r.getMessage() and "节省" in r.getMessage()]
+        assert not stats_logs
+
+    def test_default_spec_strips_nested_tests(self, tmp_path: Path) -> None:
+        """DefaultSlimSpec 自动剥离嵌套 tests 目录（pandas/scikit-learn 等无需专门 spec）."""
+        whl = tmp_path / "wh" / "pandas-2.0.0-cp311-cp311-win_amd64.whl"
+        whl.parent.mkdir()
+        _make_wheel(
+            whl,
+            {
+                "pandas/__init__.py": b"",
+                "pandas/core/__init__.py": b"",
+                "pandas/core/frame.py": b"# frame",
+                "pandas/core/tests/__init__.py": b"",
+                "pandas/core/tests/test_frame.py": b"# test",
+                "pandas/io/tests/test_csv.py": b"# test",
+            },
+        )
+        dest = tmp_path / "sp"
+        count = slim_unpack([whl], dest)
+        assert count == 1
+        # 嵌套 tests 被剥离
+        assert not (dest / "pandas" / "core" / "tests" / "test_frame.py").exists()
+        assert not (dest / "pandas" / "io" / "tests" / "test_csv.py").exists()
+        # 运行时文件保留
+        assert (dest / "pandas" / "core" / "frame.py").is_file()
+
+    def test_default_spec_preserves_testing_subdir(self, tmp_path: Path) -> None:
+        """DefaultSlimSpec 不剥离 testing 目录（numpy.testing 是公共 API）."""
+        whl = tmp_path / "wh" / "numpy-1.26.0-cp311-cp311-win_amd64.whl"
+        whl.parent.mkdir()
+        _make_wheel(
+            whl,
+            {
+                "numpy/__init__.py": b"",
+                "numpy/testing/__init__.py": b"# testing api",
+                "numpy/core/tests/test_x.py": b"# nested test",
+            },
+        )
+        dest = tmp_path / "sp"
+        count = slim_unpack([whl], dest)
+        assert count == 1
+        # testing（单数，公共 API）保留
+        assert (dest / "numpy" / "testing" / "__init__.py").is_file()
+        # tests（复数，嵌套）剥离
+        assert not (dest / "numpy" / "core" / "tests" / "test_x.py").exists()
+
     def test_keep_module_without_dot_skipped(self, tmp_path: Path) -> None:
         """keep_modules 中无 '.' 的条目被跳过，走全量解压."""
         whl = tmp_path / "wh" / "PySide2-5.15.2.1-cp39-none-win_amd64.whl"
@@ -2033,13 +2115,17 @@ class TestNestedExcludesBehavior:
             "scipy/fft/_pocketfft/tests/x.py", "scipy", set(), frozenset(), frozenset({"tests"})
         ) == ("exclude", None)
 
-    def test_nested_excludes_empty_no_strip(self) -> None:
-        """nested_excludes 为空时不剥离嵌套 tests（向后兼容）."""
+    def test_nested_excludes_empty_still_strip_default_tests(self) -> None:
+        """nested_excludes 为空时仍剥离嵌套 tests（基类 NESTED_TEST_DIRS 自动合并）.
+
+        基类 :attr:`SlimSpec.NESTED_TEST_DIRS` 默认含 ``"tests"``，即使
+        ``nested_excludes`` 参数为空也会剥离任意层级的 tests 目录。
+        """
         from fspack.slim.base import SlimSpec
 
-        # 默认行为：scipy/linalg/tests/ 归 shared（parts[1]=linalg 非 tests）
+        # 基类 NESTED_TEST_DIRS 自动剥离 scipy/linalg/tests/
         assert SlimSpec._default_classify("scipy/linalg/tests/x.py", "scipy", set(), frozenset(), frozenset()) == (
-            "shared",
+            "exclude",
             None,
         )
 
@@ -2237,6 +2323,81 @@ class TestSlimUnpackStageCallback:
         dest = tmp_path / "sp"
         count = slim_unpack([whl], dest, {"PySide2": frozenset({"QtCore"})})
         assert count == 1
+
+    def test_stage_records_saved_bytes(self, tmp_path: Path) -> None:
+        """slim_unpack 累加各 wheel 节省字节数到 stage.add_saved_bytes."""
+        from fspack.progress import BuildTracker
+
+        # PySide6 wheel：闭包内仅 QtCore，剥离 Qt3DCore.pyd/designer.exe/examples/dummy.py
+        whl = tmp_path / "wh" / "PySide6-6.5.0-cp39-none-win_amd64.whl"
+        whl.parent.mkdir()
+        _make_wheel(
+            whl,
+            {
+                "PySide6/__init__.py": b"",
+                "PySide6/QtCore.pyd": b"core",
+                "PySide6/Qt3DCore.pyd": b"3d",
+                "PySide6/designer.exe": b"tool",
+                "PySide6/examples/dummy.py": b"example",
+            },
+        )
+        dest = tmp_path / "sp"
+        tracker = BuildTracker()
+        with tracker.stage("解压 wheel(精简)") as stage:
+            slim_unpack([whl], dest, {"PySide6": frozenset({"QtCore"})}, stage=stage)
+        # 剥离 3 个文件（Qt3DCore.pyd + designer.exe + examples/dummy.py）
+        # 各文件内容字节数：b"3d"(2) + b"tool"(4) + b"example"(7) = 13 字节
+        assert tracker.records[0].bytes_saved == 13
+
+    def test_stage_saved_bytes_zero_when_nothing_stripped(self, tmp_path: Path) -> None:
+        """无可剥离文件时 stage.bytes_saved 为 0."""
+        from fspack.progress import BuildTracker
+
+        whl = tmp_path / "wh" / "PySide6-6.5.0-cp39-none-win_amd64.whl"
+        whl.parent.mkdir()
+        _make_wheel(
+            whl,
+            {
+                "PySide6/__init__.py": b"",
+                "PySide6/QtCore.pyd": b"core",
+            },
+        )
+        dest = tmp_path / "sp"
+        tracker = BuildTracker()
+        with tracker.stage("解压 wheel(精简)") as stage:
+            slim_unpack([whl], dest, {"PySide6": frozenset({"QtCore"})}, stage=stage)
+        # 闭包含 QtCore，无剥离文件
+        assert tracker.records[0].bytes_saved == 0
+
+    def test_stage_saved_bytes_aggregates_multiple_wheels(self, tmp_path: Path) -> None:
+        """多 wheel 解压时节省字节数累加."""
+        from fspack.progress import BuildTracker
+
+        whl1 = tmp_path / "wh1" / "PySide6-6.5.0-cp39-none-win_amd64.whl"
+        whl1.parent.mkdir()
+        _make_wheel(
+            whl1,
+            {
+                "PySide6/__init__.py": b"",
+                "PySide6/QtCore.pyd": b"core",
+                "PySide6/Qt3DCore.pyd": b"3d",  # 剥离 2 字节
+            },
+        )
+        whl2 = tmp_path / "wh2" / "PySide6_Addons-6.5.0-cp39-none-win_amd64.whl"
+        whl2.parent.mkdir()
+        _make_wheel(
+            whl2,
+            {
+                "PySide6/__init__.py": b"",
+                "PySide6/QtCharts.pyd": b"charts",  # 剥离 6 字节
+            },
+        )
+        dest = tmp_path / "sp"
+        tracker = BuildTracker()
+        with tracker.stage("解压 wheel(精简)") as stage:
+            slim_unpack([whl1, whl2], dest, {"PySide6": frozenset({"QtCore"})}, stage=stage)
+        # 累加：2 + 6 = 8 字节
+        assert tracker.records[0].bytes_saved == 8
 
 
 class TestWheelInfoFromFilename:

@@ -4,7 +4,10 @@
 v0.2.7（未发布）
 ----------------
 
+- feat: 构建汇总表新增"节省"列，wheel 精简与标准库精简阶段累计剥离字节数直观显示（如 "45.2MB"），无需翻阅逐 wheel 日志；无剥离时显示 "-" 避免误导
 - feat: 新增 ``[tool.fspack] slim-include``/``slim-exclude`` wheel 精简用户自定义规则，支持 fnmatch glob 模式强制保留/剥离特定文件；优先级 ``slim-include`` > ``slim-exclude`` > spec 自动分类；用于覆盖 AST 闭包误判、强制剥离 ``opengl32sw.dll``/``translations`` 等不需要的文件
+- feat: wheel 精简统计日志，解压完成后输出"剥离 N 个文件，节省 X.YMB / Y.YMB (Z%)"，便于评估精简效果
+- refactor: 嵌套 tests 目录剥离提升到 ``SlimSpec.NESTED_TEST_DIRS`` 基类属性，所有走兜底的库（pandas/scikit-learn 等）无需专门 spec 即可自动剥离 ``pkg/sub/tests/`` 三级嵌套测试目录；``testing``（单数，numpy 公共 API）不受影响
 - feat: 新增 ``--extra-index-url``/``--find-links`` 私有包源支持，可多次指定；与 ``[tool.fspack] extra-index-urls``/``find-links`` 配置合并（CLI 追加在后、去重保留首次出现），透传给 pip/uv 的 ``--extra-index-url``/``--find-links``；私有包源纳入依赖解析缓存键，切换源后强制重新解析；sdist 回退路径（``pip wheel``）同步透传私有包源
 - feat: 新增 ``--nuitka`` 编译模式，用户源码编译为 .pyd 本机执行（速度提升 30-50%）；按 Python 版本锁定 Nuitka 版本（3.8/3.9→2.5.1，3.10+→4.1.3），自动装到本地缓存 ``~/.fspack/cache/nuitka/`` 不污染 dist/runtime；Windows 用缓存的 standalone python 运行编译，避免 embed python 触发 reExecute fork bomb；入口文件保留 .py 兼容 ``runpy.run_path()``；stamp 缓存命中跳过整个阶段；缺 pip 时 ensurepip/uv 两轮自救
 - feat: 新增 ``--pyc-optimize`` 字节码优化级别与 ``--no-site`` 禁用 site.py 加载选项

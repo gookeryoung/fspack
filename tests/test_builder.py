@@ -1063,6 +1063,26 @@ def test_trim_stdlib_linux_strips_unwanted_dirs(tmp_path: Path) -> None:
     assert (stdlib / "json").exists()  # 保留有用模块
 
 
+def test_trim_stdlib_linux_records_saved_bytes(tmp_path: Path) -> None:
+    """Linux 模式剥离目录时累加节省字节数到 stage.add_saved_bytes."""
+    runtime = tmp_path / "runtime"
+    stdlib = runtime / "python" / "lib" / "python3.11"
+    (stdlib / "test").mkdir(parents=True)
+    (stdlib / "test" / "data.bin").write_bytes(b"x" * 1024)  # 1KB
+    (stdlib / "test" / "sub").mkdir()
+    (stdlib / "test" / "sub" / "more.bin").write_bytes(b"y" * 512)  # 0.5KB
+    (stdlib / "ensurepip").mkdir(parents=True)
+    (stdlib / "ensurepip" / "pkg.py").write_bytes(b"z" * 256)  # 0.25KB
+
+    st = StageRecorder("精简标准库")
+    _trim_stdlib(runtime, "3.11.9", Platform.LINUX, st)
+
+    record = st._finalize()
+    # 1KB + 0.5KB + 0.25KB = 1792 字节
+    assert record.bytes_saved == 1792
+    assert record.skipped == 2  # test + ensurepip
+
+
 def test_trim_stdlib_windows_skips(tmp_path: Path) -> None:
     """Windows embed 标准库在 zip 内已精简，跳过不剥离."""
     runtime = tmp_path / "runtime"
@@ -1074,6 +1094,8 @@ def test_trim_stdlib_windows_skips(tmp_path: Path) -> None:
 
     # Windows 模式不剥离
     assert (stdlib / "test").exists()
+    record = st._finalize()
+    assert record.bytes_saved == 0
 
 
 def test_trim_stdlib_missing_stdlib_skips(tmp_path: Path) -> None:
@@ -1084,6 +1106,8 @@ def test_trim_stdlib_missing_stdlib_skips(tmp_path: Path) -> None:
     st = StageRecorder("精简标准库")
     _trim_stdlib(runtime, "3.11.9", Platform.LINUX, st)
     # 不报错即通过
+    record = st._finalize()
+    assert record.bytes_saved == 0
 
 
 def test_trim_stdlib_idempotent(tmp_path: Path) -> None:
@@ -1091,11 +1115,38 @@ def test_trim_stdlib_idempotent(tmp_path: Path) -> None:
     runtime = tmp_path / "runtime"
     stdlib = runtime / "python" / "lib" / "python3.11"
     (stdlib / "test").mkdir(parents=True)
+    (stdlib / "test" / "data.bin").write_bytes(b"x" * 100)
 
-    st = StageRecorder("精简标准库")
-    _trim_stdlib(runtime, "3.11.9", Platform.LINUX, st)
-    _trim_stdlib(runtime, "3.11.9", Platform.LINUX, st)  # 二次调用不报错
+    st1 = StageRecorder("精简标准库")
+    _trim_stdlib(runtime, "3.11.9", Platform.LINUX, st1)
+    st2 = StageRecorder("精简标准库")
+    _trim_stdlib(runtime, "3.11.9", Platform.LINUX, st2)  # 二次调用不报错
     assert not (stdlib / "test").exists()
+    # 二次调用目录已不存在，bytes_saved 为 0
+    assert st2._finalize().bytes_saved == 0
+    # 首次调用记录了 100 字节
+    assert st1._finalize().bytes_saved == 100
+
+
+def test_dir_size_empty_dir(tmp_path: Path) -> None:
+    """_dir_size 对空目录返回 0."""
+    from fspack.builder import _dir_size
+
+    d = tmp_path / "empty"
+    d.mkdir()
+    assert _dir_size(d) == 0
+
+
+def test_dir_size_nested_files(tmp_path: Path) -> None:
+    """_dir_size 递归累加所有文件大小."""
+    from fspack.builder import _dir_size
+
+    d = tmp_path / "tree"
+    (d / "sub").mkdir(parents=True)
+    (d / "a.bin").write_bytes(b"x" * 100)
+    (d / "sub" / "b.bin").write_bytes(b"y" * 200)
+    (d / "sub" / "c.bin").write_bytes(b"z" * 300)
+    assert _dir_size(d) == 600
 
 
 # ---- _precompile_pyc 测试 ----

@@ -143,14 +143,30 @@ def _trim_stdlib(runtime_dir: Path, py_version: str, target: Platform, stage: St
         stage.set_detail("标准库目录不存在，跳过")
         return
     removed = 0
+    saved_bytes = 0
     for name in _STDLIB_TRIM_DIRS:
         d = stdlib / name
         if d.is_dir():
+            saved_bytes += _dir_size(d)
             shutil.rmtree(d)
             removed += 1
             _logger.info("精简标准库: 剥离 %s", d)
     stage.skip(removed)
+    stage.add_saved_bytes(saved_bytes)
     stage.set_detail(f"剥离 {removed} 目录")
+
+
+def _dir_size(path: Path) -> int:
+    """递归计算目录总字节数（文件大小累加，不含目录元数据）."""
+    total = 0
+    for entry in path.rglob("*"):
+        if entry.is_file():
+            try:
+                total += entry.stat().st_size
+            except OSError:
+                # 文件被并发删除或权限问题：跳过，不阻断精简流程
+                continue
+    return total
 
 
 def _site_packages_fingerprint(sp: Path) -> str:

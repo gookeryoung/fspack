@@ -115,9 +115,9 @@ class LxmlSlimSpec(SlimSpec):
         return cls._default_classify(entry, top_pkg, keep_subs, cls._EXTRA_EXCLUDES)
 
 
-# 嵌套测试目录名：matplotlib/scipy 等科学库各子模块下均含 tests/，
-# 剥离任意层级的 tests 目录（含跨包 mpl_toolkits/tests/）
-_NESTED_TEST_DIRS = frozenset({"tests"})
+# 嵌套测试目录名已提升到 SlimSpec.NESTED_TEST_DIRS，所有走 _default_classify
+# 的 spec 自动剥离任意层级的 tests 目录（含跨包 mpl_toolkits/tests/、
+# scipy/<sub>/tests/、pandas/<sub>/tests/ 等），无需各 spec 显式声明。
 
 
 class MatplotlibSlimSpec(SlimSpec):
@@ -128,8 +128,8 @@ class MatplotlibSlimSpec(SlimSpec):
     ``matplotlib/docs`` 等）由 :meth:`_default_classify` 处理，本规则扩展：
 
     - ``sphinxext``：matplotlib 二级目录，Sphinx 文档构建扩展（运行时不需要）
-    - ``tests``（嵌套）：剥离 ``mpl_toolkits/<sub>/tests/``、
-      ``matplotlib/tests/``（后者与 COMMON_EXCLUDE_SUBDIRS 冗余但无害）
+    - ``tests``（嵌套）：由 :attr:`SlimSpec.NESTED_TEST_DIRS` 自动剥离
+      （``mpl_toolkits/<sub>/tests/``、``matplotlib/tests/`` 等）
     - 顶层 C 扩展始终保留：``ft2font.pyd`` 是 ``__init__._check_versions()``
       硬依赖（``from . import ft2font``），剥离即 ImportError。通过
       ``top_ext_always_shared=True`` 将顶层 ``.pyd``/``.pyi``/``.so`` 归
@@ -163,20 +163,18 @@ class MatplotlibSlimSpec(SlimSpec):
         """matplotlib 条目分类，委托 :meth:`_default_classify` + 库专属剥离集合.
 
         ``top_ext_always_shared=True``：顶层 C 扩展（ft2font 等）始终保留，
-        不做子模块选择性剥离。
+        不做子模块选择性剥离。嵌套 tests 由基类 :attr:`NESTED_TEST_DIRS` 自动剥离。
         """
-        return cls._default_classify(entry, top_pkg, keep_subs, cls._EXTRA_EXCLUDES, _NESTED_TEST_DIRS, True)
+        return cls._default_classify(entry, top_pkg, keep_subs, cls._EXTRA_EXCLUDES, frozenset(), True)
 
 
 class ScipySlimSpec(SlimSpec):
     """scipy 精简规则：剥离各子模块下的嵌套 tests 目录。
 
     scipy 各子模块（``linalg``/``fft``/``optimize``/``stats`` 等）下均含
-    ``tests/`` 子目录，约占 scipy 总体积 10-15%。``COMMON_EXCLUDE_SUBDIRS``
-    仅检查 ``parts[1]``（二级目录），无法剥离 ``scipy/linalg/tests/`` 这类
-    三级嵌套。本规则通过 ``nested_excludes`` 在任意层级剥离 ``tests``：
-
-    - ``tests``（嵌套）：剥离 ``scipy/<sub>/tests/``、``scipy/<sub>/<deep>/tests/``
+    ``tests/`` 子目录，约占 scipy 总体积 10-15%。嵌套 tests 剥离由
+    :attr:`SlimSpec.NESTED_TEST_DIRS` 自动处理（基类 :meth:`_default_classify`
+    合并到 ``nested_excludes``），本 spec 仅需匹配包名即可。
 
     运行时保留：``scipy/_lib/``（内部库）、``scipy/<sub>/``（非 tests 部分）、
     ``scipy.libs/``（共享 DLL）。
@@ -196,5 +194,5 @@ class ScipySlimSpec(SlimSpec):
         top_pkg: str,
         keep_subs: set[str],
     ) -> tuple[str, str | None]:
-        """scipy 条目分类，委托 :meth:`_default_classify` + 嵌套 tests 剥离."""
-        return cls._default_classify(entry, top_pkg, keep_subs, frozenset(), _NESTED_TEST_DIRS)
+        """scipy 条目分类，委托 :meth:`_default_classify`（嵌套 tests 由基类自动剥离）."""
+        return cls._default_classify(entry, top_pkg, keep_subs)

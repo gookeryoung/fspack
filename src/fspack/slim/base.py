@@ -137,6 +137,14 @@ class SlimSpec(abc.ABC):
         }
     )
 
+    # 嵌套测试目录：在任意层级（含跨包）剥离。
+    # ``COMMON_EXCLUDE_SUBDIRS`` 仅检查二级目录（``parts[1]``），无法剥离
+    # ``pkg/sub/tests/`` 这类三级嵌套。本属性用于 :meth:`_default_classify`
+    # 自动合并到 ``nested_excludes``，让所有走兜底的库（pandas/scikit-learn 等）
+    # 无需专门 spec 即可剥离嵌套 tests。
+    # 仅含 ``tests``（复数）——``testing``（单数）在 numpy 等库是公共 API，不能嵌套剥离。
+    NESTED_TEST_DIRS: frozenset[str] = frozenset({"tests"})
+
     # dist-info 中显式剥离的文件名（运行时无用途，仅安装工具/构建工具用）
     # - RECORD：wheel 文件清单（pip uninstall 与 importlib.metadata.files() 用，
     #   应用运行时不需要；单文件常占 dist-info 60%+ 体积）
@@ -301,10 +309,13 @@ class SlimSpec(abc.ABC):
             return ("exclude", None)
 
         # 嵌套剥离：任意层级（含跨包）匹配则剥离
-        # 用于 scipy/<sub>/tests/、mpl_toolkits/<sub>/tests/ 等嵌套测试目录
-        if nested_excludes:
+        # 自动合并 cls.NESTED_TEST_DIRS（默认 {"tests"}），让所有走兜底的库
+        # （pandas/scikit-learn 等）无需专门 spec 即可剥离嵌套 tests。
+        # 显式 nested_excludes 用于库专属嵌套目录（扩展默认集合）。
+        all_nested = nested_excludes | cls.NESTED_TEST_DIRS
+        if all_nested:
             for part in parts[1:]:
-                if part in nested_excludes:
+                if part in all_nested:
                     return ("exclude", None)
 
         if parts[0] != top_pkg:
@@ -422,7 +433,7 @@ def _slim_extract(
     top_pkg: str,
     keep_subs: set[str],
     slim_rules: SlimRules = DEFAULT_SLIM_RULES,
-) -> None:
+) -> int:
     """从已打开的 ZipFile 按需解压，剥离 ``exclude`` 类文件与未保留子模块文件。
 
     - 始终剥离 ``exclude`` 类条目（如 examples/docs/tests 子目录、Qt 开发工具 exe）
@@ -436,31 +447,56 @@ def _slim_extract(
     - ``include`` 匹配的条目始终保留（覆盖 spec 的 ``exclude`` 判定）
     - ``exclude`` 匹配的条目始终剥离（覆盖 spec 的 ``shared``/``submodule`` 判定）
     - 二者均不匹配时走 spec 自动分类
+
+    解压完成后输出精简统计日志（剥离文件数、节省字节数），便于用户评估精简效果。
+    返回剥离文件累计字节数，供调用方（:func:`slim_unpack`）回填到
+    :class:`StageRecorder` 的"节省"列，在汇总表中直观体现精简价值。
     """
     spec = get_spec(normalize_name(top_pkg))
-    skipped = 0
+    skipped_files = 0
+    skipped_bytes = 0
+    total_bytes = 0
     for info in zf.infolist():
+        total_bytes += info.file_size
         # 用户规则优先级最高：include > exclude > spec 自动分类
         if slim_rules.matches_include(info.filename):
             zf.extract(info, dest)
             continue
         if slim_rules.matches_exclude(info.filename):
+            if not info.is_dir():
+                skipped_files += 1
+                skipped_bytes += info.file_size
             continue
         category, sub = spec.classify_entry(info.filename, top_pkg, keep_subs)
         if category == "exclude":
             # 剥离文件与剥离目录的目录条目均跳过，避免遗留空目录
+            if not info.is_dir():
+                skipped_files += 1
+                skipped_bytes += info.file_size
             continue
         if info.is_dir():
             zf.extract(info, dest)
             continue
         # keep_subs 为空时不应用子模块选择性剥离（全量保留 .pyd 等）
         if category == "submodule" and keep_subs and sub not in keep_subs:
-            skipped += 1
+            skipped_files += 1
+            skipped_bytes += info.file_size
             continue
         zf.extract(info, dest)
-    if skipped:
+    if skipped_files:
         assert zf.filename is not None  # 从文件路径打开的 ZipFile 必有 filename
-        _logger.info("精简 %s: 跳过 %d 个未用子模块文件", Path(zf.filename).name, skipped)
+        saved_mb = skipped_bytes / 1024 / 1024
+        total_mb = total_bytes / 1024 / 1024
+        pct = (skipped_bytes / total_bytes * 100) if total_bytes else 0
+        _logger.info(
+            "精简 %s: 剥离 %d 个文件，节省 %.1fMB / %.1fMB (%.0f%%)",
+            Path(zf.filename).name,
+            skipped_files,
+            saved_mb,
+            total_mb,
+            pct,
+        )
+    return skipped_bytes
 
 
 def _unpack_one_wheel(
@@ -469,7 +505,7 @@ def _unpack_one_wheel(
     whl_pkg: str,
     merged: dict[str, set[str]],
     slim_rules: SlimRules = DEFAULT_SLIM_RULES,
-) -> None:
+) -> int:
     """解压单个可解析文件名的 wheel：检测 top_pkg 后选择全量或精简解压。
 
     单次 ``zipfile.ZipFile`` 打开同时完成 top_pkg 检测与解压，避免重复打开。
@@ -480,6 +516,9 @@ def _unpack_one_wheel(
     ``PySide6`` 的保留集合——详见 :func:`_detect_top_pkg` 回退匹配逻辑。
 
     ``slim_rules`` 透传给 :func:`_slim_extract`，优先级高于 spec 自动分类。
+
+    返回精简剥离的字节数（全量解压分支返回 0），供 :func:`slim_unpack` 累加到
+    :class:`StageRecorder` 的"节省"列。
     """
     try:
         with zipfile.ZipFile(whl) as zf:
@@ -489,7 +528,7 @@ def _unpack_one_wheel(
                 # （_detect_top_pkg 回退匹配已处理拆分 wheel 场景，此分支仅在
                 # wheel 结构异常时触发，用户规则无法应用）
                 zf.extractall(dest)
-                return
+                return 0
             # 用 top_pkg 的归一化名查找 keep_subs，支持拆分 wheel 共享主包保留集合
             keep_subs = merged.get(normalize_name(top_pkg), set())
             if keep_subs:
@@ -497,7 +536,7 @@ def _unpack_one_wheel(
             else:
                 # keep_subs 为空：仅应用剥离规则（examples/docs/tests 等），子模块文件全保留
                 _logger.info("解压 %s（应用剥离规则）", whl.name)
-            _slim_extract(zf, dest, top_pkg, keep_subs, slim_rules)
+            return _slim_extract(zf, dest, top_pkg, keep_subs, slim_rules)
     except zipfile.BadZipFile as e:
         raise DependencyError(f"wheel 损坏: {whl}") from e
 
@@ -554,6 +593,7 @@ def slim_unpack(  # noqa: PLR0913
 
     sorted_wheels = sorted(wheels)
     count = 0
+    total_saved = 0
     for whl in iter_with_progress(sorted_wheels, "解压 wheel", stage=stage):
         info = WheelInfo.from_filename(whl.name)
         if info is None:
@@ -561,8 +601,10 @@ def slim_unpack(  # noqa: PLR0913
             _full_unpack(whl, site_packages_dir)
         else:
             whl_pkg = normalize_name(info.name)
-            _unpack_one_wheel(whl, site_packages_dir, whl_pkg, merged, slim_rules)
+            total_saved += _unpack_one_wheel(whl, site_packages_dir, whl_pkg, merged, slim_rules)
         count += 1
     if stage is not None and count:
         stage.set_detail(f"{count} wheels 解压")
+        if total_saved:
+            stage.add_saved_bytes(total_saved)
     return count

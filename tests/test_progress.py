@@ -28,6 +28,7 @@ class TestStageRecorder:
         assert rec._hits == 0
         assert rec._items == 0
         assert rec._skipped == 0
+        assert rec._saved == 0
         assert rec._detail == ""
 
     def test_add_bytes_accumulates(self) -> None:
@@ -41,6 +42,18 @@ class TestStageRecorder:
         rec.add_bytes(0)
         rec.add_bytes(-10)
         assert rec._bytes == 0
+
+    def test_add_saved_bytes_accumulates(self) -> None:
+        rec = StageRecorder("t")
+        rec.add_saved_bytes(1024)
+        rec.add_saved_bytes(2048)
+        assert rec._saved == 3072
+
+    def test_add_saved_bytes_ignores_non_positive(self) -> None:
+        rec = StageRecorder("t")
+        rec.add_saved_bytes(0)
+        rec.add_saved_bytes(-512)
+        assert rec._saved == 0
 
     def test_hit_cache_default_one(self) -> None:
         rec = StageRecorder("t")
@@ -87,6 +100,7 @@ class TestStageRecorder:
     def test_finalize_returns_immutable_record(self) -> None:
         rec = StageRecorder("test")
         rec.add_bytes(1024)
+        rec.add_saved_bytes(2048)
         rec.hit_cache(2)
         rec.processed(3)
         rec.skip(4)
@@ -96,6 +110,7 @@ class TestStageRecorder:
         assert isinstance(record, StageRecord)
         assert record.name == "test"
         assert record.bytes_downloaded == 1024
+        assert record.bytes_saved == 2048
         assert record.cache_hit == 2
         assert record.items == 3
         assert record.skipped == 4
@@ -193,6 +208,48 @@ class TestBuildTracker:
         out = capture.get()
         assert "空阶段" in out
         assert "-" in out
+
+    def test_summary_table_shows_saved_bytes_column(self) -> None:
+        """精简节省字节数在汇总表"节省"列显示."""
+        tracker = BuildTracker()
+        with tracker.stage("解压 wheel(精简)") as rec:
+            rec.add_saved_bytes(45 * 1024 * 1024)
+            rec.processed(5)
+            rec.set_detail("5 wheels 解压")
+        table = tracker.summary()
+        with console.rich.capture() as capture:
+            console.rich.print(table)
+        out = capture.get()
+        assert "节省" in out
+        assert "45.0MB" in out
+        assert "5 wheels 解压" in out
+
+    def test_summary_table_saved_column_dashes_when_zero(self) -> None:
+        """无节省字节数时"节省"列显示 "-"，不显示误导性的 "0B"."""
+        tracker = BuildTracker()
+        with tracker.stage("解压 wheel(精简)") as rec:
+            rec.processed(3)
+            rec.set_detail("3 wheels 解压")
+        table = tracker.summary()
+        with console.rich.capture() as capture:
+            console.rich.print(table)
+        out = capture.get()
+        assert "解压 wheel(精简)" in out
+        # 无节省时总计行也不应出现 0B
+        assert "0B" not in out
+
+    def test_summary_table_total_saved_aggregates_across_stages(self) -> None:
+        """多阶段节省字节数在总计行累加."""
+        tracker = BuildTracker()
+        with tracker.stage("阶段A") as rec:
+            rec.add_saved_bytes(10 * 1024 * 1024)
+        with tracker.stage("阶段B") as rec:
+            rec.add_saved_bytes(5 * 1024 * 1024)
+        table = tracker.summary()
+        with console.rich.capture() as capture:
+            console.rich.print(table)
+        out = capture.get()
+        assert "15.0MB" in out
 
 
 class TestFmtSeconds:
