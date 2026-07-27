@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 import abc
-import fnmatch
 import logging
 import re
 import zipfile
@@ -25,6 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
+from fspack.config import DEFAULT_SLIM_RULES, SlimRules
 from fspack.exceptions import DependencyError
 from fspack.progress import StageRecorder, iter_with_progress
 
@@ -416,13 +416,12 @@ def _full_unpack(whl: Path, dest: Path) -> None:
         raise DependencyError(f"wheel 损坏: {whl}") from e
 
 
-def _slim_extract(  # noqa: PLR0913
+def _slim_extract(
     zf: zipfile.ZipFile,
     dest: Path,
     top_pkg: str,
     keep_subs: set[str],
-    user_include: frozenset[str] = frozenset(),
-    user_exclude: frozenset[str] = frozenset(),
+    slim_rules: SlimRules = DEFAULT_SLIM_RULES,
 ) -> None:
     """从已打开的 ZipFile 按需解压，剥离 ``exclude`` 类文件与未保留子模块文件。
 
@@ -432,23 +431,20 @@ def _slim_extract(  # noqa: PLR0913
       但仍应用剥离规则）——用于源码仅 ``import <top_pkg>`` 顶层导入、AST 未
       收集到子模块使用信息的场景
 
-    用户规则（``user_include``/``user_exclude``）优先级高于 spec 自动分类：
+    ``slim_rules``（用户自定义 glob 规则）优先级高于 spec 自动分类：
 
-    - ``user_include`` 匹配的条目始终保留（覆盖 spec 的 ``exclude`` 判定）
-    - ``user_exclude`` 匹配的条目始终剥离（覆盖 spec 的 ``shared``/``submodule`` 判定）
+    - ``include`` 匹配的条目始终保留（覆盖 spec 的 ``exclude`` 判定）
+    - ``exclude`` 匹配的条目始终剥离（覆盖 spec 的 ``shared``/``submodule`` 判定）
     - 二者均不匹配时走 spec 自动分类
-
-    glob 模式用 :func:`fnmatch.fnmatchcase` 匹配 wheel 内 POSIX 相对路径，
-    ``*`` 匹配任意字符含 ``/``。
     """
     spec = get_spec(normalize_name(top_pkg))
     skipped = 0
     for info in zf.infolist():
         # 用户规则优先级最高：include > exclude > spec 自动分类
-        if user_include and _match_any(info.filename, user_include):
+        if slim_rules.matches_include(info.filename):
             zf.extract(info, dest)
             continue
-        if user_exclude and _match_any(info.filename, user_exclude):
+        if slim_rules.matches_exclude(info.filename):
             continue
         category, sub = spec.classify_entry(info.filename, top_pkg, keep_subs)
         if category == "exclude":
@@ -467,18 +463,12 @@ def _slim_extract(  # noqa: PLR0913
         _logger.info("精简 %s: 跳过 %d 个未用子模块文件", Path(zf.filename).name, skipped)
 
 
-def _match_any(path: str, patterns: frozenset[str]) -> bool:
-    """检查 path 是否匹配任一 glob 模式（fnmatch 大小写敏感，``*`` 含 ``/``）."""
-    return any(fnmatch.fnmatchcase(path, p) for p in patterns)
-
-
-def _unpack_one_wheel(  # noqa: PLR0913
+def _unpack_one_wheel(
     whl: Path,
     dest: Path,
     whl_pkg: str,
     merged: dict[str, set[str]],
-    user_include: frozenset[str] = frozenset(),
-    user_exclude: frozenset[str] = frozenset(),
+    slim_rules: SlimRules = DEFAULT_SLIM_RULES,
 ) -> None:
     """解压单个可解析文件名的 wheel：检测 top_pkg 后选择全量或精简解压。
 
@@ -489,8 +479,7 @@ def _unpack_one_wheel(  # noqa: PLR0913
     ``whl_pkg``），使拆分 wheel（如 ``pyside6_essentials``）能共享主包
     ``PySide6`` 的保留集合——详见 :func:`_detect_top_pkg` 回退匹配逻辑。
 
-    ``user_include``/``user_exclude`` 透传给 :func:`_slim_extract`，优先级高于
-    spec 自动分类。
+    ``slim_rules`` 透传给 :func:`_slim_extract`，优先级高于 spec 自动分类。
     """
     try:
         with zipfile.ZipFile(whl) as zf:
@@ -508,7 +497,7 @@ def _unpack_one_wheel(  # noqa: PLR0913
             else:
                 # keep_subs 为空：仅应用剥离规则（examples/docs/tests 等），子模块文件全保留
                 _logger.info("解压 %s（应用剥离规则）", whl.name)
-            _slim_extract(zf, dest, top_pkg, keep_subs, user_include, user_exclude)
+            _slim_extract(zf, dest, top_pkg, keep_subs, slim_rules)
     except zipfile.BadZipFile as e:
         raise DependencyError(f"wheel 损坏: {whl}") from e
 
@@ -519,8 +508,7 @@ def slim_unpack(  # noqa: PLR0913
     submodule_usage: dict[str, frozenset[str]] | None = None,
     keep_modules: set[str] | None = None,
     *,
-    slim_include: tuple[str, ...] = (),
-    slim_exclude: tuple[str, ...] = (),
+    slim_rules: SlimRules = DEFAULT_SLIM_RULES,
     stage: StageRecorder | None = None,
 ) -> int:
     """按子模块 import 分析选择性解压给定 wheel 列表（白名单制）。
@@ -535,10 +523,9 @@ def slim_unpack(  # noqa: PLR0913
       （向后兼容：纯顶层 import 或无子模块分析时）
     - 返回解包 wheel 数量
 
-    ``slim_include``/``slim_exclude``：用户自定义 glob 模式，优先级高于 spec
-    自动分类。``slim_include`` 强制保留（覆盖 spec 剥离），``slim_exclude``
-    强制剥离（覆盖 spec 保留）。匹配 wheel 内 POSIX 相对路径（如
-    ``PySide6/Qt6Charts.dll``、``PySide6/translations/*``）。
+    ``slim_rules``：用户自定义 glob 规则（:class:`fspack.config.SlimRules`），
+    优先级高于 spec 自动分类。``include`` 强制保留（覆盖 spec 剥离），
+    ``exclude`` 强制剥离（覆盖 spec 保留）。匹配 wheel 内 POSIX 相对路径。
 
     ``stage`` 用于通过 ``iter_with_progress`` 显示解压进度并回写处理项数到 BuildTracker。
     """
@@ -567,8 +554,6 @@ def slim_unpack(  # noqa: PLR0913
 
     sorted_wheels = sorted(wheels)
     count = 0
-    user_include = frozenset(slim_include)
-    user_exclude = frozenset(slim_exclude)
     for whl in iter_with_progress(sorted_wheels, "解压 wheel", stage=stage):
         info = WheelInfo.from_filename(whl.name)
         if info is None:
@@ -576,7 +561,7 @@ def slim_unpack(  # noqa: PLR0913
             _full_unpack(whl, site_packages_dir)
         else:
             whl_pkg = normalize_name(info.name)
-            _unpack_one_wheel(whl, site_packages_dir, whl_pkg, merged, user_include, user_exclude)
+            _unpack_one_wheel(whl, site_packages_dir, whl_pkg, merged, slim_rules)
         count += 1
     if stage is not None and count:
         stage.set_detail(f"{count} wheels 解压")

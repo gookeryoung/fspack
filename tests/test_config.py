@@ -925,12 +925,12 @@ def test_parse_project_find_links_non_string_element_raises(tmp_path: Path) -> N
         '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nfind-links = [123]\n'
     )
     (tmp_path / "app.py").write_text("def main():\n    pass\n")
-    with pytest.raises(ProjectError, match="find-links 必须是字符串列表"):
+    with pytest.raises(ProjectError, match="find-links 元素必须是字符串"):
         parse_project(tmp_path)
 
 
 def test_parse_project_with_slim_include_exclude(tmp_path: Path) -> None:
-    """[tool.fspack] slim-include/slim-exclude 解析为元组."""
+    """[tool.fspack] slim-include/slim-exclude 解析为 SlimRules."""
     (tmp_path / "pyproject.toml").write_text(
         '[project]\nname = "app"\nversion = "0.1"\n\n'
         "[tool.fspack]\n"
@@ -939,8 +939,9 @@ def test_parse_project_with_slim_include_exclude(tmp_path: Path) -> None:
     )
     (tmp_path / "app.py").write_text("def main():\n    pass\n")
     info = parse_project(tmp_path)
-    assert info.slim_include == ("PySide6/Qt6Charts.dll",)
-    assert info.slim_exclude == ("PySide6/opengl32sw.dll", "PySide6/translations/*")
+    assert info.slim_rules.include == ("PySide6/Qt6Charts.dll",)
+    assert info.slim_rules.exclude == ("PySide6/opengl32sw.dll", "PySide6/translations/*")
+    assert info.slim_rules.has_rules
 
 
 def test_parse_project_slim_include_not_list_raises(tmp_path: Path) -> None:
@@ -963,13 +964,14 @@ def test_parse_project_slim_exclude_empty_element_raises(tmp_path: Path) -> None
         parse_project(tmp_path)
 
 
-def test_parse_project_slim_include_exclude_defaults_empty(tmp_path: Path) -> None:
-    """未配置 slim-include/slim-exclude 时默认为空元组."""
+def test_parse_project_slim_rules_defaults_empty(tmp_path: Path) -> None:
+    """未配置 slim-include/slim-exclude 时 SlimRules 为空规则."""
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
     (tmp_path / "app.py").write_text("def main():\n    pass\n")
     info = parse_project(tmp_path)
-    assert info.slim_include == ()
-    assert info.slim_exclude == ()
+    assert info.slim_rules.include == ()
+    assert info.slim_rules.exclude == ()
+    assert not info.slim_rules.has_rules
 
 
 def test_parse_project_private_sources_in_multi_entry(tmp_path: Path) -> None:

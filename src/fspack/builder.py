@@ -16,11 +16,13 @@ from typing import Callable, Sequence
 from fspack.config import (
     DEFAULT_LINUX_PY_VERSION,
     DEFAULT_PY_VERSION,
+    DEFAULT_SLIM_RULES,
     BuildConfig,
     BuildOptions,
     DependencyReport,
     MirrorConfig,
     ProjectInfo,
+    SlimRules,
     resolve_py_version,
 )
 from fspack.console import console
@@ -675,8 +677,7 @@ def _download_dependencies(ctx: BuildContext, site_packages: Path, report: Depen
                     site_packages,
                     report.ast_submodules,
                     ctx.opts.keep_modules,
-                    slim_include=ctx.info.slim_include,
-                    slim_exclude=ctx.info.slim_exclude,
+                    slim_rules=ctx.info.slim_rules,
                     stage=st,
                 )
     else:
@@ -992,15 +993,14 @@ def unpack_wheels(  # noqa: PLR0913
     submodule_usage: dict[str, frozenset[str]] | None = None,
     keep_modules: set[str] | None = None,
     *,
-    slim_include: tuple[str, ...] = (),
-    slim_exclude: tuple[str, ...] = (),
+    slim_rules: SlimRules = DEFAULT_SLIM_RULES,
     stage: StageRecorder | None = None,
 ) -> int:
     """将给定 wheel 列表解包到 site-packages 目录，返回解包数量。
 
     当提供 ``submodule_usage`` 时按子模块分析选择性解压（精简打包），
-    否则全量解压。``slim_include``/``slim_exclude`` 透传给 ``slim_unpack``，
-    作为用户自定义 glob 规则覆盖 spec 自动分类。
+    否则全量解压。``slim_rules`` 透传给 ``slim_unpack``，作为用户自定义
+    glob 规则覆盖 spec 自动分类。
     """
     from fspack.slim import slim_unpack
 
@@ -1009,8 +1009,7 @@ def unpack_wheels(  # noqa: PLR0913
         site_packages_dir,
         submodule_usage,
         keep_modules,
-        slim_include=slim_include,
-        slim_exclude=slim_exclude,
+        slim_rules=slim_rules,
         stage=stage,
     )
 

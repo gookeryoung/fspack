@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from fspack.config import SlimRules
 from fspack.exceptions import DependencyError
 from fspack.slim import classify_entry, slim_unpack
 
@@ -953,7 +954,7 @@ class TestSlimUnpack:
     # ---- 用户自定义 include/exclude 规则 ----
 
     def test_user_include_force_keep_excluded_file(self, tmp_path: Path) -> None:
-        """slim_include 强制保留被 spec 剥离的文件（覆盖 STRIP_EXTS）."""
+        """slim include 强制保留被 spec 剥离的文件（覆盖 STRIP_EXTS）."""
         whl = tmp_path / "wh" / "PySide6-6.5.0-cp39-none-win_amd64.whl"
         whl.parent.mkdir()
         _make_wheel(
@@ -970,14 +971,14 @@ class TestSlimUnpack:
             [whl],
             dest,
             {"PySide6": frozenset({"QtCore"})},
-            slim_include=("PySide6/designer.exe",),
+            slim_rules=SlimRules(include=("PySide6/designer.exe",)),
         )
         assert count == 1
         # 用户规则强制保留 designer.exe（覆盖 STRIP_EXTS 剥离）
         assert (dest / "PySide6" / "designer.exe").is_file()
 
     def test_user_exclude_force_strip_kept_file(self, tmp_path: Path) -> None:
-        """slim_exclude 强制剥离被 spec 保留的文件（覆盖 shared 保留）."""
+        """slim exclude 强制剥离被 spec 保留的文件（覆盖 shared 保留）."""
         whl = tmp_path / "wh" / "PySide6-6.5.0-cp39-none-win_amd64.whl"
         whl.parent.mkdir()
         _make_wheel(
@@ -994,7 +995,7 @@ class TestSlimUnpack:
             [whl],
             dest,
             {"PySide6": frozenset({"QtCore"})},
-            slim_exclude=("PySide6/Qt6Core.dll",),
+            slim_rules=SlimRules(exclude=("PySide6/Qt6Core.dll",)),
         )
         assert count == 1
         # 用户规则强制剥离 Qt6Core.dll（覆盖 spec 闭包保留）
@@ -1003,7 +1004,7 @@ class TestSlimUnpack:
         assert (dest / "PySide6" / "QtCore.pyd").is_file()
 
     def test_user_exclude_glob_pattern(self, tmp_path: Path) -> None:
-        """slim_exclude 支持 glob 模式（* 匹配任意字符含 /）."""
+        """slim exclude 支持 glob 模式（* 匹配任意字符含 /）."""
         whl = tmp_path / "wh" / "PySide6-6.5.0-cp39-none-win_amd64.whl"
         whl.parent.mkdir()
         _make_wheel(
@@ -1021,7 +1022,7 @@ class TestSlimUnpack:
             [whl],
             dest,
             {"PySide6": frozenset({"QtCore"})},
-            slim_exclude=("PySide6/translations/*",),
+            slim_rules=SlimRules(exclude=("PySide6/translations/*",)),
         )
         assert count == 1
         # glob 匹配 translations 目录所有文件
@@ -1031,7 +1032,7 @@ class TestSlimUnpack:
         assert (dest / "PySide6" / "Qt6Core.dll").is_file()
 
     def test_user_include_priority_over_exclude(self, tmp_path: Path) -> None:
-        """slim_include 优先级高于 slim_exclude（同一文件冲突时保留）."""
+        """slim include 优先级高于 exclude（同一文件冲突时保留）."""
         whl = tmp_path / "wh" / "PySide6-6.5.0-cp39-none-win_amd64.whl"
         whl.parent.mkdir()
         _make_wheel(
@@ -1047,8 +1048,10 @@ class TestSlimUnpack:
             [whl],
             dest,
             {"PySide6": frozenset({"QtCore"})},
-            slim_include=("PySide6/designer.exe",),
-            slim_exclude=("PySide6/designer.exe",),
+            slim_rules=SlimRules(
+                include=("PySide6/designer.exe",),
+                exclude=("PySide6/designer.exe",),
+            ),
         )
         assert count == 1
         # include 优先级高于 exclude → 保留
@@ -1073,8 +1076,10 @@ class TestSlimUnpack:
             [whl],
             dest,
             {"PySide6": frozenset({"QtCore"})},
-            slim_include=("PySide6/nonexistent.dll",),
-            slim_exclude=("PySide6/nonexistent2.dll",),
+            slim_rules=SlimRules(
+                include=("PySide6/nonexistent.dll",),
+                exclude=("PySide6/nonexistent2.dll",),
+            ),
         )
         assert count == 1
         # spec 自动分类生效
@@ -1100,7 +1105,7 @@ class TestSlimUnpack:
             [whl],
             dest,
             {"PySide6": frozenset({"QtCore"})},
-            slim_exclude=("PYSIDE6/QT6CORE.DLL",),
+            slim_rules=SlimRules(exclude=("PYSIDE6/QT6CORE.DLL",)),
         )
         assert count == 1
         # 大写模式不匹配 → 文件保留

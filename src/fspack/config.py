@@ -20,6 +20,7 @@ from __future__ import annotations
 import ast
 import codecs
 import enum
+import fnmatch
 import logging
 import re
 from dataclasses import dataclass, field, replace
@@ -172,6 +173,46 @@ class BuildDefaults:
 
 
 @dataclass(frozen=True)
+class SlimRules:
+    """wheel 精简用户自定义规则（glob 模式）.
+
+    ``include`` 强制保留被 spec 剥离的文件（覆盖 STRIP_EXTS/闭包外剥离），
+    ``exclude`` 强制剥离被 spec 保留的文件（覆盖闭包内/shared 保留）。
+    优先级：``include`` > ``exclude`` > spec 自动分类。
+
+    glob 模式用 :func:`fnmatch.fnmatchcase` 匹配 wheel 内 POSIX 相对路径，
+    ``*`` 匹配任意字符含 ``/``（如 ``PySide6/translations/*`` 匹配子目录文件）。
+    """
+
+    include: tuple[str, ...] = ()
+    exclude: tuple[str, ...] = ()
+
+    @classmethod
+    def from_config(cls, fspack_cfg: dict[str, Any]) -> SlimRules:
+        """从 ``[tool.fspack]`` 解析 ``slim-include``/``slim-exclude``."""
+        include = _parse_string_list_cfg(fspack_cfg.get("slim-include"), "slim-include", reject_empty=True)
+        exclude = _parse_string_list_cfg(fspack_cfg.get("slim-exclude"), "slim-exclude", reject_empty=True)
+        return cls(include=include, exclude=exclude)
+
+    @property
+    def has_rules(self) -> bool:
+        """是否配置了任何用户规则."""
+        return bool(self.include or self.exclude)
+
+    def matches_include(self, path: str) -> bool:
+        """检查路径是否匹配任一 include 规则."""
+        return _match_any_glob(path, self.include)
+
+    def matches_exclude(self, path: str) -> bool:
+        """检查路径是否匹配任一 exclude 规则."""
+        return _match_any_glob(path, self.exclude)
+
+
+# SlimRules 默认空规则单例（frozen dataclass 不可变，安全共享）
+DEFAULT_SLIM_RULES = SlimRules()
+
+
+@dataclass(frozen=True)
 class ProjectInfo:
     """解析后的项目元信息."""
 
@@ -190,10 +231,9 @@ class ProjectInfo:
     build_defaults: BuildDefaults = field(default_factory=BuildDefaults)
     extra_index_urls: tuple[str, ...] = ()
     find_links: tuple[str, ...] = ()
-    # wheel 精简用户规则：slim_include 强制保留（覆盖 spec 剥离），
-    # slim_exclude 强制剥离（覆盖 spec 保留）。glob 模式匹配 wheel 内 POSIX 相对路径。
-    slim_include: tuple[str, ...] = ()
-    slim_exclude: tuple[str, ...] = ()
+    # wheel 精简用户规则：include 强制保留（覆盖 spec 剥离），
+    # exclude 强制剥离（覆盖 spec 保留）。glob 模式匹配 wheel 内 POSIX 相对路径。
+    slim_rules: SlimRules = field(default_factory=SlimRules)
 
     @classmethod
     def from_dir(cls, project_dir: Path, py_version: str | None = None) -> ProjectInfo:
@@ -443,11 +483,10 @@ def parse_project(project_dir: Path, py_version: str | None = None) -> ProjectIn
     # [tool.fspack] 构建默认值：CLI 标志覆盖
     build_defaults = _parse_build_defaults(fspack_cfg)
     # [tool.fspack] 私有包源：extra-index-urls / find-links 透传给 pip/uv
-    extra_index_urls = _parse_string_list(fspack_cfg.get("extra-index-urls"), "extra-index-urls")
-    find_links = _parse_string_list(fspack_cfg.get("find-links"), "find-links")
+    extra_index_urls = _parse_string_list_cfg(fspack_cfg.get("extra-index-urls"), "extra-index-urls")
+    find_links = _parse_string_list_cfg(fspack_cfg.get("find-links"), "find-links")
     # [tool.fspack] wheel 精简用户规则
-    slim_include = _parse_slim_patterns(fspack_cfg.get("slim-include"), "slim-include")
-    slim_exclude = _parse_slim_patterns(fspack_cfg.get("slim-exclude"), "slim-exclude")
+    slim_rules = SlimRules.from_config(fspack_cfg)
 
     if entries_tbl:
         entries = _parse_entries(project_dir, entries_tbl)
@@ -468,8 +507,7 @@ def parse_project(project_dir: Path, py_version: str | None = None) -> ProjectIn
             build_defaults=build_defaults,
             extra_index_urls=extra_index_urls,
             find_links=find_links,
-            slim_include=slim_include,
-            slim_exclude=slim_exclude,
+            slim_rules=slim_rules,
         )
 
     entry_module, entry_file, app_type = detect_entry(project_dir, name, deps)
@@ -488,8 +526,7 @@ def parse_project(project_dir: Path, py_version: str | None = None) -> ProjectIn
         build_defaults=build_defaults,
         extra_index_urls=extra_index_urls,
         find_links=find_links,
-        slim_include=slim_include,
-        slim_exclude=slim_exclude,
+        slim_rules=slim_rules,
     )
 
 
@@ -522,42 +559,32 @@ def _parse_entries(
 
 
 def _parse_exclude_dirs(value: object) -> tuple[str, ...]:
-    """解析 ``[tool.fspack] exclude`` 配置为排除模式元组.
-
-    接受字符串列表（如 ``["examples", "docs"]``），每个元素为 glob 模式，
-    合并到 :func:`fspack.builder.copy_source` 内置 ``_EXCLUDE`` 中。
-    非列表或元素非字符串时报错。
-    """
-    if value is None:
-        return ()
-    if not isinstance(value, list):
-        raise ProjectError(f"[tool.fspack] exclude 必须是字符串列表，得到 {type(value).__name__}")
-    result: list[str] = []
-    for item in value:
-        if not isinstance(item, str) or not item.strip():
-            raise ProjectError(f"[tool.fspack] exclude 元素必须是非空字符串，得到 {item!r}")
-        result.append(item.strip())
-    return tuple(result)
+    """解析 ``[tool.fspack] exclude`` 配置为排除模式元组（空元素报错）."""
+    return _parse_string_list_cfg(value, "exclude", reject_empty=True)
 
 
-def _parse_string_list(value: object, cfg_key: str) -> tuple[str, ...]:
-    """解析 ``[tool.fspack]`` 字符串列表配置项（如 ``extra-index-urls``/``find-links``）。
+def _parse_string_list_cfg(
+    value: object,
+    cfg_key: str,
+    *,
+    reject_empty: bool = False,
+) -> tuple[str, ...]:
+    """解析 ``[tool.fspack]`` 字符串列表配置为去空白元组.
 
-    接受字符串列表，每个元素为 URL 或路径。非列表或元素非字符串时报错。
-    """
-    if value is None:
-        return ()
-    if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
-        raise ProjectError(f"[tool.fspack] {cfg_key} 必须是字符串列表，得到 {value!r}")
-    return tuple(x.strip() for x in value if x.strip())
+    通用解析器，覆盖 ``exclude``/``extra-index-urls``/``find-links``/
+    ``slim-include``/``slim-exclude`` 等场景。
 
+    Args:
+        value: 配置原始值（``list`` 或 ``None``）
+        cfg_key: 配置键名（用于错误消息，如 ``"slim-include"``）
+        reject_empty: ``True`` 时空字符串元素报错（``exclude``/``slim-*``），
+            ``False`` 时静默过滤（``extra-index-urls``/``find-links``）
 
-def _parse_slim_patterns(value: object, cfg_key: str) -> tuple[str, ...]:
-    """解析 ``[tool.fspack] slim-include``/``slim-exclude`` 为 glob 模式元组.
+    Returns:
+        去空白后的字符串元组；``value`` 为 ``None`` 时返回空元组
 
-    接受字符串列表，每个元素为 fnmatch glob 模式，匹配 wheel 内 POSIX 风格相对路径
-    （如 ``PySide6/Qt6Charts.dll``、``PySide6/translations/*``）。``*`` 匹配任意
-    字符含路径分隔符。非列表或元素非字符串时报错。
+    Raises:
+        ProjectError: ``value`` 非 list、元素非字符串、或空元素且 ``reject_empty=True``
     """
     if value is None:
         return ()
@@ -565,10 +592,20 @@ def _parse_slim_patterns(value: object, cfg_key: str) -> tuple[str, ...]:
         raise ProjectError(f"[tool.fspack] {cfg_key} 必须是字符串列表，得到 {type(value).__name__}")
     result: list[str] = []
     for item in value:
-        if not isinstance(item, str) or not item.strip():
-            raise ProjectError(f"[tool.fspack] {cfg_key} 元素必须是非空字符串，得到 {item!r}")
-        result.append(item.strip())
+        if not isinstance(item, str):
+            raise ProjectError(f"[tool.fspack] {cfg_key} 元素必须是字符串，得到 {item!r}")
+        stripped = item.strip()
+        if not stripped:
+            if reject_empty:
+                raise ProjectError(f"[tool.fspack] {cfg_key} 元素必须是非空字符串，得到 {item!r}")
+            continue
+        result.append(stripped)
     return tuple(result)
+
+
+def _match_any_glob(path: str, patterns: tuple[str, ...]) -> bool:
+    """检查 path 是否匹配任一 glob 模式（fnmatch 大小写敏感，``*`` 含 ``/``）."""
+    return any(fnmatch.fnmatchcase(path, p) for p in patterns)
 
 
 # [tool.fspack] 构建默认值键名与 BuildDefaults 字段的映射
