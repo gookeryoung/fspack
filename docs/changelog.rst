@@ -4,6 +4,10 @@
 v0.2.7（未发布）
 ----------------
 
+- feat: 新增 ``--recursive``/``-R`` 递归打包模式，``fsp b -R [project]``/``fsp p -R [project]`` 递归扫描 project 目录下所有含 ``pyproject.toml`` 的子项目依次构建/打包；跳过 ``.venv``/``dist``/``build``/``.git`` 等开发期目录；单项目失败不中断后续项目，最后汇总成功/失败列表并通过退出码（0=全部成功，1=有失败）传播结果，便于 CI 检测
+- perf: ``analyzer.source_fingerprint`` 哈希算法从 SHA-256 改为 BLAKE2b（digest_size=32，输出 64 hex 字符与原一致），CPython 实现略快 10-20%
+- perf: ``analyzer._local_packages`` 用 ``os.scandir`` 替代 ``Path.iterdir``，``DirEntry.is_file``/``is_dir`` 复用枚举时的 stat 缓存减少系统调用
+- perf: ``analyzer._parse_serial``/``_parse_file_worker`` 用 ``Path.read_bytes()`` + ``ast.parse(bytes)`` 替代 ``read_text(encoding="utf-8")`` + ``ast.parse(str)``，``ast.parse`` 内部 C 解码快于 Python 层 ``.decode``，50 文件场景 ``analyze_dependencies`` 提速约 14%
 - perf: ``.pyi`` 类型存根文件纳入 ``STRIP_EXTS`` 统一剥离（mypy/pyrefly 等类型检查工具用，应用运行时不需要），所有 spec 共享，无需专门处理；从 ``SUBMODULE_EXTS`` 移除避免按子模块选择性保留
 - feat: 新增 scikit-learn 精简规则，剥离 datasets/descr/ 描述文件与 datasets/images/ 示例图片（保留 data/ 运行时必需），fit/predict/transform 等算法 API 不受影响
 - feat: 新增 pyarrow 精简规则，剥离 includes/ C++ 头文件与 Cython 定义目录（.pxd 文件需本 spec 覆盖，.h 已由 STRIP_EXTS 剥离），顶层 C 扩展（lib.pyd 等）始终保留

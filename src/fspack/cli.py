@@ -1,6 +1,6 @@
 """fspack CLI 入口 —— cargo 风格短命令（fsp b/c/r）.
 
-顶部仅导入轻量标准库（argparse/logging/pathlib）与 ``__version__``。
+顶部仅导入轻量标准库（argparse/logging/pathlib/os/sys）与 ``__version__``。
 重模块（``fspack.config``/``fspack.console``/``fspack.platform``）延迟到
 实际使用时导入，使 ``fsp --help`` 无需加载 config/console 即可输出帮助。
 """
@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -17,9 +19,33 @@ from fspack import __version__
 if TYPE_CHECKING:
     from fspack.platform import Platform
 
-__all__ = ["build_parser", "main"]
+__all__ = ["build_parser", "discover_subprojects", "main"]
 
 _logger = logging.getLogger(__name__)
+
+
+# 递归扫描子项目时跳过的目录名（与 analyzer._EXCLUDED_DIRS 共用语义）。
+# 这些目录下的 pyproject.toml 不应被视为可打包项目（如 .venv 内的 pip
+# 包含 pyproject.toml；dist 内是已构建产物；build 是临时构建目录）。
+_RECURSIVE_SKIP_DIRS: frozenset[str] = frozenset(
+    {
+        "dist",
+        "build",
+        ".git",
+        "__pycache__",
+        ".venv",
+        ".tox",
+        ".fspack",
+        ".trae",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".mypy_cache",
+        ".pyrefly_cache",
+        ".uv-cache",
+        "htmlcov",
+        "node_modules",
+    }
+)
 
 
 def _mirrors_choices() -> list[str]:
@@ -152,6 +178,16 @@ def _add_build_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser
             "与 [tool.fspack] find-links 合并（CLI 追加在配置之后，去重保留首次出现）"
         ),
     )
+    p.add_argument(
+        "-R",
+        "--recursive",
+        action="store_true",
+        help=(
+            "递归扫描 project 目录下所有含 pyproject.toml 的子项目，依次构建。"
+            "跳过 .venv/dist/build/.git 等开发期目录；单项目失败不中断，"
+            "最后汇总成功/失败列表"
+        ),
+    )
 
 
 def _add_run_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -194,6 +230,16 @@ def _add_package_subparser(sub: argparse._SubParsersAction[argparse.ArgumentPars
             "zip=跨平台便携包，nsis=Windows 安装包，tar.gz/deb=Linux，all=平台全部"
         ),
     )
+    p.add_argument(
+        "-R",
+        "--recursive",
+        action="store_true",
+        help=(
+            "递归扫描 project 目录下所有含 pyproject.toml 的子项目，依次打包。"
+            "跳过 .venv/dist/build/.git 等开发期目录；单项目失败不中断，"
+            "最后汇总成功/失败列表"
+        ),
+    )
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -212,39 +258,9 @@ def main(argv: list[str] | None = None) -> None:
 
     project = Path(ns.project).resolve()
     if command in ("build", "b"):
-        from dataclasses import replace
-
-        from fspack.builder import build
-        from fspack.config import ProjectInfo, build_options_from_defaults, get_mirror
-
-        # 合并 [tool.fspack] 构建默认值与 CLI 标志：
-        # - 先用 build_options_from_defaults 构造配置层 base（config or BuildOptions 默认值）
-        # - 再用 replace() 应用 CLI 覆盖：布尔开关用 ``cli or base``（任一启用 → 启用），
-        #   pyc_optimize 用 ``cli if cli is not None else base``（CLI 显式指定优先）
-        info = ProjectInfo.from_dir(project, ns.py_version)
-        base = build_options_from_defaults(info.build_defaults)
-        options = replace(
-            base,
-            keep_modules=set(ns.keep_modules) if ns.keep_modules else base.keep_modules,
-            icon=Path(ns.icon).resolve() if ns.icon else base.icon,
-            no_stdlib_trim=ns.no_stdlib_trim or base.no_stdlib_trim,
-            no_pyc=ns.no_pyc or base.no_pyc,
-            pyc_strip=ns.pyc_strip or base.pyc_strip,
-            pyc_optimize=ns.pyc_optimize if ns.pyc_optimize is not None else base.pyc_optimize,
-            no_site=ns.no_site or base.no_site,
-            nuitka=ns.nuitka or base.nuitka,
-            ccache=ns.ccache or base.ccache,
-            nuitka_packages=tuple(dict.fromkeys((*base.nuitka_packages, *(ns.nuitka_pkg or [])))),
-        )
-        build(
-            project,
-            get_mirror(ns.mirror),
-            ns.py_version,
-            target=_parse_target(ns.target),
-            options=options,
-            extra_index_urls=tuple(ns.extra_index_urls or ()),
-            find_links=tuple(ns.find_links or ()),
-        )
+        if ns.recursive:
+            sys.exit(_run_recursive(project, "build", ns))
+        _run_build(project, ns)
     elif command in ("run", "r"):
         from fspack.runner import run as run_cmd
 
@@ -254,19 +270,201 @@ def main(argv: list[str] | None = None) -> None:
 
         clean_dist(project)
     elif command in ("package", "p"):
-        from fspack.config import get_mirror
-        from fspack.packaging.installer import build_release
+        if ns.recursive:
+            sys.exit(_run_recursive(project, "package", ns))
+        _run_package(project, ns)
 
-        outputs = build_release(
-            project,
-            get_mirror(ns.mirror),
-            ns.py_version,
-            no_build=ns.no_build,
-            target=_parse_target(ns.target),
-            fmt=ns.format,
-        )
-        for out in outputs:
-            _logger.info("发行包已生成: %s", out)
+
+def _run_build(project: Path, ns: argparse.Namespace) -> None:
+    """执行单项目 build 子命令."""
+    from dataclasses import replace
+
+    from fspack.builder import build
+    from fspack.config import ProjectInfo, build_options_from_defaults, get_mirror
+
+    # 合并 [tool.fspack] 构建默认值与 CLI 标志：
+    # - 先用 build_options_from_defaults 构造配置层 base（config or BuildOptions 默认值）
+    # - 再用 replace() 应用 CLI 覆盖：布尔开关用 ``cli or base``（任一启用 → 启用），
+    #   pyc_optimize 用 ``cli if cli is not None else base``（CLI 显式指定优先）
+    info = ProjectInfo.from_dir(project, ns.py_version)
+    base = build_options_from_defaults(info.build_defaults)
+    options = replace(
+        base,
+        keep_modules=set(ns.keep_modules) if ns.keep_modules else base.keep_modules,
+        icon=Path(ns.icon).resolve() if ns.icon else base.icon,
+        no_stdlib_trim=ns.no_stdlib_trim or base.no_stdlib_trim,
+        no_pyc=ns.no_pyc or base.no_pyc,
+        pyc_strip=ns.pyc_strip or base.pyc_strip,
+        pyc_optimize=ns.pyc_optimize if ns.pyc_optimize is not None else base.pyc_optimize,
+        no_site=ns.no_site or base.no_site,
+        nuitka=ns.nuitka or base.nuitka,
+        ccache=ns.ccache or base.ccache,
+        nuitka_packages=tuple(dict.fromkeys((*base.nuitka_packages, *(ns.nuitka_pkg or [])))),
+    )
+    build(
+        project,
+        get_mirror(ns.mirror),
+        ns.py_version,
+        target=_parse_target(ns.target),
+        options=options,
+        extra_index_urls=tuple(ns.extra_index_urls or ()),
+        find_links=tuple(ns.find_links or ()),
+    )
+
+
+def _run_package(project: Path, ns: argparse.Namespace) -> None:
+    """执行单项目 package 子命令."""
+    from fspack.config import get_mirror
+    from fspack.packaging.installer import build_release
+
+    outputs = build_release(
+        project,
+        get_mirror(ns.mirror),
+        ns.py_version,
+        no_build=ns.no_build,
+        target=_parse_target(ns.target),
+        fmt=ns.format,
+    )
+    for out in outputs:
+        _logger.info("发行包已生成: %s", out)
+
+
+def discover_subprojects(root: Path) -> list[Path]:
+    """递归扫描 root 目录下所有含 ``pyproject.toml`` 的子项目（含 root 自身）.
+
+    跳过 :data:`_RECURSIVE_SKIP_DIRS` 中的开发期目录（如 ``.venv``/``dist``/
+    ``build``/``.git``），避免误识别这些目录下的 ``pyproject.toml``（如
+    ``.venv`` 内 pip 的 ``pyproject.toml``）。
+
+    返回按路径字母序排序的子项目目录列表（含 root 自身，若 root 含
+    ``pyproject.toml``），便于稳定输出与可重复构建。
+
+    用 :func:`os.scandir` 递归遍历，``DirEntry`` 复用枚举时的 stat 缓存
+    减少 stat 调用。子目录递归前先检查目录名是否在跳过集合中。
+    """
+    projects: list[Path] = []
+    seen: set[Path] = set()
+
+    def _scan(current: Path) -> None:
+        # 多次调用同一目录去重（理论不会，但兜底防御符号链接循环）
+        try:
+            real = current.resolve()
+        except OSError:
+            return
+        if real in seen:
+            return
+        seen.add(real)
+
+        if (current / "pyproject.toml").is_file():
+            projects.append(current)
+
+        try:
+            entries = sorted(os.scandir(current), key=lambda e: e.name)
+        except OSError:
+            return
+        for entry in entries:
+            if not entry.is_dir(follow_symlinks=False):
+                continue
+            if entry.name in _RECURSIVE_SKIP_DIRS or entry.name.endswith(".egg-info"):
+                continue
+            _scan(Path(entry.path))
+
+    _scan(root)
+    return projects
+
+
+def _run_recursive(root: Path, action: str, ns: argparse.Namespace) -> int:
+    """递归执行 build/package 子命令，返回退出码（0=全部成功，1=有失败）.
+
+    扫描 root 下所有子项目，依次调用 ``_run_build`` 或 ``_run_package``。
+    单项目失败时打印错误并继续，最后汇总成功/失败列表。
+
+    输出格式示例::
+
+        > 递归扫描子项目：发现 3 个
+        > [1/3] 构建 app1 ...
+        √ app1 构建成功
+        > [2/3] 构建 app2 ...
+        × app2 构建失败: <错误>
+        > [3/3] 构建 app3 ...
+        √ app3 构建成功
+
+        递归构建汇总：成功 2，失败 1
+        失败项目：
+          - app2: <错误摘要>
+
+    退出码：全部成功返回 0，任一失败返回 1（便于 CI 检测）。
+    """
+    from fspack.console import console
+
+    projects = discover_subprojects(root)
+    total = len(projects)
+    if total == 0:
+        console.warn(f"未在 {root} 下发现含 pyproject.toml 的子项目")
+        return 0
+
+    console.step(f"递归扫描子项目：发现 {total} 个")
+    succeeded: list[tuple[Path, str]] = []  # (project, summary)
+    failed: list[tuple[Path, str]] = []  # (project, error_message)
+
+    action_verb = "构建" if action == "build" else "打包"
+
+    for index, project in enumerate(projects, 1):
+        rel = _format_project_path(project, root)
+        console.step(f"[{index}/{total}] {action_verb} {rel} ...")
+        try:
+            if action == "build":
+                _run_build(project, ns)
+            else:
+                _run_package(project, ns)
+            succeeded.append((project, rel))
+            console.success(f"{rel} {action_verb}成功")
+        except SystemExit:
+            # _run_build/_run_package 不主动调 sys.exit，但防御性捕获
+            raise
+        except BaseException as exc:
+            err_msg = _format_error(exc)
+            failed.append((project, f"{rel}: {err_msg}"))
+            console.error(f"{rel} {action_verb}失败: {err_msg}")
+            _logger.debug("%s 完整错误堆栈", rel, exc_info=exc)
+
+    _print_recursive_summary(action_verb, succeeded, failed)
+    return 1 if failed else 0
+
+
+def _format_project_path(project: Path, root: Path) -> str:
+    """格式化子项目路径用于显示：相对 root 的路径，root 自身显示为 '.'."""
+    try:
+        rel = project.relative_to(root)
+    except ValueError:
+        return str(project)
+    return "." if str(rel) == "." else rel.as_posix()
+
+
+def _format_error(exc: BaseException) -> str:
+    """格式化异常为单行错误消息（去除换行，截断超长消息）."""
+    msg = str(exc).strip() or exc.__class__.__name__
+    # 取首行，避免多行错误消息破坏汇总表
+    first_line = msg.splitlines()[0]
+    if len(first_line) > 200:
+        first_line = first_line[:197] + "..."
+    return first_line
+
+
+def _print_recursive_summary(
+    action_verb: str, succeeded: list[tuple[Path, str]], failed: list[tuple[Path, str]]
+) -> None:
+    """打印递归执行汇总：成功数、失败数、失败项目列表."""
+    from fspack.console import console
+
+    console.rich.print()  # 空行分隔
+    console.step(f"递归{action_verb}汇总：成功 {len(succeeded)}，失败 {len(failed)}")
+    if failed:
+        console.error("失败项目：")
+        for _project, msg in failed:
+            console.rich.print(f"  - {msg}")
+    elif succeeded:
+        console.success(f"全部 {len(succeeded)} 个子项目{action_verb}成功")
 
 
 def _drop_separator(rest: list[str]) -> list[str]:

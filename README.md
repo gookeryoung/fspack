@@ -83,6 +83,7 @@ fsp b /path/to/project --mirror aliyun --py-version 3.11.9 --target windows
 fsp b [project] [--mirror <name>] [--py-version <ver>] [--target <platform>]
               [--keep-module <mod>] [--icon <path>] [--no-stdlib-trim]
               [--no-pyc] [--pyc-strip] [--pyc-optimize <0|1|2>] [--no-site] [--nuitka]
+              [-R|--recursive]
 ```
 
 - `project`：项目目录，默认当前目录
@@ -97,6 +98,7 @@ fsp b [project] [--mirror <name>] [--py-version <ver>] [--target <platform>]
 - `--pyc-optimize`：字节码优化级别：0=保留 docstring/assert，1=剥离 assert，2=剥离 assert+docstring（-OO，体积减 5-15%，启动提速 5-10%，默认 2）
 - `--no-site`：禁用 site.py 加载（`_pth` 省略 `import site` 行，节省 ~20-30ms 启动时间）
 - `--nuitka`：启用 Nuitka 编译模式，用户源码编译为 .pyd 本机执行（速度提升 30-50%）。Nuitka 自动装到本地缓存 `~/.fspack/cache/nuitka/`，不污染 dist/runtime；Windows 编译环境用 python-build-standalone 完整发行版（缓存到 `~/.fspack/cache/python/`），避免 embed python 触发 Nuitka reExecute fork bomb；入口文件保留 .py 不编译（入口包装器 `runpy.run_path()` 需要）；交叉构建自动跳过；默认关闭
+- `-R`/`--recursive`：递归扫描 `project` 目录下所有含 `pyproject.toml` 的子项目依次构建（含 `project` 自身）；跳过 `.venv`/`dist`/`build`/`.git` 等开发期目录；单项目失败不中断后续项目，最后汇总成功/失败列表，退出码 0=全部成功、1=有失败（便于 CI 检测）
 
 ### fsp run
 
@@ -119,6 +121,7 @@ fsp c [project]
 
 ```text
 fsp p [project] [--mirror <name>] [--py-version <ver>] [--target <plat>] [--no-build] [--format <fmt>]
+              [-R|--recursive]
 ```
 
 - `--target`：目标平台（windows/linux），默认当前平台
@@ -129,6 +132,7 @@ fsp p [project] [--mirror <name>] [--py-version <ver>] [--target <plat>] [--no-b
   - `nsis`：Windows 安装包
   - `tar.gz`/`deb`：Linux 便携包/安装包
   - `all`：当前平台全部格式
+- `-R`/`--recursive`：递归扫描 `project` 目录下所有含 `pyproject.toml` 的子项目依次打包（含 `project` 自身）；跳过 `.venv`/`dist`/`build`/`.git` 等开发期目录；单项目失败不中断，退出码 0=全部成功、1=有失败
 
 按目标平台分发：Windows 走 NSIS 生成 `dist/release/<name>-setup.exe`；Linux 走 dpkg-deb 生成 `dist/release/<name>_<ver>_amd64.deb` 与 `dist/release/<name>-<ver>-linux.tar.gz` 便携包；`zip` 格式生成 `dist/release/<name>-<ver>-<plat>.zip` 跨平台便携包。
 
@@ -193,6 +197,26 @@ fsp r --entry web     # 运行 web 入口
 多入口模式下每个入口写入 `<name>.entry` 文件，C loader 运行时按
 `<exe_basename>.entry` 查找入口脚本。单入口项目（无 `[tool.fspack.entries]`）
 仍写 `.entry` 文件，向后兼容。
+
+### 递归打包多项目（monorepo / 多子项目仓库）
+
+`--recursive`/`-R` 模式递归扫描给定目录下所有含 `pyproject.toml` 的子项目
+（含目录自身），依次执行构建/打包，便于一次性处理 monorepo、`examples/`
+目录或工作区下多个独立子项目：
+
+```bash
+fsp b -R ./examples        # 递归构建 examples/ 下所有示例项目
+fsp p -R ./monorepo        # 递归打包 monorepo/ 下所有子项目
+fsp b --recursive .        # 等价长形式
+```
+
+特性：
+
+- 跳过 `.venv`/`dist`/`build`/`.git`/`__pycache__` 等开发期目录，不误识别
+  这些目录下的 `pyproject.toml`（如 `.venv` 内 pip 的 `pyproject.toml`）
+- 单项目失败不中断后续项目，最后汇总成功/失败列表
+- 退出码：0=全部成功，1=有失败（便于 CI 检测）
+- 子项目按路径字母序排序，保证可重复构建与稳定输出
 
 ## 示例
 
