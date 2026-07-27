@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import shutil
 import zipfile
+from io import StringIO
 from pathlib import Path
 from typing import Any
 
 import pytest
+from rich.console import Console
+from rich.table import Table
 
 from fspack.builder import (
+    _build_artifacts_table,
     _dep_cache_load,
     _dep_cache_path,
     _dep_cache_save,
@@ -17,7 +21,6 @@ from fspack.builder import (
     _inject_win7_compat_dll,
     _needs_win7_compat_dll,
     _precompile_pyc,
-    _print_artifacts_stats,
     _site_packages_has_deps,
     _sync_tree,
     _trim_stdlib,
@@ -34,6 +37,13 @@ from fspack.platform import Platform
 from fspack.progress import BuildTracker, StageRecorder
 
 _EXAMPLES = Path(__file__).parent.parent / "examples"
+
+
+def _render_table_str(table: Table, width: int = 200) -> str:
+    """用固定宽度 Console 渲染表格为字符串，避免终端宽度导致内容换行."""
+    buf = StringIO()
+    Console(width=width, file=buf, force_terminal=False).print(table)
+    return buf.getvalue()
 
 
 def test_copy_source_excludes_dist(tmp_path: Path) -> None:
@@ -1147,10 +1157,10 @@ def test_dir_size_nested_files(tmp_path: Path) -> None:
     assert _dir_size(d) == 600
 
 
-# ---- _print_artifacts_stats 测试 ----
+# ---- _build_artifacts_table 测试 ----
 
 
-def test_print_artifacts_stats_outputs_dist_total_and_subdirs(tmp_path: Path) -> None:
+def test_build_artifacts_table_outputs_dist_total_and_subdirs(tmp_path: Path) -> None:
     """构建产物统计表输出 dist 总大小、runtime/src/build/可执行文件大小."""
     dist = tmp_path / "dist"
     (dist / "runtime").mkdir(parents=True)
@@ -1163,11 +1173,7 @@ def test_print_artifacts_stats_outputs_dist_total_and_subdirs(tmp_path: Path) ->
     exe.write_bytes(b"e" * 2048)  # 2KB
 
     tracker = BuildTracker()
-    _print_artifacts_stats(tracker, dist, [exe])
-
-    with console.rich.capture() as capture:
-        _print_artifacts_stats(tracker, dist, [exe])
-    out = capture.get()
+    out = _render_table_str(_build_artifacts_table(tracker, dist, [exe]))
     assert "构建产物统计" in out
     assert "dist 总大小" in out
     assert "runtime" in out
@@ -1178,7 +1184,7 @@ def test_print_artifacts_stats_outputs_dist_total_and_subdirs(tmp_path: Path) ->
     assert "3.8KB" in out
 
 
-def test_print_artifacts_stats_shows_saved_bytes(tmp_path: Path) -> None:
+def test_build_artifacts_table_shows_saved_bytes(tmp_path: Path) -> None:
     """tracker 有精简节省字节数时统计表显示"精简节省"行."""
     dist = tmp_path / "dist"
     dist.mkdir()
@@ -1188,27 +1194,23 @@ def test_print_artifacts_stats_shows_saved_bytes(tmp_path: Path) -> None:
     with tracker.stage("解压 wheel(精简)") as st:
         st.add_saved_bytes(45 * 1024 * 1024)  # 45MB
 
-    with console.rich.capture() as capture:
-        _print_artifacts_stats(tracker, dist, [dist / "app.exe"])
-    out = capture.get()
+    out = _render_table_str(_build_artifacts_table(tracker, dist, [dist / "app.exe"]))
     assert "精简节省" in out
     assert "45.0MB" in out
 
 
-def test_print_artifacts_stats_no_saved_bytes_omits_row(tmp_path: Path) -> None:
+def test_build_artifacts_table_no_saved_bytes_omits_row(tmp_path: Path) -> None:
     """无精简节省时不显示"精简节省"行."""
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "app.exe").write_bytes(b"x" * 100)
 
     tracker = BuildTracker()
-    with console.rich.capture() as capture:
-        _print_artifacts_stats(tracker, dist, [dist / "app.exe"])
-    out = capture.get()
+    out = _render_table_str(_build_artifacts_table(tracker, dist, [dist / "app.exe"]))
     assert "精简节省" not in out
 
 
-def test_print_artifacts_stats_missing_subdirs_zero(tmp_path: Path) -> None:
+def test_build_artifacts_table_missing_subdirs_zero(tmp_path: Path) -> None:
     """dist 下缺少 runtime/src/build 子目录时各大小为 0B，不报错."""
     dist = tmp_path / "dist"
     dist.mkdir()
@@ -1216,36 +1218,30 @@ def test_print_artifacts_stats_missing_subdirs_zero(tmp_path: Path) -> None:
     exe.write_bytes(b"x" * 100)
 
     tracker = BuildTracker()
-    with console.rich.capture() as capture:
-        _print_artifacts_stats(tracker, dist, [exe])
-    out = capture.get()
+    out = _render_table_str(_build_artifacts_table(tracker, dist, [exe]))
     # 缺失子目录显示 0B
     assert "0B" in out
 
 
-def test_print_artifacts_stats_missing_exe_skipped(tmp_path: Path) -> None:
+def test_build_artifacts_table_missing_exe_skipped(tmp_path: Path) -> None:
     """可执行文件路径不存在时跳过，不计入大小."""
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "runtime").mkdir()
 
     tracker = BuildTracker()
-    with console.rich.capture() as capture:
-        _print_artifacts_stats(tracker, dist, [dist / "nonexistent.exe"])
-    out = capture.get()
+    out = _render_table_str(_build_artifacts_table(tracker, dist, [dist / "nonexistent.exe"]))
     assert "构建产物统计" in out
     # 可执行文件大小为 0B
     assert "0B" in out
 
 
-def test_print_artifacts_stats_missing_dist_dir(tmp_path: Path) -> None:
+def test_build_artifacts_table_missing_dist_dir(tmp_path: Path) -> None:
     """dist 目录不存在时 dist 总大小为 0B，不报错."""
     dist = tmp_path / "nonexistent"
 
     tracker = BuildTracker()
-    with console.rich.capture() as capture:
-        _print_artifacts_stats(tracker, dist, [])
-    out = capture.get()
+    out = _render_table_str(_build_artifacts_table(tracker, dist, []))
     assert "构建产物统计" in out
     assert "0B" in out
 

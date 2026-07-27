@@ -171,13 +171,17 @@ def _dir_size(path: Path) -> int:
     return total
 
 
-def _print_artifacts_stats(tracker: BuildTracker, dist_dir: Path, exes: list[Path]) -> None:
-    """输出构建产物统计表：dist 总大小、各子目录大小、可执行文件大小、精简节省汇总.
+def _build_artifacts_table(tracker: BuildTracker, dist_dir: Path, exes: list[Path]) -> Table:
+    """构建产物统计表：dist 总大小、各子目录大小、可执行文件大小、精简节省汇总.
 
-    在 :func:`build` 末尾 :meth:`BuildTracker.summary` 之后调用，让用户一眼看到
-    最终产物体积分布与精简效果。目录大小计算在 spinner 中执行（避免数千文件
-    stat 阻塞 UI）；精简节省从 ``tracker.records`` 累加 ``bytes_saved``，与
-    汇总表"节省"列总计一致，不重复计算。
+    在 :func:`build` 末尾 :meth:`BuildTracker.summary` 之后由
+    :func:`_print_artifacts_stats` 调用，让用户一眼看到最终产物体积分布与精简
+    效果。目录大小计算在 spinner 中执行（避免数千文件 stat 阻塞 UI）；
+    精简节省从 ``tracker.records`` 累加 ``bytes_saved``，与汇总表"节省"列
+    总计一致，不重复计算。
+
+    返回 :class:`rich.table.Table` 供调用方决定输出方式（便于测试用固定宽度
+    Console 渲染，避免终端宽度导致内容换行）。
     """
     with spinner("统计产物大小"):
         dist_total = _dir_size(dist_dir) if dist_dir.is_dir() else 0
@@ -198,7 +202,12 @@ def _print_artifacts_stats(tracker: BuildTracker, dist_dir: Path, exes: list[Pat
     table.add_row("└ 可执行文件", fmt_bytes(exe_size))
     if saved_total:
         table.add_row("精简节省", fmt_bytes(saved_total), style="bold yellow")
-    console.rich.print(table)
+    return table
+
+
+def _print_artifacts_stats(tracker: BuildTracker, dist_dir: Path, exes: list[Path]) -> None:
+    """输出构建产物统计表到控制台."""
+    console.rich.print(_build_artifacts_table(tracker, dist_dir, exes))
 
 
 def _site_packages_fingerprint(sp: Path) -> str:

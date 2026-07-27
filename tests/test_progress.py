@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import time
+from io import StringIO
 
 import pytest
+from rich.console import Console
+from rich.table import Table
 
-from fspack.console import console
 from fspack.progress import (
     BuildTracker,
     StageRecord,
@@ -16,6 +18,18 @@ from fspack.progress import (
     iter_with_progress,
     spinner,
 )
+
+
+def _render_table_str(table: Table, width: int = 200) -> str:
+    """用固定宽度 Console 渲染表格为字符串，避免终端宽度导致内容换行.
+
+    测试环境终端宽度可能较窄（CI/重定向输出），Rich Table 会对"备注"列等
+    长内容做 word wrap，导致断言 ``"5 wheels 解压" in out`` 失败（实际渲染
+    为 ``"5 wheels\n解压"``）。用固定宽度 200 渲染确保内容不换行。
+    """
+    buf = StringIO()
+    Console(width=width, file=buf, force_terminal=False).print(table)
+    return buf.getvalue()
 
 
 class TestStageRecorder:
@@ -183,9 +197,7 @@ class TestBuildTracker:
             rec.skip(3)
             rec.set_detail("已存在跳过")
         table = tracker.summary()
-        with console.rich.capture() as capture:
-            console.rich.print(table)
-        out = capture.get()
+        out = _render_table_str(table)
         assert "解析项目" in out
         assert "准备运行时" in out
         assert "下载依赖" in out
@@ -203,9 +215,7 @@ class TestBuildTracker:
         with tracker.stage("空阶段"):
             pass
         table = tracker.summary()
-        with console.rich.capture() as capture:
-            console.rich.print(table)
-        out = capture.get()
+        out = _render_table_str(table)
         assert "空阶段" in out
         assert "-" in out
 
@@ -217,9 +227,7 @@ class TestBuildTracker:
             rec.processed(5)
             rec.set_detail("5 wheels 解压")
         table = tracker.summary()
-        with console.rich.capture() as capture:
-            console.rich.print(table)
-        out = capture.get()
+        out = _render_table_str(table)
         assert "节省" in out
         assert "45.0MB" in out
         assert "5 wheels 解压" in out
@@ -231,9 +239,7 @@ class TestBuildTracker:
             rec.processed(3)
             rec.set_detail("3 wheels 解压")
         table = tracker.summary()
-        with console.rich.capture() as capture:
-            console.rich.print(table)
-        out = capture.get()
+        out = _render_table_str(table)
         assert "解压 wheel(精简)" in out
         # 无节省时总计行也不应出现 0B
         assert "0B" not in out
@@ -246,9 +252,7 @@ class TestBuildTracker:
         with tracker.stage("阶段B") as rec:
             rec.add_saved_bytes(5 * 1024 * 1024)
         table = tracker.summary()
-        with console.rich.capture() as capture:
-            console.rich.print(table)
-        out = capture.get()
+        out = _render_table_str(table)
         assert "15.0MB" in out
 
 
@@ -380,8 +384,6 @@ class TestIntegrationBuildTracker:
         total_bytes = sum(r.bytes_downloaded for r in records)
         assert total_bytes == 24 * 1024 * 1024
         table = tracker.summary()
-        with console.rich.capture() as capture:
-            console.rich.print(table)
-        out = capture.get()
+        out = _render_table_str(table)
         assert "构建阶段汇总" in out
         assert "24.0MB" in out
