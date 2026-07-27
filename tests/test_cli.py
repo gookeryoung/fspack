@@ -408,3 +408,44 @@ def test_build_extra_index_url_combined_with_find_links(tmp_path: Path, monkeypa
     )
     assert called["extra_index_urls"] == ("https://pypi.company.com/simple/",)
     assert called["find_links"] == ("./wheels",)
+
+
+# ---------- CLI 启动懒加载 ----------
+
+
+def test_mirrors_choices_returns_valid_list() -> None:
+    """_mirrors_choices 返回非空字符串列表（延迟导入 MIRRORS）."""
+    choices = cli._mirrors_choices()
+    assert isinstance(choices, list)
+    assert len(choices) > 0
+    assert all(isinstance(c, str) for c in choices)
+
+
+def test_cli_module_no_top_level_console_import() -> None:
+    """cli.py 顶部不再导入 fspack.console（懒加载优化）.
+
+    验证 ``from fspack.console import console`` 不在模块顶层导入，
+    确保 ``fsp --help`` 不触发 rich 模块加载（~17ms）。
+    """
+    import inspect
+
+    source = inspect.getsource(cli)
+    # 顶部导入区（build_parser 之前的全局代码）不应含 console
+    top_section = source.split("def build_parser")[0]
+    assert "from fspack.console" not in top_section
+    assert "import fspack.console" not in top_section
+
+
+def test_cli_module_no_top_level_platform_import() -> None:
+    """cli.py 顶部不再导入 fspack.platform（懒加载优化）.
+
+    Platform 仅在 TYPE_CHECKING 块和 _parse_target 函数内导入。
+    """
+    import inspect
+
+    source = inspect.getsource(cli)
+    top_section = source.split("def build_parser")[0]
+    # TYPE_CHECKING 块内的导入允许
+    assert "from fspack.platform import Platform" not in top_section.replace(
+        "if TYPE_CHECKING:\n    from fspack.platform import Platform", ""
+    )

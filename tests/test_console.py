@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any, Callable
 
 import pytest
 
@@ -63,16 +64,16 @@ def test_setup_logging_configures_root() -> None:
         root.handlers = original_handlers
 
 
-def _spy_console_init() -> tuple[dict[str, object], object]:
+def _spy_console_init() -> tuple[dict[str, object], Callable[..., object]]:
     """构造 Console.__init__ 的 spy，返回 (captured_kwargs, real_init)."""
     import fspack.console as mod
 
     captured: dict[str, object] = {}
     real_init = mod.Console.__init__
 
-    def spy_init(self: object, *args: object, **kwargs: object) -> object:
+    def spy_init(self: Any, *args: Any, **kwargs: Any) -> Any:
         captured.update(kwargs)
-        return real_init(self, *args, **kwargs)  # type: ignore[arg-type]
+        return real_init(self, *args, **kwargs)
 
     return captured, spy_init
 

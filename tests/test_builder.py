@@ -5,7 +5,7 @@ from __future__ import annotations
 import shutil
 import zipfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, cast
 
 import pytest
 
@@ -17,6 +17,7 @@ from fspack.builder import (
     _inject_win7_compat_dll,
     _needs_win7_compat_dll,
     _precompile_pyc,
+    _site_packages_fingerprint,
     _site_packages_has_deps,
     _sync_tree,
     _trim_stdlib,
@@ -1146,6 +1147,44 @@ def test_dir_size_nested_files(tmp_path: Path) -> None:
     assert _dir_size(d) == 600
 
 
+def test_dir_size_handles_concurrent_deletion(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_dir_size 遇到 OSError（stat 失败）时跳过，不阻断计算.
+
+    模拟 rglob 返回的条目中，is_file() 通过但 stat() 抛 OSError（并发删除/权限问题）。
+    """
+
+    class _StatResult:
+        def __init__(self, size: int) -> None:
+            self.st_size = size
+
+    class _GoodEntry:
+        def __init__(self, size: int) -> None:
+            self._size = size
+
+        def is_file(self) -> bool:
+            return True
+
+        def stat(self) -> _StatResult:
+            return _StatResult(self._size)
+
+    class _BrokenEntry:
+        def is_file(self) -> bool:
+            return True
+
+        def stat(self) -> _StatResult:
+            raise OSError("file removed by another process")
+
+    d = tmp_path / "tree"
+    d.mkdir()
+    monkeypatch.setattr(
+        Path,
+        "rglob",
+        lambda self, pattern: [_GoodEntry(100), _BrokenEntry(), _GoodEntry(200)] if self == d else [],
+    )
+    # BrokenEntry 的 OSError 被跳过，仅累加两个 GoodEntry 的 100 + 200 = 300
+    assert _dir_size(d) == 300
+
+
 # ---- _precompile_pyc 测试 ----
 
 
@@ -1776,6 +1815,98 @@ def test_copy_source_syncs_deleted_files(tmp_path: Path) -> None:
     assert (dst / "main.py").is_file()
 
 
+def test_sync_tree_deletes_stale_directory(tmp_path: Path) -> None:
+    """_sync_tree 删除 dst 中 src 不存在的目录（rmtree 分支）."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("v1")
+    dst = tmp_path / "dst"
+    dst.mkdir()
+    (dst / "app.py").write_text("old")
+    (dst / "stale_dir").mkdir()
+    (dst / "stale_dir" / "file.txt").write_text("stale")
+
+    _sync_tree(src, dst, shutil.ignore_patterns())
+
+    assert not (dst / "stale_dir").exists(), "src 不存在的目录应被删除"
+    assert (dst / "app.py").read_text() == "v1"
+
+
+def test_sync_tree_overwrites_changed_file(tmp_path: Path) -> None:
+    """_sync_tree 对 dst 已存在但内容变动的文件调 copy2 覆盖（mtime/size 不同分支）."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("new content")
+    dst = tmp_path / "dst"
+    dst.mkdir()
+    (dst / "app.py").write_text("old")
+
+    _sync_tree(src, dst, shutil.ignore_patterns())
+
+    assert (dst / "app.py").read_text() == "new content"
+
+
+def test_sync_tree_skips_unchanged_file(tmp_path: Path) -> None:
+    """_sync_tree 对 mtime+size 相同的文件跳过 copy2（避免不必要磁盘写）."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("same")
+    dst = tmp_path / "dst"
+    dst.mkdir()
+    # 先复制一次确保 mtime/size 一致
+    shutil.copy2(src / "app.py", dst / "app.py")
+    src_stat_before = (src / "app.py").stat()
+    dst_stat_before = (dst / "app.py").stat()
+
+    _sync_tree(src, dst, shutil.ignore_patterns())
+
+    # dst 文件未被重写（mtime 不变）
+    dst_stat_after = (dst / "app.py").stat()
+    assert dst_stat_after.st_mtime_ns == dst_stat_before.st_mtime_ns
+    assert src_stat_before.st_mtime_ns == dst_stat_after.st_mtime_ns
+
+
+def test_site_packages_fingerprint_empty_when_no_dir(tmp_path: Path) -> None:
+    """_site_packages_fingerprint 目录不存在时返回空串."""
+    assert _site_packages_fingerprint(tmp_path / "nonexistent") == ""
+
+
+def test_site_packages_fingerprint_empty_when_empty(tmp_path: Path) -> None:
+    """_site_packages_fingerprint 目录存在但无 dist-info 时返回非空哈希（空输入）."""
+    sp = tmp_path / "site-packages"
+    sp.mkdir()
+    fp = _site_packages_fingerprint(sp)
+    assert isinstance(fp, str)
+    assert len(fp) == 64  # sha256 hexdigest 长度
+
+
+def test_site_packages_fingerprint_changes_with_dist_info(tmp_path: Path) -> None:
+    """_site_packages_fingerprint 随 dist-info 目录名变化."""
+    sp = tmp_path / "site-packages"
+    sp.mkdir()
+    fp_empty = _site_packages_fingerprint(sp)
+    (sp / "rich-13.0.0.dist-info").mkdir()
+    fp_rich = _site_packages_fingerprint(sp)
+    (sp / "click-8.1.0.dist-info").mkdir()
+    fp_both = _site_packages_fingerprint(sp)
+    assert fp_empty != fp_rich
+    assert fp_rich != fp_both
+    assert len(fp_both) == 64
+
+
+def test_site_packages_fingerprint_order_independent(tmp_path: Path) -> None:
+    """_site_packages_fingerprint 对 dist-info 排序后哈希，顺序无关."""
+    sp1 = tmp_path / "sp1"
+    sp1.mkdir()
+    (sp1 / "aaa-1.0.dist-info").mkdir()
+    (sp1 / "zzz-1.0.dist-info").mkdir()
+    sp2 = tmp_path / "sp2"
+    sp2.mkdir()
+    (sp2 / "zzz-1.0.dist-info").mkdir()
+    (sp2 / "aaa-1.0.dist-info").mkdir()
+    assert _site_packages_fingerprint(sp1) == _site_packages_fingerprint(sp2)
+
+
 def test_copy_source_with_extra_excludes(tmp_path: Path) -> None:
     """extra_excludes 额外排除 [tool.fspack] exclude 配置的目录."""
     src = tmp_path / "proj"
@@ -1884,12 +2015,12 @@ def test_build_dep_cache_hit_skips_ast_analysis(tmp_path: Path, monkeypatch: pyt
 
     # 第二次构建：缓存命中
     analyze_called = False
-    original_from_src = DependencyReport.from_src.__func__  # type: ignore[attr-defined]
+    original_from_src = cast(Callable[..., DependencyReport], DependencyReport.from_src.__func__)
 
-    def tracking_from_src(cls: object, *args: object, **kwargs: object) -> DependencyReport:
+    def tracking_from_src(cls: Any, *args: Any, **kwargs: Any) -> DependencyReport:
         nonlocal analyze_called
         analyze_called = True
-        return original_from_src(*args, **kwargs)  # type: ignore[arg-type]
+        return original_from_src(*args, **kwargs)
 
     monkeypatch.setattr("fspack.config.DependencyReport.from_src", classmethod(tracking_from_src))
     build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)

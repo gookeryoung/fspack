@@ -1132,6 +1132,63 @@ def test_individual_import_test_locates_corrupt_pyd(tmp_path: Path, monkeypatch:
     assert result == {"rich.errors"}
 
 
+def test_batch_import_test_skips_non_prefix_lines(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_batch_import_test 跳过非 FSPACK_VERIFY_RESULT 前缀的输出行."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+
+    # reversed 迭代：结果行在前 → 非前缀行在后，确保非前缀行也被遍历到
+    monkeypatch.setattr(
+        "fspack.packaging.nuitka.subprocess.run",
+        lambda cmd, **kwargs: _SubprocessResult(
+            returncode=0,
+            stdout=_VerifyResult({"rich.errors": True}).stdout + "trailing line\nanother trailing\n",
+        ),
+    )
+    result = NuitkaCompiler._batch_import_test(tmp_path / "python.exe", [tmp_path], ["rich.errors"])
+    assert result == {"rich.errors"}
+
+
+def test_batch_import_test_returns_none_on_invalid_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_batch_import_test 遇到前缀行但 JSON 损坏时返回 None（回退到逐个测试）."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+
+    monkeypatch.setattr(
+        "fspack.packaging.nuitka.subprocess.run",
+        lambda cmd, **kwargs: _SubprocessResult(
+            returncode=0,
+            stdout="FSPACK_VERIFY_RESULT:not-valid-json\n",
+        ),
+    )
+    result = NuitkaCompiler._batch_import_test(tmp_path / "python.exe", [tmp_path], ["rich.errors"])
+    assert result is None
+
+
+def test_verify_compiled_modules_strips_init_module_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_verify_compiled_modules 对 __init__.py 推导的模块名剥离 .__init__ 后缀."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+
+    # 构造 site-packages/rich/__init__.py + __init__.cp311-win_amd64.pyd
+    site_packages = tmp_path / "site-packages"
+    rich_dir = site_packages / "rich"
+    rich_dir.mkdir(parents=True)
+    init_py = rich_dir / "__init__.py"
+    init_py.write_text("")
+    (rich_dir / "__init__.cp311-win_amd64.pyd").write_bytes(b"fake")
+
+    captured: dict[str, list[str]] = {}
+
+    def fake_batch(py_exe: Path, roots: list[Path], mods: list[str]) -> set[str] | None:
+        captured["mods"] = mods
+        return set(mods)
+
+    monkeypatch.setattr(NuitkaCompiler, "_batch_import_test", fake_batch)
+
+    verified, _unverified = NuitkaCompiler._verify_compiled_modules(tmp_path / "python.exe", {init_py})
+    assert init_py in verified
+    # 模块名应为 "rich" 而非 "rich.__init__"
+    assert captured["mods"] == ["rich"]
+
+
 def test_strip_compiled_sources_no_verify_preserves_original_behavior(tmp_path: Path) -> None:
     """_strip_compiled_sources 不传验证参数时保持原有行为（仅检查 .pyd 存在）."""
     from fspack.packaging.nuitka import NuitkaCompiler
@@ -1187,6 +1244,230 @@ def test_cleanup_build_dirs_no_match(tmp_path: Path) -> None:
 
     cleaned = NuitkaCompiler._cleanup_build_dirs(tmp_path)
     assert cleaned == 0
+
+
+def test_cleanup_build_dirs_skips_files_named_build(tmp_path: Path) -> None:
+    """_cleanup_build_dirs 跳过名为 *.build 的文件（仅清理目录）."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+
+    # app.build 是文件而非目录，应跳过
+    build_file = tmp_path / "app.build"
+    build_file.write_text("not a directory")
+    # real.build 是目录，应清理
+    build_dir = tmp_path / "real.build"
+    build_dir.mkdir()
+    (build_dir / "scons.py").write_text("# scons")
+
+    cleaned = NuitkaCompiler._cleanup_build_dirs(tmp_path)
+    assert cleaned == 1
+    assert build_file.is_file(), "名为 .build 的文件应保留"
+    assert not build_dir.exists(), ".build 目录应清理"
+
+
+def test_cleanup_build_dirs_handles_rmtree_oserror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """_cleanup_build_dirs 遇到 rmtree OSError 时 warning 不中断."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+
+    build_dir = tmp_path / "fail.build"
+    build_dir.mkdir()
+    (build_dir / "module.c").write_text("// c")
+
+    def fail_rmtree(path: Path, **kwargs: Any) -> None:
+        raise OSError("permission denied")
+
+    monkeypatch.setattr("fspack.packaging.nuitka_compile.shutil.rmtree", fail_rmtree)
+
+    with caplog.at_level("WARNING", logger="fspack.packaging.nuitka"):
+        cleaned = NuitkaCompiler._cleanup_build_dirs(tmp_path)
+    assert cleaned == 0
+    assert any("清理 .build 目录失败" in r.message for r in caplog.records)
+
+
+# ---- _site_packages_dir 测试 ----
+
+
+def test_site_packages_dir_windows() -> None:
+    """Windows: runtime/Lib/site-packages."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+
+    result = NuitkaCompiler._site_packages_dir(Path("/r"), "3.11.9", Platform.WINDOWS)
+    assert result == Path("/r/Lib/site-packages")
+
+
+def test_site_packages_dir_linux() -> None:
+    """Linux: runtime/python/lib/python{major}.{minor}/site-packages."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+
+    result = NuitkaCompiler._site_packages_dir(Path("/r"), "3.11.9", Platform.LINUX)
+    assert result == Path("/r/python/lib/python3.11/site-packages")
+
+
+# ---- compile_packages 边缘场景测试 ----
+
+
+def test_compile_packages_skips_when_py_exe_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_resolve_compile_python 返回 None 时 compile_packages 直接返回."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "python.exe").write_bytes(b"")
+    cache = _make_nuitka_cache(tmp_path / "cache")
+    sp = tmp_path / "site-packages"
+    sp.mkdir()
+    (sp / "rich").mkdir()
+    (sp / "rich" / "__init__.py").write_text("")
+
+    monkeypatch.setattr(NuitkaCompiler, "_resolve_compile_python", lambda *a, **kw: None)
+
+    st = StageRecorder("Nuitka 包编译")
+    # 不应抛异常，不应调用 _compile_files
+    NuitkaCompiler.compile_packages(sp, ("rich",), runtime, "3.11.9", Platform.WINDOWS, cache, stage=st)
+
+
+def test_compile_packages_skips_when_nuitka_not_cached(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_is_nuitka_cached 返回 False 时 compile_packages 跳过编译."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "python.exe").write_bytes(b"")
+    # 缓存目录无 nuitka 包
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    sp = tmp_path / "site-packages"
+    sp.mkdir()
+    (sp / "rich").mkdir()
+    (sp / "rich" / "__init__.py").write_text("")
+
+    st = StageRecorder("Nuitka 包编译")
+    # 不应抛异常，不应调用 _compile_files
+    NuitkaCompiler.compile_packages(sp, ("rich",), runtime, "3.11.9", Platform.WINDOWS, cache, stage=st)
+
+
+def test_compile_packages_warns_when_failed_gt_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """compile_packages 编译有失败时 warning 记录失败数."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "python.exe").write_bytes(b"")
+    cache = _make_nuitka_cache(tmp_path / "cache")
+    sp = tmp_path / "site-packages"
+    pkg = sp / "rich"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    (pkg / "mod.py").write_text("x = 1")
+
+    def fake_compile_files(
+        cls: Any, py_exe: Path, bootstrap: Path, py_files: list[Path], stage: Any, **kw: Any
+    ) -> tuple[set[Path], int]:
+        # 返回 1 个失败
+        return (set(), 1)
+
+    monkeypatch.setattr(NuitkaCompiler, "_compile_files", classmethod(fake_compile_files))
+
+    st = StageRecorder("Nuitka 包编译")
+    with caplog.at_level("WARNING", logger="fspack.packaging.nuitka"):
+        NuitkaCompiler.compile_packages(sp, ("rich",), runtime, "3.11.9", Platform.WINDOWS, cache, stage=st)
+    assert any("失败 1 个" in r.message for r in caplog.records)
+
+
+def test_compile_packages_mixed_existing_and_missing_packages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """compile_packages 同时传入存在与不存在的包：不存在包跳过，存在包正常编译."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "python.exe").write_bytes(b"")
+    cache = _make_nuitka_cache(tmp_path / "cache")
+    sp = tmp_path / "site-packages"
+    pkg = sp / "rich"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    (pkg / "mod.py").write_text("x = 1")
+
+    def fake_compile_files(
+        cls: Any, py_exe: Path, bootstrap: Path, py_files: list[Path], stage: Any, **kw: Any
+    ) -> tuple[set[Path], int]:
+        for py in py_files:
+            (py.parent / f"{py.stem}.cp311-win_amd64.pyd").write_bytes(b"fake")
+        return (set(py_files), 0)
+
+    monkeypatch.setattr(NuitkaCompiler, "_compile_files", classmethod(fake_compile_files))
+    monkeypatch.setattr(
+        "fspack.packaging.nuitka.subprocess.run",
+        lambda cmd, **kwargs: _VerifyResult({"rich.mod": True}),
+    )
+
+    st = StageRecorder("Nuitka 包编译")
+    with caplog.at_level("WARNING", logger="fspack.packaging.nuitka"):
+        # rich 存在，nonexistent 不存在
+        NuitkaCompiler.compile_packages(
+            sp, ("rich", "nonexistent"), runtime, "3.11.9", Platform.WINDOWS, cache, stage=st
+        )
+    # nonexistent 包警告
+    assert any("未找到包目录" in r.message for r in caplog.records)
+    # rich 包正常编译
+    assert not (pkg / "mod.py").exists()
+    assert (pkg / "mod.cp311-win_amd64.pyd").is_file()
+
+
+def test_compile_packages_with_ccache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """compile_packages 传 ccache=True + cache_root 时调用 _ensure_ccache."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "python.exe").write_bytes(b"")
+    cache = _make_nuitka_cache(tmp_path / "cache")
+    sp = tmp_path / "site-packages"
+    pkg = sp / "rich"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    (pkg / "mod.py").write_text("x = 1")
+
+    ccache_called: dict[str, bool] = {}
+
+    def fake_ensure_ccache(cache_root: Path, target: Platform, stage: Any) -> Path:
+        ccache_called["yes"] = True
+        return Path("/usr/bin/ccache")
+
+    def fake_compile_files(
+        cls: Any, py_exe: Path, bootstrap: Path, py_files: list[Path], stage: Any, **kw: Any
+    ) -> tuple[set[Path], int]:
+        for py in py_files:
+            (py.parent / f"{py.stem}.cp311-win_amd64.pyd").write_bytes(b"fake")
+        return (set(py_files), 0)
+
+    monkeypatch.setattr(
+        NuitkaCompiler, "_ensure_ccache", classmethod(lambda cls, *a, **kw: fake_ensure_ccache(*a, **kw))
+    )
+    monkeypatch.setattr(NuitkaCompiler, "_compile_files", classmethod(fake_compile_files))
+    monkeypatch.setattr(
+        "fspack.packaging.nuitka.subprocess.run",
+        lambda cmd, **kwargs: _VerifyResult({"rich.mod": True}),
+    )
+
+    st = StageRecorder("Nuitka 包编译")
+    NuitkaCompiler.compile_packages(
+        sp,
+        ("rich",),
+        runtime,
+        "3.11.9",
+        Platform.WINDOWS,
+        cache,
+        stage=st,
+        ccache=True,
+        cache_root=tmp_path / "ccache_root",
+    )
+    assert ccache_called.get("yes") is True
 
 
 # ---- nuitka_version_for 字典查询测试 ----
@@ -2059,6 +2340,54 @@ def test_compile_with_stamp_passes_nuitka_packages_to_compile_packages(
     assert captured_pkgs == [("rich", "click")]
     # stamp 写入（含 pkg_part）
     assert NuitkaCompiler._stamp_path(dist).is_file()
+
+
+def test_compile_with_stamp_warns_when_site_packages_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """compile_with_stamp 在 site-packages 不存在时 warning 跳过包编译."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("print('hi')")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "python.exe").write_bytes(b"")
+    cache_root = tmp_path / "nuitka_cache"
+
+    monkeypatch.setattr(NuitkaCompiler, "ensure_env", classmethod(lambda cls, *a, **kw: "4.1.3"))
+    fake_py = tmp_path / "fake_python.exe"
+    fake_py.write_text("")
+    monkeypatch.setattr(NuitkaCompiler, "_ensure_build_python", classmethod(lambda cls, *a, **kw: fake_py))
+    monkeypatch.setattr(NuitkaCompiler, "compile_src", classmethod(lambda cls, *a, **kw: None))
+
+    # 不创建 site-packages 目录
+
+    compile_packages_called: list[bool] = []
+
+    def fake_compile_packages(cls: Any, *args: Any, **kwargs: Any) -> None:
+        compile_packages_called.append(True)
+
+    monkeypatch.setattr(NuitkaCompiler, "compile_packages", classmethod(fake_compile_packages))
+
+    st = StageRecorder("Nuitka 编译")
+    with caplog.at_level("WARNING", logger="fspack.packaging.nuitka"):
+        NuitkaCompiler.compile_with_stamp(
+            src,
+            dist,
+            runtime,
+            "3.11.9",
+            Platform.WINDOWS,
+            get_mirror("aliyun"),
+            cache_root,
+            stage=st,
+            nuitka_packages=("rich",),
+        )
+
+    # compile_packages 未被调用（site-packages 不存在）
+    assert not compile_packages_called
+    assert any("site-packages 不存在" in r.message for r in caplog.records)
 
 
 def test_stamp_key_includes_nuitka_packages(tmp_path: Path) -> None:

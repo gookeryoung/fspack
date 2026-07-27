@@ -488,7 +488,7 @@ def test_build_release_auto_windows_dispatches_nsis(tmp_path: Path, monkeypatch:
 
     calls: list[str] = []
 
-    def fake_nsis_build_installer(cls, *args, **kw):  # type: ignore[no-untyped-def]
+    def fake_nsis_build_installer(cls: Any, *args: Any, **kw: Any) -> Path:
         calls.append("nsis")
         out = dist / "release" / "app-1.0-py3.11.9-windows-slim-setup.exe"
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -527,7 +527,7 @@ def test_build_release_all_windows_generates_two_formats(tmp_path: Path, monkeyp
 
     build_calls: list[str] = []
 
-    def fake_nsis_build_installer(cls, *args, **kw):  # type: ignore[no-untyped-def]
+    def fake_nsis_build_installer(cls: Any, *args: Any, **kw: Any) -> Path:
         build_calls.append("nsis-build")
         out = dist / "release" / "app-1.0-py3.11.9-windows-slim-setup.exe"
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -535,7 +535,7 @@ def test_build_release_all_windows_generates_two_formats(tmp_path: Path, monkeyp
         return out
 
     # 监控 build() 是否被多次调用（all 模式下应仅首次调用 build）
-    def fake_build(*args, **kw):  # type: ignore[no-untyped-def]
+    def fake_build(*args: Any, **kw: Any) -> None:
         build_calls.append("build")
 
     monkeypatch.setattr(

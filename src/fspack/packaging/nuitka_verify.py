@@ -111,7 +111,7 @@ class NuitkaVerify:
             artifacts.extend(py_file.parent.glob(f"{stem}.*.so"))
             py_to_artifacts[py_file] = artifacts
 
-        if not module_to_py:
+        if not module_to_py:  # pragma: no cover - pkg_root 必为 py_file 祖先，module_to_py 不会为空
             # 无法推导模块名，信任编译结果
             return compiled_files, []
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import ssl
 from pathlib import Path
+from urllib.request import Request
 
 import pytest
 
@@ -73,8 +74,8 @@ class TestDownloaderDownload:
     def test_downloads_file_and_returns_bytes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         captured: dict[str, str] = {}
 
-        def fake_urlopen(req: object, timeout: int, **kwargs: object) -> _FakeResp:
-            captured["url"] = req.full_url  # type: ignore[union-attr]
+        def fake_urlopen(req: Request, timeout: int, **kwargs: object) -> _FakeResp:
+            captured["url"] = req.full_url
             return _FakeResp(b"hello world data")
 
         monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", fake_urlopen)

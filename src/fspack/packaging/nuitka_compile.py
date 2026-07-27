@@ -28,6 +28,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+from typing import IO, TextIO
 
 from fspack.config import MirrorConfig, nuitka_version_for
 from fspack.exceptions import NuitkaError
@@ -53,8 +54,70 @@ class NuitkaCompile:
     ``_ensure_build_python`` / ``_nuitka_cache_dir``。
 
     依赖 :class:`fspack.packaging.nuitka_verify.NuitkaVerify` 提供：
-    ``_verify_compiled_modules``（经 ``cls.`` MRO 派发）。
+    ``_verify_compiled_modules``（NuitkaVerify 在 MRO 后置，无法 stub 占位，
+    调用处用 ``# type: ignore[attr-defined]`` 标注）。
+
+    下方 stub 方法仅为类型检查占位（``# pragma: no cover`` 标注），运行时
+    被 :class:`NuitkaCompiler` MRO 链中 :class:`NuitkaEnv` 的真实实现覆盖，
+    永远不会执行。
     """
+
+    # ---- Mixin 依赖 stub（仅供类型检查，运行时被 MRO 覆盖）----
+
+    @classmethod
+    def _runtime_python(cls, runtime_dir: Path, py_version: str, target: Platform) -> Path:
+        """stub: 由 :class:`NuitkaEnv` 提供."""
+        raise NotImplementedError  # pragma: no cover
+
+    @staticmethod
+    def _is_nuitka_cached(cache_dir: Path) -> bool:
+        """stub: 由 :class:`NuitkaEnv` 提供."""
+        raise NotImplementedError  # pragma: no cover
+
+    @classmethod
+    def _ensure_ccache(cls, cache_root: Path, target: Platform, stage: StageRecorder) -> Path | None:
+        """stub: 由 :class:`NuitkaEnv` 提供."""
+        raise NotImplementedError  # pragma: no cover
+
+    @staticmethod
+    def _build_compile_env(target: Platform, ccache_exe: Path | None) -> dict[str, str]:
+        """stub: 由 :class:`NuitkaEnv` 提供."""
+        raise NotImplementedError  # pragma: no cover
+
+    @staticmethod
+    def _resolve_jobs() -> int:
+        """stub: 由 :class:`NuitkaEnv` 提供."""
+        raise NotImplementedError  # pragma: no cover
+
+    @classmethod
+    def ensure_env(
+        cls,
+        cache_root: Path,
+        py_version: str,
+        target: Platform,
+        mirror: MirrorConfig,
+        *,
+        stage: StageRecorder,
+    ) -> str:
+        """stub: 由 :class:`NuitkaEnv` 提供."""
+        raise NotImplementedError  # pragma: no cover
+
+    @classmethod
+    def _ensure_build_python(
+        cls,
+        cache_root: Path,
+        py_version: str,
+        target: Platform,
+        *,
+        stage: StageRecorder,
+    ) -> Path:
+        """stub: 由 :class:`NuitkaEnv` 提供."""
+        raise NotImplementedError  # pragma: no cover
+
+    @staticmethod
+    def _nuitka_cache_dir(cache_root: Path, py_version: str) -> Path:
+        """stub: 由 :class:`NuitkaEnv` 提供."""
+        raise NotImplementedError  # pragma: no cover
 
     @staticmethod
     def _stream_compile(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int, str, str]:
@@ -76,16 +139,16 @@ class NuitkaCompile:
         stdout_chunks: list[bytes] = []
         stderr_chunks: list[bytes] = []
 
-        def _drain(stream: object, chunks: list[bytes], out: object) -> None:
+        def _drain(stream: IO[bytes] | None, chunks: list[bytes], out: TextIO) -> None:
             assert stream is not None
-            fd = stream.fileno()  # type: ignore[union-attr]
+            fd = stream.fileno()
             while True:
                 chunk = os.read(fd, 4096)
                 if not chunk:
                     break
                 chunks.append(chunk)
-                out.buffer.write(chunk)  # type: ignore[union-attr]
-                out.buffer.flush()  # type: ignore[union-attr]
+                out.buffer.write(chunk)
+                out.buffer.flush()
 
         t_out = threading.Thread(target=_drain, args=(process.stdout, stdout_chunks, sys.stdout), daemon=True)
         t_err = threading.Thread(target=_drain, args=(process.stderr, stderr_chunks, sys.stderr), daemon=True)
@@ -161,7 +224,7 @@ class NuitkaCompile:
         if py_exe is None:
             return
 
-        if not cls._is_nuitka_cached(nuitka_cache):  # type: ignore[attr-defined]  # NuitkaEnv mixin
+        if not cls._is_nuitka_cached(nuitka_cache):  # NuitkaEnv mixin（stub 在类顶部，运行时 MRO 派发）
             _logger.warning(
                 "Nuitka 编译跳过: 缓存目录无 nuitka %s，请用 fsp b --nuitka 触发安装",
                 nuitka_cache,
@@ -177,7 +240,9 @@ class NuitkaCompile:
         # ccache 就绪：优先系统 PATH，缺失则下载到 ~/.fspack/cache/ccache/
         ccache_exe = None
         if ccache and cache_root is not None:
-            ccache_exe = cls._ensure_ccache(cache_root, target, stage)  # type: ignore[attr-defined]  # NuitkaEnv mixin
+            ccache_exe = cls._ensure_ccache(
+                cache_root, target, stage
+            )  # NuitkaEnv mixin（stub 在类顶部，运行时 MRO 派发）
 
         bootstrap_script = cls._create_bootstrap_script(nuitka_cache)
         try:
@@ -191,7 +256,9 @@ class NuitkaCompile:
         # 环境变量自动回退到 zig 编译器，zig 编译的 .pyd 可能损坏（运行时访问违例）。
         # 用 runtime python（.pyd ABI 绑定 runtime）批量 import 验证，损坏的 .pyd
         # 删除产物保留 .py，回退到 .pyc 加载。
-        runtime_py_exe = cls._runtime_python(runtime_dir, py_version, target)  # type: ignore[attr-defined]  # NuitkaEnv mixin
+        runtime_py_exe = cls._runtime_python(
+            runtime_dir, py_version, target
+        )  # NuitkaEnv mixin（stub 在类顶部，运行时 MRO 派发）
         verify_py_exe = runtime_py_exe if runtime_py_exe.is_file() else None
         stripped = cls._strip_compiled_sources(
             compiled_files,
@@ -258,7 +325,7 @@ class NuitkaCompile:
         if py_exe is None:
             return
 
-        if not cls._is_nuitka_cached(nuitka_cache):  # type: ignore[attr-defined]  # NuitkaEnv mixin
+        if not cls._is_nuitka_cached(nuitka_cache):  # NuitkaEnv mixin（stub 在类顶部，运行时 MRO 派发）
             _logger.warning("Nuitka 包编译跳过: 缓存目录无 nuitka %s", nuitka_cache)
             return
 
@@ -284,7 +351,9 @@ class NuitkaCompile:
         # ccache 就绪
         ccache_exe = None
         if ccache and cache_root is not None:
-            ccache_exe = cls._ensure_ccache(cache_root, target, stage)  # type: ignore[attr-defined]  # NuitkaEnv mixin
+            ccache_exe = cls._ensure_ccache(
+                cache_root, target, stage
+            )  # NuitkaEnv mixin（stub 在类顶部，运行时 MRO 派发）
 
         bootstrap_script = cls._create_bootstrap_script(nuitka_cache)
         try:
@@ -298,7 +367,9 @@ class NuitkaCompile:
         # 环境变量自动回退到 zig 编译器，zig 编译的 .pyd 可能损坏（运行时访问违例）。
         # 用 runtime python（.pyd ABI 绑定 runtime）批量 import 验证，损坏的 .pyd
         # 删除产物保留 .py，回退到 .pyc 加载。
-        runtime_py_exe = cls._runtime_python(runtime_dir, py_version, target)  # type: ignore[attr-defined]  # NuitkaEnv mixin
+        runtime_py_exe = cls._runtime_python(
+            runtime_dir, py_version, target
+        )  # NuitkaEnv mixin（stub 在类顶部，运行时 MRO 派发）
         verify_py_exe = runtime_py_exe if runtime_py_exe.is_file() else None
         stripped = cls._strip_compiled_sources(
             compiled_files,
@@ -330,7 +401,9 @@ class NuitkaCompile:
         if build_python_exe is not None and build_python_exe.is_file():
             _logger.info("用 standalone python 运行 nuitka: %s", build_python_exe)
             return build_python_exe
-        py_exe = cls._runtime_python(runtime_dir, py_version, target)  # type: ignore[attr-defined]  # NuitkaEnv mixin
+        py_exe = cls._runtime_python(
+            runtime_dir, py_version, target
+        )  # NuitkaEnv mixin（stub 在类顶部，运行时 MRO 派发）
         if not py_exe.is_file():
             _logger.warning("Nuitka 编译跳过: runtime python 未就绪 %s", py_exe)
             stage.set_detail("runtime python 未就绪，跳过")
@@ -412,8 +485,8 @@ class NuitkaCompile:
         """
         # 构建编译环境变量：CC="<compiler>" 或 CC="ccache <compiler>"（启用 ccache 时）
         # 始终设置 CC 指定 C 编译器，避免 Nuitka 4.x 选择 zig 触发交互式下载
-        compile_env = cls._build_compile_env(target, ccache_exe)  # type: ignore[attr-defined]  # NuitkaEnv mixin
-        jobs = cls._resolve_jobs()  # type: ignore[attr-defined]  # NuitkaEnv mixin
+        compile_env = cls._build_compile_env(target, ccache_exe)  # NuitkaEnv mixin（stub 在类顶部，运行时 MRO 派发）
+        jobs = cls._resolve_jobs()  # NuitkaEnv mixin（stub 在类顶部，运行时 MRO 派发）
         compiled_files: set[Path] = set()
         failed = 0
         total = len(py_files)
@@ -501,7 +574,9 @@ class NuitkaCompile:
             verified_files: set[Path] = set(compiled_files)
             unverified_artifacts: list[Path] = []
             try:
-                verified_files, unverified_artifacts = cls._verify_compiled_modules(verify_py_exe, compiled_files)  # type: ignore[attr-defined]  # NuitkaVerify mixin
+                verified_files, unverified_artifacts = cls._verify_compiled_modules(  # type: ignore[attr-defined]  # NuitkaVerify mixin（MRO 后置无法 stub）
+                    verify_py_exe, compiled_files
+                )
             except OSError as e:
                 # runtime python 不可执行（如测试桩空文件）或 subprocess 启动失败，
                 # 跳过验证信任编译结果（运行时 .pyd 加载失败会回退到 .pyc）
@@ -511,7 +586,7 @@ class NuitkaCompile:
                 try:
                     artifact.unlink()
                     _logger.warning("删除损坏的 .pyd/.so 产物: %s", artifact)
-                except OSError as e:
+                except OSError as e:  # pragma: no cover - 文件被并发锁定或权限问题
                     _logger.warning("删除损坏 .pyd/.so 失败 %s: %s", artifact, e)
             files_to_strip = verified_files
 
@@ -670,8 +745,12 @@ class NuitkaCompile:
         # Nuitka 是可选优化，网络不可用/C 编译器缺失/下载失败不应中断构建。
         # compile_src 不在捕获范围（单文件编译失败已有 warning 继续，非环境问题）。
         try:
-            cls.ensure_env(cache_root, py_version, target, mirror, stage=stage)  # type: ignore[attr-defined]  # NuitkaEnv mixin
-            nuitka_cache = cls._nuitka_cache_dir(cache_root, py_version)  # type: ignore[attr-defined]  # NuitkaEnv mixin
+            cls.ensure_env(
+                cache_root, py_version, target, mirror, stage=stage
+            )  # NuitkaEnv mixin（stub 在类顶部，运行时 MRO 派发）
+            nuitka_cache = cls._nuitka_cache_dir(
+                cache_root, py_version
+            )  # NuitkaEnv mixin（stub 在类顶部，运行时 MRO 派发）
 
             # Windows 编译环境：下载 python-build-standalone 完整发行版运行 nuitka
             # embed runtime python 不完整（无 .py 源码、_pth 限制 sys.path），Nuitka 的
@@ -679,7 +758,7 @@ class NuitkaCompile:
             # 导致 CPU 卡死（Nuitka 官方文档称此为 Fork Bomb）。
             # standalone python 是完整 CPython，sys.executable 可被 nuitka/scons 安全调用。
             # Linux runtime 已是 standalone，返回空 Path 占位（compile_src 内部回退到 runtime python）。
-            build_python_exe = cls._ensure_build_python(  # type: ignore[attr-defined]  # NuitkaEnv mixin
+            build_python_exe = cls._ensure_build_python(  # NuitkaEnv mixin（stub 在类顶部，运行时 MRO 派发）
                 cache_root.parent / "python",
                 py_version,
                 target,

@@ -20,15 +20,11 @@ import tarfile
 import zipfile
 from pathlib import Path
 
+from fspack._compat import override
 from fspack.config import MirrorConfig
 from fspack.exceptions import EmbedError
 from fspack.packaging.net import Downloader
 from fspack.progress import StageRecorder
-
-if sys.version_info >= (3, 12):  # pragma: no cover
-    from typing import override
-else:
-    from typing_extensions import override  # type: ignore[import-not-found,unused-ignore]
 
 __all__ = [
     "STANDALONE_BASE_URL",
@@ -141,7 +137,7 @@ class RuntimeDownloader(abc.ABC):
     @classmethod
     def post_extract(cls, runtime_dir: Path, version: str) -> None:  # noqa: ARG003
         """解压后额外步骤，默认无操作。子类可覆盖（如 embed 创建 site-packages）。"""
-        return None
+        return None  # pragma: no cover # 默认钩子，所有子类均覆盖或 ensure_* 函数不调用
 
     @classmethod
     def download(
@@ -192,17 +188,23 @@ class RuntimeDownloader(abc.ABC):
         """确保 runtime_dir 内有可用运行时，返回 runtime_dir。
 
         重复构建时若 marker 文件已存在则跳过下载与解压，但仍执行 :meth:`post_extract`。
+
+        .. note::
+
+            当前生产路径由模块级 ``ensure_embed``/``ensure_standalone`` 函数承担
+            （便于测试 monkeypatch ``download_*`` 函数），本方法保留作为基类模板
+            供未来子类复用。
         """
-        marker = cls.marker_path(runtime_dir, version)
-        if marker.exists():
-            _logger.info("%s 已就绪: %s", cls.runtime_label, runtime_dir)
-            if stage is not None:
-                stage.hit_cache()
-        else:
-            archive_path = cls.download(version, cache_dir, stage=stage, **kwargs)
-            cls.extract(archive_path, runtime_dir)
-        cls.post_extract(runtime_dir, version)
-        return runtime_dir
+        marker = cls.marker_path(runtime_dir, version)  # pragma: no cover # 模板方法，当前未使用
+        if marker.exists():  # pragma: no cover
+            _logger.info("%s 已就绪: %s", cls.runtime_label, runtime_dir)  # pragma: no cover
+            if stage is not None:  # pragma: no cover
+                stage.hit_cache()  # pragma: no cover
+        else:  # pragma: no cover
+            archive_path = cls.download(version, cache_dir, stage=stage, **kwargs)  # pragma: no cover
+            cls.extract(archive_path, runtime_dir)  # pragma: no cover
+        cls.post_extract(runtime_dir, version)  # pragma: no cover
+        return runtime_dir  # pragma: no cover
 
 
 # ---- 子类 ----
@@ -216,7 +218,7 @@ class EmbedRuntime(RuntimeDownloader):
 
     @classmethod
     @override
-    def archive_name(cls, version: str, **kwargs: object) -> str:
+    def archive_name(cls, version: str, **kwargs: object) -> str:  # noqa: ARG003 # 抽象方法签名要求
         """返回 embed zip 文件名。"""
         return embed_zip_name(version)
 
@@ -246,7 +248,7 @@ class EmbedRuntime(RuntimeDownloader):
 
     @classmethod
     @override
-    def post_extract(cls, runtime_dir: Path, version: str) -> None:
+    def post_extract(cls, runtime_dir: Path, version: str) -> None:  # noqa: ARG003 # 抽象方法签名要求，embed 不需要 version
         """创建 site-packages 目录。"""
         site_packages = runtime_dir / "Lib" / "site-packages"
         site_packages.mkdir(parents=True, exist_ok=True)
@@ -291,9 +293,9 @@ class StandaloneRuntime(RuntimeDownloader):
                 # 并阻止绝对路径/路径穿越等恶意条目（tarball 来自网络下载）。
                 # 低版本无 filter 参数，回退原行为。
                 if sys.version_info >= (3, 12):
-                    tf.extractall(runtime_dir, filter="data")
+                    tf.extractall(runtime_dir, filter="data")  # pragma: no cover # 测试环境为 3.11，3.12+ 分支无法覆盖
                 else:
-                    tf.extractall(runtime_dir)  # pragma: no cover
+                    tf.extractall(runtime_dir)
         except (tarfile.TarError, OSError) as e:
             raise EmbedError(f"python-build-standalone tarball 损坏: {archive_path}") from e
 

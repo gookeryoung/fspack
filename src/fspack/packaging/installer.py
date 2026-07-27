@@ -1,12 +1,15 @@
-"""安装包生成：Windows NSIS 与 Linux tar.gz + .deb + 跨平台 zip 便携包。
+"""安装包生成 facade：Windows NSIS / Linux tar.gz + .deb / 跨平台 zip 便携包。
 
-提取 :class:`Installer` 基类封装通用编排流程：
+本模块为 facade，保留：
+- :class:`Installer` 抽象基类与通用编排流程（``build()`` → 校验 → ``build_package``）
+- 公共辅助：``_run_stage``/``_prepare_dist``/``_check_exe``/``_release_base`` 等
+- 发行包调度：``_resolve_formats``/``build_release``（按 ``--format`` 调度多格式生成）
+- 函数式 API：``build_installer``/``build_linux_installer``（委托子类）
 
-1. 可选 ``build()`` 先构建项目到 dist
-2. 校验可执行文件已存在
-3. 调 :meth:`build_package` 生成具体格式的安装包
-
-子类实现 :meth:`build_package` 定制产物格式（NSIS exe / tar.gz + .deb）。
+平台专属实现拆分到子模块：
+- :mod:`fspack.packaging.installer_nsis`：NSIS 脚本生成与编译
+- :mod:`fspack.packaging.installer_linux`：tar.gz 便携包与 .deb 安装包
+- :mod:`fspack.packaging.installer_zip`：跨平台 zip 便携包
 
 ``build_release`` 按 ``--format`` 调度生成一种或多种格式产物：
 ``auto``（平台默认）/``zip``（跨平台便携包）/``nsis``（Windows 安装包）/
@@ -17,9 +20,7 @@ from __future__ import annotations
 
 import abc
 import logging
-import shutil
-import subprocess
-import sys
+import subprocess  # noqa: F401 # 测试 monkeypatch 通过 fspack.packaging.installer.subprocess.run 访问
 from pathlib import Path
 from typing import Callable, TypeVar
 
@@ -29,11 +30,6 @@ from fspack.console import console
 from fspack.exceptions import InstallerError
 from fspack.platform import Platform, detect_platform
 from fspack.progress import BuildTracker, spinner
-
-if sys.version_info >= (3, 12):  # pragma: no cover
-    from typing import override
-else:
-    from typing_extensions import override  # type: ignore[import-not-found,unused-ignore]
 
 __all__ = [
     "Installer",
@@ -208,9 +204,6 @@ def _release_base(info: ProjectInfo, platform_suffix: str) -> str:
     return f"{info.name}-{info.version}-{_py_tag(info)}-{platform_suffix}-slim"
 
 
-# ---- NSIS 安装包（Windows）----
-
-
 # 构建中间文件/缓存文件，打包时排除（仅用于增量构建，对最终用户无用）.
 # - .dep_cache.json: 依赖分析缓存（dist 根目录）
 # - .nuitka_compile_stamp: Nuitka 编译 stamp（dist 根目录）
@@ -225,295 +218,8 @@ _DIST_INTERMEDIATE_EXCLUDES: tuple[str, ...] = (
     "build",
 )
 
-# NSIS File /x 参数列表（空格分隔的 /x <pattern> 序列）
-_NSIS_EXCLUDE_INTERMEDIATE = " ".join(f"/x {pat}" for pat in _DIST_INTERMEDIATE_EXCLUDES)
 
-
-_NSIS_TEMPLATE = """\
-!include "MUI2.nsh"
-
-Name "{name} {version}"
-OutFile "{out_setup}"
-InstallDir "$PROGRAMFILES64\\{name}"
-RequestExecutionLevel admin
-Unicode True
-
-!insertmacro MUI_PAGE_WELCOME
-!insertmacro MUI_PAGE_DIRECTORY
-!insertmacro MUI_PAGE_INSTFILES
-!insertmacro MUI_PAGE_FINISH
-
-!insertmacro MUI_LANGUAGE "SimpChinese"
-!insertmacro MUI_LANGUAGE "English"
-
-Section "Main"
-  SetOutPath "$INSTDIR"
-  # /x 排除 fspack 自身产物（installer.nsi/release）、uv build 重叠产物（*.whl/*.tar.gz）
-  # 与构建中间文件（.dep_cache.json/.nuitka_compile_stamp/.pyc_stamp/*.build）
-  File /r /x installer.nsi /x release /x *.whl /x *.tar.gz {nsis_exclude_intermediate}*.*
-  WriteUninstaller "$INSTDIR\\uninstall.exe"
-{shortcut_block}
-{registry_block}
-SectionEnd
-
-Section "Uninstall"
-  RMDir /r "$INSTDIR"
-{uninstall_shortcut_block}
-{uninstall_registry_block}
-SectionEnd
-"""
-
-
-class NsisInstaller(Installer):
-    """Windows NSIS 安装包生成器。"""
-
-    @classmethod
-    @override
-    def target_platform(cls) -> Platform:
-        """Windows 平台。"""
-        return Platform.WINDOWS
-
-    @classmethod
-    @override
-    def exe_filename(cls, info: ProjectInfo) -> str:
-        """返回 ``<name>.exe``。"""
-        return info.exe_name
-
-    @classmethod
-    @override
-    def build_package(
-        cls,
-        dist_dir: Path,
-        info: ProjectInfo,
-        release_dir: Path,
-        *,
-        tracker: BuildTracker,
-    ) -> Path:
-        """生成 NSIS 脚本并编译为安装包。"""
-        nsi = _run_stage(
-            tracker,
-            "生成 NSIS 脚本",
-            lambda: generate_nsis_script(info, dist_dir, release_dir),
-            detail="installer.nsi",
-        )
-        out_setup = release_dir / f"{_release_base(info, 'windows')}-setup.exe"
-        result = _run_stage(
-            tracker,
-            "编译 NSIS 安装包",
-            lambda: compile_installer(nsi, out_setup),
-            detail=out_setup.name,
-        )
-        console.success(f"安装包已生成: {result}")
-        return result
-
-
-def generate_nsis_script(project: ProjectInfo, dist_dir: Path, release_dir: Path) -> Path:
-    """生成 NSIS 安装脚本到 dist_dir/installer.nsi，返回脚本路径。
-
-    release_dir 必须是 dist_dir 的子目录，OutFile 路径相对 dist_dir 计算。
-    """
-    release_dir.mkdir(parents=True, exist_ok=True)
-    out_setup_rel = release_dir.relative_to(dist_dir) / f"{_release_base(project, 'windows')}-setup.exe"
-    out_setup_win = str(out_setup_rel).replace("/", "\\")
-    content = _NSIS_TEMPLATE.format(
-        name=project.name,
-        version=project.version,
-        out_setup=out_setup_win,
-        nsis_exclude_intermediate=_NSIS_EXCLUDE_INTERMEDIATE + " " if _NSIS_EXCLUDE_INTERMEDIATE else "",
-        shortcut_block=_build_shortcut_block(project),
-        uninstall_shortcut_block=_build_uninstall_shortcut_block(project),
-        registry_block=_build_registry_block(project),
-        uninstall_registry_block=_build_uninstall_registry_block(project),
-    )
-    nsi = dist_dir / "installer.nsi"
-    # 用 UTF-8-SIG（带 BOM）写入，makensis 依 BOM 识别 UTF-8，
-    # 否则按 ANSI 代码页解析导致中文（注释/快捷方式名）报 Bad text encoding
-    nsi.write_text(content, encoding="utf-8-sig")
-    _logger.info("已生成 NSIS 脚本: %s", nsi)
-    return nsi
-
-
-def _build_shortcut_block(project: ProjectInfo) -> str:
-    """生成开始菜单与桌面快捷方式创建指令。
-
-    所有应用类型默认生成：开始菜单文件夹、程序快捷方式、卸载快捷方式、桌面快捷方式。
-    """
-    name = project.name
-    exe = project.exe_name
-    lines = [
-        f'  CreateDirectory "$SMPROGRAMS\\{name}"',
-        f'  CreateShortCut "$SMPROGRAMS\\{name}\\{name}.lnk" "$INSTDIR\\{exe}"',
-        f'  CreateShortCut "$SMPROGRAMS\\{name}\\卸载 {name}.lnk" "$INSTDIR\\uninstall.exe"',
-        f'  CreateShortCut "$DESKTOP\\{name}.lnk" "$INSTDIR\\{exe}"',
-    ]
-    return "\n".join(lines)
-
-
-def _build_uninstall_shortcut_block(project: ProjectInfo) -> str:
-    """生成卸载时清理快捷方式指令（所有应用类型均清理）。"""
-    name = project.name
-    return f'  RMDir /r "$SMPROGRAMS\\{name}"\n  Delete "$DESKTOP\\{name}.lnk"'
-
-
-def _build_registry_block(project: ProjectInfo) -> str:
-    """生成添加/删除程序注册表条目，使应用出现在 Windows 设置的应用列表中。"""
-    name = project.name
-    version = project.version
-    exe = project.exe_name
-    key = f"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{name}"
-    return (
-        f'  WriteRegStr HKLM "{key}" "DisplayName" "{name}"\n'
-        f'  WriteRegStr HKLM "{key}" "DisplayVersion" "{version}"\n'
-        f'  WriteRegStr HKLM "{key}" "UninstallString" \'"$INSTDIR\\uninstall.exe"\'\n'
-        f'  WriteRegStr HKLM "{key}" "QuietUninstallString" \'"$INSTDIR\\uninstall.exe" /S\'\n'
-        f'  WriteRegStr HKLM "{key}" "InstallLocation" "$INSTDIR"\n'
-        f'  WriteRegStr HKLM "{key}" "Publisher" "fspack"\n'
-        f'  WriteRegStr HKLM "{key}" "DisplayIcon" "$INSTDIR\\{exe}"\n'
-        f'  WriteRegDWORD HKLM "{key}" "NoModify" 1\n'
-        f'  WriteRegDWORD HKLM "{key}" "NoRepair" 1'
-    )
-
-
-def _build_uninstall_registry_block(project: ProjectInfo) -> str:
-    """生成卸载时删除注册表条目的指令。"""
-    key = f"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{project.name}"
-    return f'  DeleteRegKey HKLM "{key}"'
-
-
-def compile_installer(nsi_path: Path, out_setup: Path) -> Path:
-    """调用 makensis 编译 .nsi 为安装包，返回 out_setup 路径。"""
-    cmd = ["makensis", str(nsi_path)]
-    _logger.info("编译安装包: %s", " ".join(cmd))
-    try:
-        subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8", errors="replace", cwd=nsi_path.parent)
-    except FileNotFoundError as e:
-        raise InstallerError("未找到 makensis，请安装 NSIS（如 sudo apt install -y nsis）") from e
-    except subprocess.CalledProcessError as e:
-        raise InstallerError(f"makensis 编译失败:\n{e.stderr}") from e
-    if not out_setup.is_file():
-        raise InstallerError(f"makensis 未产出安装包: {out_setup}")
-    return out_setup
-
-
-# ---- Linux 安装包（tar.gz + .deb）----
-
-
-# Linux 打包排除模式：release 目录 + 构建中间文件（与 NSIS /x 排除一致）
-_LINUX_IGNORE = shutil.ignore_patterns("release", *_DIST_INTERMEDIATE_EXCLUDES)
-
-
-class LinuxInstaller(Installer):
-    """Linux 安装包生成器：tar.gz 便携包 + .deb 安装包。"""
-
-    @classmethod
-    @override
-    def target_platform(cls) -> Platform:
-        """Linux 平台。"""
-        return Platform.LINUX
-
-    @classmethod
-    @override
-    def exe_filename(cls, info: ProjectInfo) -> str:
-        """返回 ``<name>``（无后缀）。"""
-        return info.name
-
-    @classmethod
-    @override
-    def build_package(
-        cls,
-        dist_dir: Path,
-        info: ProjectInfo,
-        release_dir: Path,
-        *,
-        tracker: BuildTracker,
-    ) -> Path:
-        """生成 tar.gz 便携包与 .deb 安装包，返回 .deb 路径。"""
-        tar_name = f"{_release_base(info, 'linux')}.tar.gz"
-        _run_stage(
-            tracker,
-            "生成 tar.gz 便携包",
-            lambda: build_tarball(dist_dir, info, release_dir),
-            detail=tar_name,
-        )
-        deb_name = f"{info.name}_{info.version}-{_py_tag(info)}-slim_amd64.deb"
-        result = _run_stage(
-            tracker,
-            "构造 .deb 安装包",
-            lambda: build_deb(dist_dir, info, release_dir),
-            detail=deb_name,
-        )
-        console.success(f"安装包已生成: {result}")
-        return result
-
-
-def build_tarball(dist_dir: Path, info: ProjectInfo, release_dir: Path) -> Path:
-    """打包 dist 为 tar.gz 便携包，返回包路径。
-
-    tar.gz 内顶层目录为 ``<name>-<version>-<py_tag>-linux-slim``，解压后即可运行。
-    排除 dist/release/ 避免安装包递归打包自身。
-    """
-    release_dir.mkdir(parents=True, exist_ok=True)
-    base = _release_base(info, "linux")
-    staging = release_dir / base
-    if staging.exists():
-        shutil.rmtree(staging)
-    shutil.copytree(dist_dir, staging, ignore=_LINUX_IGNORE)
-    archive = shutil.make_archive(str(release_dir / base), "gztar", root_dir=release_dir, base_dir=base)
-    shutil.rmtree(staging)
-    archive_path = Path(archive)
-    _logger.info("已生成 tar.gz 便携包: %s", archive_path)
-    return archive_path
-
-
-def build_deb(dist_dir: Path, info: ProjectInfo, release_dir: Path) -> Path:
-    """构造 .deb 安装包，返回 .deb 路径。
-
-    数据布局：``/usr/lib/<name>/``（dist 内容）+ ``/usr/bin/<name>``（wrapper 调用可执行文件）。
-    排除 dist/release/ 避免安装包递归打包自身。
-    """
-    release_dir.mkdir(parents=True, exist_ok=True)
-    deb_base = f"{info.name}_{info.version}-{_py_tag(info)}-slim_amd64"
-    staging = release_dir / deb_base
-
-    if staging.exists():
-        shutil.rmtree(staging)
-
-    pkg_dir = staging / "usr" / "lib" / info.name
-    shutil.copytree(dist_dir, pkg_dir, ignore=_LINUX_IGNORE)
-
-    bin_dir = staging / "usr" / "bin"
-    bin_dir.mkdir(parents=True, exist_ok=True)
-    wrapper = bin_dir / info.name
-    wrapper.write_text(f'#!/bin/sh\nexec /usr/lib/{info.name}/{info.name} "$@"\n', encoding="utf-8")
-    wrapper.chmod(0o755)
-
-    debian_dir = staging / "DEBIAN"
-    debian_dir.mkdir(parents=True, exist_ok=True)
-    (debian_dir / "control").write_text(
-        f"Package: {info.name}\n"
-        f"Version: {info.version}\n"
-        "Architecture: amd64\n"
-        "Maintainer: fspack\n"
-        f"Description: {info.name} 打包的应用\n",
-        encoding="utf-8",
-    )
-
-    deb_path = release_dir / f"{deb_base}.deb"
-    cmd = ["dpkg-deb", "--build", str(staging), str(deb_path)]
-    _logger.info("构建 .deb: %s", " ".join(cmd))
-    try:
-        subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8", errors="replace")
-    except FileNotFoundError as e:
-        raise InstallerError("未找到 dpkg-deb，请安装 dpkg-dev（如 sudo apt install -y dpkg-dev）") from e
-    except subprocess.CalledProcessError as e:
-        raise InstallerError(f"dpkg-deb 构建失败:\n{e.stderr}") from e
-
-    shutil.rmtree(staging)
-    _logger.info("已生成 .deb 安装包: %s", deb_path)
-    return deb_path
-
-
-# ---- 函数式 API（委托给类）----
+# ---- 函数式 API（委托给子类）----
 
 
 def build_installer(  # noqa: PLR0913
@@ -544,121 +250,6 @@ def build_linux_installer(  # noqa: PLR0913
     return LinuxInstaller.build_installer(
         project_dir, mirror, py_version, no_build=no_build, dist_dir=dist_dir, tracker=tracker
     )
-
-
-# ---- zip 便携包（跨平台）----
-
-
-def build_zip(  # noqa: PLR0913
-    project_dir: Path,
-    mirror: MirrorConfig,
-    py_version: str | None = None,
-    no_build: bool = False,
-    dist_dir: Path | None = None,
-    target: Platform = Platform.WINDOWS,
-    *,
-    tracker: BuildTracker | None = None,
-) -> Path:
-    """编排：可选 build → 校验可执行文件 → 打包 zip 便携包，返回 zip 路径。
-
-    zip 跨平台解压即用，无需安装。文件名 ``<name>-<version>-<platform>.zip``，
-    内顶层目录同名，解压后不污染当前目录。排除 ``dist/release/`` 避免递归打包。
-    """
-    own_tracker = tracker is None
-    tk = tracker or BuildTracker(title="打包阶段汇总")
-    dist, info = _prepare_dist(project_dir, mirror, py_version, no_build, dist_dir, target)
-    _check_exe(dist, info, target)
-    release = dist / "release"
-    zip_name = f"{_release_base(info, 'windows' if target is Platform.WINDOWS else 'linux')}.zip"
-    result = _run_stage(
-        tk,
-        "生成 zip 便携包",
-        lambda: _make_zip(dist, info, release, target),
-        detail=zip_name,
-    )
-    console.success(f"zip 便携包已生成: {result}")
-    if own_tracker:
-        console.rich.print(tk.summary())
-    return result
-
-
-def _make_zip(dist_dir: Path, info: ProjectInfo, release_dir: Path, target: Platform) -> Path:
-    """打包 dist 为 zip 便携包，返回 zip 路径。
-
-    顶层目录 ``<name>-<version>-<py_tag>-<platform>-slim``，排除 ``release/`` 子目录。
-    用 staging 目录 + ``shutil.make_archive`` 实现，与 :func:`build_tarball` 风格一致。
-    """
-    release_dir.mkdir(parents=True, exist_ok=True)
-    platform_suffix = "windows" if target is Platform.WINDOWS else "linux"
-    base = _release_base(info, platform_suffix)
-    staging = release_dir / base
-    if staging.exists():
-        shutil.rmtree(staging)
-    shutil.copytree(dist_dir, staging, ignore=_LINUX_IGNORE)
-    archive = shutil.make_archive(str(release_dir / base), "zip", root_dir=release_dir, base_dir=base)
-    shutil.rmtree(staging)
-    archive_path = Path(archive)
-    _logger.info("已生成 zip 便携包: %s", archive_path)
-    return archive_path
-
-
-# ---- 单格式编排（tar.gz / deb）----
-
-
-def build_tarball_release(  # noqa: PLR0913
-    project_dir: Path,
-    mirror: MirrorConfig,
-    py_version: str | None = None,
-    no_build: bool = False,
-    dist_dir: Path | None = None,
-    *,
-    tracker: BuildTracker | None = None,
-) -> Path:
-    """编排：可选 build → 校验可执行文件 → 生成 tar.gz 便携包，返回包路径。"""
-    own_tracker = tracker is None
-    tk = tracker or BuildTracker(title="打包阶段汇总")
-    dist, info = _prepare_dist(project_dir, mirror, py_version, no_build, dist_dir, Platform.LINUX)
-    _check_exe(dist, info, Platform.LINUX)
-    release = dist / "release"
-    tar_name = f"{_release_base(info, 'linux')}.tar.gz"
-    result = _run_stage(
-        tk,
-        "生成 tar.gz 便携包",
-        lambda: build_tarball(dist, info, release),
-        detail=tar_name,
-    )
-    console.success(f"tar.gz 便携包已生成: {result}")
-    if own_tracker:
-        console.rich.print(tk.summary())
-    return result
-
-
-def build_deb_release(  # noqa: PLR0913
-    project_dir: Path,
-    mirror: MirrorConfig,
-    py_version: str | None = None,
-    no_build: bool = False,
-    dist_dir: Path | None = None,
-    *,
-    tracker: BuildTracker | None = None,
-) -> Path:
-    """编排：可选 build → 校验可执行文件 → 构造 .deb 安装包，返回 .deb 路径。"""
-    own_tracker = tracker is None
-    tk = tracker or BuildTracker(title="打包阶段汇总")
-    dist, info = _prepare_dist(project_dir, mirror, py_version, no_build, dist_dir, Platform.LINUX)
-    _check_exe(dist, info, Platform.LINUX)
-    release = dist / "release"
-    deb_name = f"{info.name}_{info.version}-{_py_tag(info)}-slim_amd64.deb"
-    result = _run_stage(
-        tk,
-        "构造 .deb 安装包",
-        lambda: build_deb(dist, info, release),
-        detail=deb_name,
-    )
-    console.success(f".deb 安装包已生成: {result}")
-    if own_tracker:
-        console.rich.print(tk.summary())
-    return result
 
 
 # ---- 调度：按 --format 选择生成哪些格式 ----
@@ -740,3 +331,24 @@ def build_release(  # noqa: PLR0913
             )
     console.rich.print(tracker.summary())
     return outputs
+
+
+# ---- 子模块 re-export（末尾导入避免循环依赖）----
+# 子模块从本模块导入 Installer 基类与公共辅助，故须在所有定义之后导入
+
+from fspack.packaging.installer_linux import (  # noqa: E402
+    LinuxInstaller,
+    build_deb,
+    build_deb_release,
+    build_tarball,
+    build_tarball_release,
+)
+from fspack.packaging.installer_nsis import (  # noqa: E402
+    NsisInstaller,
+    compile_installer,
+    generate_nsis_script,
+)
+from fspack.packaging.installer_zip import (  # noqa: E402,F401 # 测试通过 fspack.packaging.installer._make_zip 访问
+    _make_zip,
+    build_zip,
+)

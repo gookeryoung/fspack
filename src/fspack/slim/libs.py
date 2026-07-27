@@ -16,14 +16,8 @@
 
 from __future__ import annotations
 
-import sys
-
+from fspack._compat import override
 from fspack.slim.base import SlimSpec
-
-if sys.version_info >= (3, 12):  # pragma: no cover
-    from typing import override
-else:
-    from typing_extensions import override  # type: ignore[import-not-found]
 
 __all__ = [
     "LxmlSlimSpec",

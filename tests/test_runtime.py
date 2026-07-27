@@ -6,6 +6,7 @@ import io
 import tarfile
 import zipfile
 from pathlib import Path
+from urllib.request import Request
 
 import pytest
 
@@ -79,8 +80,8 @@ def test_download_embed_cache_hit(tmp_path: Path) -> None:
 def test_download_embed_fetches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, str] = {}
 
-    def fake_urlopen(req: object, timeout: int, **kwargs: object) -> _FakeResp:
-        captured["url"] = req.full_url  # type: ignore[union-attr]
+    def fake_urlopen(req: Request, timeout: int, **kwargs: object) -> _FakeResp:
+        captured["url"] = req.full_url
         return _FakeResp(b"ZIPDATA")
 
     monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", fake_urlopen)
@@ -223,8 +224,8 @@ def test_download_standalone_cache_hit(tmp_path: Path) -> None:
 def test_download_standalone_fetches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, str] = {}
 
-    def fake_urlopen(req: object, timeout: int, **kwargs: object) -> _FakeResp:
-        captured["url"] = req.full_url  # type: ignore[union-attr]
+    def fake_urlopen(req: Request, timeout: int, **kwargs: object) -> _FakeResp:
+        captured["url"] = req.full_url
         return _FakeResp(b"TARDATA")
 
     monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", fake_urlopen)
@@ -303,3 +304,30 @@ def test_ensure_standalone_downloads_when_missing(tmp_path: Path, monkeypatch: p
     monkeypatch.setattr("fspack.packaging.runtime.download_standalone", lambda *a, **k: tar_path)
     ensure_standalone("3.11.9", STANDALONE_RELEASE_TAG, tmp_path / "cache", runtime)
     assert (runtime / "python" / "bin" / "python3.11").is_file()
+
+
+# --- ensure_* with stage 参数测试 ---
+
+
+def test_ensure_embed_skips_with_stage_records_cache_hit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """ensure_embed marker 命中且传入 stage 时调 stage.hit_cache."""
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "python311.dll").write_bytes(b"")
+    monkeypatch.setattr("fspack.packaging.runtime.download_embed", lambda *a, **k: None)
+    rec = StageRecorder("test")
+    ensure_embed("3.11.9", _MIRROR, tmp_path / "cache", runtime, stage=rec)
+    record = rec._finalize()
+    assert record.cache_hit == 1
+
+
+def test_ensure_standalone_skips_with_stage_records_cache_hit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """ensure_standalone marker 命中且传入 stage 时调 stage.hit_cache."""
+    runtime = tmp_path / "runtime"
+    (runtime / "python" / "bin").mkdir(parents=True)
+    (runtime / "python" / "bin" / "python3.11").write_text("")
+    monkeypatch.setattr("fspack.packaging.runtime.download_standalone", lambda *a, **k: None)
+    rec = StageRecorder("test")
+    ensure_standalone("3.11.9", STANDALONE_RELEASE_TAG, tmp_path / "cache", runtime, stage=rec)
+    record = rec._finalize()
+    assert record.cache_hit == 1

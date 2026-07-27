@@ -10,15 +10,16 @@ try:
 except (ImportError, AttributeError):  # pragma: no cover
     import sys
     import types
+    from typing import Any, cast
 
     sys.modules.pop("typing_extensions", None)
     _stub = types.ModuleType("typing_extensions")
 
-    def override(obj):  # type: ignore[no-redef]
+    def override(obj: Any) -> Any:
         """运行时 no-op 回退."""
         return obj
 
-    _stub.override = override  # type: ignore[attr-defined]
+    cast(Any, _stub).override = override
     sys.modules["typing_extensions"] = _stub
 
 __all__ = ["__version__"]

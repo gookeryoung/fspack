@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import logging
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -263,10 +264,10 @@ def test_convert_image_no_pillow_returns_false(
 
     real_import = builtins.__import__
 
-    def fake_import(name: str, *args: object, **kwargs: object) -> object:
+    def fake_import(name: str, *args: Any, **kwargs: Any) -> Any:
         if name == "PIL":
             raise ImportError("simulated")
-        return real_import(name, *args, **kwargs)  # type: ignore[arg-type]
+        return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
     src = tmp_path / "src.png"
@@ -345,10 +346,10 @@ def test_resolve_icon_falls_back_when_pillow_missing(
 
     real_import = builtins.__import__
 
-    def fake_import(name: str, *args: object, **kwargs: object) -> object:
+    def fake_import(name: str, *args: Any, **kwargs: Any) -> Any:
         if name == "PIL":
             raise ImportError("simulated")
-        return real_import(name, *args, **kwargs)  # type: ignore[arg-type]
+        return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
     (tmp_path / "favicon.png").write_bytes(b"fake png")
@@ -364,10 +365,10 @@ def test_resolve_icon_cli_non_ico_falls_back_when_no_pillow(tmp_path: Path, monk
 
     real_import = builtins.__import__
 
-    def fake_import(name: str, *args: object, **kwargs: object) -> object:
+    def fake_import(name: str, *args: Any, **kwargs: Any) -> Any:
         if name == "PIL":
             raise ImportError("simulated")
-        return real_import(name, *args, **kwargs)  # type: ignore[arg-type]
+        return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
     cli_png = tmp_path / "custom.png"

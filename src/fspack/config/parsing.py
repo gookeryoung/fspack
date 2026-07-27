@@ -15,7 +15,7 @@ import ast
 import logging
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from fspack.config.models import (
     AppType,
@@ -40,7 +40,7 @@ try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover
     try:
-        import tomli as tomllib  # type: ignore[import-not-found,unused-ignore]
+        import tomli as tomllib  # type: ignore[import-not-found]
     except ImportError as e:  # pragma: no cover
         raise ProjectError("解析 pyproject.toml 需要 tomli（Python<3.11），请安装 tomli") from e
 
@@ -202,7 +202,7 @@ def _parse_build_defaults(fspack_cfg: dict[str, Any]) -> BuildDefaults:
         if not isinstance(raw_pkgs, list) or not all(isinstance(x, str) for x in raw_pkgs):
             raise ProjectError(f"[tool.fspack] nuitka_packages 必须是字符串列表，得到 {raw_pkgs!r}")
         kwargs["nuitka_packages"] = tuple(raw_pkgs)
-    return BuildDefaults(**kwargs)  # type: ignore[arg-type]
+    return BuildDefaults(**cast(Any, kwargs))
 
 
 def _resolve_icon(project_dir: Path, icon_rel: object) -> Path | None:

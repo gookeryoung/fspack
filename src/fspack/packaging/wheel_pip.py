@@ -23,6 +23,8 @@ import shutil
 import subprocess
 import sys
 import threading
+from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Sequence
 
@@ -34,6 +36,10 @@ from fspack.progress import StageRecorder, spinner
 __all__ = ["download_wheels"]
 
 _logger = logging.getLogger(__name__)
+
+# 并行下载线程数上限：I/O 密集网络下载，8 个并发平衡 PyPI 限流与吞吐量
+# 单个 wheel 下载耗时差异大（几 KB 元数据 vs 数百 MB 二进制），线程池自动调度
+_PARALLEL_DOWNLOAD_WORKERS = 8
 
 # Windows 系统标准命名为 python.exe；Microsoft Store 版本另提供 python3.exe stub。
 # Linux/macOS 用 python3，回退 python。
@@ -388,36 +394,19 @@ def _download_online(  # noqa: PLR0913
             _logger.warning("uv 解析失败，回退到 pip 完整解析: %s", e)
 
     if resolved is not None:
-        # uv 解析成功：用 pip download --no-deps 逐个下载已解析的精确版本
-        # --progress-bar on 强制显示进度条（即使 stderr 被管道捕获）
-        _logger.info("用 pip download --no-deps 下载 %d 个已解析依赖", len(resolved))
-        req_file = cache_dir / ".requirements-resolved.txt"
-        req_file.write_text("\n".join(resolved) + "\n", encoding="utf-8")
-        try:
-            result = _run_pip(
-                [*base_args, "--no-deps", "--progress-bar", "on", *extra_args, "-r", str(req_file)],
-                f"pip download {len(resolved)} 个已解析依赖",
-                stream=True,
-            )
-            assert result is not None  # suppress_error=False，不会返回 None
-            return result
-        except DependencyError as e:
-            # sdist 回退：uv 解析出的某些包可能只有 sdist 无 wheel
-            # （如 win-unicode-console==0.5），--only-binary=:all: 无法下载
-            _handle_sdist_fallback(
-                e, py, pypi_index, cache_dir, extra_index_urls=extra_index_urls, find_links=find_links
-            )
-            # 构建后用 -i index 重试：sdist 构建的 wheel 在本地缓存（--find-links），
-            # 其他包从网络下载（第一次整体失败可能未下载到缓存）
-            result = _run_pip(
-                [*base_args, "--no-deps", "--progress-bar", "on", "-i", pypi_index, *extra_args, "-r", str(req_file)],
-                f"pip download 重试 {len(resolved)} 个已解析依赖",
-                stream=True,
-            )
-            assert result is not None  # suppress_error=False，不会返回 None
-            return result
-        finally:
-            req_file.unlink(missing_ok=True)
+        # uv 解析成功：用 ThreadPoolExecutor 并行 pip download --no-deps 下载
+        # I/O 密集网络下载，并行可显著提速（尤其多个独立 wheel，无需等待串行队列）
+        _logger.info("并行下载 %d 个已解析依赖（最多 %d 并发）", len(resolved), _PARALLEL_DOWNLOAD_WORKERS)
+        return _download_resolved_parallel(
+            resolved,
+            base_args,
+            extra_args,
+            py,
+            pypi_index,
+            cache_dir,
+            extra_index_urls=extra_index_urls,
+            find_links=find_links,
+        )
 
     # uv 不可用或解析失败：回退到 pip 完整解析+下载
     try:
@@ -438,6 +427,128 @@ def _download_online(  # noqa: PLR0913
         )
         assert result is not None  # suppress_error=False，不会返回 None
         return result
+
+
+def _download_resolved_parallel(  # noqa: PLR0913
+    resolved: list[str],
+    base_args: list[str],
+    extra_args: list[str],
+    py: str,
+    pypi_index: str,
+    cache_dir: Path,
+    *,
+    extra_index_urls: Sequence[str] = (),
+    find_links: Sequence[str] = (),
+) -> subprocess.CompletedProcess[str]:
+    """并行下载 uv 解析出的精确版本 wheel.
+
+    用 :class:`~concurrent.futures.ThreadPoolExecutor` 并发调用
+    ``pip download --no-deps <pkg>==<ver>``，I/O 密集网络下载场景下
+    相比串行 ``-r requirements.txt`` 显著提速。
+
+    失败处理：单个包下载失败时收集其异常。若全部成功则合并 stdout 返回；
+    若有失败则尝试 sdist 回退（解析首个失败的 stderr 提取缺失包名），
+    构建后仅重试失败的包，最终合并所有 stdout 返回。
+
+    Args:
+        resolved: uv 解析出的精确版本需求列表（如 ``["numpy==1.24.0", ...]``）。
+        base_args: pip download 基础参数（不含 ``-i index`` 与包名）。
+        extra_args: 私有包源参数（``--extra-index-url``/``--find-links`` 展开）。
+        py: pip 解释器路径。
+        pypi_index: PyPI 索引 URL，sdist 回退时传给 pip wheel 与重试命令。
+        cache_dir: wheel 缓存目录。
+        extra_index_urls: 额外索引 URL（sdist 回退用）。
+        find_links: 本地 wheel 目录（sdist 回退用）。
+    """
+    # 单包场景直接串行，避免线程池开销，但仍走 sdist 回退
+    if len(resolved) == 1:
+        try:
+            return _download_one_resolved(resolved[0], base_args, extra_args, pypi_index, with_index=False)
+        except subprocess.CalledProcessError as e:
+            _logger.warning("单包下载失败，尝试 sdist 回退: %s", resolved[0])
+            fallback_err = DependencyError(f"依赖下载失败:\n{e.stderr}")
+            _handle_sdist_fallback(
+                fallback_err, py, pypi_index, cache_dir, extra_index_urls=extra_index_urls, find_links=find_links
+            )
+            return _download_one_resolved(resolved[0], base_args, extra_args, pypi_index, with_index=True)
+
+    workers = min(_PARALLEL_DOWNLOAD_WORKERS, len(resolved))
+    succeeded: list[tuple[str, subprocess.CompletedProcess[str]]] = []
+    failed: list[tuple[str, subprocess.CalledProcessError]] = []
+
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="wheel-dl") as executor:
+        future_to_req = {
+            executor.submit(_download_one_resolved, req, base_args, extra_args, pypi_index, with_index=False): req
+            for req in resolved
+        }
+        for future in as_completed(future_to_req):
+            req = future_to_req[future]
+            try:
+                result = future.result()
+                succeeded.append((req, result))
+            except subprocess.CalledProcessError as e:
+                failed.append((req, e))
+
+    if not failed:
+        return _merge_parallel_results(succeeded)
+
+    # 有失败包：sdist 回退（用首个失败的 stderr 解析 missing 包名）
+    _logger.warning("并行下载 %d 个失败，尝试 sdist 回退: %s", len(failed), [r for r, _ in failed])
+    first_err = failed[0][1]
+    fallback_err = DependencyError(f"依赖下载失败:\n{first_err.stderr}")
+    _handle_sdist_fallback(
+        fallback_err, py, pypi_index, cache_dir, extra_index_urls=extra_index_urls, find_links=find_links
+    )
+    # sdist 构建后重试失败的包（带 -i index，因 sdist 构建的 wheel 在本地缓存）
+    retry_results: list[tuple[str, subprocess.CompletedProcess[str]]] = []
+    for req, _ in failed:
+        result = _download_one_resolved(req, base_args, extra_args, pypi_index, with_index=True)
+        retry_results.append((req, result))
+    return _merge_parallel_results([*succeeded, *retry_results])
+
+
+def _download_one_resolved(
+    req: str,
+    base_args: list[str],
+    extra_args: list[str],
+    pypi_index: str,
+    *,
+    with_index: bool,
+) -> subprocess.CompletedProcess[str]:
+    """下载单个已解析 wheel（``pip download --no-deps <req>``）.
+
+    用 ``subprocess.run`` 捕获 stdout/stderr，不流式输出（并行模式多进程
+    stderr 交错混乱，单包模式量小无需进度条）。
+
+    Args:
+        req: 精确版本需求字符串（如 ``numpy==1.24.0``）。
+        base_args: pip download 基础参数（不含 ``-i index`` 与包名）。
+        extra_args: 私有包源参数（``--extra-index-url``/``--find-links`` 展开）。
+        pypi_index: PyPI 索引 URL，``with_index=True`` 时附加 ``-i <pypi_index>``。
+        with_index: True 时附加 ``-i``（sdist 回退重试场景，需从网络下载其他包）。
+    """
+    if with_index:
+        cmd = [*base_args, "--no-deps", "-i", pypi_index, *extra_args, req]
+    else:
+        cmd = [*base_args, "--no-deps", *extra_args, req]
+    try:
+        return subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8", errors="replace")
+    except FileNotFoundError as e:
+        raise DependencyError(f"未找到 pip: {cmd[0]}") from e
+    except subprocess.CalledProcessError:
+        # 重新抛出原异常，保留 stderr 供 sdist 回退解析
+        raise
+
+
+def _merge_parallel_results(
+    results: Iterable[tuple[str, subprocess.CompletedProcess[str]]],
+) -> subprocess.CompletedProcess[str]:
+    """合并并行下载结果：拼接 stdout 供 :func:`_parse_pip_download_wheels` 解析.
+
+    stderr 不合并（并行时各进程 stderr 独立，合并无意义），返回空字符串。
+    """
+    stdout_parts = [r.stdout for _, r in results if r.stdout]
+    return subprocess.CompletedProcess(args=[], returncode=0, stdout="\n".join(stdout_parts), stderr="")
 
 
 def _parse_missing_packages(stderr: str) -> list[str]:

@@ -16,14 +16,8 @@
 
 from __future__ import annotations
 
-import sys
-
+from fspack._compat import override
 from fspack.slim.base import SlimSpec
-
-if sys.version_info >= (3, 12):  # pragma: no cover
-    from typing import override
-else:
-    from typing_extensions import override  # type: ignore[import-not-found]
 
 __all__ = ["DefaultSlimSpec"]
 
@@ -41,7 +35,7 @@ class DefaultSlimSpec(SlimSpec):
 
     @classmethod
     @override
-    def match(cls, whl_pkg: str) -> bool:
+    def match(cls, whl_pkg: str) -> bool:  # noqa: ARG003 # 抽象方法签名要求，兜底匹配不区分包名
         """兜底匹配：始终返回 ``True``."""
         return True
 

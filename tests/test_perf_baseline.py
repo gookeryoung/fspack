@@ -172,18 +172,17 @@ class TestSlimBaseline:
         优化目标（iter-53）：多 wheel 并行解压，PySide6 拆分 wheel 场景
         （3 个 wheel）预期提速 2-3x。
         """
+        counter = {"n": 0}
 
         def _unpack() -> int:
-            dest = tmp_path / f"sp_{_unpack.counter}"  # type: ignore[attr-defined]
+            dest = tmp_path / f"sp_{counter['n']}"
             dest.mkdir()
             count = slim_unpack([sample_wheel], dest, {"PySide6": frozenset({"Core", "Gui", "Widgets"})})
             shutil.rmtree(dest, ignore_errors=True)
             return count
 
-        _unpack.counter = 0  # type: ignore[attr-defined]
-
         def _run() -> int:
-            _unpack.counter += 1  # type: ignore[attr-defined]
+            counter["n"] += 1
             return _unpack()
 
         result = benchmark(_run)

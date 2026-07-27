@@ -197,8 +197,8 @@ def test_build_linux_installer_no_build_success(tmp_path: Path, monkeypatch: pyt
         captured["deb"] = info
         return release_dir / "app_1.0-py3.11.10-slim_amd64.deb"
 
-    monkeypatch.setattr("fspack.packaging.installer.build_tarball", fake_build_tarball)
-    monkeypatch.setattr("fspack.packaging.installer.build_deb", fake_build_deb)
+    monkeypatch.setattr("fspack.packaging.installer_linux.build_tarball", fake_build_tarball)
+    monkeypatch.setattr("fspack.packaging.installer_linux.build_deb", fake_build_deb)
 
     result = build_linux_installer(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=True)
     assert result == dist / "release" / "app_1.0-py3.11.10-slim_amd64.deb"
@@ -235,9 +235,10 @@ def test_build_linux_installer_with_build(tmp_path: Path, monkeypatch: pytest.Mo
         )
 
     monkeypatch.setattr("fspack.packaging.installer.build", fake_build)
-    monkeypatch.setattr("fspack.packaging.installer.build_tarball", lambda *a, **kw: tmp_path / "x.tar.gz")
+    monkeypatch.setattr("fspack.packaging.installer_linux.build_tarball", lambda *a, **kw: tmp_path / "x.tar.gz")
     monkeypatch.setattr(
-        "fspack.packaging.installer.build_deb", lambda *a, **kw: dist / "release" / "app_1.0-py3.11.10-slim_amd64.deb"
+        "fspack.packaging.installer_linux.build_deb",
+        lambda *a, **kw: dist / "release" / "app_1.0-py3.11.10-slim_amd64.deb",
     )
 
     result = build_linux_installer(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=False)

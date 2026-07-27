@@ -1,0 +1,462 @@
+"""C loader 编译流程：基类、平台子类、编译命令构造、icon 与 mingw DLL 处理.
+
+从 :mod:`fspack.packaging.loader` 拆分而来，封装 ``generate → compile → cache``
+通用流程与平台差异：
+
+- :class:`LoaderCompiler` 基类：缓存检查 → 命中复制 → 未命中编译 → 回写
+- :class:`WindowsLoader`：mingw 交叉编译，GUI 加 -mwindows，icon 用 windres 嵌入
+- :class:`LinuxLoader`：gcc 链接 libdl
+- ``inject_mingw_runtime_dlls``：注入 MinGW 运行时 DLL 到 dist/runtime/
+
+C 源码模板从 :mod:`fspack.packaging.loader_source` 导入。
+"""
+
+from __future__ import annotations
+
+import abc
+import hashlib
+import logging
+import shutil
+import subprocess
+from pathlib import Path
+
+from fspack._compat import override
+from fspack.config import AppType
+from fspack.exceptions import LoaderError
+from fspack.packaging.loader_source import _LOADER_C_LINUX, _LOADER_C_WINDOWS
+from fspack.platform import Platform
+from fspack.progress import StageRecorder, spinner
+
+__all__ = [
+    "LINUX_GCC",
+    "MINGW_GCC",
+    "LinuxLoader",
+    "LoaderCompiler",
+    "WindowsLoader",
+    "compile_loader",
+    "gcc_available",
+    "generate_loader_source",
+    "inject_mingw_runtime_dlls",
+    "loader_cache_dir",
+    "mingw_available",
+]
+
+# 共享 logger 名：保持与原 loader.py 一致，测试 caplog 按 logger 名过滤
+_logger = logging.getLogger("fspack.packaging.loader")
+MINGW_GCC = "x86_64-w64-mingw32-gcc"
+MINGW_WINDRES = "x86_64-w64-mingw32-windres"
+LINUX_GCC = "gcc"
+
+_ICON_RC_TEMPLATE = 'id ICON "{icon_path}"\n'
+
+
+def loader_cache_dir() -> Path:
+    """返回 fspack loader 缓存目录 ``~/.fspack/cache/loaders/``."""
+    return Path.home() / ".fspack" / "cache" / "loaders"
+
+
+def _loader_cache_key(source: str, app_type: AppType, platform: Platform, icon_hash: str = "") -> str:
+    """计算 loader 缓存键：sha256(source + app_type + platform + icon_hash) 前 16 字符 hex。
+
+    源码仅依赖 ``py_xy`` 与平台（入口路径运行时从 ``<exe_basename>.entry``
+    或回退 ``.entry`` 读取），应用类型影响 ``-mwindows`` 编译选项，icon_hash
+    区分不同 icon（空串表示无 icon）。四者组合哈希作为缓存文件名，保证同配置
+    命中、改配置失效。
+    """
+    h = hashlib.sha256()
+    h.update(source.encode("utf-8"))
+    h.update(app_type.value.encode("utf-8"))
+    h.update(platform.value.encode("utf-8"))
+    h.update(icon_hash.encode("utf-8"))
+    return h.hexdigest()[:16]
+
+
+# ---- 基类 ----
+
+
+class LoaderCompiler(abc.ABC):
+    """C loader 编译器基类。
+
+    封装 ``generate → compile → cache`` 通用流程：
+
+    1. :meth:`generate_source` —— 生成 C 源码（platform-specific 模板）
+    2. :meth:`compile` —— 缓存检查 → 命中复制 → 未命中编译 → 回写缓存
+    3. 编译时调用 :meth:`_build_command` 构造命令，:meth:`_prepare_icon` 处理图标资源
+
+    类属性：
+    - ``platform``：目标平台
+    - ``exe_suffix``：可执行文件后缀（Windows 为 ``.exe``，Linux 为空）
+    - ``compiler_name``：编译器可执行名
+    - ``install_hint``：编译器缺失时的安装提示
+    """
+
+    platform: Platform
+    exe_suffix: str = ""
+    compiler_name: str = ""
+    install_hint: str = ""
+
+    @classmethod
+    @abc.abstractmethod
+    def generate_source(cls, py_xy: str) -> str:
+        """生成 C loader 源码。
+
+        py_xy: 形如 python311 的版本前缀。
+        """
+
+    @classmethod
+    @abc.abstractmethod
+    def _build_command(
+        cls,
+        c_file: Path,
+        out_exe: Path,
+        app_type: AppType,
+        icon_obj: Path | None,
+    ) -> list[str]:
+        """构造编译命令。"""
+
+    @classmethod
+    def _supports_icon(cls) -> bool:
+        """是否支持 icon 资源嵌入。默认 False，Windows 覆盖为 True。"""
+        return False
+
+    @classmethod
+    def _prepare_icon(cls, icon: Path, work_dir: Path) -> Path | None:  # noqa: ARG003
+        """编译 icon 资源为 .o 文件，返回路径。默认无 icon 处理。"""
+        return None
+
+    @classmethod
+    def available(cls) -> bool:
+        """检测编译器是否可用。"""
+        return shutil.which(cls.compiler_name) is not None
+
+    @classmethod
+    def compile(  # noqa: PLR0913
+        cls,
+        source: str,
+        out_exe: Path,
+        app_type: AppType,
+        work_dir: Path,
+        *,
+        icon: Path | None = None,
+        cache_dir: Path | None = None,
+        stage: StageRecorder | None = None,
+    ) -> Path:
+        """编译 loader 源码为可执行文件，返回路径。
+
+        缓存命中时直接复制到 ``out_exe`` 并调 ``stage.hit_cache()``；
+        未命中时编译并 best-effort 回写缓存供后续复用。缓存键为
+        ``sha256(source + app_type + platform + icon_hash)`` 前 16 字符，保证
+        同配置命中、改配置失效。``cache_dir`` 默认 ``~/.fspack/cache/loaders/``。
+        """
+        out_exe.parent.mkdir(parents=True, exist_ok=True)
+
+        icon_hash = _icon_hash(icon) if icon is not None and cls._supports_icon() else ""
+        cache = cache_dir or loader_cache_dir()
+        cache.mkdir(parents=True, exist_ok=True)
+        key = _loader_cache_key(source, app_type, cls.platform, icon_hash)
+        cached_exe = cache / f"{key}{cls.exe_suffix}"
+
+        if cached_exe.is_file():
+            _logger.info("loader 缓存命中: %s", cached_exe.name)
+            shutil.copy2(cached_exe, out_exe)
+            if stage is not None:
+                stage.hit_cache()
+                stage.set_detail("缓存命中")
+            return out_exe
+
+        # 缓存未命中：创建编译工作目录并写 loader.c
+        # 缓存命中路径不创建 work_dir，避免 dist/build/ 留下空目录
+        work_dir.mkdir(parents=True, exist_ok=True)
+        c_file = work_dir / "loader.c"
+        c_file.write_text(source, encoding="utf-8")
+
+        icon_obj = cls._prepare_icon(icon, work_dir) if icon is not None else None
+        cmd = cls._build_command(c_file, out_exe, app_type, icon_obj)
+        _logger.info("编译 loader: %s", " ".join(cmd))
+        try:
+            with spinner(f"编译 loader ({cls.compiler_name})"):
+                subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8", errors="replace")
+        except FileNotFoundError as e:
+            raise LoaderError(f"未找到编译器 {cls.compiler_name}，请安装 {cls.install_hint}") from e
+        except subprocess.CalledProcessError as e:
+            raise LoaderError(f"loader 编译失败:\n{e.stderr}") from e
+        try:
+            shutil.copy2(out_exe, cached_exe)
+        except OSError as e:
+            _logger.warning("loader 缓存回写失败: %s", e)
+        if stage is not None:
+            stage.set_detail(cls.compiler_name)
+        return out_exe
+
+
+# ---- 子类 ----
+
+
+class WindowsLoader(LoaderCompiler):
+    """Windows C loader 编译器（mingw 交叉编译）。"""
+
+    platform = Platform.WINDOWS
+    exe_suffix = ".exe"
+    compiler_name = MINGW_GCC
+    install_hint = "mingw-w64"
+
+    @classmethod
+    @override
+    def available(cls) -> bool:
+        """检测 mingw gcc 是否可用（带前缀或无前缀均可）。"""
+        return shutil.which(_find_mingw_gcc()) is not None
+
+    @classmethod
+    @override
+    def generate_source(cls, py_xy: str) -> str:
+        """生成 Windows loader 源码，加载 python3X.dll 并调用 Py_Main。"""
+        python_dll = f"runtime\\\\{py_xy}.dll"
+        return _LOADER_C_WINDOWS.format(python_dll=python_dll)
+
+    @classmethod
+    @override
+    def _build_command(
+        cls,
+        c_file: Path,
+        out_exe: Path,
+        app_type: AppType,
+        icon_obj: Path | None,
+    ) -> list[str]:
+        """构造 mingw 编译命令：GUI 加 -mwindows，icon 编译为 .o 链接。"""
+        cmd: list[str] = [_find_mingw_gcc(), "-O2", "-municode", "-o", str(out_exe), str(c_file)]
+        if app_type is AppType.GUI:
+            cmd.insert(1, "-mwindows")
+        if icon_obj is not None:
+            cmd.append(str(icon_obj))
+        return cmd
+
+    @classmethod
+    @override
+    def _supports_icon(cls) -> bool:
+        """Windows 支持 icon 资源嵌入。"""
+        return True
+
+    @classmethod
+    @override
+    def _prepare_icon(cls, icon: Path, work_dir: Path) -> Path | None:
+        """用 windres 把 .ico 编译为 COFF 格式 .o 文件，返回路径。"""
+        return _compile_icon_resource(icon, work_dir)
+
+
+class LinuxLoader(LoaderCompiler):
+    """Linux C loader 编译器（gcc 链接 libdl）。"""
+
+    platform = Platform.LINUX
+    exe_suffix = ""
+    compiler_name = LINUX_GCC
+    install_hint = "gcc"
+
+    @classmethod
+    @override
+    def generate_source(cls, py_xy: str) -> str:
+        """生成 Linux loader 源码，dlopen libpython3.X.so 并调用 Py_BytesMain。"""
+        dotted = f"{py_xy[6]}.{py_xy[7:]}"
+        libpython = f"runtime/python/lib/libpython{dotted}.so"
+        return _LOADER_C_LINUX.format(libpython=libpython)
+
+    @classmethod
+    @override
+    def _build_command(
+        cls,
+        c_file: Path,
+        out_exe: Path,
+        app_type: AppType,  # noqa: ARG003 # 抽象方法签名要求，Linux 不区分 app_type
+        icon_obj: Path | None,  # noqa: ARG003 # 抽象方法签名要求，Linux 用 windres 而非 icon_obj
+    ) -> list[str]:
+        """构造 gcc 编译命令，链接 libdl。"""
+        return [LINUX_GCC, "-O2", "-o", str(out_exe), str(c_file), "-ldl"]
+
+
+# ---- 函数式 API（委托给类，按 platform dispatch）----
+
+
+def generate_loader_source(
+    py_xy: str,
+    platform: Platform = Platform.WINDOWS,
+) -> str:
+    """生成 C loader 源码。
+
+    py_xy: 形如 python311 的版本前缀。
+    platform: 目标平台，决定加载 DLL（Windows）或 .so（Linux）。
+
+    入口脚本路径在运行时从 ``<exe_dir>/<exe_basename>.entry`` 读取（多入口），
+    回退 ``<exe_dir>/.entry``（单入口）；构建时由 build 写入对应入口文件。
+    loader 源码仅依赖 ``py_xy`` 与平台，可按 ``(py_xy, app_type, platform)`` 缓存复用。
+    """
+    cls = LinuxLoader if platform is Platform.LINUX else WindowsLoader
+    return cls.generate_source(py_xy)
+
+
+def compile_loader(  # noqa: PLR0913
+    source: str,
+    out_exe: Path,
+    app_type: AppType,
+    work_dir: Path,
+    platform: Platform = Platform.WINDOWS,
+    *,
+    icon: Path | None = None,
+    cache_dir: Path | None = None,
+    stage: StageRecorder | None = None,
+) -> Path:
+    """编译 loader 源码为可执行文件，返回路径。
+
+    Windows 用 mingw 交叉编译（GUI 加 -mwindows），Linux 用 gcc（链接 libdl）。
+
+    ``icon`` 为 Windows 可执行文件图标（.ico），用 windres 编译资源文件
+    链接到 exe。Linux 忽略 icon（ELF 无图标资源概念）。
+
+    缓存命中时直接复制到 ``out_exe`` 并调 ``stage.hit_cache()``；
+    未命中时编译并 best-effort 回写缓存供后续复用。缓存键为
+    ``sha256(source + app_type + platform + icon_hash)`` 前 16 字符，保证
+    同配置命中、改配置失效。``cache_dir`` 默认 ``~/.fspack/cache/loaders/``。
+    """
+    cls = LinuxLoader if platform is Platform.LINUX else WindowsLoader
+    return cls.compile(source, out_exe, app_type, work_dir, icon=icon, cache_dir=cache_dir, stage=stage)
+
+
+def mingw_available() -> bool:
+    """检测 mingw 交叉编译器是否可用。"""
+    return WindowsLoader.available()
+
+
+def gcc_available() -> bool:
+    """检测 gcc 编译器是否可用。"""
+    return LinuxLoader.available()
+
+
+# ---- icon 资源处理（Windows 专用）----
+
+
+def _icon_hash(icon: Path) -> str:
+    """计算 icon 文件内容的 sha256 前 16 字符 hex，用于缓存键。"""
+    h = hashlib.sha256()
+    h.update(icon.read_bytes())
+    return h.hexdigest()[:16]
+
+
+def _find_windres() -> str:
+    """查找可用的 windres，优先交叉前缀，回退无前缀。
+
+    Windows mingw64 发行版通常命名 ``windres``（无前缀），Linux 交叉编译
+    环境命名 ``x86_64-w64-mingw32-windres``（带前缀）。两者都查找不到时
+    返回默认名，让后续 subprocess 报 FileNotFoundError。
+    """
+    for name in (MINGW_WINDRES, "windres"):
+        if shutil.which(name):
+            return name
+    return MINGW_WINDRES
+
+
+def _find_mingw_gcc() -> str:
+    """查找可用的 mingw gcc，优先交叉前缀，回退无前缀。
+
+    与 :func:`_find_windres` 同理：Windows 原生 mingw64 发行版（MSYS2、WinLibs、
+    chocolatey mingw 包）通常命名 ``gcc``（无前缀），Linux 交叉编译环境命名
+    ``x86_64-w64-mingw32-gcc``（带前缀）。两者都查找不到时返回默认名，让后续
+    subprocess 报 FileNotFoundError。
+    """
+    for name in (MINGW_GCC, "gcc"):
+        if shutil.which(name):
+            return name
+    return MINGW_GCC
+
+
+# MinGW 运行时 DLL：loader.exe 与 Nuitka 编译的 .pyd 动态链接这些 DLL。
+# 不随 Windows 分发，需注入到 dist/runtime/ 使 Python 加载 .pyd 时能找到
+# （DLL 搜索路径含 runtime/，由 loader.exe 的 SetDllDirectoryW 设置）。
+_MINGW_RUNTIME_DLLS = ("libgcc_s_seh-1.dll", "libwinpthread-1.dll", "libstdc++-6.dll")
+
+
+def _locate_mingw_dll(gcc: str, dll_name: str) -> Path | None:
+    """用 ``gcc -print-file-name`` 定位 MinGW 运行时 DLL，返回绝对路径或 None.
+
+    ``-print-file-name`` 输出 DLL 路径（绝对路径或相对 gcc 工作目录），可能
+    返回空字符串或仅文件名（DLL 不在 gcc 搜索路径时）。仅当返回值是已存在
+    文件时认为定位成功。
+    """
+    result = subprocess.run(
+        [gcc, "-print-file-name", dll_name],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    candidate = result.stdout.strip()
+    if not candidate:
+        return None
+    candidate_path = Path(candidate)
+    if not candidate_path.is_absolute():
+        # 相对路径：相对 gcc 工作目录解析无意义，用 shutil.which 在 PATH 兜底
+        which = shutil.which(candidate)
+        if which is None:
+            return None
+        candidate_path = Path(which)
+    return candidate_path if candidate_path.is_file() else None
+
+
+def inject_mingw_runtime_dlls(target_dir: Path) -> None:
+    """将 MinGW 运行时 DLL 复制到目标目录。
+
+    loader.exe 与 Nuitka 编译的 .pyd 动态链接 ``libgcc_s_seh-1.dll`` /
+    ``libwinpthread-1.dll`` / ``libstdc++-6.dll``。这些 DLL 不随 Windows 分发，
+    需注入到 ``dist/runtime/`` 使 Python 加载 .pyd 时能找到（DLL 搜索路径含
+    ``runtime/``，由 loader.exe 的 :c:func:`SetDllDirectoryW` 设置）。
+
+    用 ``gcc -print-file-name=<dll>`` 定位源 DLL（MinGW 工具链自带）。
+    重复构建时若 DLL 已存在则跳过。源 DLL 缺失时仅告警不报错（兼容静态链接
+    或非标准 MinGW 构建）。
+
+    Args:
+        target_dir: 目标目录（通常是 ``dist/runtime/``），DLL 复制到此目录。
+    """
+    gcc = _find_mingw_gcc()
+    for dll_name in _MINGW_RUNTIME_DLLS:
+        dest = target_dir / dll_name
+        if dest.is_file():
+            _logger.info("MinGW 运行时 DLL 已就绪: %s", dest)
+            continue
+        src = _locate_mingw_dll(gcc, dll_name)
+        if src is None:
+            _logger.warning("MinGW 运行时 DLL 缺失: %s，跳过注入", dll_name)
+            continue
+        shutil.copy2(src, dest)
+        _logger.info("注入 MinGW 运行时 DLL: %s → %s", src, dest)
+
+
+def _compile_icon_resource(icon: Path, work_dir: Path) -> Path | None:
+    """用 windres 把 .ico 编译为 COFF 格式 .o 文件，返回路径。
+
+    生成 ``icon.rc`` 引用 icon 文件，windres 编译为 ``icon.o`` 供 gcc 链接。
+    windres 处理路径用 Windows 反斜杠风格，icon 文件复制到 work_dir 避免相对
+    路径问题。windres 不可用时 warning 并返回 None（exe 仍可编译，仅无图标）。
+    """
+    if not icon.is_file():
+        _logger.warning("icon 文件不存在，跳过图标嵌入: %s", icon)
+        return None
+    windres = _find_windres()
+    if not shutil.which(windres):
+        _logger.warning("未找到 windres，跳过图标嵌入（请安装 mingw-w64）")
+        return None
+    # 复制 icon 到 work_dir 避免相对路径问题
+    icon_copy = work_dir / "icon.ico"
+    shutil.copy2(icon, icon_copy)
+    # windres 处理路径用 Windows 反斜杠
+    rc_content = _ICON_RC_TEMPLATE.format(icon_path="icon.ico")
+    rc_file = work_dir / "icon.rc"
+    rc_file.write_text(rc_content, encoding="utf-8")
+    obj_file = work_dir / "icon.o"
+    cmd = [windres, "--input", str(rc_file), "--output", str(obj_file), "--output-format=coff"]
+    _logger.info("编译 icon 资源: %s", " ".join(cmd))
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8", errors="replace", cwd=work_dir)
+    except FileNotFoundError as e:
+        _logger.warning("windres 不可用，跳过图标嵌入: %s", e)
+        return None
+    except subprocess.CalledProcessError as e:
+        _logger.warning("icon 资源编译失败，跳过图标嵌入:\n%s", e.stderr)
+        return None
+    return obj_file

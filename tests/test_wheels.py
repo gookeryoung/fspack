@@ -15,6 +15,7 @@ from fspack.packaging.wheels import (
     _PIP_PYTHON_NAMES,
     _build_sdist_wheels,
     _deps_cache_key,
+    _download_one_resolved,
     _download_online,
     _eval_python_version_marker,
     _eval_single_marker,
@@ -22,6 +23,7 @@ from fspack.packaging.wheels import (
     _find_pip_python,
     _find_uv,
     _load_deps_cache,
+    _merge_parallel_results,
     _parse_missing_packages,
     _parse_pip_download_wheels,
     _resolve_with_uv,
@@ -1017,7 +1019,7 @@ def test_resolve_with_uv_calledprocess_error(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_download_online_uv_resolved_uses_no_deps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """uv 解析成功时用 pip download --no-deps -r 下载，含 --progress-bar on."""
+    """uv 解析成功时并行 pip download --no-deps 下载，每个包独立调用."""
     cache = tmp_path / "cache"
     cache.mkdir()
     monkeypatch.setattr("fspack.packaging.wheel_pip._find_uv", lambda: "/usr/bin/uv")
@@ -1025,21 +1027,26 @@ def test_download_online_uv_resolved_uses_no_deps(tmp_path: Path, monkeypatch: p
         "fspack.packaging.wheel_pip._resolve_with_uv",
         lambda pkgs, pv, pt, idx, **kw: ["numpy==1.24.0", "requests==2.31.0"],
     )
-    captured: dict[str, list[str]] = {}
+    captured_cmds: list[list[str]] = []
 
-    def fake_stream(cmd: list[str]) -> _Completed:
-        captured["cmd"] = cmd
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        captured_cmds.append(cmd)
         return _Completed()
 
-    monkeypatch.setattr("fspack.packaging.wheel_pip._stream_subprocess", fake_stream)
+    monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
     base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
     _download_online(["numpy>=1.0"], base_args, "/py/python", "3.11.9", ("win_amd64",), "https://idx/simple", cache)
-    cmd = captured["cmd"]
-    assert "--no-deps" in cmd
-    assert "--progress-bar" in cmd
-    assert "on" in cmd
-    assert "-r" in cmd
-    # 临时 requirements 文件已删除
+    # 2 个包并行下载，触发 2 次 subprocess.run 调用
+    assert len(captured_cmds) == 2
+    for cmd in captured_cmds:
+        assert "--no-deps" in cmd
+    # 每个命令包含一个精确版本需求（而非 -r requirements.txt）
+    all_args = {arg for cmd in captured_cmds for arg in cmd}
+    assert "numpy==1.24.0" in all_args
+    assert "requests==2.31.0" in all_args
+    assert "-r" not in all_args
+    assert "--progress-bar" not in all_args
+    # 无临时 requirements 文件残留
     assert not (cache / ".requirements-resolved.txt").exists()
 
 
@@ -1125,7 +1132,7 @@ def test_download_online_sdist_fallback(tmp_path: Path, monkeypatch: pytest.Monk
 
 
 def test_download_wheels_uv_path_integration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """download_wheels 集成测试：--no-index 失败 → uv 解析 → pip --no-deps 下载."""
+    """download_wheels 集成测试：--no-index 失败 → uv 解析 → 并行 pip --no-deps 下载."""
     cache = tmp_path / "cache"
     cache.mkdir()
     whl_name = "numpy-1.24.0-cp311-cp311-win_amd64.whl"
@@ -1136,25 +1143,30 @@ def test_download_wheels_uv_path_integration(tmp_path: Path, monkeypatch: pytest
         lambda pkgs, pv, pt, idx, **kw: ["numpy==1.24.0"],
     )
 
-    # --no-index 走 subprocess.run 失败，pip --no-deps 走 _stream_subprocess 成功
-    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
-        raise subprocess.CalledProcessError(1, cmd, stderr="not in cache")
+    # --no-index 走 subprocess.run 失败（缓存未命中）；
+    # 单包路径走 subprocess.run 成功（不走 _stream_subprocess）
+    download_calls = {"no_index": 0, "download": 0}
 
-    def fake_stream(cmd: list[str]) -> _Completed:
-        # pip download --no-deps 下载成功
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        if "--no-index" in cmd:
+            download_calls["no_index"] += 1
+            raise subprocess.CalledProcessError(1, cmd, stderr="not in cache")
+        # pip download --no-deps <pkg>==<ver> 单包下载成功
+        download_calls["download"] += 1
         (cache / whl_name).write_bytes(b"numpy")
         r = _Completed()
         r.stdout = f"Saved {whl_name}\n"
         return r
 
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
-    monkeypatch.setattr("fspack.packaging.wheel_pip._stream_subprocess", fake_stream)
     result = download_wheels(("numpy>=1.0",), "3.11.9", "https://idx/simple", cache)
     assert any(p.name == whl_name for p in result)
+    assert download_calls["no_index"] == 1
+    assert download_calls["download"] == 1
 
 
 def test_download_online_uv_sdist_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """uv 路径 sdist 回退：pip download --no-deps 失败 → pip wheel 构建 → 重试成功."""
+    """uv 路径 sdist 回退：单包 pip download --no-deps 失败 → pip wheel 构建 → 重试成功."""
     cache = tmp_path / "cache"
     cache.mkdir()
     whl_name = "win-unicode-console-0.5-py3-none-any.whl"
@@ -1170,12 +1182,9 @@ def test_download_online_uv_sdist_fallback(tmp_path: Path, monkeypatch: pytest.M
         stdout = ""
         stderr = ""
 
-    def fake_stream(cmd: list[str]) -> _Result:
-        if "wheel" in cmd and "--no-deps" in cmd and "-w" in cmd:
-            # pip wheel --no-deps 构建路径
-            call_count["pip_wheel"] += 1
-            (cache / whl_name).write_bytes(b"wuc")
-            return _Result()
+    # 单包路径调 subprocess.run（pip download --no-deps）；
+    # sdist 构建仍走 _stream_subprocess（pip wheel --no-deps）
+    def fake_run(cmd: list[str], **kw: Any) -> _Result:
         call_count["pip_download"] += 1
         if call_count["pip_download"] == 1:
             # 第一次 pip download --no-deps 失败（无 wheel）
@@ -1190,6 +1199,15 @@ def test_download_online_uv_sdist_fallback(tmp_path: Path, monkeypatch: pytest.M
         r.stdout = f"Saved {whl_name}\n"
         return r
 
+    def fake_stream(cmd: list[str]) -> _Result:
+        # pip wheel --no-deps 构建路径（_build_sdist_wheels 中调用）
+        if "wheel" in cmd and "--no-deps" in cmd and "-w" in cmd:
+            call_count["pip_wheel"] += 1
+            (cache / whl_name).write_bytes(b"wuc")
+            return _Result()
+        return _Result()
+
+    monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
     monkeypatch.setattr("fspack.packaging.wheel_pip._stream_subprocess", fake_stream)
     base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache), "--only-binary=:all:"]
     result = _download_online(
@@ -1201,9 +1219,190 @@ def test_download_online_uv_sdist_fallback(tmp_path: Path, monkeypatch: pytest.M
         "https://idx/simple",
         cache,
     )
-    assert call_count["pip_download"] == 2  # 第一次失败，第二次成功
+    assert call_count["pip_download"] == 2  # 第一次失败，第二次重试成功
     assert call_count["pip_wheel"] == 1  # sdist 构建一次
     assert f"Saved {whl_name}" in result.stdout
+
+
+# ---------- _download_resolved_parallel / _download_one_resolved / _merge_parallel_results ----------
+
+
+def test_download_resolved_parallel_multiple_packages(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """多包场景并行下载：每个包触发独立 subprocess.run 调用，结果合并 stdout."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setattr("fspack.packaging.wheel_pip._find_uv", lambda: "/usr/bin/uv")
+    resolved_pkgs = ["numpy==1.24.0", "requests==2.31.0", "rich==13.5.0"]
+    monkeypatch.setattr(
+        "fspack.packaging.wheel_pip._resolve_with_uv",
+        lambda pkgs, pv, pt, idx, **kw: resolved_pkgs,
+    )
+    captured_cmds: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        captured_cmds.append(cmd)
+        # 从 cmd 末尾取包名作为 wheel 文件名（模拟 pip download 输出）
+        req = cmd[-1]
+        pkg_name = req.split("==")[0]
+        r = _Completed()
+        r.stdout = f"Saved {pkg_name}-wheel.whl\n"
+        return r
+
+    monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
+    base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
+    result = _download_online(
+        ["numpy>=1.0"], base_args, "/py/python", "3.11.9", ("win_amd64",), "https://idx/simple", cache
+    )
+    # 3 个包触发 3 次并行调用
+    assert len(captured_cmds) == 3
+    # 合并 stdout 包含所有包的 Saved 行
+    assert "Saved numpy-wheel.whl" in result.stdout
+    assert "Saved requests-wheel.whl" in result.stdout
+    assert "Saved rich-wheel.whl" in result.stdout
+    # 每个命令独立含 --no-deps 和精确版本需求
+    for cmd in captured_cmds:
+        assert "--no-deps" in cmd
+        assert cmd[-1] in resolved_pkgs
+
+
+def test_download_resolved_parallel_partial_failure_sdist_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """并行下载部分失败：失败包触发 sdist 回退，重试仅针对失败包."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setattr("fspack.packaging.wheel_pip._find_uv", lambda: "/usr/bin/uv")
+    # numpy 成功，odfpy 失败（无 wheel，仅 sdist）
+    monkeypatch.setattr(
+        "fspack.packaging.wheel_pip._resolve_with_uv",
+        lambda pkgs, pv, pt, idx, **kw: ["numpy==1.24.0", "odfpy==1.4.1"],
+    )
+    call_count = {"numpy_download": 0, "odfpy_download": 0, "pip_wheel": 0, "odfpy_retry": 0}
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        req = cmd[-1]
+        if "numpy==1.24.0" in req:
+            call_count["numpy_download"] += 1
+            r = _Completed()
+            r.stdout = "Saved numpy-wheel.whl\n"
+            return r
+        # odfpy 路径
+        if "-i" in cmd and "https://idx/simple" in cmd:
+            # 带 -i 的重试路径
+            call_count["odfpy_retry"] += 1
+            r = _Completed()
+            r.stdout = "Saved odfpy-wheel.whl\n"
+            return r
+        # 首次 odfpy 下载失败
+        call_count["odfpy_download"] += 1
+        raise subprocess.CalledProcessError(
+            1,
+            cmd,
+            stderr="ERROR: Could not find a version that satisfies the requirement odfpy==1.4.1 (from versions: none)\n"
+            "ERROR: No matching distribution found for odfpy==1.4.1",
+        )
+
+    def fake_stream(cmd: list[str]) -> _Completed:
+        # pip wheel --no-deps 构建路径
+        if "wheel" in cmd and "--no-deps" in cmd and "-w" in cmd:
+            call_count["pip_wheel"] += 1
+            return _Completed()
+        return _Completed()
+
+    monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.wheel_pip._stream_subprocess", fake_stream)
+    base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache), "--only-binary=:all:"]
+    result = _download_online(
+        ["numpy>=1.0", "odfpy>=1.4.1"],
+        base_args,
+        "/py/python",
+        "3.8.10",
+        ("win_amd64",),
+        "https://idx/simple",
+        cache,
+    )
+    # numpy 下载成功（1 次），odfpy 首次失败（1 次），sdist 构建（1 次），odfpy 重试成功（1 次）
+    assert call_count["numpy_download"] == 1
+    assert call_count["odfpy_download"] == 1
+    assert call_count["pip_wheel"] == 1
+    assert call_count["odfpy_retry"] == 1
+    # 合并 stdout 包含 numpy 和 odfpy 的 Saved 行
+    assert "Saved numpy-wheel.whl" in result.stdout
+    assert "Saved odfpy-wheel.whl" in result.stdout
+
+
+def test_download_one_resolved_with_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_download_one_resolved with_index=True 时附加 -i <pypi_index>."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    captured: dict[str, list[str]] = {}
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        captured["cmd"] = cmd
+        return _Completed()
+
+    monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
+    base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
+    extra_args = ["--find-links", str(cache)]
+    _download_one_resolved("numpy==1.24.0", base_args, extra_args, "https://idx/simple", with_index=True)
+    cmd = captured["cmd"]
+    assert "-i" in cmd
+    assert "https://idx/simple" in cmd
+    assert "--no-deps" in cmd
+    assert "numpy==1.24.0" in cmd
+    assert "--find-links" in cmd
+
+
+def test_download_one_resolved_without_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_download_one_resolved with_index=False 时不附加 -i."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    captured: dict[str, list[str]] = {}
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        captured["cmd"] = cmd
+        return _Completed()
+
+    monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
+    base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
+    _download_one_resolved("numpy==1.24.0", base_args, [], "https://idx/simple", with_index=False)
+    cmd = captured["cmd"]
+    assert "-i" not in cmd
+    assert "--no-deps" in cmd
+    assert "numpy==1.24.0" in cmd
+
+
+def test_download_one_resolved_pip_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_download_one_resolved 在 pip 消失时抛 DependencyError."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        raise FileNotFoundError(2, "No such file", cmd[0])
+
+    monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
+    base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
+    with pytest.raises(DependencyError, match="未找到 pip"):
+        _download_one_resolved("numpy==1.24.0", base_args, [], "https://idx/simple", with_index=False)
+
+
+def test_merge_parallel_results_concat_stdout() -> None:
+    """_merge_parallel_results 拼接各任务 stdout，stderr 留空."""
+    r1 = subprocess.CompletedProcess(args=[], returncode=0, stdout="Saved a.whl\n", stderr="err1")
+    r2 = subprocess.CompletedProcess(args=[], returncode=0, stdout="Saved b.whl\n", stderr="err2")
+    merged = _merge_parallel_results([("a==1.0", r1), ("b==2.0", r2)])
+    assert "Saved a.whl" in merged.stdout
+    assert "Saved b.whl" in merged.stdout
+    assert merged.stderr == ""
+    assert merged.returncode == 0
+
+
+def test_merge_parallel_results_skip_empty_stdout() -> None:
+    """_merge_parallel_results 跳过空 stdout 任务."""
+    r1 = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+    r2 = subprocess.CompletedProcess(args=[], returncode=0, stdout="Saved b.whl\n", stderr="")
+    merged = _merge_parallel_results([("a==1.0", r1), ("b==2.0", r2)])
+    assert merged.stdout == "Saved b.whl\n"
 
 
 # ---------- _stream_subprocess ----------
@@ -1493,7 +1692,7 @@ def test_resolve_with_uv_no_private_sources_omits_args(monkeypatch: pytest.Monke
 
 
 def test_download_online_uv_resolved_passes_extra_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """uv 解析成功路径：pip download --no-deps 命令含私有包源参数."""
+    """uv 解析成功路径：并行 pip download --no-deps 命令含私有包源参数."""
     cache = tmp_path / "cache"
     cache.mkdir()
     monkeypatch.setattr("fspack.packaging.wheel_pip._find_uv", lambda: "/usr/bin/uv")
@@ -1512,13 +1711,13 @@ def test_download_online_uv_resolved_passes_extra_sources(tmp_path: Path, monkey
         return ["numpy==1.24.0"]
 
     monkeypatch.setattr("fspack.packaging.wheel_pip._resolve_with_uv", fake_resolve)
-    captured: dict[str, list[str]] = {}
+    captured_cmds: list[list[str]] = []
 
-    def fake_stream(cmd: list[str]) -> _Completed:
-        captured["cmd"] = cmd
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        captured_cmds.append(cmd)
         return _Completed()
 
-    monkeypatch.setattr("fspack.packaging.wheel_pip._stream_subprocess", fake_stream)
+    monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
     base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
     _download_online(
         ["numpy>=1.0"],
@@ -1531,7 +1730,10 @@ def test_download_online_uv_resolved_passes_extra_sources(tmp_path: Path, monkey
         extra_index_urls=("https://pypi.company.com/simple/",),
         find_links=("./wheels",),
     )
-    cmd = captured["cmd"]
+    # 单包场景触发 1 次 subprocess.run
+    assert len(captured_cmds) == 1
+    cmd = captured_cmds[0]
+    assert "--no-deps" in cmd
     assert "--extra-index-url" in cmd
     assert "https://pypi.company.com/simple/" in cmd
     assert "--find-links" in cmd

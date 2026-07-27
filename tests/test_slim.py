@@ -2,20 +2,15 @@
 
 from __future__ import annotations
 
-import sys
 import zipfile
 from pathlib import Path
 
 import pytest
 
+from fspack._compat import override
 from fspack.config import DEFAULT_SLIM_RULES, SlimRules
 from fspack.exceptions import DependencyError
 from fspack.slim import classify_entry, slim_unpack
-
-if sys.version_info >= (3, 12):  # pragma: no cover
-    from typing import override
-else:
-    from typing_extensions import override  # type: ignore[import-not-found]
 
 
 class TestClassifyEntry:
@@ -2475,9 +2470,9 @@ class TestSlimSpecRegistry:
             @override
             def classify_entry(
                 cls,
-                entry: str,
-                top_pkg: str,
-                keep_subs: set[str],
+                entry: str,  # noqa: ARG003 # 测试桩，签名要求
+                top_pkg: str,  # noqa: ARG003 # 测试桩，签名要求
+                keep_subs: set[str],  # noqa: ARG003 # 测试桩，签名要求
             ) -> tuple[str, str | None]:
                 return ("shared", None)
 

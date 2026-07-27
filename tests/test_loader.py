@@ -320,9 +320,11 @@ def _make_completed(stdout: str = "") -> Any:
     class _C:
         returncode = 0
         stderr = ""
+        stdout: str = ""
 
-    _C.stdout = stdout  # type: ignore[attr-defined]
-    return _C()
+    obj = _C()
+    obj.stdout = stdout
+    return obj
 
 
 def test_inject_mingw_runtime_dlls_copies_all_to_target_dir(

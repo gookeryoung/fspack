@@ -1,19 +1,36 @@
-"""fspack CLI 入口 —— cargo 风格短命令（fsp b/c/r）."""
+"""fspack CLI 入口 —— cargo 风格短命令（fsp b/c/r）.
+
+顶部仅导入轻量标准库（argparse/logging/pathlib）与 ``__version__``。
+重模块（``fspack.config``/``fspack.console``/``fspack.platform``）延迟到
+实际使用时导入，使 ``fsp --help`` 无需加载 config/console 即可输出帮助。
+"""
 
 from __future__ import annotations
 
 import argparse
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from fspack import __version__
-from fspack.config import MIRRORS
-from fspack.console import console
-from fspack.platform import Platform
+
+if TYPE_CHECKING:
+    from fspack.platform import Platform
 
 __all__ = ["build_parser", "main"]
 
 _logger = logging.getLogger(__name__)
+
+
+def _mirrors_choices() -> list[str]:
+    """延迟导入 ``MIRRORS`` 避免 ``fsp --help`` 加载完整 config 模块.
+
+    ``fspack.config`` 顶层导入会触发 ``config.models``/``config.parsing`` 加载
+    （~10ms），仅 build/package 子命令需要 ``MIRRORS`` 作为 choices。
+    """
+    from fspack.config import MIRRORS
+
+    return list(MIRRORS)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -37,7 +54,7 @@ def _add_build_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser
     """添加 build/b 子命令：打包项目."""
     p = sub.add_parser("build", aliases=["b"], help="打包项目")
     p.add_argument("project", nargs="?", default=".", help="项目目录（默认当前目录）")
-    p.add_argument("--mirror", default=None, choices=list(MIRRORS), help="镜像源")
+    p.add_argument("--mirror", default=None, choices=_mirrors_choices(), help="镜像源")
     p.add_argument("--py-version", default=None, help="embed python 版本，如 3.11.9")
     p.add_argument("--target", default=None, choices=["windows", "linux"], help="目标平台（默认当前平台）")
     p.add_argument(
@@ -160,7 +177,7 @@ def _add_package_subparser(sub: argparse._SubParsersAction[argparse.ArgumentPars
     """添加 package/p 子命令：生成发行包."""
     p = sub.add_parser("package", aliases=["p"], help="生成发行包")
     p.add_argument("project", nargs="?", default=".", help="项目目录")
-    p.add_argument("--mirror", default=None, choices=list(MIRRORS), help="镜像源")
+    p.add_argument("--mirror", default=None, choices=_mirrors_choices(), help="镜像源")
     p.add_argument("--py-version", default=None, help="embed python 版本，如 3.11.9")
     p.add_argument("--target", default=None, choices=["windows", "linux"], help="目标平台（默认当前平台）")
     p.add_argument(
@@ -187,6 +204,9 @@ def main(argv: list[str] | None = None) -> None:
     if command is None:
         parser.print_help()
         return
+
+    # console 延迟导入：仅在实际执行子命令时加载 rich（~17ms）
+    from fspack.console import console
 
     console.setup_logging(verbose=ns.verbose)
 
@@ -260,6 +280,8 @@ def _parse_target(value: str | None) -> Platform | None:
     """将 CLI 字符串转为 Platform 枚举，None 表示用当前平台."""
     if value is None:
         return None
+    from fspack.platform import Platform
+
     if value == "windows":
         return Platform.WINDOWS
     return Platform.LINUX

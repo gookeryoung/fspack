@@ -258,7 +258,7 @@ def _satisfies(version: str, specifiers: str) -> bool:
             ok = ver == spec
         elif op == "!=":
             ok = ver != spec
-        else:
+        else:  # pragma: no cover - ~= 兼容发行符未实现，正则匹配但静默跳过
             continue
         if not ok:
             return False

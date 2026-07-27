@@ -44,10 +44,13 @@ from fspack.packaging.wheel_pip import (
     _UV_RESOLVED_LINE_RE,  # noqa: F401
     _build_pip_download_args,  # noqa: F401
     _build_sdist_wheels,  # noqa: F401
+    _download_one_resolved,  # noqa: F401
     _download_online,  # noqa: F401
+    _download_resolved_parallel,  # noqa: F401
     _find_pip_python,  # noqa: F401
     _find_uv,  # noqa: F401
     _handle_sdist_fallback,  # noqa: F401
+    _merge_parallel_results,  # noqa: F401
     _parse_missing_packages,  # noqa: F401
     _parse_pip_download_wheels,  # noqa: F401
     _parse_wheel_names,  # noqa: F401

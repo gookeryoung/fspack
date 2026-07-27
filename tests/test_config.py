@@ -550,6 +550,35 @@ def test_satisfies_exact_match_no_wildcard() -> None:
     assert _satisfies("3.12.10", "==3.12.0") is False
 
 
+def test_satisfies_less_equal_operator() -> None:
+    """``<=`` 操作符：小于或等于都满足."""
+    assert _satisfies("3.11.9", "<=3.12") is True
+    assert _satisfies("3.12.0", "<=3.12") is True
+    assert _satisfies("3.13.0", "<=3.12") is False
+
+
+def test_satisfies_greater_than_operator() -> None:
+    """``>`` 操作符：仅大于满足（不含等于）."""
+    assert _satisfies("3.13.0", ">3.12") is True
+    assert _satisfies("3.12.0", ">3.12") is False
+    assert _satisfies("3.11.9", ">3.12") is False
+
+
+def test_satisfies_not_equal_operator() -> None:
+    """``!=`` 操作符（无通配符）：不等于即满足."""
+    assert _satisfies("3.12.0", "!=3.12.0") is False
+    assert _satisfies("3.12.10", "!=3.12.0") is True
+    assert _satisfies("3.11.9", "!=3.12.0") is True
+
+
+def test_satisfies_combined_operators() -> None:
+    """组合多个操作符：``>=3.11,<3.13,!=3.12.0``."""
+    assert _satisfies("3.11.9", ">=3.11,<3.13,!=3.12.0") is True
+    assert _satisfies("3.12.0", ">=3.11,<3.13,!=3.12.0") is False  # 被 != 排除
+    assert _satisfies("3.12.10", ">=3.11,<3.13,!=3.12.0") is True
+    assert _satisfies("3.13.0", ">=3.11,<3.13,!=3.12.0") is False  # 被 < 排除
+
+
 def test_resolve_py_version_wildcard_requires_python(tmp_path: Path) -> None:
     """``requires-python: ==3.12.*`` 自动选最高兼容 3.12.x 版本."""
     # Windows embed 最高 3.12.x 为 3.12.10
