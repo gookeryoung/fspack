@@ -22,6 +22,7 @@ fspack 将 Python 项目打包为可执行文件与跨平台安装包：用 embe
 - **字节码预编译**：默认将 src 与 site-packages 预编译为 .pyc 加速首次启动；`--pyc-strip` 剥离 .py 仅留 .pyc，`--pyc-optimize` 控制 -O/-OO 优化级别
 - **Nuitka 本机编译**：`--nuitka` 将用户源码编译为 .pyd 本机执行（速度提升 30-50%），自动按 Python 版本锁定 Nuitka 版本并装到本地缓存 `~/.fspack/cache/nuitka/`，stamp 缓存命中跳过整个阶段
 - **标准库精简**：默认剥离 Linux standalone 的 test/ensurepip/idlelib 等无用模块；`--no-stdlib-trim` 可关闭
+- **wheel 精简**：AST 扫描源码 import 推断实际使用的子模块（如 `PySide6.QtWidgets`），按依赖闭包选择性解压 wheel（剥离未用子模块的 `.pyd`/`.dll`/`.pyi`、translations/include/metatypes 等开发资源、`.exe` 工具）；`[tool.fspack] slim-include`/`slim-exclude` 支持用户自定义 glob 规则覆盖自动分类
 - **增量构建缓存**：源码指纹 + 预编译 stamp + Nuitka stamp 三层缓存，未改动文件跳过复制与重编
 - **Win7 兼容**：Python 3.9+ 注入 api-ms-win-core-path 替代 DLL，支持在 Win7/Win2008R2 运行
 - **国内镜像**：默认清华源 PyPI 与 embed python 镜像，`--mirror` 切换（aliyun/huawei/tsinghua）
@@ -137,7 +138,7 @@ fsp p [project] [--mirror <name>] [--py-version <ver>] [--target <plat>] [--no-b
 2. **下载运行时**：Windows 下载 embed python zip 并解压到 `dist/runtime/`；Linux 下载 python-build-standalone tar.gz 并解压到 `dist/runtime/python/`
 3. **分析依赖**：AST 扫描源码 import，分类标准库/本地/第三方，与 `pyproject.toml` 声明依赖比对；结果按源码指纹缓存，未改动跳过
 4. **补充内置库**（仅 Windows）：AST 检出 `tkinter` 使用时，从 python-build-standalone Windows 构建提取 tkinter 组件（纯 Python 包 + `_tkinter.pyd` + Tcl/Tk 运行时脚本）补充到 runtime，按版本缓存 zip 避免重复下载
-5. **下载 wheel**：用 dev python 的 `pip download` 拉取目标平台 wheel，解包到 `dist/runtime/Lib/site-packages/`（Windows）或 `dist/runtime/python/lib/python3.X/site-packages/`（Linux）
+5. **下载 wheel**：用 dev python 的 `pip download` 拉取目标平台 wheel，解包到 `dist/runtime/Lib/site-packages/`（Windows）或 `dist/runtime/python/lib/python3.X/site-packages/`（Linux）。解包时按 AST 收集的子模块使用信息选择性保留（wheel 精简）：Qt 库按依赖闭包（如 `QtWidgets` → `Gui`/`Core`）保留对应 `.pyd`/`.dll`，剥离未用子模块、translations/include/metatypes 开发资源、`.exe` 工具；`slim-include`/`slim-exclude` 用户规则覆盖自动分类
 6. **写 _pth**（仅 Windows）：覆盖 `runtime/python3X._pth`，注册 site-packages 与 `..\src` 路径；`--no-site` 时省略 `import site` 行节省启动时间
 7. **复制源码**：项目源码复制到 `dist/src/`，排除 dist/build/.venv 等构建产物；按 mtime 跳过未改动文件
 8. **标准库精简**（默认，仅 Linux）：剥离 standalone 的 test/ensurepip/idlelib 等无用模块；`--no-stdlib-trim` 可关闭
@@ -224,6 +225,69 @@ fsp r --entry web     # 运行 web 入口
 | Linux | python-build-standalone（indygreg） | gcc | .deb + tar.gz |
 
 Linux dev 机可交叉编译 Windows 包（`fsp b --target windows`），反之亦然。
+
+## 配置参考
+
+`pyproject.toml` 的 `[tool.fspack]` 段支持以下配置项（均可选）：
+
+```toml
+[tool.fspack]
+icon = "assets/app.ico"                    # exe 图标（.ico/.png/.jpg），覆盖自动搜索
+exclude = ["examples", "docs"]             # 源码复制时额外排除的 glob 模式（合并到内置排除）
+slim-include = ["PySide6/Qt6Charts.dll"]   # wheel 精简：强制保留（覆盖 spec 剥离）
+slim-exclude = [                           # wheel 精简：强制剥离（覆盖 spec 保留）
+    "PySide6/opengl32sw.dll",
+    "PySide6/translations/*",
+]
+extra-index-urls = ["https://pypi.company.com/simple/"]  # 私有 PyPI 源
+find-links = ["./wheels"]                  # 本地 wheel 目录或 URL
+
+[tool.fspack.entries]                      # 多入口声明（见"多入口打包"章节）
+cli = "cli.py"
+gui = "gui.py"
+```
+
+### wheel 精简用户规则
+
+`slim-include`/`slim-exclude` 支持 fnmatch glob 模式，匹配 wheel 内 POSIX 相对路径
+（如 `PySide6/Qt6Charts.dll`、`PySide6/translations/*`）。`*` 匹配任意字符含 `/`。
+
+**优先级**：`slim-include` > `slim-exclude` > spec 自动分类
+
+- `slim-include`：强制保留被 spec 剥离的文件（如 AST 闭包外的 Qt 模块 DLL）
+- `slim-exclude`：强制剥离被 spec 保留的文件（如 Quick 闭包内的 `opengl32sw.dll`）
+- 都不匹配时走 spec 自动分类（向后兼容）
+
+典型场景：
+
+```toml
+# 强制保留被 AST 闭包排除的 Qt 模块
+slim-include = ["PySide6/Qt6Charts.dll", "PySide6/QtCharts.pyd"]
+
+# 剥离不需要的大体积文件
+slim-exclude = [
+    "PySide6/opengl32sw.dll",      # 软件 OpenGL 后备（20MB，WebEngine 用 Chromium GPU 不需要）
+    "PySide6/translations/*",      # 翻译资源（29MB）
+    "PySide6/include/*",           # C 头文件（14MB）
+    "PySide6/metatypes/*",         # 编译期 JSON（14MB）
+]
+```
+
+### 构建默认值
+
+以下配置项作为 CLI 标志未显式指定时的回退默认值（CLI `--nuitka` 等仍可覆盖）：
+
+```toml
+[tool.fspack]
+nuitka = false           # 启用 Nuitka 编译模式
+pyc_strip = false        # 剥离 .py 仅留 .pyc
+pyc_optimize = 2         # 字节码优化级别 0/1/2
+no_site = false          # 禁用 site.py
+no_pyc = false           # 关闭字节码预编译
+no_stdlib_trim = false   # 关闭标准库精简
+ccache = false           # Nuitka 编译启用 ccache
+nuitka_packages = []     # Nuitka 编译包含的额外包
+```
 
 ## 已知限制
 

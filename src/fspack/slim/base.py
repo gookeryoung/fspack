@@ -497,10 +497,8 @@ def _unpack_one_wheel(  # noqa: PLR0913
             top_pkg = _detect_top_pkg(zf, whl_pkg)
             if top_pkg is None:
                 # wheel 顶层目录与归一化包名不匹配 → 兜底全量解压
-                # 用户规则仍生效（user_exclude 在全量解压后无法应用，故走精简路径）
-                if user_include or user_exclude:
-                    # 有用户规则时走精简路径以应用规则（top_pkg 未知则用 whl_pkg 推断）
-                    _logger.warning("wheel %s top_pkg 检测失败，用户规则可能不生效", whl.name)
+                # （_detect_top_pkg 回退匹配已处理拆分 wheel 场景，此分支仅在
+                # wheel 结构异常时触发，用户规则无法应用）
                 zf.extractall(dest)
                 return
             # 用 top_pkg 的归一化名查找 keep_subs，支持拆分 wheel 共享主包保留集合

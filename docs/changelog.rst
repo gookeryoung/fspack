@@ -4,6 +4,7 @@
 v0.2.7（未发布）
 ----------------
 
+- feat: 新增 ``[tool.fspack] slim-include``/``slim-exclude`` wheel 精简用户自定义规则，支持 fnmatch glob 模式强制保留/剥离特定文件；优先级 ``slim-include`` > ``slim-exclude`` > spec 自动分类；用于覆盖 AST 闭包误判、强制剥离 ``opengl32sw.dll``/``translations`` 等不需要的文件
 - feat: 新增 ``--extra-index-url``/``--find-links`` 私有包源支持，可多次指定；与 ``[tool.fspack] extra-index-urls``/``find-links`` 配置合并（CLI 追加在后、去重保留首次出现），透传给 pip/uv 的 ``--extra-index-url``/``--find-links``；私有包源纳入依赖解析缓存键，切换源后强制重新解析；sdist 回退路径（``pip wheel``）同步透传私有包源
 - feat: 新增 ``--nuitka`` 编译模式，用户源码编译为 .pyd 本机执行（速度提升 30-50%）；按 Python 版本锁定 Nuitka 版本（3.8/3.9→2.5.1，3.10+→4.1.3），自动装到本地缓存 ``~/.fspack/cache/nuitka/`` 不污染 dist/runtime；Windows 用缓存的 standalone python 运行编译，避免 embed python 触发 reExecute fork bomb；入口文件保留 .py 兼容 ``runpy.run_path()``；stamp 缓存命中跳过整个阶段；缺 pip 时 ensurepip/uv 两轮自救
 - feat: 新增 ``--pyc-optimize`` 字节码优化级别与 ``--no-site`` 禁用 site.py 加载选项
@@ -11,6 +12,7 @@ v0.2.7（未发布）
 - feat: 打包阶段（生成 NSIS 脚本/编译安装包）纳入 BuildTracker 汇总表统计
 - feat(pyside2-qml-dashboard): 新增 WSL 管理仪表盘 QML 示例项目
 - fix(slim): 补全 Qt QML/Quick 模块依赖映射，修复 QML 项目运行时 DLL 缺失
+- fix(slim): 修复 PySide6 6.6+ 拆分 wheel（pyside6_essentials/addons）全量解压问题；``_detect_top_pkg`` 回退匹配使 QtSlimSpec 识别拆分 wheel 的 ``PySide6`` 顶层目录，共享主包 keep_subs；补全 WebEngineCore/WebEngineWidgets 的 Quick/QuickWidgets/PrintSupport 依赖与 Quick 的 OpenGL/QmlMeta 依赖（dumpbin 验证 C 层 DLL 导入表）
 - fix: Nuitka 编译用心跳线程与流式输出显示进度，避免长时间无输出被误认为卡死；``--jobs=1`` 限制 C 编译并行度
 - fix: ``tarfile.extractall`` 加 PEP 706 ``filter="data"`` 过滤器（Python 3.12+），消除 DeprecationWarning 并阻止路径穿越（runtime.py 与 nuitka.py 两处）
 - fix(test): Linux e2e 测试增加平台跳过条件，Windows 上的 mingw gcc 缺 ``dlfcn.h`` 无法交叉编译 Linux loader
