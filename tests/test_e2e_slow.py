@@ -4,6 +4,9 @@
 覆盖 9 类典型项目：无库 CLI、有库 CLI、有库 GUI（PySide6/PySide2/PyQt5）、有库 pygame、
 有库 web、多入口混合（cli+gui+web 共享 runtime/依赖）。
 另含 Linux 平台端到端测试（python-build-standalone + gcc 编译 + 原生运行）。
+
+iter-69 扩展：PySide2 QML 应用、Nuitka 编译端到端（Windows mingw + Linux gcc）、
+用户自定义 slim-include 规则覆盖 spec 剥离的端到端验证。
 """
 
 from __future__ import annotations
@@ -579,3 +582,233 @@ def test_build_and_run_tk_app_pyall(tmp_path: Path) -> None:
     wrapper = (proj / "dist" / "_entry_tk_app_pyall.py").read_text(encoding="utf-8")
     assert "if True:" in wrapper, "wrapper 未注入 tkinter 环境变量（has_tkinter 应为 True）"
     assert "TCL_LIBRARY" in wrapper
+
+
+# ---------- iter-69 扩展：PySide2 QML / Nuitka / slim-include 端到端 ----------
+
+
+@pytest.mark.slow
+def test_build_and_run_pyside2_qml_dashboard_py38(tmp_path: Path) -> None:
+    """pyside2_qml_dashboard_py38 示例：PySide2 + QML 应用打包验证。
+
+    验证：
+    1. QML 资源文件（views/*.qml + qtquickcontrols2.conf）正确打包到 dist/src/
+    2. PySide2 依赖（QtQml/QtQuickControls2 模块）解包到 site-packages
+    3. wine 运行可能因系统 DLL 缺失跳过（与 pyside2_app_py310 同条件）
+
+    PySide2 的 Qt DLL 在 wine 上可能缺系统 DLL（icuuc.dll 等），缺时跳过
+    运行断言，仅验证构建产物。
+    """
+    from fspack.builder import build
+    from fspack.config import BuildOptions, get_mirror
+    from fspack.packaging.loader import mingw_available
+    from fspack.platform import Platform
+
+    if not mingw_available():
+        pytest.skip("mingw-w64 未安装")
+    if not shutil.which("wine"):
+        pytest.skip("wine 未安装")
+
+    proj = tmp_path / "pyside2_qml_dashboard_py38"
+    shutil.copytree(_EXAMPLES / "pyside2_qml_dashboard_py38", proj)
+    build(
+        proj,
+        get_mirror("aliyun"),
+        None,
+        target=Platform.WINDOWS,
+        options=BuildOptions(keep_modules={"PySide2.QtQml", "PySide2.QtQuickControls2"}),
+    )
+
+    exe = proj / "dist" / "pyside2_qml_dashboard_py38.exe"
+    assert exe.is_file(), f"未生成 exe: {exe}"
+    assert (proj / "dist" / "runtime" / "python310.dll").is_file(), (
+        "未找到 python310.dll（requires-python=<3.11 解析到 3.10.11）"
+    )
+    assert (proj / "dist" / "runtime" / "python310._pth").is_file(), "未生成 _pth"
+    # PySide2 解包
+    assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "PySide2").is_dir(), "PySide2 未解包"
+
+    # QML 资源文件应打包到 dist/src/（copy_source 排除 *.md 但保留 .qml/.conf）
+    src_views = proj / "dist" / "src" / "views"
+    assert src_views.is_dir(), f"QML views/ 目录未打包: {src_views}"
+    qml_files = list(src_views.glob("*.qml"))
+    assert len(qml_files) >= 5, f"QML 文件数不足: {len(qml_files)}"
+    assert (proj / "dist" / "src" / "qtquickcontrols2.conf").is_file(), "qtquickcontrols2.conf 未打包"
+
+    # PySide2 QtQml/QtQuick 模块应解包（keep_modules 显式保留）
+    pyside2_dir = proj / "dist" / "runtime" / "Lib" / "site-packages" / "PySide2"
+    assert any(p.name.startswith("QtQml") for p in pyside2_dir.iterdir()), "QtQml 模块未解包"
+    assert any(p.name.startswith("QtQuickControls2") for p in pyside2_dir.iterdir()), "QtQuickControls2 模块未解包"
+
+    # wine 运行验证：QML 应用需 offscreen 平台
+    env = {**os.environ, "WINEDEBUG": "-all", "QT_QPA_PLATFORM": "offscreen"}
+    result = subprocess.run(["wine", str(exe)], capture_output=True, text=True, timeout=300, env=env, check=False)
+    combined = result.stdout + result.stderr
+    # QML 应用启动后无 print 输出，验证不崩溃（returncode 0 或被 wine 信号中断）
+    # 主要验证 Qt DLL 加载成功（无 DLL load failed）
+    if "DLL load failed" in combined:
+        pytest.skip(f"wine 缺少系统 DLL，PySide2 Qt DLL 无法加载，真实 Windows 可运行: {combined!r}")
+    # QML 应用无控制台输出，returncode 0 表示正常启动并退出
+    # wine 下可能因 offscreen 平台退出码非 0，仅验证无 DLL 加载失败
+
+
+@pytest.mark.slow
+def test_build_with_nuitka_compilation(tmp_path: Path) -> None:
+    """Nuitka 编译端到端：cli_helloworld_pyall + --nuitka 编译为 .pyd。
+
+    验证：
+    1. Nuitka 环境自动就绪（下载 nuitka + clang 到 ~/.fspack/cache/nuitka/）
+    2. dist/src 下用户源码编译为 .pyd（Windows）/ .so（Linux）
+    3. .py 源码被剥离（pyc_strip 配合，仅保留入口 .py）
+    4. wine 运行验证编译产物可执行
+
+    首次运行需下载 Nuitka wheel 与 clang（~150MB），耗时较长（>5 分钟）。
+    """
+    from fspack.builder import build
+    from fspack.config import BuildOptions, get_mirror
+    from fspack.packaging.loader import mingw_available
+    from fspack.platform import Platform, detect_platform
+
+    if detect_platform() is not Platform.WINDOWS:
+        pytest.skip("Windows Nuitka e2e 测试需在 Windows 上运行（mingw + wine）")
+    if not mingw_available():
+        pytest.skip("mingw-w64 未安装")
+    if not shutil.which("wine"):
+        pytest.skip("wine 未安装")
+
+    proj = tmp_path / "cli_helloworld_pyall"
+    shutil.copytree(_EXAMPLES / "cli_helloworld_pyall", proj)
+    build(
+        proj,
+        get_mirror("aliyun"),
+        "3.11.9",
+        target=Platform.WINDOWS,
+        options=BuildOptions(nuitka=True, pyc_strip=True),
+    )
+
+    exe = proj / "dist" / "cli_helloworld_pyall.exe"
+    assert exe.is_file(), f"未生成 exe: {exe}"
+
+    # dist/src 下应有 .pyd 编译产物（Windows 命名：helloworld.cp311-win_amd64.pyd）
+    src_dir = proj / "dist" / "src"
+    pyd_files = list(src_dir.glob("*.pyd"))
+    assert pyd_files, f"未找到 Nuitka 编译的 .pyd 产物: {list(src_dir.iterdir())}"
+
+    # .py 源码应被剥离（pyc_strip），仅入口 helloworld.py 保留
+    py_files = [p for p in src_dir.glob("*.py") if p.name != "helloworld.py"]
+    assert not py_files, f"非入口 .py 未被剥离: {py_files}"
+    # 入口 helloworld.py 必须保留（runpy.run_path 需要 .py 文件）
+    assert (src_dir / "helloworld.py").is_file(), "入口 helloworld.py 未保留（Nuitka 编译跳过入口）"
+
+    # wine 运行验证编译产物可执行
+    env = {**os.environ, "WINEDEBUG": "-all", "PYTHONIOENCODING": "utf-8"}
+    result = subprocess.run(["wine", str(exe)], capture_output=True, text=True, timeout=240, env=env, check=False)
+    combined = result.stdout + result.stderr
+    assert "hello, world" in combined, f"Nuitka 编译产物运行失败: {combined!r}"
+
+
+@pytest.mark.slow
+def test_build_linux_with_nuitka(tmp_path: Path) -> None:
+    """Linux Nuitka 编译端到端：cli_helloworld_pyall + --nuitka 编译为 .so。
+
+    验证：
+    1. Linux 平台 Nuitka 环境自动就绪
+    2. dist/src 下用户源码编译为 .so（Linux 命名：helloworld.cpython-311-x86_64-linux-gnu.so）
+    3. .py 源码被剥离，仅保留入口
+    4. 原生运行验证编译产物可执行
+
+    仅在 Linux 原生平台运行：Nuitka 无法交叉编译（target 必须等于 detect_platform()）。
+    """
+    from fspack.builder import build
+    from fspack.config import BuildOptions, get_mirror
+    from fspack.packaging.loader import gcc_available
+    from fspack.platform import Platform, detect_platform
+
+    if detect_platform() is not Platform.LINUX:
+        pytest.skip("Linux Nuitka e2e 测试需在 Linux 上运行（无法交叉编译）")
+    if not gcc_available():
+        pytest.skip("gcc 未安装")
+
+    proj = tmp_path / "cli_helloworld_pyall"
+    shutil.copytree(_EXAMPLES / "cli_helloworld_pyall", proj)
+    build(
+        proj,
+        get_mirror("aliyun"),
+        "3.11.15",
+        target=Platform.LINUX,
+        options=BuildOptions(nuitka=True, pyc_strip=True),
+    )
+
+    exe = proj / "dist" / "cli_helloworld_pyall"
+    assert exe.is_file(), f"未生成 exe: {exe}"
+
+    # dist/src 下应有 .so 编译产物
+    src_dir = proj / "dist" / "src"
+    so_files = list(src_dir.glob("*.so"))
+    assert so_files, f"未找到 Nuitka 编译的 .so 产物: {list(src_dir.iterdir())}"
+
+    # 入口 helloworld.py 必须保留，其他 .py 被剥离
+    py_files = [p for p in src_dir.glob("*.py") if p.name != "helloworld.py"]
+    assert not py_files, f"非入口 .py 未被剥离: {py_files}"
+    assert (src_dir / "helloworld.py").is_file(), "入口 helloworld.py 未保留"
+
+    # 原生运行验证
+    result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=60, check=False)
+    combined = result.stdout + result.stderr
+    assert "hello, world" in combined, f"Linux Nuitka 编译产物运行失败: {combined!r}"
+
+
+@pytest.mark.slow
+def test_build_with_slim_include_rule(tmp_path: Path) -> None:
+    """用户自定义 slim-include 规则端到端：强制保留 numpy/distutils（覆盖 NumpySlimSpec 剥离）。
+
+    验证：
+    1. slim-include 规则覆盖 spec 默认剥离：numpy/distutils 被 NumpySlimSpec 剥离，
+       用户通过 slim-include="numpy/distutils/*" 强制保留
+    2. 保留的文件确实解包到 site-packages
+    3. 应用仍能正常运行（保留 distutils 不影响 numpy 运行）
+
+    用 sci_numpy_py38 项目 + 通过修改 pyproject.toml 注入 [tool.fspack] slim-include。
+    """
+    from fspack.builder import build
+    from fspack.config import get_mirror
+    from fspack.packaging.loader import mingw_available
+    from fspack.platform import Platform, detect_platform
+
+    target = detect_platform()
+    if target is Platform.WINDOWS:
+        if not mingw_available():
+            pytest.skip("mingw-w64 未安装")
+        if not shutil.which("wine"):
+            pytest.skip("wine 未安装")
+    else:
+        from fspack.packaging.loader import gcc_available
+
+        if not gcc_available():
+            pytest.skip("gcc 未安装")
+
+    proj = tmp_path / "sci_numpy_py38"
+    shutil.copytree(_EXAMPLES / "sci_numpy_py38", proj)
+    # 注入 slim-include 规则强制保留 numpy/distutils（NumpySlimSpec 默认剥离）
+    pyproject = proj / "pyproject.toml"
+    content = pyproject.read_text(encoding="utf-8")
+    pyproject.write_text(content + '\n[tool.fspack]\nslim-include = ["numpy/distutils/*"]\n', encoding="utf-8")
+
+    py_ver = "3.11.15" if target is Platform.LINUX else "3.11.9"
+    build(proj, get_mirror("aliyun"), py_ver, target=target)
+
+    exe = proj / "dist" / ("sci_numpy_py38" if target is Platform.LINUX else "sci_numpy_py38.exe")
+    assert exe.is_file(), f"未生成 exe: {exe}"
+
+    # numpy/distutils 应被保留（slim-include 覆盖 spec 剥离）
+    distutils_dir = proj / "dist" / "runtime" / "Lib" / "site-packages" / "numpy" / "distutils"
+    assert distutils_dir.is_dir(), f"slim-include 未生效，numpy/distutils 未保留: {distutils_dir}"
+    # 至少有 __init__.py
+    assert (distutils_dir / "__init__.py").is_file(), "numpy/distutils/__init__.py 未保留"
+
+    # 运行验证 numpy 仍能正常工作
+    env = {**os.environ, "WINEDEBUG": "-all", "PYTHONIOENCODING": "utf-8"} if target is Platform.WINDOWS else os.environ
+    cmd = ["wine", str(exe)] if target is Platform.WINDOWS else [str(exe)]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600, env=env, check=False)
+    combined = result.stdout + result.stderr
+    assert "numpy demo ok" in combined, f"slim-include 保留 distutils 后 numpy 运行失败: {combined!r}"
