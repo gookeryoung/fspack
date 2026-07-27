@@ -1,0 +1,385 @@
+"""精简规则抽象基类与注册表：``SlimSpec`` 及其辅助结构。
+
+从 :mod:`fspack.slim.base` 拆分而来，封装精简规则的抽象定义与按包名分发机制。
+每个 ``SlimSpec`` 子类描述一组包（如 Qt 库、普通库）的精简规则——子模块归一化、
+依赖闭包扩展、wheel 条目分类。
+
+新增包精简规则时只需：
+
+1. 继承 ``SlimSpec``，实现 ``match``/``classify_entry``；
+   ``normalize_submodule``/``expand_closure`` 有默认实现（原样返回/返回副本），
+   仅需在有归一化或依赖闭包需求时覆盖（如 Qt 库）
+2. 用 ``register_spec`` 注册（``DefaultSlimSpec`` 兜底，必须最后注册）
+
+无需修改 :func:`fspack.slim.unpack.slim_unpack` 与 :func:`classify_entry` 的分发逻辑。
+"""
+
+from __future__ import annotations
+
+import abc
+import logging
+import re
+from dataclasses import dataclass
+from pathlib import Path
+
+__all__ = [
+    "SlimSpec",
+    "WheelInfo",
+    "classify_entry",
+    "get_spec",
+    "normalize_name",
+    "register_spec",
+]
+
+# 共享 logger 名：保持与原 fspack.slim.base 一致，测试 caplog 按 logger 名过滤
+_logger = logging.getLogger("fspack.slim.base")
+
+# PEP 427 wheel 文件名正则：name-version(-build)?-py-abi-plat.whl
+_WHEEL_RE = re.compile(
+    r"^(?P<name>.+?)-(?P<ver>.+?)(-(?P<build>\d[^-]*?))?-"
+    r"(?P<py>[^-]+)-(?P<abi>[^-]+)-(?P<plat>[^-]+)\.whl$",
+    re.IGNORECASE,
+)
+
+
+@dataclass(frozen=True)
+class WheelInfo:
+    """解析后的 wheel 元信息."""
+
+    name: str
+    version: str
+    python_tags: tuple[str, ...]
+    abi_tag: str
+    platform_tags: tuple[str, ...]
+
+    @classmethod
+    def from_filename(cls, filename: str) -> WheelInfo | None:
+        """从 wheel 文件名构造实例，无法解析返回 None."""
+        m = _WHEEL_RE.match(filename)
+        if m is None:
+            return None
+        return cls(
+            name=m.group("name"),
+            version=m.group("ver"),
+            python_tags=tuple(m.group("py").split(".")),
+            abi_tag=m.group("abi"),
+            platform_tags=tuple(m.group("plat").split(".")),
+        )
+
+
+def normalize_name(name: str) -> str:
+    """PEP 503 名称归一化：小写，连续的 ``-_.`` 合并为 ``-``."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+class SlimSpec(abc.ABC):
+    """精简规则基类：定义如何分类 wheel 条目。
+
+    每个具体子类描述一组包（如 Qt 库、普通库）的精简规则。子类必须实现
+    :meth:`match` 声明匹配的包名集合与 :meth:`classify_entry` 实现条目分类逻辑。
+    :meth:`normalize_submodule` 与 :meth:`expand_closure` 有默认实现（原样返回/
+    返回副本），仅需在有归一化或依赖闭包需求时覆盖（如 Qt 库）。
+    """
+
+    # 子模块扩展名：仅这些文件按子模块名选择性保留
+    # 注：.pyi 类型存根文件运行时不需要（仅类型检查工具用），归 STRIP_EXTS 剥离
+    SUBMODULE_EXTS: frozenset[str] = frozenset({".pyd", ".so"})
+
+    # 是否为兜底规则（``match`` 始终 True）。``DefaultSlimSpec`` 覆盖为 True，
+    # 其他 spec 为 False。用于 :func:`fspack.slim.unpack._detect_top_pkg` 回退匹配时
+    # 跳过兜底 spec，避免 ``numpy.libs`` 等辅助目录被误识别为 top_pkg。
+    is_fallback: bool = False
+
+    # 通用剥离文件扩展名：编译时/调试/缓存/类型存根文件，运行时不需要，所有 spec 共享
+    # - .h/.hpp/.hxx/.hh：C/C++ 头文件（编译 C 扩展用）
+    # - .cpp/.cc/.cxx/.c：C/C++ 源码
+    # - .lib/.a：静态库/导入库（链接时用）
+    # - .pdb/.exp/.ilk：Windows 链接/调试中间产物
+    # - .pyc/.pyo：字节码缓存（Python 自动重建）
+    # - .pyi：类型存根文件（mypy/pyrefly 等类型检查工具用，运行时不需要）
+    # - .exe：辅助工具可执行文件（如 designer.exe，运行时不需要）
+    STRIP_EXTS: frozenset[str] = frozenset(
+        {
+            ".h",
+            ".hpp",
+            ".hxx",
+            ".hh",
+            ".cpp",
+            ".cc",
+            ".cxx",
+            ".c",
+            ".lib",
+            ".a",
+            ".pdb",
+            ".exp",
+            ".ilk",
+            ".pyc",
+            ".pyo",
+            ".pyi",
+            ".exe",
+        }
+    )
+
+    # 通用剥离子目录：示例代码、文档、测试代码、基准测试、缓存目录非运行时必需
+    COMMON_EXCLUDE_SUBDIRS: frozenset[str] = frozenset(
+        {
+            "examples",  # 示例代码
+            "docs",  # 文档（多数包用复数）
+            "doc",  # 文档（少数包用单数）
+            "tests",  # 测试代码（多数包用复数）
+            "test",  # 测试代码（少数包用单数）
+            "testing",  # 测试辅助目录
+            "benchmarks",  # 性能基准测试
+            "__pycache__",  # 字节码缓存目录
+        }
+    )
+
+    # 嵌套测试目录：在任意层级（含跨包）剥离。
+    # ``COMMON_EXCLUDE_SUBDIRS`` 仅检查二级目录（``parts[1]``），无法剥离
+    # ``pkg/sub/tests/`` 这类三级嵌套。本属性用于 :meth:`_default_classify`
+    # 自动合并到 ``nested_excludes``，让所有走兜底的库（pandas/scikit-learn 等）
+    # 无需专门 spec 即可剥离嵌套 tests。
+    # 仅含 ``tests``（复数）——``testing``（单数）在 numpy 等库是公共 API，不能嵌套剥离。
+    NESTED_TEST_DIRS: frozenset[str] = frozenset({"tests"})
+
+    # dist-info 中显式剥离的文件名（运行时无用途，仅安装工具/构建工具用）
+    # - RECORD：wheel 文件清单（pip uninstall 与 importlib.metadata.files() 用，
+    #   应用运行时不需要；单文件常占 dist-info 60%+ 体积）
+    # - RECORD.jws/RECORD.p7s：RECORD 的数字签名
+    # - WHEEL：wheel 构建格式信息（仅安装工具用）
+    # - entry_points.txt：console_scripts/gui_scripts 入口点（开发工具命令，
+    #   应用运行时不需要）
+    # - top_level.txt：顶层包名（仅安装工具用）
+    # - INSTALLER：记录安装器名称（无运行时用途）
+    # - REQUESTED：标记手动安装（无运行时用途）
+    # 保留 METADATA/PKG-INFO（importlib.metadata.version/metadata 兜底）、
+    # LICENSE/COPYING/NOTICE（法律合规）与其他未知文件（兜底保留避免误剥离）
+    _DIST_INFO_STRIP_FILES: frozenset[str] = frozenset(
+        {
+            "RECORD",
+            "RECORD.jws",
+            "RECORD.p7s",
+            "WHEEL",
+            "entry_points.txt",
+            "top_level.txt",
+            "INSTALLER",
+            "REQUESTED",
+        }
+    )
+
+    @classmethod
+    @abc.abstractmethod
+    def match(cls, whl_pkg: str) -> bool:
+        """是否匹配此精简规则（按 wheel 归一化包名判断）。
+
+        ``whl_pkg`` 为已归一化的包名（小写，``-``/``_``/``.`` 合并）。
+        兜底规则的 :meth:`match` 应始终返回 ``True``。
+        """
+
+    @classmethod
+    def normalize_submodule(cls, sub: str) -> str:
+        """归一化子模块名（如 Qt 库统一 ``QtCore``/``Qt5Core`` → ``Core``）。
+
+        无归一化需求的库原样返回 ``sub``（默认实现）。Qt 库等需要归一化的
+        子类覆盖此方法。
+        """
+        return sub
+
+    @classmethod
+    def expand_closure(cls, subs: set[str]) -> set[str]:
+        """计算子模块集合的传递依赖闭包。
+
+        返回的集合应包含输入子模块及其所有传递依赖。无依赖映射的子类
+        直接返回输入集合的副本（不就地修改 ``subs``，默认实现）。Qt 库等
+        有显式依赖映射的子类覆盖此方法。
+        """
+        return set(subs)
+
+    @classmethod
+    @abc.abstractmethod
+    def classify_entry(cls, entry: str, top_pkg: str, keep_subs: set[str]) -> tuple[str, str | None]:
+        """分类 wheel 条目归属。
+
+        返回 ``(类别, 子模块名|None)``，类别为 ``"metadata"``/``"exclude"``/
+        ``"shared"``/``"submodule"``：
+
+        - ``metadata``: ``*.dist-info/**`` 元数据，始终保留
+        - ``exclude``: 可安全剥离的非必要文件，始终跳过
+        - ``shared``: 包级共享文件，始终保留
+        - ``submodule``: 子模块专属文件，仅当子模块在 ``keep_subs`` 中时保留
+        """
+
+    # ---- 通用分类辅助（供子类复用）----
+
+    @classmethod
+    def _is_strip_ext(cls, entry: str) -> bool:
+        """检查条目是否为应剥离的编译时/调试/缓存文件扩展名。
+
+        跳过目录条目（以 ``/`` 结尾），仅检查文件扩展名是否在
+        :attr:`STRIP_EXTS` 中。用于在 spec 分类逻辑的早期统一剥离
+        ``.h``/``.cpp``/``.lib``/``.pdb``/``.pyc``/``.exe`` 等非运行时文件。
+        """
+        if entry.endswith("/"):
+            return False
+        filename = entry.rsplit("/", 1)[-1]
+        return Path(filename).suffix.lower() in cls.STRIP_EXTS
+
+    @classmethod
+    def _classify_dist_info(cls, entry: str) -> tuple[str, str | None]:
+        """精简 ``*.dist-info`` 条目：剥离运行时无用的元数据文件。
+
+        - 目录条目（``Xxx.dist-info/``）→ metadata（保留目录自身）
+        - :attr:`_DIST_INFO_STRIP_FILES` 中文件（RECORD/WHEEL/entry_points.txt
+          /top_level.txt/INSTALLER/REQUESTED 等）→ exclude（运行时无用途）
+        - 其他文件（METADATA/PKG-INFO/LICENSE/COPYING/NOTICE 及未知文件）
+          → metadata（保留 importlib.metadata 兜底与法律合规文件，未知文件
+          兜底保留避免误剥离）
+
+        RECORD 单文件常占 dist-info 60%+ 体积（含全 wheel 文件 hash 清单），
+        剥离后保留法律合规与版本查询能力，节省显著空间。
+        """
+        parts = entry.split("/")
+        # dist-info 目录自身条目（如 "PySide2-5.15.2.1.dist-info/"）
+        if len(parts) == 1:
+            return ("metadata", None)
+        if parts[1] in cls._DIST_INFO_STRIP_FILES:
+            return ("exclude", None)
+        return ("metadata", None)
+
+    @classmethod
+    def _classify_top_or_meta(cls, entry: str, top_pkg: str) -> tuple[str, str | None] | None:
+        """通用 metadata、STRIP_EXTS 剥离与跨包 shared 分类。
+
+        返回 ``None`` 表示不属于这三类，需交由具体规则继续分类。``STRIP_EXTS``
+        在此统一处理（含跨包），调用方（如 Qt spec）无需重复实现扩展名剥离。
+        """
+        parts = entry.split("/")
+        if parts[0].endswith(".dist-info"):
+            return cls._classify_dist_info(entry)
+        if cls._is_strip_ext(entry):
+            return ("exclude", None)
+        if parts[0] != top_pkg:
+            return ("shared", None)
+        return None
+
+    @classmethod
+    def _default_classify(  # noqa: PLR0911, PLR0913
+        cls,
+        entry: str,
+        top_pkg: str,
+        keep_subs: set[str],  # noqa: ARG003
+        extra_excludes: frozenset[str] = frozenset(),
+        nested_excludes: frozenset[str] = frozenset(),
+        top_ext_always_shared: bool = False,
+    ) -> tuple[str, str | None]:
+        """默认分类逻辑（供 ``DefaultSlimSpec`` 与简单 spec 复用）。
+
+        - ``*.dist-info/**`` → 经 :meth:`_classify_dist_info` 精简分类
+          （剥离 RECORD/WHEEL/entry_points.txt 等运行时无用文件，
+          保留 METADATA/LICENSE 等）
+        - 编译时/调试/缓存扩展名（:attr:`STRIP_EXTS`）→ exclude
+          （`.h`/`.cpp`/`.lib`/`.pdb`/`.pyc`/`.exe` 等运行时不需要）
+        - 嵌套剥离：``nested_excludes`` 中目录名出现在任意层级（含跨包）
+          → exclude（用于 ``scipy/<sub>/tests/``、``mpl_toolkits/tests/``）
+        - 跨包文件 → shared
+        - ``__init__.*``/``_*`` → shared
+        - 顶层 ``.pyd``/``.so`` → submodule（按原文件名 stem）；
+          ``top_ext_always_shared=True`` 时改归 shared（用于顶层 C 扩展是
+          ``__init__`` 硬依赖的库，如 matplotlib 的 ``ft2font.pyd``）。
+          注：``.pyi`` 已由 :meth:`_is_strip_ext` 在更早阶段统一剥离，
+          不会到达此分支。
+        - 其他文件 → shared
+        - 子目录在 ``COMMON_EXCLUDE_SUBDIRS`` 或 ``extra_excludes`` 中 → exclude
+        - 其他子目录 → shared
+
+        ``extra_excludes`` 用于库专属二级剥离目录（如 numpy 的 f2py/distutils、
+        lxml 的 includes）；``nested_excludes`` 用于任意层级剥离（含跨包，
+        如 scipy 各子模块下的 tests、matplotlib 跨包 mpl_toolkits 下的 tests）；
+        ``top_ext_always_shared`` 用于顶层 C 扩展不可选择性剥离的库（matplotlib
+        的 ``ft2font`` 是 ``__init__._check_versions()`` 硬依赖，剥离即 ImportError）。
+        Qt 等复杂 spec 不用此方法。
+        """
+        parts = entry.split("/")
+        if parts[0].endswith(".dist-info"):
+            return cls._classify_dist_info(entry)
+
+        # 编译时/调试/缓存扩展名剥离（运行时不需要，含跨包/任意层级）
+        if cls._is_strip_ext(entry):
+            return ("exclude", None)
+
+        # 嵌套剥离：任意层级（含跨包）匹配则剥离
+        # 自动合并 cls.NESTED_TEST_DIRS（默认 {"tests"}），让所有走兜底的库
+        # （pandas/scikit-learn 等）无需专门 spec 即可剥离嵌套 tests。
+        # 显式 nested_excludes 用于库专属嵌套目录（扩展默认集合）。
+        all_nested = nested_excludes | cls.NESTED_TEST_DIRS
+        if all_nested:
+            for part in parts[1:]:
+                if part in all_nested:
+                    return ("exclude", None)
+
+        if parts[0] != top_pkg:
+            return ("shared", None)
+
+        # 顶层文件（parts == 2）
+        if len(parts) == 2:
+            filename = parts[1]
+            if filename.startswith("__init__.") or filename.startswith("_"):
+                return ("shared", None)
+            suffix = Path(filename).suffix.lower()
+            # C 扩展文件名格式为 ``<module>.<abi-tag>.pyd``（如 ``etree.cp312-win_amd64.pyd``），
+            # ``Path.stem`` 只去最后一个后缀得到 ``etree.cp312-win_amd64``（含 ABI 标签），
+            # 与 AST 收集的子模块名 ``etree`` 不匹配，导致 .pyd 被误判为未保留而剥离。
+            # 用 ``split(".")[0]`` 取首个 ``.`` 之前的部分作为模块名。
+            stem = filename.split(".")[0]
+            if suffix in cls.SUBMODULE_EXTS:
+                if top_ext_always_shared:
+                    # 顶层 C 扩展是 __init__ 硬依赖，始终保留（如 matplotlib ft2font）
+                    return ("shared", None)
+                # 非归一化，按原文件名归类
+                return ("submodule", stem)
+            return ("shared", None)
+
+        # 子目录（len(parts) >= 3）：通用剥离 + 库专属剥离
+        if parts[1] in cls.COMMON_EXCLUDE_SUBDIRS or parts[1] in extra_excludes:
+            return ("exclude", None)
+        return ("shared", None)
+
+
+# 注册表：按注册顺序匹配，首个命中的 spec 类生效。DefaultSlimSpec 必须最后注册。
+_SPECS: list[type[SlimSpec]] = []
+
+
+def register_spec(spec: type[SlimSpec]) -> type[SlimSpec]:
+    """注册精简规则类。装饰器形式，按注册顺序匹配。
+
+    ``DefaultSlimSpec`` 应最后注册（兜底，``match`` 始终返回 ``True``）。
+    """
+    _SPECS.append(spec)
+    return spec
+
+
+def get_spec(whl_pkg: str) -> type[SlimSpec]:
+    """按归一化包名匹配返回对应的精简规则类。
+
+    遍历注册表，首个 :meth:`SlimSpec.match` 命中的 spec 类返回。无匹配时
+    返回最后注册的 ``DefaultSlimSpec``（兜底）。
+    """
+    for spec in _SPECS:
+        if spec.match(whl_pkg):
+            return spec
+    # 兜底：不应到达（DefaultSlimSpec.match 始终 True），仅做防御
+    return _SPECS[-1]  # pragma: no cover
+
+
+def classify_entry(
+    entry: str,
+    top_pkg: str,
+    keep_subs: set[str] | None = None,
+) -> tuple[str, str | None]:
+    """分类 wheel 条目归属（按 ``top_pkg`` 自动选择精简规则）。
+
+    入口函数：根据归一化包名分发到注册的 ``SlimSpec`` 子类。具体规则见
+    各子类的 :meth:`SlimSpec.classify_entry` 文档。
+    """
+    spec = get_spec(normalize_name(top_pkg))
+    return spec.classify_entry(entry, top_pkg, keep_subs or set())
