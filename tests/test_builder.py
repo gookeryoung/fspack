@@ -4,16 +4,12 @@ from __future__ import annotations
 
 import shutil
 import zipfile
-from io import StringIO
 from pathlib import Path
 from typing import Any
 
 import pytest
-from rich.console import Console
-from rich.table import Table
 
 from fspack.builder import (
-    _build_artifacts_table,
     _dep_cache_load,
     _dep_cache_path,
     _dep_cache_save,
@@ -34,16 +30,9 @@ from fspack.config import BuildOptions, DependencyReport, get_mirror
 from fspack.console import console
 from fspack.exceptions import DependencyError
 from fspack.platform import Platform
-from fspack.progress import BuildTracker, StageRecorder
+from fspack.progress import StageRecorder
 
 _EXAMPLES = Path(__file__).parent.parent / "examples"
-
-
-def _render_table_str(table: Table, width: int = 200) -> str:
-    """用固定宽度 Console 渲染表格为字符串，避免终端宽度导致内容换行."""
-    buf = StringIO()
-    Console(width=width, file=buf, force_terminal=False).print(table)
-    return buf.getvalue()
 
 
 def test_copy_source_excludes_dist(tmp_path: Path) -> None:
@@ -1155,95 +1144,6 @@ def test_dir_size_nested_files(tmp_path: Path) -> None:
     (d / "sub" / "b.bin").write_bytes(b"y" * 200)
     (d / "sub" / "c.bin").write_bytes(b"z" * 300)
     assert _dir_size(d) == 600
-
-
-# ---- _build_artifacts_table 测试 ----
-
-
-def test_build_artifacts_table_outputs_dist_total_and_subdirs(tmp_path: Path) -> None:
-    """构建产物统计表输出 dist 总大小、runtime/src/build/可执行文件大小."""
-    dist = tmp_path / "dist"
-    (dist / "runtime").mkdir(parents=True)
-    (dist / "runtime" / "python.exe").write_bytes(b"x" * 1024)  # 1KB
-    (dist / "src").mkdir(parents=True)
-    (dist / "src" / "app.py").write_bytes(b"y" * 512)  # 0.5KB
-    (dist / "build").mkdir(parents=True)
-    (dist / "build" / "icon.ico").write_bytes(b"z" * 256)  # 0.25KB
-    exe = dist / "app.exe"
-    exe.write_bytes(b"e" * 2048)  # 2KB
-
-    tracker = BuildTracker()
-    out = _render_table_str(_build_artifacts_table(tracker, dist, [exe]))
-    assert "构建产物统计" in out
-    assert "dist 总大小" in out
-    assert "runtime" in out
-    assert "src" in out
-    assert "build" in out
-    assert "可执行文件" in out
-    # 总大小约 3.75KB（1024+512+256+2048=3840 字节）
-    assert "3.8KB" in out
-
-
-def test_build_artifacts_table_shows_saved_bytes(tmp_path: Path) -> None:
-    """tracker 有精简节省字节数时统计表显示"精简节省"行."""
-    dist = tmp_path / "dist"
-    dist.mkdir()
-    (dist / "app.exe").write_bytes(b"x" * 100)
-
-    tracker = BuildTracker()
-    with tracker.stage("解压 wheel(精简)") as st:
-        st.add_saved_bytes(45 * 1024 * 1024)  # 45MB
-
-    out = _render_table_str(_build_artifacts_table(tracker, dist, [dist / "app.exe"]))
-    assert "精简节省" in out
-    assert "45.0MB" in out
-
-
-def test_build_artifacts_table_no_saved_bytes_omits_row(tmp_path: Path) -> None:
-    """无精简节省时不显示"精简节省"行."""
-    dist = tmp_path / "dist"
-    dist.mkdir()
-    (dist / "app.exe").write_bytes(b"x" * 100)
-
-    tracker = BuildTracker()
-    out = _render_table_str(_build_artifacts_table(tracker, dist, [dist / "app.exe"]))
-    assert "精简节省" not in out
-
-
-def test_build_artifacts_table_missing_subdirs_zero(tmp_path: Path) -> None:
-    """dist 下缺少 runtime/src/build 子目录时各大小为 0B，不报错."""
-    dist = tmp_path / "dist"
-    dist.mkdir()
-    exe = dist / "app.exe"
-    exe.write_bytes(b"x" * 100)
-
-    tracker = BuildTracker()
-    out = _render_table_str(_build_artifacts_table(tracker, dist, [exe]))
-    # 缺失子目录显示 0B
-    assert "0B" in out
-
-
-def test_build_artifacts_table_missing_exe_skipped(tmp_path: Path) -> None:
-    """可执行文件路径不存在时跳过，不计入大小."""
-    dist = tmp_path / "dist"
-    dist.mkdir()
-    (dist / "runtime").mkdir()
-
-    tracker = BuildTracker()
-    out = _render_table_str(_build_artifacts_table(tracker, dist, [dist / "nonexistent.exe"]))
-    assert "构建产物统计" in out
-    # 可执行文件大小为 0B
-    assert "0B" in out
-
-
-def test_build_artifacts_table_missing_dist_dir(tmp_path: Path) -> None:
-    """dist 目录不存在时 dist 总大小为 0B，不报错."""
-    dist = tmp_path / "nonexistent"
-
-    tracker = BuildTracker()
-    out = _render_table_str(_build_artifacts_table(tracker, dist, []))
-    assert "构建产物统计" in out
-    assert "0B" in out
 
 
 # ---- _precompile_pyc 测试 ----
