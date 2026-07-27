@@ -8,6 +8,11 @@ windres 的 ``ICON`` 资源类型仅接受 ``.ico`` 文件，本模块负责：
    ``.ico`` 原样返回；其余格式（``.png``/``.bmp``/``.jpg``/``.jpeg``/``.gif``/``.webp``）
    通过 Pillow 转换为 ``.ico``。Pillow 不可用时返回 ``None``，调用方回退到默认 icon。
 
+透明通道支持：转换时统一转 ``RGBA`` 模式保留 8-bit alpha（含 ``P``+``transparency``
+的 GIF / PNG-8 单透明索引、``P``+``trns`` 的多 alpha 值、``La``/``PA`` 等 L+alpha 模式）。
+ICO 多档尺寸全部用 PNG 格式保存（``bitmap_format="png"``，Pillow >= 9.4 支持），
+避免默认 BMP 格式的小尺寸条目将 alpha 退化为 1-bit AND mask 丢失半透明信息。
+
 Pillow 作为 optional 依赖 ``fspack[image]`` 提供，未安装时不影响 ``.ico`` 与默认 icon 流程。
 """
 
@@ -130,7 +135,20 @@ def _convert_image_to_ico(src: Path, dst: Path) -> bool:
     """用 Pillow 将图片转换为 ``.ico``，成功返回 True。
 
     Pillow 不可用或转换抛异常时记录 warning 并返回 False。
-    转换参数：``RGBA`` 模式保留透明通道，尺寸自动适配 ico 多档（16/32/48/64/128/256）。
+
+    透明通道保留策略：
+
+    - ``RGBA`` 模式原样保留 8-bit alpha（含半透明像素）
+    - ``P`` 模式带 ``transparency``（GIF / PNG-8 单透明索引）：``convert("RGBA")``
+      将透明索引像素置为 ``alpha=0``，其余置为 ``alpha=255``
+    - ``P`` 模式带 ``trns`` chunk（PNG-8 多 alpha 值）：Pillow 自动展开为 RGBA
+    - ``La`` / ``PA`` 等 L+alpha / 调色板+alpha 模式：``convert("RGBA")`` 保留 alpha
+    - ``RGB`` / ``L`` / ``1`` / ``CMYK`` 等无 alpha 模式：转 RGBA 填充 ``alpha=255``
+
+    ICO 多档尺寸（16/32/48/64/128/256）全部用 PNG 格式保存
+    （``bitmap_format="png"``，Pillow >= 9.4 支持）。默认 BMP 格式的小尺寸条目
+    仅用 1-bit AND mask 表示透明，会丢失半透明信息；PNG 格式保留完整 8-bit alpha，
+    确保 exe 图标在 Windows 资源管理器 / 任务栏 / Alt+Tab 中正确显示透明背景。
     """
     try:
         from PIL import Image
@@ -144,12 +162,15 @@ def _convert_image_to_ico(src: Path, dst: Path) -> bool:
     img = None
     try:
         img = Image.open(src)
-        # RGBA 保留透明通道；非 RGBA 转 RGBA（如 JPEG 无 alpha）
+        # 统一转 RGBA：保留透明通道（P+transparency / La / PA / RGBA 原样，
+        # RGB / L / 1 / CMYK 等无 alpha 模式填充 alpha=255）
         if img.mode != "RGBA":
             img = img.convert("RGBA")
         # ico 多尺寸：windres 选最匹配档位嵌入 exe
         sizes = [(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
-        img.save(dst, format="ICO", sizes=sizes)
+        # bitmap_format="png" 强制所有尺寸用 PNG 格式保存，保留完整 8-bit alpha；
+        # 默认 BMP 格式的小尺寸条目仅用 1-bit AND mask，会丢失半透明信息
+        img.save(dst, format="ICO", sizes=sizes, bitmap_format="png")
         _logger.info("图片转换 .ico 成功: %s -> %s", src, dst)
         return True
     except (OSError, ValueError) as e:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib.util
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -242,6 +242,155 @@ def test_convert_image_success(tmp_path: Path) -> None:
     dst = tmp_path / "out.ico"
     assert _convert_image_to_ico(src, dst) is True
     assert dst.is_file()
+
+
+@_skip_no_pil
+def test_convert_image_preserves_alpha_channel(tmp_path: Path) -> None:
+    """转换后 ICO 保留完整 8-bit alpha 通道（含半透明像素）.
+
+    验证 ``bitmap_format="png"`` 生效：所有尺寸条目用 PNG 格式保存，
+    避免默认 BMP 格式的小尺寸条目将 alpha 退化为 1-bit AND mask。
+    """
+    import io
+    import struct
+
+    from PIL import Image, ImageDraw
+
+    # 创建带透明背景 + 半透明前景的 RGBA 图片
+    src = tmp_path / "alpha.png"
+    img = Image.new("RGBA", (256, 256), (0, 0, 0, 0))  # 完全透明背景
+    draw = ImageDraw.Draw(img)
+    draw.ellipse((64, 64, 192, 192), fill=(255, 0, 0, 128))  # 半透明红色圆
+    img.save(src, format="PNG")
+
+    dst = tmp_path / "out.ico"
+    assert _convert_image_to_ico(src, dst) is True
+
+    # 解析 ICO 文件结构，验证所有条目都是 PNG 格式（保留完整 alpha）
+    data = dst.read_bytes()
+    _reserved, _type, count = struct.unpack("<HHH", data[0:6])
+    assert count == 6  # 6 档尺寸
+    offset = 6
+    png_256_data = b""
+    for i in range(count):
+        w, h, _pixels, _color = struct.unpack("<BBBB", data[offset : offset + 4])
+        entry_size, offset_val = struct.unpack("<II", data[offset + 8 : offset + 16])
+        width = w if w else 256
+        height = h if h else 256
+        entry_header = data[offset_val : offset_val + 8]
+        # PNG 格式以 \x89PNG 开头；BMP 格式以 BITMAPINFOHEADER（40 00 00 00）开头
+        assert entry_header.startswith(b"\x89PNG"), (
+            f"条目 {i} ({width}x{height}) 应为 PNG 格式以保留 alpha，实际头部: {entry_header[:4].hex()}"
+        )
+        if width == 256 and height == 256:
+            png_256_data = data[offset_val : offset_val + entry_size]
+        offset += 16
+
+    # 读回 256x256 PNG 条目验证 alpha 通道
+    assert png_256_data, "未找到 256x256 条目"
+    rgba = Image.open(io.BytesIO(png_256_data)).convert("RGBA")
+    # 四角应为完全透明（alpha=0）
+    for corner in ((0, 0), (255, 0), (0, 255), (255, 255)):
+        pixel = _rgba_pixel(rgba, corner)
+        assert pixel[3] == 0, f"角 {corner} 应透明 alpha=0，实际: {pixel}"
+    # 中心应为半透明红色（alpha≈128）
+    center = _rgba_pixel(rgba, (128, 128))
+    assert center[0] == 255 and center[3] == 128, f"中心应半透明 (255,0,0,128)，实际: {center}"
+
+
+def _extract_ico_png_entry(data: bytes, target_size: int) -> bytes:
+    """从 ICO 文件二进制数据中提取指定尺寸的 PNG 条目数据.
+
+    辅助函数：解析 ICO 文件结构，遍历条目目录找到目标尺寸的条目，
+    返回其原始 PNG 字节流。用于透明通道测试中读回特定尺寸条目验证 alpha。
+    """
+    import struct
+
+    _reserved, _type, count = struct.unpack("<HHH", data[0:6])
+    offset = 6
+    for _i in range(count):
+        w, h, _pixels, _color = struct.unpack("<BBBB", data[offset : offset + 4])
+        entry_size, offset_val = struct.unpack("<II", data[offset + 8 : offset + 16])
+        width = w if w else 256
+        height = h if h else 256
+        if width == target_size and height == target_size:
+            return data[offset_val : offset_val + entry_size]
+        offset += 16
+    return b""
+
+
+def _rgba_pixel(img: Any, xy: tuple[int, int]) -> tuple[int, int, int, int]:
+    """读取 RGBA 图片指定位置的像素值（4 元组）.
+
+    辅助函数：Pillow ``getpixel`` 的 stub 返回类型为 ``float | None``，
+    但 RGBA 图片实际返回 ``tuple[int, int, int, int]``。用 ``cast`` 收窄类型
+    供测试断言使用（Pillow stub 限制，类型系统无法表达）。
+    """
+    return cast(tuple[int, int, int, int], img.getpixel(xy))
+
+
+@_skip_no_pil
+def test_convert_image_preserves_p_mode_transparency(tmp_path: Path) -> None:
+    """P 模式带 transparency 的 PNG（PNG-8 单透明索引）转换后保留透明.
+
+    模拟 favicon.png 带 8-bit 透明的常见场景：调色板图片通过 transparency 索引
+    标记透明色。``convert("RGBA")`` 应将透明索引像素置为 alpha=0。
+    """
+    import io
+
+    from PIL import Image, ImageDraw
+
+    src = tmp_path / "p_trans.png"
+    # 创建 RGBA 图片后量化为 P 模式带 transparency
+    img_rgba = Image.new("RGBA", (256, 256), (0, 0, 0, 0))  # 透明背景
+    draw = ImageDraw.Draw(img_rgba)
+    draw.ellipse((64, 64, 192, 192), fill=(255, 0, 0, 255))  # 不透明红色圆
+    img_p = img_rgba.quantize(colors=255, method=Image.Quantize.FASTOCTREE)
+    img_p.save(src, format="PNG", transparency=0)
+
+    dst = tmp_path / "out.ico"
+    assert _convert_image_to_ico(src, dst) is True
+
+    # 读回 256x256 条目验证：四角透明，中心不透明红色
+    png_data = _extract_ico_png_entry(dst.read_bytes(), 256)
+    assert png_data, "未找到 256x256 条目"
+    rgba = Image.open(io.BytesIO(png_data)).convert("RGBA")
+    for corner in ((0, 0), (255, 0), (0, 255), (255, 255)):
+        pixel = _rgba_pixel(rgba, corner)
+        assert pixel[3] == 0, f"角 {corner} 应透明 alpha=0，实际: {pixel}"
+    center = _rgba_pixel(rgba, (128, 128))
+    assert center[0] == 255 and center[3] == 255, f"中心应不透明 (255,0,0,255)，实际: {center}"
+
+
+@_skip_no_pil
+def test_convert_image_preserves_gif_transparency(tmp_path: Path) -> None:
+    """GIF 带 transparency 转换后保留透明.
+
+    GIF 是 P 模式带单一 transparency 索引的典型格式，``convert("RGBA")`` 应正确展开。
+    """
+    import io
+
+    from PIL import Image, ImageDraw
+
+    src = tmp_path / "transparent.gif"
+    img = Image.new("P", (256, 256), 0)  # 索引 0 = 透明
+    # 调色板：索引 0=任意（透明），索引 1=红色
+    img.putpalette([0, 0, 0, 255, 0, 0] + [0, 0, 0] * 254)
+    draw = ImageDraw.Draw(img)
+    draw.ellipse((64, 64, 192, 192), fill=1)  # 红色圆
+    img.save(src, format="GIF", transparency=0)
+
+    dst = tmp_path / "out.ico"
+    assert _convert_image_to_ico(src, dst) is True
+
+    png_data = _extract_ico_png_entry(dst.read_bytes(), 256)
+    assert png_data, "未找到 256x256 条目"
+    rgba = Image.open(io.BytesIO(png_data)).convert("RGBA")
+    for corner in ((0, 0), (255, 0), (0, 255), (255, 255)):
+        pixel = _rgba_pixel(rgba, corner)
+        assert pixel[3] == 0, f"角 {corner} 应透明 alpha=0，实际: {pixel}"
+    center = _rgba_pixel(rgba, (128, 128))
+    assert center[0] == 255 and center[3] == 255, f"中心应红色 (255,0,0,255)，实际: {center}"
 
 
 @_skip_no_pil
