@@ -1,19 +1,21 @@
-"""安装包生成 facade：Windows NSIS / Linux tar.gz + .deb / 跨平台 zip 便携包。
+"""安装包生成 facade：Windows NSIS / Linux tar.gz + .deb / macOS .pkg + .dmg / 跨平台 zip 便携包。
 
 本模块为 facade，保留：
 - :class:`Installer` 抽象基类与通用编排流程（``build()`` → 校验 → ``build_package``）
 - 公共辅助：``_run_stage``/``_prepare_dist``/``_check_exe``/``_release_base`` 等
 - 发行包调度：``_resolve_formats``/``build_release``（按 ``--format`` 调度多格式生成）
-- 函数式 API：``build_installer``/``build_linux_installer``（委托子类）
+- 函数式 API：``build_installer``/``build_linux_installer``/``build_mac_installer``（委托子类）
 
 平台专属实现拆分到子模块：
 - :mod:`fspack.packaging.installer_nsis`：NSIS 脚本生成与编译
 - :mod:`fspack.packaging.installer_linux`：tar.gz 便携包与 .deb 安装包
+- :mod:`fspack.packaging.installer_macos`：.pkg 安装包与 .dmg 磁盘镜像
 - :mod:`fspack.packaging.installer_zip`：跨平台 zip 便携包
 
 ``build_release`` 按 ``--format`` 调度生成一种或多种格式产物：
 ``auto``（平台默认）/``zip``（跨平台便携包）/``nsis``（Windows 安装包）/
-``tar.gz``（Linux 便携包）/``deb``（Linux 安装包）/``all``（平台全部）。
+``tar.gz``（Linux 便携包）/``deb``（Linux 安装包）/``pkg``（macOS 安装包）/
+``dmg``（macOS 磁盘镜像）/``all``（平台全部）。
 """
 
 from __future__ import annotations
@@ -34,11 +36,17 @@ from fspack.progress import BuildTracker, spinner
 __all__ = [
     "Installer",
     "LinuxInstaller",
+    "MacInstaller",
     "NsisInstaller",
     "build_deb",
     "build_deb_release",
+    "build_dmg",
+    "build_dmg_release",
     "build_installer",
     "build_linux_installer",
+    "build_mac_installer",
+    "build_pkg",
+    "build_pkg_release",
     "build_release",
     "build_tarball",
     "build_tarball_release",
@@ -51,7 +59,7 @@ _logger = logging.getLogger(__name__)
 
 
 # 发行包格式取值校验
-_VALID_FORMATS = ("auto", "zip", "nsis", "tar.gz", "deb", "all")
+_VALID_FORMATS = ("auto", "zip", "nsis", "tar.gz", "deb", "pkg", "dmg", "all")
 
 _T = TypeVar("_T")
 
@@ -258,20 +266,31 @@ def build_linux_installer(  # noqa: PLR0913
 def _resolve_formats(fmt: str, target: Platform) -> list[str]:
     """将 ``--format`` 取值解析为具体格式列表。
 
-    - ``auto``：平台默认（Windows=nsis，Linux=tar.gz+deb），向后兼容
-    - ``all``：平台全部（Windows=nsis+zip，Linux=tar.gz+deb+zip）
-    - 单一格式：校验平台兼容性（nsis 仅 Windows，tar.gz/deb 仅 Linux，zip 跨平台）
+    - ``auto``：平台默认（Windows=nsis，Linux=tar.gz+deb，macOS=pkg+dmg），向后兼容
+    - ``all``：平台全部（Windows=nsis+zip，Linux=tar.gz+deb+zip，macOS=pkg+dmg+zip）
+    - 单一格式：校验平台兼容性（nsis 仅 Windows，tar.gz/deb 仅 Linux，
+      pkg/dmg 仅 macOS，zip 跨平台）
     """
     if fmt not in _VALID_FORMATS:
         raise InstallerError(f"未知 --format 取值: {fmt}，可选: {', '.join(_VALID_FORMATS)}")
+    # auto / all 按平台查表
+    platform_defaults: dict[Platform, tuple[list[str], list[str]]] = {
+        Platform.WINDOWS: (["nsis"], ["nsis", "zip"]),
+        Platform.MACOS: (["pkg", "dmg"], ["pkg", "dmg", "zip"]),
+        Platform.LINUX: (["tar.gz", "deb"], ["tar.gz", "deb", "zip"]),
+    }
+    defaults, all_formats = platform_defaults[target]
     if fmt == "auto":
-        return ["nsis"] if target is Platform.WINDOWS else ["tar.gz", "deb"]
+        return defaults
     if fmt == "all":
-        return ["nsis", "zip"] if target is Platform.WINDOWS else ["tar.gz", "deb", "zip"]
+        return all_formats
+    # 单一格式：校验平台兼容性
     if fmt == "nsis" and target is not Platform.WINDOWS:
         raise InstallerError("NSIS 安装包仅支持 Windows 目标")
     if fmt in ("tar.gz", "deb") and target is not Platform.LINUX:
         raise InstallerError(f"{fmt} 格式仅支持 Linux 目标")
+    if fmt in ("pkg", "dmg") and target is not Platform.MACOS:
+        raise InstallerError(f"{fmt} 格式仅支持 macOS 目标")
     return [fmt]
 
 
@@ -283,6 +302,7 @@ def build_release(  # noqa: PLR0913
     dist_dir: Path | None = None,
     target: Platform | None = None,
     fmt: str = "auto",
+    codesign: bool = False,
 ) -> list[Path]:
     """按 ``--format`` 调度生成发行包，返回产物路径列表。
 
@@ -291,6 +311,10 @@ def build_release(  # noqa: PLR0913
 
     所有格式共享同一 ``BuildTracker``，最终统一渲染「打包阶段汇总」表（与 ``build()``
     的「构建阶段汇总」对应）。单格式函数（``build_zip`` 等）单独调用时各自渲染汇总表。
+
+    Args:
+        codesign: macOS 产物是否做 ad-hoc 签名（``codesign --sign -``），仅对
+            ``pkg``/``dmg`` 格式生效，其他平台忽略
     """
     resolved_target = target or detect_platform()
     formats = _resolve_formats(fmt, resolved_target)
@@ -329,6 +353,30 @@ def build_release(  # noqa: PLR0913
                     project_dir, mirror, py_version, no_build=skip_build, dist_dir=dist_dir, tracker=tracker
                 )
             )
+        elif f == "pkg":
+            outputs.append(
+                build_pkg_release(
+                    project_dir,
+                    mirror,
+                    py_version,
+                    no_build=skip_build,
+                    dist_dir=dist_dir,
+                    tracker=tracker,
+                    codesign=codesign,
+                )
+            )
+        elif f == "dmg":
+            outputs.append(
+                build_dmg_release(
+                    project_dir,
+                    mirror,
+                    py_version,
+                    no_build=skip_build,
+                    dist_dir=dist_dir,
+                    tracker=tracker,
+                    codesign=codesign,
+                )
+            )
     console.rich.print(tracker.summary())
     return outputs
 
@@ -342,6 +390,14 @@ from fspack.packaging.installer_linux import (  # noqa: E402
     build_deb_release,
     build_tarball,
     build_tarball_release,
+)
+from fspack.packaging.installer_macos import (  # noqa: E402
+    MacInstaller,
+    build_dmg,
+    build_dmg_release,
+    build_mac_installer,
+    build_pkg,
+    build_pkg_release,
 )
 from fspack.packaging.installer_nsis import (  # noqa: E402
     NsisInstaller,

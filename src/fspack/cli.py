@@ -260,10 +260,19 @@ def _add_package_subparser(sub: argparse._SubParsersAction[argparse.ArgumentPars
     p.add_argument(
         "--format",
         default="auto",
-        choices=["auto", "zip", "nsis", "tar.gz", "deb", "all"],
+        choices=["auto", "zip", "nsis", "tar.gz", "deb", "pkg", "dmg", "all"],
         help=(
-            "发行包格式：auto=平台默认（Win=nsis，Linux=tar.gz+deb），"
-            "zip=跨平台便携包，nsis=Windows 安装包，tar.gz/deb=Linux，all=平台全部"
+            "发行包格式：auto=平台默认（Win=nsis，Linux=tar.gz+deb，macOS=pkg+dmg），"
+            "zip=跨平台便携包，nsis=Windows 安装包，tar.gz/deb=Linux，"
+            "pkg/dmg=macOS，all=平台全部"
+        ),
+    )
+    p.add_argument(
+        "--codesign",
+        action="store_true",
+        help=(
+            "macOS 产物做 ad-hoc 签名（codesign --sign -），仅对 pkg/dmg 格式生效。"
+            "ad-hoc 签名仅用于本地执行，真实分发需用 Apple Developer ID 签名；默认关闭"
         ),
     )
     p.add_argument(
@@ -420,6 +429,7 @@ def _run_package(project: Path, ns: argparse.Namespace) -> None:
         no_build=ns.no_build,
         target=_parse_target(ns.target),
         fmt=ns.format,
+        codesign=ns.codesign,
     )
     for out in outputs:
         _logger.info("发行包已生成: %s", out)

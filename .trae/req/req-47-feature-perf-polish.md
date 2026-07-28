@@ -139,26 +139,26 @@ req-46 完成缓存配置 + 离线支持 + init 模板命令（iter-76~85），�
 
 中高风险，扩大测试覆盖与平台支持。
 
-- [ ] **iter-96 CI 三 job 增强**：(1) test job 添加 windows-latest 矩阵，
+- [x] **iter-96 CI 三 job 增强**：(1) test job 添加 windows-latest 矩阵，
   覆盖 Windows 路径/mingw/NSIS 流程；(2) 新增 `slow-e2e` job，每周六
   04:00 UTC cron 定时运行 slow 端到端测试，PR 不触发避免阻塞；(3) 新增
   `benchmark` job，每次 push 到 main 跑 pytest-benchmark，与基线对比退化
   >10% 失败。三 job 独立并行，避免拉长 PR 反馈时间
-- [ ] **iter-97 Linux 平台测试覆盖补强**：审查 tests/ 下所有测试，识别
+- [x] **iter-97 Linux 平台测试覆盖补强**：审查 tests/ 下所有测试，识别
   Windows 专属路径（embed python/`python3X._pth`/mingw 交叉编译/`python.exe`）
   并补充 Linux 对等测试（standalone python/`libpython.so`/gcc 原生编译/
   `python3`）。目标：Linux 平台测试覆盖率从当前 ~40% 提升至 ≥80%
-- [ ] **iter-98 测试 fixture 共享化**：审查 tests/ 下 30 个测试文件，识别
+- [x] **iter-98 测试 fixture 共享化**：审查 tests/ 下 30 个测试文件，识别
   重复的 fixture（tmp_path 包装、mock subprocess、样本项目构造等）提取到
   `tests/conftest.py`。减少测试代码重复，提升新测试编写效率
-- [ ] **iter-99 macOS runtime + loader**：(1) `Platform` 枚举新增 `MACOS`；
+- [x] **iter-99 macOS runtime + loader**：(1) `Platform` 枚举新增 `MACOS`；
   `detect_platform` 识别 Darwin；(2) `StandaloneRuntime` 扩展支持 macOS
   （python-build-standalone 提供 macOS x86_64 + arm64 tarball）；(3) 新增
   `MacLoader`（clang 编译，dlopen libpython3.X.dylib，Mach-O 格式，
-  `@executable_path` 解析 runtime 路径）；(4) `wheel_platform_tags` 新增
+  `_NSGetExecutablePath` 解析可执行路径）；(4) `wheel_platform_tags` 新增
   macOS 标签（macosx_11_0_x86_64 / macosx_11_0_arm64）；(5) 测试：mock
   clang 编译，验证 C 源码生成与缓存键
-- [ ] **iter-100 macOS 安装包与里程碑收尾**：(1) 新增 `MacInstaller`（.pkg
+- [x] **iter-100 macOS 安装包与里程碑收尾**：(1) 新增 `MacInstaller`（.pkg
   通过 pkgbuild + productbuild，.dmg 通过 hdiutil）；(2) `build_release`
   的 `auto` 格式在 macOS 平台默认 .pkg + .dmg；(3) 代码签名基础：`--codesign`
   选项调 codesign 签名 .app 与 .pkg（ad-hoc 签名）；(4) iter-86~100 全量

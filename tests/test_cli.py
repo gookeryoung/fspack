@@ -337,10 +337,12 @@ def test_package_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
         dist_dir: Path | None = None,
         target: object = None,
         fmt: str = "auto",
+        codesign: bool = False,
     ) -> list[Path]:
         called["project"] = project
         called["mirror"] = mirror
         called["no_build"] = no_build
+        called["codesign"] = codesign
         return []
 
     monkeypatch.setattr("fspack.packaging.installer.build_release", fake_build_release)
@@ -349,6 +351,51 @@ def test_package_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     # mirror 经 get_mirror 转为 MirrorConfig，校验 name 字段
     assert called["mirror"].name == "阿里云"
     assert called["no_build"] is True
+    assert called["codesign"] is False
+
+
+def test_package_codesign_flag_passthrough(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`fsp p <project> --codesign` 透传到 build_release(codesign=True)."""
+    called: dict[str, Any] = {}
+
+    def fake_build_release(  # noqa: PLR0913
+        project: Path,
+        mirror: object = None,
+        py_version: str | None = None,
+        no_build: bool = False,
+        dist_dir: Path | None = None,
+        target: object = None,
+        fmt: str = "auto",
+        codesign: bool = False,
+    ) -> list[Path]:
+        called["codesign"] = codesign
+        return []
+
+    monkeypatch.setattr("fspack.packaging.installer.build_release", fake_build_release)
+    cli.main(["p", str(tmp_path), "--codesign"])
+    assert called["codesign"] is True
+
+
+def test_package_format_choices_include_pkg_dmg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`--format` choices 含 pkg/dmg，解析后透传到 build_release."""
+    called: dict[str, Any] = {}
+
+    def fake_build_release(  # noqa: PLR0913
+        project: Path,
+        mirror: object = None,
+        py_version: str | None = None,
+        no_build: bool = False,
+        dist_dir: Path | None = None,
+        target: object = None,
+        fmt: str = "auto",
+        codesign: bool = False,
+    ) -> list[Path]:
+        called["fmt"] = fmt
+        return []
+
+    monkeypatch.setattr("fspack.packaging.installer.build_release", fake_build_release)
+    cli.main(["p", str(tmp_path), "--format", "pkg"])
+    assert called["fmt"] == "pkg"
 
 
 def test_drop_separator() -> None:

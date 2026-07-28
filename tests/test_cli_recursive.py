@@ -99,6 +99,7 @@ def _capture_package_call(*, with_outputs: bool = False) -> tuple[list[Path], An
         dist_dir: Path | None = None,
         target: object = None,
         fmt: str = "auto",
+        codesign: bool = False,
     ) -> list[Path]:
         called_projects.append(project)
         if with_outputs:

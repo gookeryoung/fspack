@@ -245,6 +245,11 @@ def test_resolve_formats_auto_linux() -> None:
     assert _resolve_formats("auto", Platform.LINUX) == ["tar.gz", "deb"]
 
 
+def test_resolve_formats_auto_macos() -> None:
+    """auto + macOS → [pkg, dmg]."""
+    assert _resolve_formats("auto", Platform.MACOS) == ["pkg", "dmg"]
+
+
 def test_resolve_formats_all_windows() -> None:
     """all + Windows → [nsis, zip]."""
     assert _resolve_formats("all", Platform.WINDOWS) == ["nsis", "zip"]
@@ -255,27 +260,53 @@ def test_resolve_formats_all_linux() -> None:
     assert _resolve_formats("all", Platform.LINUX) == ["tar.gz", "deb", "zip"]
 
 
+def test_resolve_formats_all_macos() -> None:
+    """all + macOS → [pkg, dmg, zip]."""
+    assert _resolve_formats("all", Platform.MACOS) == ["pkg", "dmg", "zip"]
+
+
 def test_resolve_formats_zip_cross_platform() -> None:
-    """zip 跨平台，Windows 与 Linux 均可."""
+    """zip 跨平台，Windows / Linux / macOS 均可."""
     assert _resolve_formats("zip", Platform.WINDOWS) == ["zip"]
     assert _resolve_formats("zip", Platform.LINUX) == ["zip"]
+    assert _resolve_formats("zip", Platform.MACOS) == ["zip"]
 
 
 def test_resolve_formats_nsis_only_windows() -> None:
-    """nsis 仅 Windows，Linux 目标报错."""
+    """nsis 仅 Windows，Linux / macOS 目标报错."""
     assert _resolve_formats("nsis", Platform.WINDOWS) == ["nsis"]
     with pytest.raises(InstallerError, match="NSIS 安装包仅支持 Windows"):
         _resolve_formats("nsis", Platform.LINUX)
+    with pytest.raises(InstallerError, match="NSIS 安装包仅支持 Windows"):
+        _resolve_formats("nsis", Platform.MACOS)
 
 
 def test_resolve_formats_linux_only_formats() -> None:
-    """tar.gz / deb 仅 Linux，Windows 目标报错."""
+    """tar.gz / deb 仅 Linux，Windows / macOS 目标报错."""
     assert _resolve_formats("tar.gz", Platform.LINUX) == ["tar.gz"]
     assert _resolve_formats("deb", Platform.LINUX) == ["deb"]
     with pytest.raises(InstallerError, match=r"tar\.gz 格式仅支持 Linux"):
         _resolve_formats("tar.gz", Platform.WINDOWS)
     with pytest.raises(InstallerError, match=r"deb 格式仅支持 Linux"):
         _resolve_formats("deb", Platform.WINDOWS)
+    with pytest.raises(InstallerError, match=r"tar\.gz 格式仅支持 Linux"):
+        _resolve_formats("tar.gz", Platform.MACOS)
+    with pytest.raises(InstallerError, match=r"deb 格式仅支持 Linux"):
+        _resolve_formats("deb", Platform.MACOS)
+
+
+def test_resolve_formats_macos_only_formats() -> None:
+    """pkg / dmg 仅 macOS，Windows / Linux 目标报错."""
+    assert _resolve_formats("pkg", Platform.MACOS) == ["pkg"]
+    assert _resolve_formats("dmg", Platform.MACOS) == ["dmg"]
+    with pytest.raises(InstallerError, match=r"pkg 格式仅支持 macOS"):
+        _resolve_formats("pkg", Platform.WINDOWS)
+    with pytest.raises(InstallerError, match=r"dmg 格式仅支持 macOS"):
+        _resolve_formats("dmg", Platform.WINDOWS)
+    with pytest.raises(InstallerError, match=r"pkg 格式仅支持 macOS"):
+        _resolve_formats("pkg", Platform.LINUX)
+    with pytest.raises(InstallerError, match=r"dmg 格式仅支持 macOS"):
+        _resolve_formats("dmg", Platform.LINUX)
 
 
 def test_resolve_formats_unknown_raises() -> None:
@@ -555,6 +586,78 @@ def test_build_release_platform_mismatch_raises(tmp_path: Path) -> None:
     """fmt=nsis + Linux 目标报错."""
     with pytest.raises(InstallerError, match="NSIS 安装包仅支持 Windows"):
         build_release(tmp_path, get_mirror("huawei"), "3.11.9", target=Platform.LINUX, fmt="nsis")
+
+
+def test_build_release_auto_macos_dispatches_pkg_dmg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """fmt=auto + macOS → 调用 build_pkg_release + build_dmg_release，codesign 透传."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0"\n')
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "app").write_bytes(b"")
+
+    calls: list[tuple[str, bool]] = []
+
+    def fake_build_pkg_release(*args: Any, **kw: Any) -> Path:
+        calls.append(("pkg", kw.get("codesign", False)))
+        out = dist / "release" / "app-1.0-py3.11.9-macos-slim.pkg"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"")
+        return out
+
+    def fake_build_dmg_release(*args: Any, **kw: Any) -> Path:
+        calls.append(("dmg", kw.get("codesign", False)))
+        out = dist / "release" / "app-1.0-py3.11.9-macos-slim.dmg"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"")
+        return out
+
+    monkeypatch.setattr("fspack.packaging.installer.build_pkg_release", fake_build_pkg_release)
+    monkeypatch.setattr("fspack.packaging.installer.build_dmg_release", fake_build_dmg_release)
+
+    outputs = build_release(
+        tmp_path,
+        get_mirror("huawei"),
+        "3.11.9",
+        no_build=True,
+        target=Platform.MACOS,
+        fmt="auto",
+        codesign=True,
+    )
+    assert len(outputs) == 2
+    assert calls == [("pkg", True), ("dmg", True)]
+
+
+def test_build_release_pkg_only_macos(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """fmt=pkg + macOS → 仅调用 build_pkg_release."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0"\n')
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "app").write_bytes(b"")
+
+    calls: list[str] = []
+
+    def fake_build_pkg_release(*args: Any, **kw: Any) -> Path:
+        calls.append("pkg")
+        out = dist / "release" / "app-1.0-py3.11.9-macos-slim.pkg"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"")
+        return out
+
+    monkeypatch.setattr("fspack.packaging.installer.build_pkg_release", fake_build_pkg_release)
+
+    outputs = build_release(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True, target=Platform.MACOS, fmt="pkg")
+    assert calls == ["pkg"]
+    assert len(outputs) == 1
+
+
+def test_build_release_macos_platform_mismatch_raises(tmp_path: Path) -> None:
+    """fmt=pkg + Windows 目标报错（pkg 仅 macOS）."""
+    with pytest.raises(InstallerError, match=r"pkg 格式仅支持 macOS"):
+        build_release(tmp_path, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, fmt="pkg")
+    with pytest.raises(InstallerError, match=r"dmg 格式仅支持 macOS"):
+        build_release(tmp_path, get_mirror("huawei"), "3.11.9", target=Platform.LINUX, fmt="dmg")
 
 
 def test_prepare_dist_passes_build_defaults_to_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
