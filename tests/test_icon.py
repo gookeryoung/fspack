@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib.util
 import logging
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Tuple, cast
 
 import pytest
 
@@ -326,7 +326,7 @@ def _rgba_pixel(img: Any, xy: tuple[int, int]) -> tuple[int, int, int, int]:
     但 RGBA 图片实际返回 ``tuple[int, int, int, int]``。用 ``cast`` 收窄类型
     供测试断言使用（Pillow stub 限制，类型系统无法表达）。
     """
-    return cast(tuple[int, int, int, int], img.getpixel(xy))
+    return cast(Tuple[int, int, int, int], img.getpixel(xy))
 
 
 @_skip_no_pil

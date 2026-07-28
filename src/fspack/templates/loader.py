@@ -32,7 +32,13 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover
+    try:
+        import tomli as tomllib  # type: ignore[import-not-found]
+    except ImportError as e:  # pragma: no cover
+        raise RuntimeError("解析 pyproject.toml 需要 tomli（Python<3.11），请安装 tomli") from e
 
 __all__ = [
     "ProjectTemplate",
