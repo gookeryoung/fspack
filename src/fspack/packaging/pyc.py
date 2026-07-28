@@ -61,12 +61,14 @@ def _inject_win7_compat_dll(runtime_dir: Path) -> None:
 
 
 def _trim_stdlib(runtime_dir: Path, py_version: str, target: Platform, stage: StageRecorder) -> None:
-    """剥离 Linux standalone 标准库中运行时无用的模块目录.
+    """剥离 standalone 标准库中运行时无用的模块目录.
 
     Windows embed 标准库在 python3XX.zip 内（只读、官方已精简），跳过。
+    Linux 与 macOS 用 python-build-standalone，标准库在
+    ``runtime/python/lib/pythonX.Y/`` 下，需剥离 test/ensurepip/idlelib 等。
     重复构建时已剥离的目录不存在则跳过，幂等。
     """
-    if target is not Platform.LINUX:
+    if target is Platform.WINDOWS:
         stage.set_detail("embed zip 已精简，跳过")
         return
     major, minor = py_version.split(".")[:2]

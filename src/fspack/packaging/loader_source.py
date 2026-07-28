@@ -1,9 +1,10 @@
 """C loader 源码模板.
 
-从 :mod:`fspack.packaging.loader` 拆分而来，集中存放 Windows 与 Linux 的
+从 :mod:`fspack.packaging.loader` 拆分而来，集中存放 Windows、Linux 与 macOS 的
 C loader 源码模板。模板用 ``str.format`` 填充平台特定常量（DLL 名、
 libpython 路径），由 :mod:`fspack.packaging.loader_compile` 的
-``WindowsLoader.generate_source``/``LinuxLoader.generate_source`` 调用。
+``WindowsLoader.generate_source``/``LinuxLoader.generate_source``/
+``MacLoader.generate_source`` 调用。
 
 入口脚本路径在运行时从 ``<exe_dir>/<exe_basename>.entry`` 文件读取（多入口模式），
 回退到 ``<exe_dir>/.entry``（单入口模式，向后兼容）。构建时为每个入口写对应
@@ -13,7 +14,7 @@ libpython 路径），由 :mod:`fspack.packaging.loader_compile` 的
 
 from __future__ import annotations
 
-__all__ = ["_LOADER_C_LINUX", "_LOADER_C_WINDOWS"]
+__all__ = ["_LOADER_C_LINUX", "_LOADER_C_MACOS", "_LOADER_C_WINDOWS"]
 
 
 _LOADER_C_WINDOWS = r"""/* fspack 生成的 C loader —— 加载 embed python 并运行用户入口脚本
@@ -124,6 +125,127 @@ int wmain(int argc, wchar_t **argv) {{
     for (int i = 1; i < argc; i++) {{
         new_argv[1 + i] = argv[i];
     }}
+    new_argv[argc + 1] = NULL;
+    return py_main(argc + 1, new_argv);
+}}
+"""
+
+
+_LOADER_C_MACOS = r"""/* fspack 生成的 C loader —— 加载 python-build-standalone (macOS) 并运行用户入口脚本
+   入口脚本路径从 <exe_basename>.entry 文件读取，回退 .entry（单入口兼容）
+   与 Linux 版差异：用 _NSGetExecutablePath 取可执行路径（macOS 无 procfs），
+   libpython 后缀为 .dylib，PATH_MAX 取自 sys/syslimits.h */
+#include <dlfcn.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/syslimits.h>
+#include <mach-o/dyld.h>
+
+#define LIBPYTHON "{libpython}"
+#define PYTHONHOME "runtime/python"
+
+typedef int (*Py_BytesMain_t)(int argc, char **argv);
+
+static void split_exe(const char *exe_path, char *dir, size_t dir_cap, char *base, size_t base_cap) {{
+    char tmp[PATH_MAX];
+    strncpy(tmp, exe_path, sizeof(tmp) - 1);
+    tmp[sizeof(tmp) - 1] = '\0';
+    char *slash = strrchr(tmp, '/');
+    if (slash) {{
+        strncpy(base, slash + 1, base_cap - 1);
+        base[base_cap - 1] = '\0';
+        *slash = '\0';
+        strncpy(dir, tmp, dir_cap - 1);
+        dir[dir_cap - 1] = '\0';
+    }} else {{
+        dir[0] = '\0';
+        strncpy(base, tmp, base_cap - 1);
+        base[base_cap - 1] = '\0';
+    }}
+}}
+
+static int read_entry(const char *exe_path, char *entry_out, size_t cap) {{
+    char dir[PATH_MAX], base[PATH_MAX], path[PATH_MAX];
+    split_exe(exe_path, dir, sizeof(dir), base, sizeof(base));
+
+    /* 多入口模式：<dir>/<base>.entry */
+    snprintf(path, sizeof(path), "%s/%s.entry", dir, base);
+    FILE *f = fopen(path, "r");
+    if (!f) {{
+        /* 单入口模式回退：<dir>/.entry */
+        snprintf(path, sizeof(path), "%s/.entry", dir);
+        f = fopen(path, "r");
+        if (!f) {{
+            fprintf(stderr, "无法读取入口文件: %s/%s.entry 或 %s/.entry\n", dir, base, dir);
+            return 1;
+        }}
+    }}
+    if (!fgets(entry_out, (int)cap, f)) {{
+        fclose(f);
+        fprintf(stderr, "入口文件为空: %s\n", path);
+        return 1;
+    }}
+    fclose(f);
+    size_t n = strlen(entry_out);
+    while (n > 0 && (entry_out[n-1] == '\n' || entry_out[n-1] == '\r')) {{
+        entry_out[--n] = '\0';
+    }}
+    if (n == 0) {{
+        fprintf(stderr, "入口路径无效\n");
+        return 1;
+    }}
+    return 0;
+}}
+
+static int get_exe_path(char *buf, size_t cap) {{
+    /* macOS 用 _NSGetExecutablePath 获取当前可执行文件路径，返回绝对路径 */
+    uint32_t size = (uint32_t)cap;
+    if (_NSGetExecutablePath(buf, &size) != 0) {{
+        fprintf(stderr, "无法获取可执行文件路径（buffer 不足，需 %u 字节）\n", size);
+        return 1;
+    }}
+    return 0;
+}}
+
+int main(int argc, char **argv) {{
+    char exe_path[PATH_MAX], dir[PATH_MAX];
+    if (get_exe_path(exe_path, sizeof(exe_path)) != 0) {{
+        return 1;
+    }}
+    strncpy(dir, exe_path, sizeof(dir) - 1);
+    dir[sizeof(dir) - 1] = '\0';
+    char *slash = strrchr(dir, '/');
+    if (slash) *slash = '\0';
+
+    char lib[PATH_MAX], entry[PATH_MAX], home[PATH_MAX], entry_full[PATH_MAX * 2];
+    snprintf(lib, sizeof(lib), "%s/%s", dir, LIBPYTHON);
+    snprintf(home, sizeof(home), "%s/%s", dir, PYTHONHOME);
+
+    if (read_entry(exe_path, entry, sizeof(entry)) != 0) {{
+        return 1;
+    }}
+    snprintf(entry_full, sizeof(entry_full), "%s/%s", dir, entry);
+
+    setenv("PYTHONHOME", home, 1);
+
+    void *h = dlopen(lib, RTLD_NOW | RTLD_GLOBAL);
+    if (!h) {{
+        fprintf(stderr, "加载 libpython 失败: %s\n%s\n", lib, dlerror());
+        return 1;
+    }}
+    Py_BytesMain_t py_main = (Py_BytesMain_t)dlsym(h, "Py_BytesMain");
+    if (!py_main) {{
+        fprintf(stderr, "未找到 Py_BytesMain 符号\n");
+        return 1;
+    }}
+
+    char **new_argv = (char **)malloc(sizeof(char *) * (argc + 2));
+    if (!new_argv) return 1;
+    new_argv[0] = argv[0];
+    new_argv[1] = entry_full;
+    for (int i = 1; i < argc; i++) new_argv[1 + i] = argv[i];
     new_argv[argc + 1] = NULL;
     return py_main(argc + 1, new_argv);
 }}

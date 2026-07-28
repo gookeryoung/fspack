@@ -111,6 +111,15 @@ def test_build_target_windows_dispatch(tmp_path: Path, monkeypatch: pytest.Monke
     assert called["target"] is Platform.WINDOWS
 
 
+def test_build_target_macos_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`--target macos` 解析为 Platform.MACOS."""
+    _make_minimal_project(tmp_path)
+    called, fake_build = _capture_build()
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    cli.main(["b", str(tmp_path), "--target", "macos"])
+    assert called["target"] is Platform.MACOS
+
+
 def test_build_keep_module_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _make_minimal_project(tmp_path)
     called, fake_build = _capture_build()

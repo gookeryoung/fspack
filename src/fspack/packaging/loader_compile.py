@@ -23,16 +23,19 @@ from pathlib import Path
 from fspack._compat import override
 from fspack.config import AppType
 from fspack.exceptions import LoaderError
-from fspack.packaging.loader_source import _LOADER_C_LINUX, _LOADER_C_WINDOWS
+from fspack.packaging.loader_source import _LOADER_C_LINUX, _LOADER_C_MACOS, _LOADER_C_WINDOWS
 from fspack.platform import Platform
 from fspack.progress import StageRecorder, spinner
 
 __all__ = [
     "LINUX_GCC",
+    "MACOS_CLANG",
     "MINGW_GCC",
     "LinuxLoader",
     "LoaderCompiler",
+    "MacLoader",
     "WindowsLoader",
+    "clang_available",
     "compile_loader",
     "gcc_available",
     "generate_loader_source",
@@ -46,6 +49,7 @@ _logger = logging.getLogger("fspack.packaging.loader")
 MINGW_GCC = "x86_64-w64-mingw32-gcc"
 MINGW_WINDRES = "x86_64-w64-mingw32-windres"
 LINUX_GCC = "gcc"
+MACOS_CLANG = "clang"
 
 _ICON_RC_TEMPLATE = 'id ICON "{icon_path}"\n'
 
@@ -274,6 +278,45 @@ class LinuxLoader(LoaderCompiler):
         return [LINUX_GCC, "-O2", "-o", str(out_exe), str(c_file), "-ldl"]
 
 
+class MacLoader(LoaderCompiler):
+    """macOS C loader 编译器（clang，dlopen libpython3.X.dylib）。
+
+    与 LinuxLoader 结构相似：用 ``dlopen`` 加载 libpython，``setenv PYTHONHOME``
+    指向 ``runtime/python``，调用 ``Py_BytesMain`` 运行入口脚本。差异：
+
+    - 编译器用 ``clang``（macOS 默认，Xcode Command Line Tools 提供）
+    - libpython 后缀为 ``.dylib``（Mach-O 动态库）
+    - 不需 ``-ldl``（dlopen 在 libSystem.B.dylib，clang 默认链接）
+    - C 源码用 ``_NSGetExecutablePath`` 取可执行路径（macOS 无 /proc/self/exe）
+    - 不支持 icon 资源嵌入（Mach-O 无类似 windres 的 COFF 资源机制）
+    """
+
+    platform = Platform.MACOS
+    exe_suffix = ""
+    compiler_name = MACOS_CLANG
+    install_hint = "clang（Xcode Command Line Tools）"
+
+    @classmethod
+    @override
+    def generate_source(cls, py_xy: str) -> str:
+        """生成 macOS loader 源码，dlopen libpython3.X.dylib 并调用 Py_BytesMain。"""
+        dotted = f"{py_xy[6]}.{py_xy[7:]}"
+        libpython = f"runtime/python/lib/libpython{dotted}.dylib"
+        return _LOADER_C_MACOS.format(libpython=libpython)
+
+    @classmethod
+    @override
+    def _build_command(
+        cls,
+        c_file: Path,
+        out_exe: Path,
+        app_type: AppType,  # noqa: ARG003 # 抽象方法签名要求，macOS 不区分 app_type
+        icon_obj: Path | None,  # noqa: ARG003 # 抽象方法签名要求，macOS 不支持 icon 资源
+    ) -> list[str]:
+        """构造 clang 编译命令（dlopen 在 libSystem，无需 -ldl）。"""
+        return [MACOS_CLANG, "-O2", "-o", str(out_exe), str(c_file)]
+
+
 # ---- 函数式 API（委托给类，按 platform dispatch）----
 
 
@@ -284,13 +327,13 @@ def generate_loader_source(
     """生成 C loader 源码。
 
     py_xy: 形如 python311 的版本前缀。
-    platform: 目标平台，决定加载 DLL（Windows）或 .so（Linux）。
+    platform: 目标平台，决定加载 DLL（Windows）/ .so（Linux）/ .dylib（macOS）。
 
     入口脚本路径在运行时从 ``<exe_dir>/<exe_basename>.entry`` 读取（多入口），
     回退 ``<exe_dir>/.entry``（单入口）；构建时由 build 写入对应入口文件。
     loader 源码仅依赖 ``py_xy`` 与平台，可按 ``(py_xy, app_type, platform)`` 缓存复用。
     """
-    cls = LinuxLoader if platform is Platform.LINUX else WindowsLoader
+    cls = _loader_class_for(platform)
     return cls.generate_source(py_xy)
 
 
@@ -307,18 +350,28 @@ def compile_loader(  # noqa: PLR0913
 ) -> Path:
     """编译 loader 源码为可执行文件，返回路径。
 
-    Windows 用 mingw 交叉编译（GUI 加 -mwindows），Linux 用 gcc（链接 libdl）。
+    Windows 用 mingw 交叉编译（GUI 加 -mwindows），Linux 用 gcc（链接 libdl），
+    macOS 用 clang（dlopen 在 libSystem，无需 -ldl）。
 
     ``icon`` 为 Windows 可执行文件图标（.ico），用 windres 编译资源文件
-    链接到 exe。Linux 忽略 icon（ELF 无图标资源概念）。
+    链接到 exe。Linux 与 macOS 忽略 icon（ELF/Mach-O 无图标资源概念）。
 
     缓存命中时直接复制到 ``out_exe`` 并调 ``stage.hit_cache()``；
     未命中时编译并 best-effort 回写缓存供后续复用。缓存键为
     ``sha256(source + app_type + platform + icon_hash)`` 前 16 字符，保证
     同配置命中、改配置失效。``cache_dir`` 默认 ``~/.fspack/cache/loaders/``。
     """
-    cls = LinuxLoader if platform is Platform.LINUX else WindowsLoader
+    cls = _loader_class_for(platform)
     return cls.compile(source, out_exe, app_type, work_dir, icon=icon, cache_dir=cache_dir, stage=stage)
+
+
+def _loader_class_for(platform: Platform) -> type[LoaderCompiler]:
+    """按目标平台返回对应的 loader 编译器子类。"""
+    if platform is Platform.LINUX:
+        return LinuxLoader
+    if platform is Platform.MACOS:
+        return MacLoader
+    return WindowsLoader
 
 
 def mingw_available() -> bool:
@@ -329,6 +382,11 @@ def mingw_available() -> bool:
 def gcc_available() -> bool:
     """检测 gcc 编译器是否可用。"""
     return LinuxLoader.available()
+
+
+def clang_available() -> bool:
+    """检测 clang 编译器是否可用（macOS）。"""
+    return MacLoader.available()
 
 
 # ---- icon 资源处理（Windows 专用）----

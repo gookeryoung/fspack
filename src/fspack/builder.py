@@ -45,8 +45,8 @@ from fspack.packaging.pipeline import (
     _dep_cache_save,  # noqa: F401
     _download_dependencies,  # noqa: F401
     _normalize_pkg_name,  # noqa: F401
-    _prepare_linux_runtime,  # noqa: F401
     _prepare_runtime,  # noqa: F401
+    _prepare_standalone_runtime,  # noqa: F401
     _prepare_windows_runtime,  # noqa: F401
     _resolve_project_icon,  # noqa: F401
     _site_packages_has_deps,  # noqa: F401

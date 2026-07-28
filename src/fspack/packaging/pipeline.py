@@ -53,8 +53,8 @@ from fspack.packaging.pipeline_stages import (
     _dep_cache_save,  # noqa: F401
     _download_dependencies,
     _normalize_pkg_name,  # noqa: F401
-    _prepare_linux_runtime,  # noqa: F401
     _prepare_runtime,
+    _prepare_standalone_runtime,  # noqa: F401
     _prepare_windows_runtime,  # noqa: F401
     _resolve_project_icon,
     _site_packages_has_deps,  # noqa: F401
@@ -99,7 +99,8 @@ def resolve_project_info(project_dir: Path, py_version: str | None, target: Plat
     解析逻辑，确保 ``no_build`` 模式下发行包文件名也使用正确的 Python 版本。
     """
     info = ProjectInfo.from_dir(project_dir, py_version)
-    default_ver = DEFAULT_LINUX_PY_VERSION if target is Platform.LINUX else DEFAULT_PY_VERSION
+    # Linux 与 macOS 均用 python-build-standalone，共享默认版本与版本表
+    default_ver = DEFAULT_LINUX_PY_VERSION if target in (Platform.LINUX, Platform.MACOS) else DEFAULT_PY_VERSION
     resolved = resolve_py_version(project_dir, py_version, info.requires_python, default_ver, target)
     if resolved != info.py_version:
         _logger.info("自动选择 Python 版本: %s", resolved)
@@ -344,7 +345,12 @@ def _print_build_plan(ctx: BuildContext, report: DependencyReport) -> None:
     basic_table.add_row("Python 版本", info.py_version)
     runtime_source = "embed python" if target is Platform.WINDOWS else "python-build-standalone"
     basic_table.add_row("runtime 来源", runtime_source)
-    loader_compiler = "mingw-w64" if target is Platform.WINDOWS else "gcc"
+    if target is Platform.WINDOWS:
+        loader_compiler = "mingw-w64"
+    elif target is Platform.MACOS:
+        loader_compiler = "clang"
+    else:
+        loader_compiler = "gcc"
     basic_table.add_row("loader 编译器", loader_compiler)
     basic_table.add_row("缓存目录", str(ctx.cfg.embed_cache_dir.parent))
     basic_table.add_row("镜像源", f"{ctx.cfg.mirror.name} ({ctx.cfg.mirror.pypi_index})")

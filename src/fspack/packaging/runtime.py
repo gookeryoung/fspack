@@ -68,21 +68,43 @@ def embed_zip_name(version: str) -> str:
     return f"python-{version}-embed-amd64.zip"
 
 
-def standalone_tarball_name(version: str, release_tag: str, *, windows: bool = False) -> str:
+def standalone_tarball_name(
+    version: str,
+    release_tag: str,
+    *,
+    windows: bool = False,
+    macos_arch: str | None = None,
+) -> str:
     """返回 python-build-standalone tarball 文件名.
 
     Args:
         version: Python 完整版本号（如 ``3.10.20``）。
         release_tag: astral-sh release tag（如 ``20260718``）。
         windows: True 返回 Windows (msvc) 平台 tarball，False 返回 Linux (gnu)。
+        macos_arch: 非 None 时返回 macOS tarball，值为 ``"x86_64"`` 或 ``"arm64"``。
+            macOS 与 Linux/Windows 互斥，``macos_arch`` 非 None 时忽略 ``windows``。
     """
-    platform = "x86_64-pc-windows-msvc" if windows else "x86_64-unknown-linux-gnu"
+    if macos_arch is not None:
+        platform = f"{macos_arch}-apple-darwin"
+    elif windows:
+        platform = "x86_64-pc-windows-msvc"
+    else:
+        platform = "x86_64-unknown-linux-gnu"
     return f"cpython-{version}+{release_tag}-{platform}-install_only.tar.gz"
 
 
-def standalone_url(version: str, release_tag: str, *, windows: bool = False) -> str:
+def standalone_url(
+    version: str,
+    release_tag: str,
+    *,
+    windows: bool = False,
+    macos_arch: str | None = None,
+) -> str:
     """返回完整下载 URL。"""
-    return f"{STANDALONE_BASE_URL}/{release_tag}/{standalone_tarball_name(version, release_tag, windows=windows)}"
+    return (
+        f"{STANDALONE_BASE_URL}/{release_tag}/"
+        f"{standalone_tarball_name(version, release_tag, windows=windows, macos_arch=macos_arch)}"
+    )
 
 
 # ---- 基类 ----
@@ -264,7 +286,11 @@ class EmbedRuntime(RuntimeDownloader):
 
 
 class StandaloneRuntime(RuntimeDownloader):
-    """python-build-standalone 下载器（Linux）。"""
+    """python-build-standalone 下载器（Linux 与 macOS）。
+
+    macOS 通过 ``macos_arch`` kwarg 区分 x86_64 与 arm64 架构，tarball 平台段
+    为 ``{arch}-apple-darwin``；Linux 默认 ``x86_64-unknown-linux-gnu``。
+    """
 
     download_timeout = 300
     runtime_label = "python-build-standalone"
@@ -275,7 +301,9 @@ class StandaloneRuntime(RuntimeDownloader):
         """返回 tarball 文件名。"""
         release_tag = kwargs["release_tag"]
         assert isinstance(release_tag, str)
-        return standalone_tarball_name(version, release_tag)
+        macos_arch = kwargs.get("macos_arch")
+        assert isinstance(macos_arch, str) or macos_arch is None
+        return standalone_tarball_name(version, release_tag, macos_arch=macos_arch)
 
     @classmethod
     @override
@@ -283,7 +311,9 @@ class StandaloneRuntime(RuntimeDownloader):
         """返回 GitHub 下载 URL。"""
         release_tag = kwargs["release_tag"]
         assert isinstance(release_tag, str)
-        return standalone_url(version, release_tag)
+        macos_arch = kwargs.get("macos_arch")
+        assert isinstance(macos_arch, str) or macos_arch is None
+        return standalone_url(version, release_tag, macos_arch=macos_arch)
 
     @classmethod
     @override
@@ -359,9 +389,14 @@ def download_standalone(
     cache_dir: Path,
     *,
     stage: StageRecorder | None = None,
+    macos_arch: str | None = None,
 ) -> Path:
-    """下载 python-build-standalone tar.gz 到缓存目录，已存在则复用。"""
-    return StandaloneRuntime.download(version, cache_dir, stage=stage, release_tag=release_tag)
+    """下载 python-build-standalone tar.gz 到缓存目录，已存在则复用。
+
+    Args:
+        macos_arch: macOS 架构（``"x86_64"`` 或 ``"arm64"``），None 表示 Linux。
+    """
+    return StandaloneRuntime.download(version, cache_dir, stage=stage, release_tag=release_tag, macos_arch=macos_arch)
 
 
 def extract_standalone(tar_path: Path, runtime_dir: Path) -> None:
@@ -369,17 +404,21 @@ def extract_standalone(tar_path: Path, runtime_dir: Path) -> None:
     StandaloneRuntime.extract(tar_path, runtime_dir)
 
 
-def ensure_standalone(
+def ensure_standalone(  # noqa: PLR0913
     version: str,
     release_tag: str,
     cache_dir: Path,
     runtime_dir: Path,
     *,
     stage: StageRecorder | None = None,
+    macos_arch: str | None = None,
 ) -> Path:
     """确保 runtime_dir 内有可用 python-build-standalone，返回 runtime_dir。
 
     重复构建时若 runtime/python/bin/python3 已存在则跳过下载与解压。
+
+    Args:
+        macos_arch: macOS 架构（``"x86_64"`` 或 ``"arm64"``），None 表示 Linux。
     """
     python_bin = StandaloneRuntime.marker_path(runtime_dir, version)
     if python_bin.is_file():
@@ -387,7 +426,7 @@ def ensure_standalone(
         if stage is not None:
             stage.hit_cache()
     else:
-        tar_path = download_standalone(version, release_tag, cache_dir, stage=stage)
+        tar_path = download_standalone(version, release_tag, cache_dir, stage=stage, macos_arch=macos_arch)
         extract_standalone(tar_path, runtime_dir)
     return runtime_dir
 

@@ -190,11 +190,49 @@ def test_standalone_tarball_name() -> None:
     )
 
 
+def test_standalone_tarball_name_windows() -> None:
+    """windows=True 返回 msvc 平台 tarball."""
+    assert (
+        standalone_tarball_name("3.13.14", "20260718", windows=True)
+        == "cpython-3.13.14+20260718-x86_64-pc-windows-msvc-install_only.tar.gz"
+    )
+
+
+def test_standalone_tarball_name_macos_x86_64() -> None:
+    """macos_arch='x86_64' 返回 Intel Mac tarball."""
+    assert (
+        standalone_tarball_name("3.13.14", "20260718", macos_arch="x86_64")
+        == "cpython-3.13.14+20260718-x86_64-apple-darwin-install_only.tar.gz"
+    )
+
+
+def test_standalone_tarball_name_macos_arm64() -> None:
+    """macos_arch='arm64' 返回 Apple Silicon tarball."""
+    assert (
+        standalone_tarball_name("3.13.14", "20260718", macos_arch="arm64")
+        == "cpython-3.13.14+20260718-arm64-apple-darwin-install_only.tar.gz"
+    )
+
+
+def test_standalone_tarball_name_macos_ignores_windows_flag() -> None:
+    """macos_arch 非 None 时忽略 windows 标志（macOS 与 Linux/Windows 互斥）."""
+    name_with_windows = standalone_tarball_name("3.13.14", "20260718", windows=True, macos_arch="arm64")
+    name_without_windows = standalone_tarball_name("3.13.14", "20260718", macos_arch="arm64")
+    assert name_with_windows == name_without_windows
+
+
 def test_standalone_url() -> None:
     url = standalone_url("3.13.14", "20260718")
     assert url.startswith(STANDALONE_BASE_URL)
     assert "20260718" in url
     assert "3.13.14" in url
+
+
+def test_standalone_url_macos() -> None:
+    """macOS tarball URL 含 apple-darwin 平台段."""
+    url = standalone_url("3.13.14", "20260718", macos_arch="arm64")
+    assert url.startswith(STANDALONE_BASE_URL)
+    assert "arm64-apple-darwin" in url
 
 
 def test_download_standalone_cache_hit(tmp_path: Path) -> None:

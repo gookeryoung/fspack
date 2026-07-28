@@ -66,8 +66,8 @@ __all__ = [
     "_dep_cache_save",
     "_download_dependencies",
     "_normalize_pkg_name",
-    "_prepare_linux_runtime",
     "_prepare_runtime",
+    "_prepare_standalone_runtime",
     "_prepare_windows_runtime",
     "_resolve_project_icon",
     "_site_packages_has_deps",
@@ -116,33 +116,36 @@ def _prepare_runtime(ctx: BuildContext) -> Path:
     分支：
 
     - Linux：下载 python-build-standalone tar.gz，解压到 ``runtime/python``
+    - macOS：下载 python-build-standalone tar.gz（x86_64 或 arm64），解压到 ``runtime/python``
     - Windows：下载 embed python zip，解压到 ``runtime``
 
     runtime 已就绪（dll/python bin 存在）时跳过下载解压，两 stage 均 ``hit_cache``。
     """
     target = ctx.cfg.target
     if target is Platform.LINUX:
-        site_packages = _prepare_linux_runtime(ctx)
+        site_packages = _prepare_standalone_runtime(ctx)
+    elif target is Platform.MACOS:
+        site_packages = _prepare_standalone_runtime(ctx, macos_arch=_detect_macos_arch())
     else:
         site_packages = _prepare_windows_runtime(ctx)
     site_packages.mkdir(parents=True, exist_ok=True)
 
     # Win7 兼容性：Python 3.9+ 官方不再支持 Win7，注入 api-ms-win-core-path-l1-1-0.dll
     # 使 embed python 3.9+ 在 Win7 SP1 / Server 2008 R2 SP1 上也能运行。
-    # 仅 Windows 目标需要（Linux standalone 不存在此问题）。
+    # 仅 Windows 目标需要（Linux/macOS standalone 不存在此问题）。
     if target is Platform.WINDOWS and _needs_win7_compat_dll(ctx.info.py_version):
         _inject_win7_compat_dll(ctx.runtime_dir)
 
     # MinGW 运行时 DLL：loader.exe 与 Nuitka 编译的 .pyd 动态链接 libgcc_s_seh-1.dll
     # / libwinpthread-1.dll / libstdc++-6.dll。这些 DLL 不随 Windows 分发，需注入到
     # dist/runtime/ 使 Python 加载 .pyd 时能找到（DLL 搜索路径含 runtime/，由
-    # loader.exe 的 SetDllDirectoryW 设置）。仅 Windows 目标需要（Linux 用系统 glibc）。
+    # loader.exe 的 SetDllDirectoryW 设置）。仅 Windows 目标需要（Linux/macOS 用系统 libc）。
     if target is Platform.WINDOWS:
         from fspack.packaging.loader import inject_mingw_runtime_dlls
 
         inject_mingw_runtime_dlls(ctx.runtime_dir)
 
-    # 标准库精简：剥离 Linux standalone 中 test/ensurepip/idlelib 等运行时无用模块。
+    # 标准库精简：剥离 standalone 中的 test/ensurepip/idlelib 等运行时无用模块。
     # Windows embed 标准库在 python3XX.zip 内（官方已精简），阶段内自动跳过。
     if not ctx.opts.no_stdlib_trim:
         with ctx.tracker.stage("精简标准库") as st:
@@ -151,8 +154,20 @@ def _prepare_runtime(ctx: BuildContext) -> Path:
     return site_packages
 
 
-def _prepare_linux_runtime(ctx: BuildContext) -> Path:
-    """下载并解压 python-build-standalone 到 runtime_dir（Linux 目标）."""
+def _detect_macos_arch() -> str:
+    """检测 macOS 目标架构：host 为 macOS 时用本机架构，否则默认 x86_64（CI 常见）."""
+    import platform as _platform
+
+    machine = _platform.machine()
+    return "arm64" if machine == "arm64" else "x86_64"
+
+
+def _prepare_standalone_runtime(ctx: BuildContext, *, macos_arch: str | None = None) -> Path:
+    """下载并解压 python-build-standalone 到 runtime_dir（Linux 与 macOS 目标）.
+
+    Args:
+        macos_arch: macOS 架构（``"x86_64"`` 或 ``"arm64"``），None 表示 Linux。
+    """
     major, minor = ctx.info.py_version.split(".")[:2]
     python_bin = ctx.runtime_dir / "python" / "bin" / f"python{major}.{minor}"
     runtime_ready = python_bin.is_file()
@@ -163,7 +178,13 @@ def _prepare_linux_runtime(ctx: BuildContext) -> Path:
             st.hit_cache()
             st.set_detail("runtime 已就绪")
         else:
-            tar_path = download_standalone(ctx.info.py_version, STANDALONE_RELEASE_TAG, standalone_cache, stage=st)
+            tar_path = download_standalone(
+                ctx.info.py_version,
+                STANDALONE_RELEASE_TAG,
+                standalone_cache,
+                stage=st,
+                macos_arch=macos_arch,
+            )
             st.set_detail("python-build-standalone")
     with ctx.tracker.stage("解压运行时") as st:
         if runtime_ready:

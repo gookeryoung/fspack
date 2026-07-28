@@ -513,6 +513,26 @@ def test_run_doctor_linux(monkeypatch: pytest.MonkeyPatch) -> None:
     assert report.has_warn is True
 
 
+def test_run_doctor_macos(monkeypatch: pytest.MonkeyPatch) -> None:
+    """run_doctor 在 macOS 平台检查 clang，不查 mingw/gcc/wine/NSIS."""
+    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.MACOS)
+
+    monkeypatch.setattr("fspack.cli_doctor._check_pillow", lambda: CheckResult("Pillow", CheckStatus.OK, "10.0"))
+    monkeypatch.setattr("fspack.cli_doctor._check_pip", lambda: CheckResult("pip", CheckStatus.OK, "24.0"))
+    monkeypatch.setattr("fspack.cli_doctor._check_uv", lambda: CheckResult("uv", CheckStatus.OK, "0.4"))
+    monkeypatch.setattr("fspack.cli_doctor._check_clang", lambda: CheckResult("clang", CheckStatus.OK, "15.0"))
+
+    report = run_doctor()
+
+    tool_names = {r.name for r in report.tool_checks}
+    assert "clang" in tool_names
+    assert "mingw-w64" not in tool_names
+    assert "gcc" not in tool_names
+    assert "wine" not in tool_names
+    assert "NSIS" not in tool_names
+    assert "NSIS (交叉打包)" not in tool_names
+
+
 def test_run_doctor_has_error_when_tool_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     """run_doctor 必备工具缺失时 has_error=True."""
     monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)

@@ -18,6 +18,7 @@ from fspack.packaging.loader import (
     _find_windres,
     _icon_hash,
     _loader_cache_key,
+    clang_available,
     compile_loader,
     gcc_available,
     generate_loader_source,
@@ -130,6 +131,138 @@ def test_generate_loader_source_linux() -> None:
 def test_generate_loader_source_linux_310() -> None:
     src = generate_loader_source("python310", Platform.LINUX)
     assert "libpython3.10.so" in src
+
+
+# ---- macOS loader 测试 ----
+
+
+def test_generate_loader_source_macos() -> None:
+    """macOS loader 源码含 libpython3.X.dylib、dlopen、_NSGetExecutablePath."""
+    src = generate_loader_source("python311", Platform.MACOS)
+    assert "runtime/python/lib/libpython3.11.dylib" in src
+    assert "dlopen" in src
+    assert "dlsym" in src
+    assert "Py_BytesMain" in src
+    assert "setenv" in src
+    assert "PYTHONHOME" in src
+    assert ".entry" in src
+    assert "read_entry" in src
+    # macOS 特有：用 _NSGetExecutablePath 取可执行路径（无 /proc/self/exe）
+    assert "_NSGetExecutablePath" in src
+    assert "mach-o/dyld.h" in src
+    # 不应含 Linux 的 /proc/self/exe
+    assert "/proc/self/exe" not in src
+
+
+def test_generate_loader_source_macos_310() -> None:
+    """macOS loader 源码按 py_xy 填充正确的 dylib 版本号."""
+    src = generate_loader_source("python310", Platform.MACOS)
+    assert "libpython3.10.dylib" in src
+
+
+def test_generate_loader_source_macos_no_hardcoded_entry() -> None:
+    """macOS loader 源码不含硬编码入口路径，可跨项目复用."""
+    src1 = generate_loader_source("python311", Platform.MACOS)
+    src2 = generate_loader_source("python311", Platform.MACOS)
+    assert src1 == src2
+    assert "helloworld" not in src1
+    assert "app.py" not in src1
+
+
+def test_compile_loader_macos_uses_clang(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """macOS 平台用 clang 编译，命令含 -O2，不含 -ldl（dlopen 在 libSystem）."""
+    captured: dict[str, list[str]] = {}
+
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
+        captured["cmd"] = cmd
+        _touch_out(cmd)
+        return CompletedStub()
+
+    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
+    out = tmp_path / "app"
+    compile_loader(
+        "int main(){return 0;}", out, AppType.CLI, tmp_path / "w", Platform.MACOS, cache_dir=tmp_path / "cache"
+    )
+    assert out.is_file()
+    assert captured["cmd"][0] == "clang"
+    assert "-O2" in captured["cmd"]
+    assert "-ldl" not in captured["cmd"]
+    assert "-municode" not in captured["cmd"]
+    assert "-mwindows" not in captured["cmd"]
+
+
+def test_compile_loader_macos_clang_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """macOS clang 缺失时抛 LoaderError，提示安装 clang."""
+
+    def fake_run(cmd: list[str], **kw: Any) -> object:
+        raise FileNotFoundError()
+
+    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
+    with pytest.raises(LoaderError, match=r"请安装 clang"):
+        compile_loader("x", tmp_path / "app", AppType.CLI, tmp_path / "w", Platform.MACOS, cache_dir=tmp_path / "cache")
+
+
+def test_compile_loader_macos_ignores_icon(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """macOS 平台忽略 icon 参数（Mach-O 无图标资源概念）。"""
+    captured: dict[str, list[str]] = {}
+
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
+        captured["cmd"] = cmd
+        _touch_out(cmd)
+        return CompletedStub()
+
+    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
+
+    icon = tmp_path / "icon.ico"
+    icon.write_bytes(b"ico")
+    out = tmp_path / "app"
+    compile_loader(
+        "x",
+        out,
+        AppType.CLI,
+        tmp_path / "w",
+        Platform.MACOS,
+        icon=icon,
+        cache_dir=tmp_path / "cache",
+    )
+    assert "icon.o" not in captured["cmd"]
+    assert "icon.ico" not in captured["cmd"]
+
+
+def test_compile_loader_macos_cache_no_suffix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """macOS 平台缓存文件无后缀（与 Linux 一致），缓存命中不创建编译工作目录."""
+    source = "int main(){return 0;}"
+    cache = tmp_path / "cache"
+    key = _loader_cache_key(source, AppType.CLI, Platform.MACOS)
+    cached = cache / key
+    cache.mkdir(parents=True)
+    cached.write_bytes(b"macos-exe")
+
+    def fake_run(cmd: list[str], **kw: Any) -> object:
+        raise AssertionError("缓存命中不应调用编译器")
+
+    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
+    out = tmp_path / "app"
+    work_dir = tmp_path / "build"
+    compile_loader(source, out, AppType.CLI, work_dir, Platform.MACOS, cache_dir=cache)
+    assert out.read_bytes() == b"macos-exe"
+    assert not work_dir.exists()
+
+
+def test_compile_loader_macos_cache_key_differs_from_linux() -> None:
+    """相同源码不同平台产生不同缓存键，macOS 与 Linux 互不命中."""
+    source = "int main(){return 0;}"
+    key_linux = _loader_cache_key(source, AppType.CLI, Platform.LINUX)
+    key_macos = _loader_cache_key(source, AppType.CLI, Platform.MACOS)
+    key_windows = _loader_cache_key(source, AppType.CLI, Platform.WINDOWS)
+    assert key_linux != key_macos
+    assert key_macos != key_windows
+    assert key_linux != key_windows
+
+
+def test_clang_available_returns_bool() -> None:
+    """clang_available 返回 bool（macOS 编译器检测）."""
+    assert isinstance(clang_available(), bool)
 
 
 def test_loader_cache_key_same_for_different_entries() -> None:

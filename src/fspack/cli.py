@@ -84,7 +84,7 @@ def _add_build_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser
     p.add_argument("project", nargs="?", default=".", help="项目目录（默认当前目录）")
     p.add_argument("--mirror", default=None, choices=_mirrors_choices(), help="镜像源")
     p.add_argument("--py-version", default=None, help="embed python 版本，如 3.11.9")
-    p.add_argument("--target", default=None, choices=["windows", "linux"], help="目标平台（默认当前平台）")
+    p.add_argument("--target", default=None, choices=["windows", "linux", "macos"], help="目标平台（默认当前平台）")
     p.add_argument(
         "--keep-module",
         action="append",
@@ -251,7 +251,7 @@ def _add_package_subparser(sub: argparse._SubParsersAction[argparse.ArgumentPars
     p.add_argument("project", nargs="?", default=".", help="项目目录")
     p.add_argument("--mirror", default=None, choices=_mirrors_choices(), help="镜像源")
     p.add_argument("--py-version", default=None, help="embed python 版本，如 3.11.9")
-    p.add_argument("--target", default=None, choices=["windows", "linux"], help="目标平台（默认当前平台）")
+    p.add_argument("--target", default=None, choices=["windows", "linux", "macos"], help="目标平台（默认当前平台）")
     p.add_argument(
         "--no-build",
         action="store_true",
@@ -643,6 +643,8 @@ def _parse_target(value: str | None) -> Platform | None:
 
     if value == "windows":
         return Platform.WINDOWS
+    if value == "macos":
+        return Platform.MACOS
     return Platform.LINUX
 
 

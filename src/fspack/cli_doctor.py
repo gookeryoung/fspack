@@ -134,6 +134,8 @@ def run_doctor() -> DoctorReport:
     if platform is Platform.WINDOWS:
         tool_checks.append(_check_mingw())
         tool_checks.append(_check_nsis())
+    elif platform is Platform.MACOS:
+        tool_checks.append(_check_clang())
     else:
         tool_checks.append(_check_gcc())
         tool_checks.append(_check_wine())
@@ -314,6 +316,15 @@ def _check_gcc() -> CheckResult:
         "gcc",
         ["gcc", "--version"],
         error_suggestion="Linux 打包需要 gcc。安装：sudo apt install gcc 或 sudo yum install gcc",
+    )
+
+
+def _check_clang() -> CheckResult:
+    """检查 clang 编译器（macOS 打包必备，Xcode Command Line Tools 提供）."""
+    return _check_tool_version(
+        "clang",
+        ["clang", "--version"],
+        error_suggestion="macOS 打包需要 clang。安装：xcode-select --install 或从 App Store 安装 Xcode",
     )
 
 

@@ -102,10 +102,11 @@ def known_versions(target: Platform) -> dict[str, str]:
     """按目标平台返回已知 Python 版本映射.
 
     Windows 用 :data:`KNOWN_EMBED_VERSIONS`（python.org embed zip 可用版本），
-    Linux 用 :data:`KNOWN_STANDALONE_VERSIONS`（python-build-standalone release 可用版本）。
-    两侧最新补丁版本可能不同：如 3.11 Windows 最新 embed 为 3.11.9，Linux standalone 为 3.11.15。
+    Linux 与 macOS 用 :data:`KNOWN_STANDALONE_VERSIONS`（python-build-standalone
+    release 可用版本）。两侧最新补丁版本可能不同：如 3.11 Windows 最新 embed
+    为 3.11.9，Linux/macOS standalone 为 3.11.15。
     """
-    if target is Platform.LINUX:
+    if target in (Platform.LINUX, Platform.MACOS):
         return KNOWN_STANDALONE_VERSIONS
     return KNOWN_EMBED_VERSIONS
 
