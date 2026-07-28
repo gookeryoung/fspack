@@ -336,7 +336,7 @@ def test_nuitka_ensure_ccache_offline_skips_download(tmp_path: Path, monkeypatch
     """离线模式下 ccache 无系统级且无缓存 → 跳过下载返回 None（不抛异常）."""
     monkeypatch.setenv("FSPACK_OFFLINE", "1")
     # 模拟无系统 ccache、无本地缓存
-    monkeypatch.setattr("fspack.packaging.nuitka_env.shutil.which", lambda _: None)
+    monkeypatch.setattr("fspack.packaging.nuitka_ccache.shutil.which", lambda _: None)
     stage = StageRecorder("test")
     cache_root = tmp_path / "nuitka"
 

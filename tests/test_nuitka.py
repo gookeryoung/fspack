@@ -2759,7 +2759,7 @@ def test_ensure_ccache_unsupported_platform_returns_none(tmp_path: Path, monkeyp
     from fspack.progress import StageRecorder
 
     # 清空 URL 映射模拟不支持的平台
-    monkeypatch.setattr("fspack.packaging.nuitka_env.CCACHE_URLS", {})
+    monkeypatch.setattr("fspack.packaging.nuitka_ccache.CCACHE_URLS", {})
     monkeypatch.setattr("fspack.packaging.nuitka.shutil.which", lambda name: None)
     st = StageRecorder("Nuitka 编译")
     result = NuitkaCompiler._ensure_ccache(tmp_path, Platform.LINUX, st)
