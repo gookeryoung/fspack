@@ -72,9 +72,12 @@ jobs:
           PYTHONUTF8: "1"
         run: uv run pytest -m "not slow" --cov=fspack --cov-fail-under=95 --cov-report=term-missing
 
-  # ===== 性能基准门禁：仅 push to main 触发，PR 不触发 =====
-  # 运行 pytest-benchmark 基线测试，与上次基线对比，退化 >25% 失败
-  # 基线按平台缓存（.benchmarks/），首次运行无基线不失败，后续运行对比门禁
+  # ===== 性能基准监控：仅 push to main 触发，PR 不触发 =====
+  # 运行 pytest-benchmark 基线测试，保存结果并输出与上次基线的对比表。
+  # 不设退化门禁（--benchmark-compare-fail）：GitHub Actions 共享机器性能
+  # 波动可达 12-29%，跨运行绝对对比不可靠，调阈值是打地鼠游戏。
+  # gate 仅因测试崩溃/import error/fixture 失败而失败，性能退化由人工
+  # 审查 artifact 中的对比表与 JSON 数据发现。
   benchmark:
     name: Benchmark gate
     runs-on: ubuntu-latest
@@ -96,8 +99,7 @@ jobs:
         run: uv sync --frozen --extra test --python 3.11
 
       # 基线缓存：按平台 + Python 版本分组，避免硬件差异导致误报
-      # key 含 v2 后缀：rounds=10→20 + median:25% 门禁调整后基线数据不兼容，
-      # 用 v2 让旧缓存失效，重新建立基线
+      # key 含 v2 后缀：rounds=10→20 调整后基线数据不兼容，用 v2 让旧缓存失效
       - name: Restore benchmark baseline
         uses: actions/cache@v5
         with:
@@ -108,14 +110,11 @@ jobs:
 
       - name: Run benchmark tests
         run: |
-          # 首次运行（缓存未命中）无历史基线，--benchmark-compare 无效，
-          # --benchmark-compare-fail 会报 "requires valid --benchmark-compare"。
-          # 仅当 .benchmarks/ 有历史 JSON 时才启用对比与退化门禁。
-          # 用 median 而非 mean 对比：median 对异常值不敏感，避免 I/O 抖动误报；
-          # 阈值 25% 容忍 GitHub Actions 机器负载波动（cold cache/邻居噪声）。
+          # --benchmark-compare 输出与上次基线的对比表（供人工审查），
+          # 不加 --benchmark-compare-fail：不因性能退化失败，仅因测试崩溃失败。
           COMPARE_OPTS=""
           if find .benchmarks -name '*.json' -type f 2>/dev/null | grep -q .; then
-            COMPARE_OPTS="--benchmark-compare --benchmark-compare-fail=median:25%"
+            COMPARE_OPTS="--benchmark-compare"
           fi
           uv run pytest tests/test_perf_baseline.py -m slow \
             --benchmark-only \
