@@ -19,6 +19,11 @@ fspack 在 dist 根目录为每个入口生成 ``_entry_<name>.py`` 包装器，
 包模式下 wrapper 将 ``pkg_root`` 加入 ``sys.path`` 使首层包可 import。对于
 src-layout 项目（包在 ``src/<pkg>/`` 下，``src/`` 是容器而非包），wrapper
 加入 ``dist/src/src`` 使 ``<pkg>`` 可 import。
+
+顶层模式下 wrapper 将 ``dist/src`` 加入 ``sys.path`` 使顶层绝对导入可用。
+``runpy.run_path`` 对文件路径不自动把脚本目录加入 ``sys.path``（与
+``python script.py`` 不同），需显式注入，否则 ``import module_c`` 等本地
+绝对导入报 ``ModuleNotFoundError``。
 """
 
 from __future__ import annotations
@@ -117,7 +122,13 @@ if _ENTRY_MODULE:
         sys.path.insert(0, _PKG_ROOT)
     runpy.run_module(_ENTRY_MODULE, run_name="__main__", alter_sys=True)
 else:
-    # 顶层模式：直接 run_path（sys.path 已含 src 自身，绝对导入可用）
+    # 顶层模式：加入 src 目录使绝对导入可用。
+    # runpy.run_path 对文件路径不自动把脚本目录加入 sys.path
+    # （_run_module_code 仅修改 sys.argv[0] 与 sys.modules），需显式注入
+    # _SRC_DIR，否则 `import module_c`/`from pkg.mod import f` 等顶层绝对
+    # 导入找不到本地模块（cli_complex_py314 等模板的 ModuleNotFoundError 根因）。
+    if _SRC_DIR not in sys.path:
+        sys.path.insert(0, _SRC_DIR)
     runpy.run_path(os.path.join(_SRC_DIR, _ENTRY_REL), run_name="__main__")
 '''
 

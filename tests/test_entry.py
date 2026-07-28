@@ -169,13 +169,22 @@ def test_dotted_module_name_pkg_after_container_broken(tmp_path: Path) -> None:
 
 
 def test_generate_wrapper_source_top_level_mode() -> None:
-    """顶层模式（module_dotted=None）生成 run_path 分支."""
+    """顶层模式（module_dotted=None）生成 run_path 分支.
+
+    顶层模式须显式将 ``_SRC_DIR`` 加入 ``sys.path``：``runpy.run_path`` 对文件
+    路径不自动把脚本目录加入 ``sys.path``（与 ``python script.py`` 不同），不
+    显式注入会导致 ``import module_c`` 等本地绝对导入 ``ModuleNotFoundError``
+    （cli_complex_py314 模板回归根因）。
+    """
     source = EntryWrapper.generate_wrapper_source("app", None, "app.py")
     assert "fspack 生成的入口包装器（app）" in source
     assert "_ENTRY_MODULE = None" in source
     assert "_ENTRY_REL = 'app.py'" in source
     # 模板里两个 runpy 调用都在，靠 if _ENTRY_MODULE 控制流；此处验证 None 字面量
     assert "runpy.run_path" in source
+    # 顶层模式显式注入 _SRC_DIR 到 sys.path，使本地绝对导入可用
+    assert "if _SRC_DIR not in sys.path:" in source
+    assert "sys.path.insert(0, _SRC_DIR)" in source
 
 
 def test_generate_wrapper_source_package_mode() -> None:

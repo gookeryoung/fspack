@@ -30,6 +30,7 @@ def _build_and_run(  # noqa: PLR0913
     extra_env: dict[str, str] | None = None,
     timeout: int = 240,
     debug: bool = False,
+    py_version: str = "3.11.9",
 ) -> None:
     """构建示例并在 wine 下运行，断言输出含预期字符串。
 
@@ -38,6 +39,7 @@ def _build_and_run(  # noqa: PLR0913
     extra_env: wine 运行时额外环境变量（如 GUI/pygame 的 offscreen 驱动）。
     debug: True 时用 embed python + wrapper 直跑入口（绕过 GUI loader，stdout 可见），
         用于 pygame 等改为 GUI 后无控制台输出的场景。
+    py_version: 目标 Python 版本（默认 3.11.9），用于 embed python 下载与 DLL 名派生。
     """
     from fspack.builder import build
     from fspack.config import get_mirror
@@ -52,11 +54,14 @@ def _build_and_run(  # noqa: PLR0913
     proj = tmp_path / proj_name
     shutil.copytree(_EXAMPLES / proj_name, proj)
 
-    build(proj, get_mirror("aliyun"), "3.11.9", target=Platform.WINDOWS)
+    build(proj, get_mirror("aliyun"), py_version, target=Platform.WINDOWS)
     exe = proj / "dist" / f"{proj_name}.exe"
     assert exe.is_file(), f"未生成 exe: {exe}"
-    assert (proj / "dist" / "runtime" / "python311.dll").is_file(), "未找到 python311.dll"
-    assert (proj / "dist" / "runtime" / "python311._pth").is_file(), "未生成 _pth"
+    # DLL/pth 名按 Python 版本派生：3.11→python311.dll，3.14→python314.dll
+    major, minor = py_version.split(".")[:2]
+    py_tag = f"python{major}{minor}"
+    assert (proj / "dist" / "runtime" / f"{py_tag}.dll").is_file(), f"未找到 {py_tag}.dll"
+    assert (proj / "dist" / "runtime" / f"{py_tag}._pth").is_file(), f"未生成 {py_tag}._pth"
 
     env = {**os.environ, "WINEDEBUG": "-all", "PYTHONIOENCODING": "utf-8"}
     if extra_env:
@@ -379,6 +384,39 @@ def test_build_and_run_linux_clitool(tmp_path: Path) -> None:
 
 
 @pytest.mark.slow
+def test_build_and_run_linux_cli_complex_py314(tmp_path: Path) -> None:
+    """Linux 平台端到端：cli_complex_py314 多包嵌套 + 顶层绝对导入链.
+
+    验证 wrapper 顶层模式显式注入 ``dist/src`` 到 ``sys.path`` 使
+    ``import module_c``/``from modules.module_a import ...`` 等本地绝对导入
+    可用（``runpy.run_path`` 不自动添加脚本目录到 sys.path 的回归根因）。
+    Python 3.14 standalone + gcc 编译 + 原生运行。
+    """
+    from fspack.builder import build
+    from fspack.config import get_mirror
+    from fspack.packaging.loader import gcc_available
+    from fspack.platform import Platform, detect_platform
+
+    if detect_platform() is not Platform.LINUX:
+        pytest.skip("Linux e2e 测试需在 Linux 上运行（交叉编译缺 Linux 头文件）")
+    if not gcc_available():
+        pytest.skip("gcc 未安装")
+
+    proj = tmp_path / "cli_complex_py314"
+    shutil.copytree(_EXAMPLES / "cli_complex_py314", proj)
+    build(proj, get_mirror("aliyun"), "3.14.6", target=Platform.LINUX)
+
+    exe = proj / "dist" / "cli_complex_py314"
+    assert exe.is_file(), f"未生成 exe: {exe}"
+    assert (proj / "dist" / "runtime" / "python" / "lib" / "python3.14" / "site-packages" / "lxml").is_dir()
+    assert (proj / "dist" / "runtime" / "python" / "lib" / "python3.14" / "site-packages" / "ordered_set").is_dir()
+
+    result = subprocess.run([str(exe)], capture_output=True, text=True, timeout=60, check=False)
+    combined = result.stdout + result.stderr
+    assert "hello, world" in combined, f"未在输出中发现 'hello, world': {combined!r}"
+
+
+@pytest.mark.slow
 def test_build_installer_helloworld_slow(tmp_path: Path) -> None:
     """NSIS 端到端：build cli_helloworld_pyall → makensis 编译 → 验证安装包产出。
 
@@ -453,9 +491,14 @@ def test_build_linux_installer_helloworld_slow(tmp_path: Path) -> None:
 
 @pytest.mark.slow
 def test_build_and_run_cli_complex(tmp_path: Path) -> None:
-    """cli_complex 示例：多包嵌套 + lxml/ordered-set 依赖，验证子模块导入链."""
-    _build_and_run("cli_complex", "hello, world", tmp_path, debug=True)
-    proj = tmp_path / "cli_complex"
+    """cli_complex_py314 示例：多包嵌套 + lxml/ordered-set 依赖，验证子模块导入链.
+
+    模板用顶层绝对导入（``import module_c``/``from modules.module_a import ...``），
+    无 ``__init__.py`` 触发顶层模式（``runpy.run_path``），wrapper 显式注入
+    ``dist/src`` 到 ``sys.path`` 使绝对导入可用。Python 3.14 验证新版本兼容。
+    """
+    _build_and_run("cli_complex_py314", "hello, world", tmp_path, debug=True, py_version="3.14.6")
+    proj = tmp_path / "cli_complex_py314"
     assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "lxml").is_dir()
     assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "ordered_set").is_dir()
 
