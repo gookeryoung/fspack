@@ -59,6 +59,7 @@ from fspack.packaging.pipeline_stages import (
     _prepare_windows_runtime,  # noqa: F401
     _resolve_project_icon,
     _site_packages_has_deps,  # noqa: F401
+    _slim_runtime,
     _strip_version_specifier,  # noqa: F401
     default_icon_path,
     fspack_wheel_cache_dir,
@@ -254,6 +255,12 @@ def _execute_build(  # noqa: PLR0913
             copy_source(project_dir, src_dst, extra_excludes=info.exclude_dirs)
 
     _compile_user_sources(ctx, src_dst)
+
+    # 精简 standalone runtime：在 _precompile_pyc 之后（构建期 compileall 已用完 python3.X 二进制），
+    # strip libpython 调试符号 + 删 python3.X 二进制 + 删 include/share + 非 tkinter 项目剥离 Tcl/Tk。
+    # 仅 Linux/macOS 目标生效，Windows embed 已精简且无调试符号，函数内自动跳过。
+    # --no-slim-runtime 关闭此阶段（BuildOptions.no_slim_runtime=True）。
+    _slim_runtime(ctx, has_tkinter)
 
     # icon 优先级：CLI --icon > 项目 [tool.fspack] icon > 自动搜索 favicon.* > 默认 app.ico（仅 Windows）
     # Linux 目标无图标资源概念，统一传 None

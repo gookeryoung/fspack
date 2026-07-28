@@ -19,7 +19,11 @@ from fspack.builder import (
     _precompile_pyc,
     _site_packages_fingerprint,
     _site_packages_has_deps,
+    _slim_runtime,
+    _strip_elf_symbols,
+    _strip_tcl_tk_counted,
     _sync_tree,
+    _trim_standalone_runtime,
     _trim_stdlib,
     build,
     clean_dist,
@@ -30,6 +34,7 @@ from fspack.builder import (
 from fspack.config import BuildOptions, DependencyReport, get_mirror
 from fspack.console import console
 from fspack.exceptions import DependencyError
+from fspack.packaging.pipeline_stages import BuildContext
 from fspack.platform import Platform
 from fspack.progress import StageRecorder
 from fspack.templates.project_template import ProjectTemplate
@@ -2192,3 +2197,380 @@ def test_clean_dist_preserves_nsi(tmp_path: Path) -> None:
 
 def test_clean_dist_no_dist(tmp_path: Path) -> None:
     clean_dist(tmp_path)
+
+
+# --- _trim_standalone_runtime 测试 ---
+
+
+def _make_standalone_runtime(tmp_path: Path, py_version: str = "3.11.9") -> Path:
+    """构造最小 standalone runtime 目录树供 _trim_standalone_runtime 测试."""
+    runtime = tmp_path / "runtime"
+    major, minor = py_version.split(".")[:2]
+    py_tag = f"python{major}.{minor}"
+
+    bin_dir = runtime / "python" / "bin"
+    bin_dir.mkdir(parents=True)
+    py_bin = bin_dir / py_tag
+    py_bin.write_bytes(b"\x7fELF" + b"x" * 1024)
+    (bin_dir / "python3").symlink_to(py_tag)
+    (bin_dir / "python").symlink_to(py_tag)
+    (bin_dir / f"{py_tag}-config").write_text("#!/bin/sh\n")
+    for name in ("2to3", "idle3", "pydoc3", "pip", "pip3"):
+        (bin_dir / name).write_text("#!/bin/sh\n")
+    (bin_dir / "pip3.11").write_text("#!/bin/sh\n")
+
+    lib_dir = runtime / "python" / "lib"
+    lib_dir.mkdir(parents=True)
+    (lib_dir / f"libpython{major}.{minor}.so.1.0").write_bytes(b"\x7fELF" + b"y" * 2048)
+    (lib_dir / f"libpython{major}.{minor}.so").symlink_to(f"libpython{major}.{minor}.so.1.0")
+    (lib_dir / "libtcl9.0.so").write_bytes(b"tcl" + b"t" * 512)
+    (lib_dir / "libtk9.0.so").write_bytes(b"tk" + b"k" * 512)
+    (lib_dir / "tcl9.0").mkdir()
+    (lib_dir / "tcl9.0" / "init.tcl").write_text("# tcl")
+    (lib_dir / "tk9.0").mkdir()
+    (lib_dir / "tk9.0" / "tk.tcl").write_text("# tk")
+    (lib_dir / "itcl4.3.5").mkdir()
+    (lib_dir / "itcl4.3.5" / "itcl.tcl").write_text("# itcl")
+    (lib_dir / "thread3.0.4").mkdir()
+    (lib_dir / "thread3.0.4" / "thread.tcl").write_text("# thread")
+
+    stdlib = lib_dir / py_tag
+    stdlib.mkdir(parents=True)
+    (stdlib / "site-packages").mkdir()
+
+    include_dir = runtime / "python" / "include"
+    include_dir.mkdir(parents=True)
+    (include_dir / "Python.h").write_text("#define Py_Version")
+
+    share_dir = runtime / "python" / "share"
+    share_dir.mkdir(parents=True)
+    (share_dir / "man" / "man1").mkdir(parents=True)
+    (share_dir / "man" / "man1" / f"{py_tag}.1").write_text(".TH python")
+
+    return runtime
+
+
+def test_trim_standalone_runtime_windows_skips(tmp_path: Path) -> None:
+    """Windows 目标跳过精简（embed python 无调试符号）."""
+    runtime = _make_standalone_runtime(tmp_path)
+    st = StageRecorder("精简 runtime")
+    _trim_standalone_runtime(runtime, "3.11.9", Platform.WINDOWS, st, has_tkinter=False)
+
+    assert (runtime / "python" / "bin" / "python3.11").is_file()
+    assert (runtime / "python" / "lib" / "libpython3.11.so.1.0").is_file()
+    record = st._finalize()
+    assert record.bytes_saved == 0
+
+
+def test_trim_standalone_runtime_missing_python_dir_skips(tmp_path: Path) -> None:
+    """standalone runtime 目录不存在时不报错."""
+    runtime = tmp_path / "runtime"
+    st = StageRecorder("精简 runtime")
+    _trim_standalone_runtime(runtime, "3.11.9", Platform.LINUX, st, has_tkinter=False)
+
+    record = st._finalize()
+    assert record.bytes_saved == 0
+
+
+def test_trim_standalone_runtime_strips_libpython(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Linux 目标 strip libpython 调试符号."""
+    runtime = _make_standalone_runtime(tmp_path)
+
+    def fake_run(cmd: list[str], **kw: Any) -> Any:
+        target_path = Path(cmd[-1])
+        if target_path.is_file():
+            original = target_path.read_bytes()
+            target_path.write_bytes(original[:100])
+        return _CompileCompleted()
+
+    monkeypatch.setattr("fspack.packaging.pyc.subprocess.run", fake_run)
+
+    st = StageRecorder("精简 runtime")
+    _trim_standalone_runtime(runtime, "3.11.9", Platform.LINUX, st, has_tkinter=True)
+
+    record = st._finalize()
+    assert record.bytes_saved > 0
+    assert (runtime / "python" / "lib" / "libpython3.11.so").is_symlink()
+
+
+def test_trim_standalone_runtime_deletes_python_binary(tmp_path: Path) -> None:
+    """Linux 目标删除 python3.X 二进制与符号链接."""
+    runtime = _make_standalone_runtime(tmp_path)
+    st = StageRecorder("精简 runtime")
+    _trim_standalone_runtime(runtime, "3.11.9", Platform.LINUX, st, has_tkinter=True, strip_symbols=False)
+
+    bin_dir = runtime / "python" / "bin"
+    assert not (bin_dir / "python3.11").exists()
+    assert not (bin_dir / "python3").exists()
+    assert not (bin_dir / "python").exists()
+    assert not (bin_dir / "python3.11-config").exists()
+
+
+def test_trim_standalone_runtime_deletes_dev_bin_files(tmp_path: Path) -> None:
+    """Linux 目标删除 2to3/idle3/pip3/pydoc3 等开发工具脚本."""
+    runtime = _make_standalone_runtime(tmp_path)
+    st = StageRecorder("精简 runtime")
+    _trim_standalone_runtime(runtime, "3.11.9", Platform.LINUX, st, has_tkinter=True, strip_symbols=False)
+
+    bin_dir = runtime / "python" / "bin"
+    assert not (bin_dir / "2to3").exists()
+    assert not (bin_dir / "idle3").exists()
+    assert not (bin_dir / "pydoc3").exists()
+    assert not (bin_dir / "pip").exists()
+    assert not (bin_dir / "pip3").exists()
+    assert not (bin_dir / "pip3.11").exists()
+
+
+def test_trim_standalone_runtime_deletes_include_share(tmp_path: Path) -> None:
+    """Linux 目标删除 include/ 与 share/ 目录."""
+    runtime = _make_standalone_runtime(tmp_path)
+    st = StageRecorder("精简 runtime")
+    _trim_standalone_runtime(runtime, "3.11.9", Platform.LINUX, st, has_tkinter=True, strip_symbols=False)
+
+    assert not (runtime / "python" / "include").exists()
+    assert not (runtime / "python" / "share").exists()
+
+
+def test_trim_standalone_runtime_strips_tcl_tk_when_no_tkinter(tmp_path: Path) -> None:
+    """非 tkinter 项目剥离 Tcl/Tk 运行时文件."""
+    runtime = _make_standalone_runtime(tmp_path)
+    st = StageRecorder("精简 runtime")
+    _trim_standalone_runtime(runtime, "3.11.9", Platform.LINUX, st, has_tkinter=False, strip_symbols=False)
+
+    lib_dir = runtime / "python" / "lib"
+    assert not (lib_dir / "libtcl9.0.so").exists()
+    assert not (lib_dir / "libtk9.0.so").exists()
+    assert not (lib_dir / "tcl9.0").exists()
+    assert not (lib_dir / "tk9.0").exists()
+    assert not (lib_dir / "itcl4.3.5").exists()
+    assert not (lib_dir / "thread3.0.4").exists()
+
+
+def test_trim_standalone_runtime_keeps_tcl_tk_when_tkinter(tmp_path: Path) -> None:
+    """tkinter 项目保留 Tcl/Tk 运行时."""
+    runtime = _make_standalone_runtime(tmp_path)
+    st = StageRecorder("精简 runtime")
+    _trim_standalone_runtime(runtime, "3.11.9", Platform.LINUX, st, has_tkinter=True, strip_symbols=False)
+
+    lib_dir = runtime / "python" / "lib"
+    assert (lib_dir / "libtcl9.0.so").is_file()
+    assert (lib_dir / "libtk9.0.so").is_file()
+    assert (lib_dir / "tcl9.0").is_dir()
+    assert (lib_dir / "tk9.0").is_dir()
+    assert (lib_dir / "itcl4.3.5").is_dir()
+    assert (lib_dir / "thread3.0.4").is_dir()
+
+
+def test_trim_standalone_runtime_idempotent(tmp_path: Path) -> None:
+    """重复调用幂等：二次调用 bytes_saved 为 0."""
+    runtime = _make_standalone_runtime(tmp_path)
+    st1 = StageRecorder("精简 runtime")
+    _trim_standalone_runtime(runtime, "3.11.9", Platform.LINUX, st1, has_tkinter=False, strip_symbols=False)
+    saved1 = st1._finalize().bytes_saved
+    assert saved1 > 0
+
+    st2 = StageRecorder("精简 runtime")
+    _trim_standalone_runtime(runtime, "3.11.9", Platform.LINUX, st2, has_tkinter=False, strip_symbols=False)
+    saved2 = st2._finalize().bytes_saved
+    assert saved2 == 0
+
+
+# --- _strip_elf_symbols 测试 ---
+
+
+class _StripFailed:
+    """模拟 strip 命令失败（非零退出码）."""
+
+    returncode = 1
+    stdout = ""
+    stderr = "strip: bad file"
+
+
+def test_strip_elf_symbols_strip_missing_silently_skips(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """strip 命令缺失（FileNotFoundError）静默跳过返回 (0, 0)."""
+    lib = tmp_path / "libpython3.11.so.1.0"
+    lib.write_bytes(b"\x7fELF" + b"x" * 100)
+
+    def fake_run(*a: Any, **kw: Any) -> Any:
+        raise FileNotFoundError("strip not found")
+
+    monkeypatch.setattr("fspack.packaging.pyc.subprocess.run", fake_run)
+
+    ok, saved = _strip_elf_symbols(lib, "linux")
+    assert ok == 0
+    assert saved == 0
+    assert lib.read_bytes() == b"\x7fELF" + b"x" * 100
+
+
+def test_strip_elf_symbols_strip_fails_returns_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """strip 命令返回非零退出码时返回 (0, 0) 不抛异常."""
+    lib = tmp_path / "libpython3.11.so.1.0"
+    lib.write_bytes(b"\x7fELF" + b"x" * 100)
+
+    monkeypatch.setattr("fspack.packaging.pyc.subprocess.run", lambda *a, **kw: _StripFailed())
+
+    ok, saved = _strip_elf_symbols(lib, "linux")
+    assert ok == 0
+    assert saved == 0
+
+
+def test_strip_elf_symbols_success_returns_saved_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """strip 成功时返回 (1, saved_bytes)."""
+    lib = tmp_path / "libpython3.11.so.1.0"
+    lib.write_bytes(b"\x7fELF" + b"x" * 200)
+
+    def fake_run(cmd: list[str], **kw: Any) -> Any:
+        target = Path(cmd[-1])
+        target.write_bytes(b"\x7fELF" + b"x" * 46)
+        return _CompileCompleted()
+
+    monkeypatch.setattr("fspack.packaging.pyc.subprocess.run", fake_run)
+
+    ok, saved = _strip_elf_symbols(lib, "linux")
+    assert ok == 1
+    assert saved == 204 - 50
+
+
+def test_strip_elf_symbols_already_stripped_returns_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """已 stripped 文件 strip 后体积未变返回 saved=0."""
+    lib = tmp_path / "libpython3.11.so.1.0"
+    lib.write_bytes(b"\x7fELF" + b"x" * 100)
+
+    monkeypatch.setattr("fspack.packaging.pyc.subprocess.run", lambda *a, **kw: _CompileCompleted())
+
+    ok, saved = _strip_elf_symbols(lib, "linux")
+    assert ok == 1
+    assert saved == 0
+
+
+# --- _strip_tcl_tk_counted 测试 ---
+
+
+def test_strip_tcl_tk_counted_no_lib_dir(tmp_path: Path) -> None:
+    """lib 目录不存在时返回 (0, 0, 0)."""
+    python_dir = tmp_path / "python"
+    python_dir.mkdir()
+    saved, dirs, files = _strip_tcl_tk_counted(python_dir)
+    assert (saved, dirs, files) == (0, 0, 0)
+
+
+def test_strip_tcl_tk_counted_strips_files_and_dirs(tmp_path: Path) -> None:
+    """剥离 Tcl/Tk 共享库、脚本目录、itcl/thread 扩展."""
+    python_dir = tmp_path / "python"
+    lib_dir = python_dir / "lib"
+    lib_dir.mkdir(parents=True)
+
+    (lib_dir / "libtcl9.0.so").write_bytes(b"tcl" * 100)
+    (lib_dir / "libtk9.0.so").write_bytes(b"tk" * 50)
+    (lib_dir / "tcl9.0").mkdir()
+    (lib_dir / "tcl9.0" / "init.tcl").write_bytes(b"x" * 50)
+    (lib_dir / "tk9.0").mkdir()
+    (lib_dir / "tk9.0" / "tk.tcl").write_bytes(b"y" * 30)
+    (lib_dir / "itcl4.3.5").mkdir()
+    (lib_dir / "itcl4.3.5" / "itcl.tcl").write_bytes(b"z" * 20)
+    (lib_dir / "thread3.0.4").mkdir()
+    (lib_dir / "thread3.0.4" / "thread.tcl").write_bytes(b"w" * 10)
+    (lib_dir / "libpython3.11.so.1.0").write_bytes(b"py" * 200)
+    (lib_dir / "libc.so.6").write_bytes(b"c" * 100)
+
+    saved, dirs, files = _strip_tcl_tk_counted(python_dir)
+
+    assert dirs == 4
+    assert files == 2
+    assert saved == 510
+    assert (lib_dir / "libpython3.11.so.1.0").is_file()
+    assert (lib_dir / "libc.so.6").is_file()
+    assert not (lib_dir / "libtcl9.0.so").exists()
+    assert not (lib_dir / "libtk9.0.so").exists()
+    assert not (lib_dir / "tcl9.0").exists()
+    assert not (lib_dir / "tk9.0").exists()
+
+
+def test_strip_tcl_tk_counted_handles_symlinks(tmp_path: Path) -> None:
+    """符号链接被 unlink 不计 saved_bytes."""
+    python_dir = tmp_path / "python"
+    lib_dir = python_dir / "lib"
+    lib_dir.mkdir(parents=True)
+    (lib_dir / "libtcl9.0.so").write_bytes(b"tcl" * 10)
+    (lib_dir / "libtcl9.0.so.1").symlink_to("libtcl9.0.so")
+
+    saved, dirs, files = _strip_tcl_tk_counted(python_dir)
+
+    assert saved == 30
+    assert files == 2
+    assert dirs == 0
+
+
+# --- _slim_runtime 测试 ---
+
+
+def _make_slim_runtime_context(
+    tmp_path: Path,
+    *,
+    target: Platform = Platform.LINUX,
+    no_slim_runtime: bool = False,
+) -> tuple[BuildContext, Path]:
+    """构造最小 BuildContext 用于 _slim_runtime 测试."""
+    from fspack.config import BuildConfig, BuildOptions, ProjectInfo
+    from fspack.progress import BuildTracker
+
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    info = ProjectInfo.from_dir(tmp_path, "3.11.9")
+    cfg = BuildConfig(
+        project_dir=tmp_path,
+        dist_dir=tmp_path / "dist",
+        embed_cache_dir=tmp_path / "cache",
+        mirror=get_mirror("huawei"),
+        target=target,
+    )
+    runtime_dir = tmp_path / "dist" / "runtime"
+    ctx = BuildContext(
+        tracker=BuildTracker(),
+        info=info,
+        cfg=cfg,
+        opts=BuildOptions(no_slim_runtime=no_slim_runtime),
+        runtime_dir=runtime_dir,
+    )
+    return ctx, runtime_dir
+
+
+def test_slim_runtime_no_slim_runtime_skips(tmp_path: Path) -> None:
+    """no_slim_runtime=True 时跳过精简."""
+    ctx, runtime_dir = _make_slim_runtime_context(tmp_path, no_slim_runtime=True)
+    _make_standalone_runtime(runtime_dir.parent)  # runtime_dir = dist/runtime
+
+    _slim_runtime(ctx, has_tkinter=False)
+
+    bin_dir = runtime_dir / "python" / "bin"
+    assert (bin_dir / "python3.11").is_file()
+    assert (bin_dir / "2to3").is_file()
+    assert (runtime_dir / "python" / "include").is_dir()
+    assert (runtime_dir / "python" / "lib" / "libtcl9.0.so").is_file()
+
+
+def test_slim_runtime_linux_calls_trim(tmp_path: Path) -> None:
+    """Linux 目标调用 _trim_standalone_runtime 删文件."""
+    ctx, runtime_dir = _make_slim_runtime_context(tmp_path, target=Platform.LINUX)
+    _make_standalone_runtime(runtime_dir.parent)  # runtime_dir = dist/runtime
+
+    _slim_runtime(ctx, has_tkinter=False)
+
+    bin_dir = runtime_dir / "python" / "bin"
+    assert not (bin_dir / "python3.11").exists()
+    assert not (bin_dir / "2to3").exists()
+    assert not (runtime_dir / "python" / "include").exists()
+    assert not (runtime_dir / "python" / "share").exists()
+    assert not (runtime_dir / "python" / "lib" / "libtcl9.0.so").exists()
+
+
+def test_slim_runtime_windows_skips(tmp_path: Path) -> None:
+    """Windows 目标时 _trim_standalone_runtime 内部跳过."""
+    ctx, runtime_dir = _make_slim_runtime_context(tmp_path, target=Platform.WINDOWS)
+    bin_dir = runtime_dir / "python" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "python3.11").write_text("fake")
+
+    _slim_runtime(ctx, has_tkinter=False)
+
+    assert (bin_dir / "python3.11").is_file()

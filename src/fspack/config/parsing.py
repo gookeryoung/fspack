@@ -65,6 +65,7 @@ _BUILD_DEFAULT_KEYS: dict[str, str] = {
     "no_site": "no_site",
     "no_pyc": "no_pyc",
     "no_stdlib_trim": "no_stdlib_trim",
+    "no_slim_runtime": "no_slim_runtime",
     "ccache": "ccache",
     "no_size_report": "no_size_report",
     "analyze_deps": "analyze_deps",
@@ -233,7 +234,7 @@ def _parse_build_defaults(fspack_cfg: dict[str, Any]) -> BuildDefaults:
     """从 ``[tool.fspack]`` 解析构建默认值.
 
     识别 ``nuitka``/``pyc_strip``/``pyc_optimize``/``no_site``/``no_pyc``/
-    ``no_stdlib_trim``/``ccache``/``no_size_report``/``analyze_deps``/
+    ``no_stdlib_trim``/``no_slim_runtime``/``ccache``/``no_size_report``/``analyze_deps``/
     ``nuitka_packages`` 键，其余键忽略（如 ``icon``/``entries``/``exclude``）。
     类型不匹配时报错，避免静默忽略错误配置。
     """

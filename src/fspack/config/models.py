@@ -145,6 +145,7 @@ class BuildDefaults:
     no_site: bool | None = None
     no_pyc: bool | None = None
     no_stdlib_trim: bool | None = None
+    no_slim_runtime: bool | None = None
     ccache: bool | None = None
     nuitka_packages: tuple[str, ...] = ()
     no_size_report: bool | None = None
@@ -293,6 +294,8 @@ class BuildOptions:
     - ``keep_modules``：显式保留的子模块集合（如 ``{"PySide2.QtGui"}``）
     - ``icon``：exe 图标路径，覆盖项目配置与自动搜索
     - ``no_stdlib_trim``：关闭标准库精简（默认剥离 Linux standalone 无用模块）
+    - ``no_slim_runtime``：关闭 standalone runtime 精简（默认 strip libpython 调试符号 +
+      删 python3.X 二进制 + 删 include/share + 非 tkinter 项目剥离 Tcl/Tk，省 ~100MB）
     - ``no_pyc``：关闭字节码预编译
     - ``pyc_strip``：剥离非 ``__init__.py`` 的 ``.py`` 源码
     - ``pyc_optimize``：字节码优化级别 0/1/2（``compileall -o``）
@@ -304,6 +307,7 @@ class BuildOptions:
     keep_modules: set[str] | None = None
     icon: Path | None = None
     no_stdlib_trim: bool = False
+    no_slim_runtime: bool = False
     no_pyc: bool = False
     pyc_strip: bool = False
     # pyc_optimize 默认 2（与 cli.py --pyc-optimize argparse default 一致，iter-35 决策）
@@ -334,6 +338,7 @@ def build_options_from_defaults(defaults: BuildDefaults) -> BuildOptions:
     return replace(
         base,
         no_stdlib_trim=defaults.no_stdlib_trim if defaults.no_stdlib_trim is not None else base.no_stdlib_trim,
+        no_slim_runtime=defaults.no_slim_runtime if defaults.no_slim_runtime is not None else base.no_slim_runtime,
         no_pyc=defaults.no_pyc if defaults.no_pyc is not None else base.no_pyc,
         pyc_strip=defaults.pyc_strip if defaults.pyc_strip is not None else base.pyc_strip,
         pyc_optimize=defaults.pyc_optimize if defaults.pyc_optimize is not None else base.pyc_optimize,

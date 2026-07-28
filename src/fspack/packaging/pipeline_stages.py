@@ -42,6 +42,7 @@ from fspack.packaging.pyc import (
     _inject_win7_compat_dll,
     _needs_win7_compat_dll,
     _precompile_pyc,
+    _trim_standalone_runtime,
     _trim_stdlib,
 )
 from fspack.packaging.runtime import (
@@ -72,6 +73,7 @@ __all__ = [
     "_prepare_windows_runtime",
     "_resolve_project_icon",
     "_site_packages_has_deps",
+    "_slim_runtime",
     "_strip_version_specifier",
     "default_icon_path",
     "fspack_wheel_cache_dir",
@@ -153,6 +155,38 @@ def _prepare_runtime(ctx: BuildContext) -> Path:
             _trim_stdlib(ctx.runtime_dir, ctx.info.py_version, target, st)
 
     return site_packages
+
+
+def _slim_runtime(ctx: BuildContext, has_tkinter: bool) -> None:
+    """精简 standalone runtime 到运行时最小集（在 ``_compile_user_sources`` 之后调用）.
+
+    剥离运行时无用的开发期文件，仅 Linux/macOS 目标生效（Windows embed 已精简且
+    无调试符号，函数内自动跳过）。包含四类优化：
+
+    - A. strip ``libpython3.X.so.1.0`` 调试符号（省 ~34MB）
+    - B. 删 ``python/bin/python3.X`` 二进制（省 ~53MB，loader 用 dlopen 不需要它）
+    - C. 删 ``python/include/`` 与 ``python/share/``（省 ~9MB）
+    - D. 非 tkinter 项目剥离 Tcl/Tk 运行时（省 ~9MB）
+
+    必须在 :func:`_compile_user_sources` 之后调用：``_precompile_pyc`` 构建期需
+    ``python/bin/python3.X`` 跑 ``compileall``，构建完成后才能删。
+    ``--no-slim-runtime`` 关闭此阶段（``BuildOptions.no_slim_runtime=True``）。
+
+    Args:
+        has_tkinter: 项目是否使用 tkinter（True 保留 Tcl/Tk，False 剥离）
+    """
+    target = ctx.cfg.target
+    if ctx.opts.no_slim_runtime:
+        _logger.info("no_slim_runtime=True，跳过 runtime 精简")
+        return
+    with ctx.tracker.stage("精简 runtime") as st:
+        _trim_standalone_runtime(
+            ctx.runtime_dir,
+            ctx.info.py_version,
+            target,
+            st,
+            has_tkinter=has_tkinter,
+        )
 
 
 def _detect_macos_arch() -> str:

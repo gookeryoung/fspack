@@ -50,6 +50,7 @@ from fspack.packaging.pipeline import (
     _prepare_windows_runtime,  # noqa: F401
     _resolve_project_icon,  # noqa: F401
     _site_packages_has_deps,  # noqa: F401
+    _slim_runtime,  # noqa: F401
     _strip_version_specifier,  # noqa: F401
     build,
     clean_dist,
@@ -65,7 +66,10 @@ from fspack.packaging.pyc import (
     _precompile_pyc,  # noqa: F401
     _pyc_stamp_key,  # noqa: F401
     _pyc_stamp_path,  # noqa: F401
+    _strip_elf_symbols,  # noqa: F401
     _strip_py_sources,  # noqa: F401
+    _strip_tcl_tk_counted,  # noqa: F401
+    _trim_standalone_runtime,  # noqa: F401
     _trim_stdlib,  # noqa: F401
 )
 from fspack.packaging.runtime import (  # noqa: F401

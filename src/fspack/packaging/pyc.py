@@ -27,7 +27,55 @@ _WIN7_COMPAT_DLL_NAME = "api-ms-win-core-path-l1-1-0.dll"
 
 # Linux standalone 标准库精简：剥离运行时无用的模块目录。
 # Windows embed 标准库在 python3XX.zip 内（只读、官方已精简），无需处理。
-_STDLIB_TRIM_DIRS = ("test", "ensurepip", "idlelib", "pydoc_data", "turtledemo", "tkinter/test", "sqlite3/test")
+# 顶层目录：test/ensurepip/idlelib/pydoc_data/turtledemo 是开发/测试/文档工具，运行时不用
+# 嵌套 test/tests：各 stdlib 子模块下的测试目录（Python 3.12+ 移除 distutils/lib2to3 时跳过）
+_STDLIB_TRIM_DIRS = (
+    "test",
+    "ensurepip",
+    "idlelib",
+    "pydoc_data",
+    "turtledemo",
+    "tkinter/test",
+    "sqlite3/test",
+    "ctypes/test",
+    "unittest/test",
+    "distutils/tests",
+    "lib2to3/tests",
+)
+
+# Linux/macOS standalone 运行时精简：剥离构建期需要但运行时无用的文件
+# python3.X 二进制（53MB）：loader 用 dlopen+Py_BytesMain，从不 exec python3.X；
+#   仅 _precompile_pyc 构建期调它跑 compileall，构建完成后可删
+# include/（C 头文件）：运行时不需要，仅编译 C 扩展用
+# share/（terminfo + man）：终端信息与 man 手册，运行时不用
+# *-config 脚本：pkg-config 配置，仅编译时用
+# 2to3/idle3/pip3/pydoc3：开发工具，运行时不用（pip 已在 site-packages 中）
+_STANDALONE_DEV_BIN_FILES = (
+    "2to3",
+    "2to3-3",
+    "idle3",
+    "idle3.9",
+    "idle3.10",
+    "idle3.11",
+    "idle3.12",
+    "idle3.13",
+    "idle3.14",
+    "pydoc3",
+    "pydoc3.9",
+    "pydoc3.10",
+    "pydoc3.11",
+    "pydoc3.12",
+    "pydoc3.13",
+    "pydoc3.14",
+    "pip",
+    "pip3",
+    "pip3.9",
+    "pip3.10",
+    "pip3.11",
+    "pip3.12",
+    "pip3.13",
+    "pip3.14",
+)
 
 
 def _needs_win7_compat_dll(py_version: str) -> bool:
@@ -88,6 +136,218 @@ def _trim_stdlib(runtime_dir: Path, py_version: str, target: Platform, stage: St
     stage.skip(removed)
     stage.add_saved_bytes(saved_bytes)
     stage.set_detail(f"剥离 {removed} 目录")
+
+
+def _trim_standalone_runtime(  # noqa: PLR0912, PLR0913
+    runtime_dir: Path,
+    py_version: str,
+    target: Platform,
+    stage: StageRecorder,
+    *,
+    has_tkinter: bool,
+    strip_symbols: bool = True,
+) -> None:
+    """精简 standalone runtime 到运行时最小集（在 ``_precompile_pyc`` 之后调用）.
+
+    剥离四类运行时无用文件（仅 Linux/macOS 目标，Windows embed 已精简且无调试符号）：
+
+    - **A. strip libpython 调试符号**：``libpython3.X.so.1.0`` 含完整 DWARF 调试
+      符号（53MB），``strip --strip-all`` 后 ~19MB，运行时零影响
+    - **B. 删 ``python/bin/python3.X`` 二进制**：loader 用 ``dlopen``+``Py_BytesMain``
+      从不 ``exec`` 这个二进制；仅构建期 ``_precompile_pyc`` 调它跑 ``compileall``，
+      构建完成后可整个删除（53MB）。同时删 ``python3``/``python`` 符号链接
+    - **C. 删 ``python/include/``、``python/share/``**：C 头文件与 terminfo/man 手册
+      运行时不用（~9MB）
+    - **D. 按 ``has_tkinter`` 剥离 Tcl/Tk**：非 tkinter 项目剥离
+      ``lib/libtcl9*.so``/``lib/libtk9*.so``/``lib/tcl9*``/``lib/tk9*``/``lib/itcl*``/
+      ``lib/thread*``（~9MB）；tkinter 项目保留（``_tkinter.pyd`` 运行时需要 Tcl/Tk）
+
+    同时删除 ``python/bin/`` 下开发工具脚本（2to3/idle3/pip3/pydoc3 与 ``*-config``
+    脚本，运行时不用；``pip`` 已在 ``site-packages`` 中可用）。
+
+    幂等：重复调用时已删除的文件不存在则跳过，``bytes_saved`` 仅累计首次删除大小。
+
+    Args:
+        runtime_dir: ``dist/runtime`` 目录
+        py_version: Python 完整版本号（如 ``3.11.15``）
+        target: 目标平台
+        stage: 进度记录器
+        has_tkinter: 项目是否使用 tkinter（True 保留 Tcl/Tk，False 剥离）
+        strip_symbols: 是否 strip libpython 调试符号（``--no-strip-symbols`` 关闭）
+    """
+    if target is Platform.WINDOWS:
+        stage.set_detail("embed python 无调试符号，跳过")
+        return
+
+    python_dir = runtime_dir / "python"
+    if not python_dir.is_dir():
+        stage.set_detail("standalone runtime 不存在，跳过")
+        return
+
+    major, minor = py_version.split(".")[:2]
+    saved_bytes = 0
+    removed_files = 0
+    removed_dirs = 0
+    stripped_libs = 0
+
+    # A. strip libpython 调试符号
+    if strip_symbols:
+        lib_dir = python_dir / "lib"
+        # glob 匹配 libpython3.X.so.1.0 / libpython3.X.so / libpython3.X.dylib
+        # macOS 用 .dylib（无 .1.0 后缀），Linux 用 .so / .so.1.0
+        for lib in lib_dir.glob(f"libpython{major}.{minor}.so*"):
+            if lib.is_symlink() or not lib.is_file():
+                continue
+            ok, saved = _strip_elf_symbols(lib, "linux")
+            stripped_libs += ok
+            saved_bytes += saved
+        for lib in lib_dir.glob(f"libpython{major}.{minor}.dylib"):
+            if lib.is_symlink() or not lib.is_file():
+                continue
+            ok, saved = _strip_elf_symbols(lib, "macos")
+            stripped_libs += ok
+            saved_bytes += saved
+
+    # B. 删 python3.X 二进制与所有符号链接
+    bin_dir = python_dir / "bin"
+    if bin_dir.is_dir():
+        # 主二进制 python3.X（53MB），与指向它的符号链接 python3 / python
+        py_bin = bin_dir / f"python{major}.{minor}"
+        if py_bin.is_file():
+            saved_bytes += py_bin.stat().st_size
+            py_bin.unlink()
+            removed_files += 1
+            _logger.info("精简 runtime: 删除 python 二进制 %s", py_bin.name)
+        # 删指向已删除二进制的悬空符号链接：python3 / python / python3-config / python3.X-config
+        for link_name in (f"python{major}.{minor}-config", "python3-config", "python3", "python"):
+            link = bin_dir / link_name
+            if link.is_symlink() or link.exists():
+                try:
+                    link.unlink()
+                    removed_files += 1
+                except OSError as e:  # pragma: no cover - 文件系统异常容错
+                    _logger.warning("删除 %s 失败: %s", link, e)
+        # 删开发工具脚本：2to3/idle3/pip3/pydoc3 系列
+        for name in _STANDALONE_DEV_BIN_FILES:
+            f = bin_dir / name
+            if f.is_symlink() or f.is_file():
+                try:
+                    if f.is_file():
+                        saved_bytes += f.stat().st_size
+                    f.unlink()
+                    removed_files += 1
+                except OSError as e:  # pragma: no cover - 文件系统异常容错
+                    _logger.warning("删除 %s 失败: %s", f, e)
+
+    # C. 删 include/ 与 share/
+    for dirname in ("include", "share"):
+        d = python_dir / dirname
+        if d.is_dir():
+            saved_bytes += _dir_size(d)
+            shutil.rmtree(d)
+            removed_dirs += 1
+            _logger.info("精简 runtime: 删除 %s/", dirname)
+
+    # D. 按 has_tkinter 剥离 Tcl/Tk 运行时
+    if not has_tkinter:
+        tk_saved, tk_dirs, tk_files = _strip_tcl_tk_counted(python_dir)
+        saved_bytes += tk_saved
+        removed_dirs += tk_dirs
+        removed_files += tk_files
+
+    stage.skip(removed_files + removed_dirs)
+    stage.add_saved_bytes(saved_bytes)
+    details = []
+    if stripped_libs:
+        details.append(f"strip {stripped_libs} 个 libpython")
+    if removed_files or removed_dirs:
+        details.append(f"删 {removed_files + removed_dirs} 个文件/目录")
+    stage.set_detail("，".join(details) or "无操作")
+
+
+def _strip_elf_symbols(lib_path: Path, platform: str) -> tuple[int, int]:
+    """调 ``strip`` 剥离 ELF/Mach-O 调试符号，返回 (成功标志, 节省字节数).
+
+    Linux: ``strip --strip-all``（剥符号表+调试符号+非必要字符串）
+    macOS: ``strip -x``（剥局部符号；macOS strip 不支持 --strip-all）
+
+    ``strip`` 命令缺失（如 minimal docker 镜像）时静默跳过，不阻断构建。
+    其他失败（权限/文件损坏）记 WARNING 跳过。
+
+    节省字节数 = strip 前文件大小 - strip 后文件大小（strip 是 in-place 修改）。
+    已 stripped 的文件 diff 为 0 或负，返回 0。
+    """
+    args = ["strip", "--strip-all"] if platform == "linux" else ["strip", "-x"]
+    args.append(str(lib_path))
+    try:
+        size_before = lib_path.stat().st_size
+    except OSError:
+        size_before = 0
+    try:
+        result = subprocess.run(args, check=False, capture_output=True, encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        _logger.warning("strip 命令缺失，跳过 libpython 调试符号剥离: %s", lib_path.name)
+        return 0, 0
+    if result.returncode != 0:
+        _logger.warning("strip %s 失败: %s", lib_path.name, (result.stderr or "").strip()[:200])
+        return 0, 0
+    try:
+        size_after = lib_path.stat().st_size
+    except OSError:
+        size_after = size_before
+    saved = max(0, size_before - size_after)
+    _logger.info("精简 runtime: strip %s（节省 %d 字节）", lib_path.name, saved)
+    return 1, saved
+
+
+def _strip_tcl_tk_counted(python_dir: Path) -> tuple[int, int, int]:
+    """剥离 Tcl/Tk 运行时文件，返回 (saved_bytes, removed_dirs, removed_files).
+
+    剥离内容：
+    - ``lib/libtcl*.so*`` / ``lib/libtk*.so*``：Tcl/Tk 动态库
+    - ``lib/tcl9`` / ``lib/tcl9.0`` / ``lib/tk9.0``：Tcl/Tk 脚本运行时
+    - ``lib/itcl*`` / ``lib/thread*``：[incr Tcl] 与 Thread 扩展
+
+    注：保留 ``lib/libpython3.X.so`` 等 libpython 文件（仅剥离 tcl/tk 相关）。
+    """
+    lib_dir = python_dir / "lib"
+    saved = 0
+    dirs = 0
+    files = 0
+    if not lib_dir.is_dir():
+        return 0, 0, 0
+
+    # libtcl*.so / libtk*.so（注意：tk 共享库名为 libtcl9tk9.0.so，含 tcl 关键字）
+    for entry in lib_dir.iterdir():
+        name = entry.name.lower()
+        is_tcl_tk = (
+            name.startswith("libtcl")
+            or name.startswith("libtk")
+            or name in {"itcl4.3.5", "itcl4.3.6", "thread3.0.4", "thread3.0.5"}
+            or name.startswith("tcl9")
+            or name.startswith("tk9")
+            or name.startswith("itcl")
+            or name.startswith("thread")
+        )
+        if not is_tcl_tk:
+            continue
+        try:
+            if entry.is_dir():
+                saved += _dir_size(entry)
+                shutil.rmtree(entry)
+                dirs += 1
+            elif entry.is_file() and not entry.is_symlink():
+                saved += entry.stat().st_size
+                entry.unlink()
+                files += 1
+            elif entry.is_symlink():
+                entry.unlink()
+                files += 1
+        except OSError as e:  # pragma: no cover - 文件系统异常容错
+            _logger.warning("剥离 Tcl/Tk 文件失败 %s: %s", entry, e)
+
+    _logger.info("精简 runtime: 剥离 Tcl/Tk 运行时 %d 目录 %d 文件", dirs, files)
+    return saved, dirs, files
 
 
 def _pyc_stamp_path(dist_dir: Path) -> Path:

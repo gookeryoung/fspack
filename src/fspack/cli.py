@@ -106,6 +106,15 @@ def _add_build_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser
         help="关闭标准库精简（默认剥离 Linux standalone 的 test/ensurepip/idlelib 等无用模块）",
     )
     p.add_argument(
+        "--no-slim-runtime",
+        action="store_true",
+        help=(
+            "关闭 standalone runtime 精简（默认 strip libpython 调试符号省 ~34MB + "
+            "删 python3.X 二进制省 ~53MB + 删 include/share 省 ~9MB + 非 tkinter 项目剥离 Tcl/Tk 省 ~9MB）。"
+            "调试 Python 解释器本身或需要保留开发期文件时使用"
+        ),
+    )
+    p.add_argument(
         "--no-pyc",
         action="store_true",
         help="关闭字节码预编译（默认预编译 src+site-packages 为 .pyc 加速首次启动）",
@@ -401,6 +410,7 @@ def _run_build(project: Path, ns: argparse.Namespace) -> None:
         keep_modules=set(ns.keep_modules) if ns.keep_modules else base.keep_modules,
         icon=Path(ns.icon).resolve() if ns.icon else base.icon,
         no_stdlib_trim=ns.no_stdlib_trim or base.no_stdlib_trim,
+        no_slim_runtime=ns.no_slim_runtime or base.no_slim_runtime,
         no_pyc=ns.no_pyc or base.no_pyc,
         pyc_strip=ns.pyc_strip or base.pyc_strip,
         pyc_optimize=ns.pyc_optimize if ns.pyc_optimize is not None else base.pyc_optimize,
