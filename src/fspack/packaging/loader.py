@@ -4,7 +4,7 @@
 
 - :mod:`fspack.packaging.loader_source`：C 源码模板（Windows/Linux/macOS）
 - :mod:`fspack.packaging.loader_compile`：编译器基类、平台子类、编译流程、
-  icon 资源处理、MinGW 运行时 DLL 注入
+  icon 资源处理
 
 保留 ``import subprocess``/``import shutil`` 供测试 monkeypatch 通过
 ``fspack.packaging.loader.subprocess.run``/``shutil.which`` 等路径访问
@@ -51,7 +51,6 @@ from fspack.packaging.loader_compile import (
     compile_loader,
     gcc_available,
     generate_loader_source,
-    inject_mingw_runtime_dlls,
     loader_cache_dir,
     mingw_available,
 )
@@ -69,7 +68,6 @@ __all__ = [
     "compile_loader",
     "gcc_available",
     "generate_loader_source",
-    "inject_mingw_runtime_dlls",
     "loader_cache_dir",
     "mingw_available",
 ]

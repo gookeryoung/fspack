@@ -139,15 +139,6 @@ def _prepare_runtime(ctx: BuildContext) -> Path:
     if target is Platform.WINDOWS and _needs_win7_compat_dll(ctx.info.py_version):
         _inject_win7_compat_dll(ctx.runtime_dir)
 
-    # MinGW 运行时 DLL：loader.exe 与 Nuitka 编译的 .pyd 动态链接 libgcc_s_seh-1.dll
-    # / libwinpthread-1.dll / libstdc++-6.dll。这些 DLL 不随 Windows 分发，需注入到
-    # dist/runtime/ 使 Python 加载 .pyd 时能找到（DLL 搜索路径含 runtime/，由
-    # loader.exe 的 SetDllDirectoryW 设置）。仅 Windows 目标需要（Linux/macOS 用系统 libc）。
-    if target is Platform.WINDOWS:
-        from fspack.packaging.loader import inject_mingw_runtime_dlls
-
-        inject_mingw_runtime_dlls(ctx.runtime_dir)
-
     # 标准库精简：剥离 standalone 中的 test/ensurepip/idlelib 等运行时无用模块。
     # Windows embed 标准库在 python3XX.zip 内（官方已精简），阶段内自动跳过。
     if not ctx.opts.no_stdlib_trim:

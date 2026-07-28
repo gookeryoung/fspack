@@ -22,7 +22,6 @@ from fspack.packaging.loader import (
     compile_loader,
     gcc_available,
     generate_loader_source,
-    inject_mingw_runtime_dlls,
     loader_cache_dir,
     mingw_available,
 )
@@ -437,124 +436,6 @@ def test_compile_loader_compile_path_sets_stage_detail(tmp_path: Path, monkeypat
     record = stage._finalize()
     assert record.detail == MINGW_GCC
     assert record.cache_hit == 0
-
-
-# ---- MinGW 运行时 DLL 注入测试 ----
-
-
-def _make_completed(stdout: str = "") -> Any:
-    """构造 subprocess.run 返回值桩（含 stdout 字段）."""
-
-    class _C:
-        returncode = 0
-        stderr = ""
-        stdout: str = ""
-
-    obj = _C()
-    obj.stdout = stdout
-    return obj
-
-
-def test_inject_mingw_runtime_dlls_copies_all_to_target_dir(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """gcc -print-file-name 返回有效路径时，三个 MinGW 运行时 DLL 都复制到目标目录."""
-    # 准备：模拟 MinGW 工具链目录，写入三个 DLL 源文件
-    mingw_bin = tmp_path / "mingw" / "bin"
-    mingw_bin.mkdir(parents=True)
-    dll_sources = {}
-    for dll_name in ("libgcc_s_seh-1.dll", "libwinpthread-1.dll", "libstdc++-6.dll"):
-        src = mingw_bin / dll_name
-        src.write_bytes(f"FAKE_{dll_name}".encode())
-        dll_sources[dll_name] = src
-
-    # mock _find_mingw_gcc 返回虚构 gcc 名（不实际查找 PATH）
-    monkeypatch.setattr("fspack.packaging.loader._find_mingw_gcc", lambda: "fake-mingw-gcc")
-
-    # mock subprocess.run：对每个 dll 返回对应源路径
-    def fake_run(cmd: list[str], **kw: Any) -> Any:
-        # cmd = ["fake-mingw-gcc", "-print-file-name", "<dll_name>"]
-        dll_name = cmd[-1]
-        return _make_completed(str(dll_sources[dll_name]))
-
-    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
-
-    target_dir = tmp_path / "runtime"
-    target_dir.mkdir()
-    inject_mingw_runtime_dlls(target_dir)
-
-    for dll_name, src in dll_sources.items():
-        dest = target_dir / dll_name
-        assert dest.is_file(), f"{dll_name} 未注入"
-        assert dest.read_bytes() == src.read_bytes()
-
-
-def test_inject_mingw_runtime_dlls_skips_when_exists(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """目标目录已有 DLL 时跳过复制，原文件内容不变（幂等）."""
-    target_dir = tmp_path / "runtime"
-    target_dir.mkdir()
-    dest = target_dir / "libgcc_s_seh-1.dll"
-    dest.write_bytes(b"EXISTING_LIBGCC")
-
-    # mock gcc 返回一个不同的源路径，但应被跳过
-    src_dir = tmp_path / "src"
-    src_dir.mkdir()
-    (src_dir / "libgcc_s_seh-1.dll").write_bytes(b"NEW_LIBGCC")
-    monkeypatch.setattr("fspack.packaging.loader._find_mingw_gcc", lambda: "fake-gcc")
-    monkeypatch.setattr(
-        "fspack.packaging.loader.subprocess.run",
-        lambda cmd, **kw: _make_completed(str(src_dir / cmd[-1])),
-    )
-
-    inject_mingw_runtime_dlls(target_dir)
-    # 内容应保持不变（未被覆盖）
-    assert dest.read_bytes() == b"EXISTING_LIBGCC"
-
-
-def test_inject_mingw_runtime_dlls_warns_when_source_missing(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """gcc -print-file-name 返回空或不存在路径时仅 warning 不报错（兼容静态链接）."""
-    target_dir = tmp_path / "runtime"
-    target_dir.mkdir()
-    monkeypatch.setattr("fspack.packaging.loader._find_mingw_gcc", lambda: "fake-gcc")
-    # mock gcc 返回空字符串（DLL 不在 gcc 搜索路径）
-    monkeypatch.setattr(
-        "fspack.packaging.loader.subprocess.run",
-        lambda cmd, **kw: _make_completed(""),
-    )
-
-    inject_mingw_runtime_dlls(target_dir)  # 不应抛异常
-    # 三个 DLL 都未被注入
-    for dll_name in ("libgcc_s_seh-1.dll", "libwinpthread-1.dll", "libstdc++-6.dll"):
-        assert not (target_dir / dll_name).exists()
-    # 至少有三个 warning 记录（每个 DLL 一个）
-    warnings = [r for r in caplog.records if "缺失" in r.message]
-    assert len(warnings) >= 3
-
-
-def test_inject_mingw_runtime_dlls_warns_when_gcc_returns_relative_only(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """gcc 返回相对路径且 shutil.which 找不到时 warning 不报错."""
-    target_dir = tmp_path / "runtime"
-    target_dir.mkdir()
-    monkeypatch.setattr("fspack.packaging.loader._find_mingw_gcc", lambda: "fake-gcc")
-    # mock gcc 返回仅文件名（相对路径），shutil.which 找不到
-    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", lambda cmd, **kw: _make_completed(cmd[-1]))
-    monkeypatch.setattr("fspack.packaging.loader.shutil.which", lambda name: None)
-
-    inject_mingw_runtime_dlls(target_dir)  # 不应抛异常
-    warnings = [r for r in caplog.records if "缺失" in r.message]
-    assert len(warnings) >= 3
 
 
 def test_compile_loader_cache_writeback_failure_logged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
