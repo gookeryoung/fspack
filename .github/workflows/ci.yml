@@ -96,28 +96,32 @@ jobs:
         run: uv sync --frozen --extra test --python 3.11
 
       # 基线缓存：按平台 + Python 版本分组，避免硬件差异导致误报
+      # key 含 v2 后缀：rounds=10→20 + median:25% 门禁调整后基线数据不兼容，
+      # 用 v2 让旧缓存失效，重新建立基线
       - name: Restore benchmark baseline
         uses: actions/cache@v4
         with:
           path: .benchmarks/
-          key: benchmark-ubuntu-3.11-${{ github.run_id }}
+          key: benchmark-ubuntu-3.11-v2-${{ github.run_id }}
           restore-keys: |
-            benchmark-ubuntu-3.11-
+            benchmark-ubuntu-3.11-v2-
 
       - name: Run benchmark tests
         run: |
           # 首次运行（缓存未命中）无历史基线，--benchmark-compare 无效，
           # --benchmark-compare-fail 会报 "requires valid --benchmark-compare"。
           # 仅当 .benchmarks/ 有历史 JSON 时才启用对比与退化门禁。
+          # 用 median 而非 mean 对比：median 对异常值不敏感，避免 I/O 抖动误报；
+          # 阈值 25% 容忍 GitHub Actions 机器负载波动（cold cache/邻居噪声）。
           COMPARE_OPTS=""
           if find .benchmarks -name '*.json' -type f 2>/dev/null | grep -q .; then
-            COMPARE_OPTS="--benchmark-compare --benchmark-compare-fail=mean:10%"
+            COMPARE_OPTS="--benchmark-compare --benchmark-compare-fail=median:25%"
           fi
           uv run pytest tests/test_perf_baseline.py -m slow \
             --benchmark-only \
             --benchmark-save=main \
             $COMPARE_OPTS \
-            --benchmark-min-rounds=10 \
+            --benchmark-min-rounds=20 \
             --benchmark-warmup=on \
             --benchmark-columns=median,min,mean,stddev
 

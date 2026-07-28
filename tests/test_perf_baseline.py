@@ -279,10 +279,14 @@ class TestProjectInfoBaseline:
         优化目标（iter-94）：``lru_cache`` 让 ``fsp b``/``fsp p`` 流程内多次
         ``ProjectInfo.from_dir`` 调用复用缓存，本基线测量冷解析耗时作为
         缓存收益评估参考。缓存命中场景见 :meth:`test_project_info_from_dir_cached_baseline`。
+
+        ``rounds=20``：冷解析涉及文件 I/O（读 pyproject.toml + 入口脚本），
+        I/O 抖动大，10 轮统计不稳定（stddev/mean 可达 1.9+），20 轮让 median
+        更稳定，避免 CI 跨运行对比误报退化。
         """
 
         # 用 pedantic + setup 每轮清空缓存，确保每轮都是冷解析
-        # iterations=1 避免 inner loop 命中缓存；rounds=10 取统计
+        # iterations=1 避免 inner loop 命中缓存；rounds=20 取统计
         def _setup() -> tuple[tuple[Path], dict[str, object]]:
             clear_project_cache()
             return (sample_pyproject_project,), {}
@@ -290,7 +294,7 @@ class TestProjectInfoBaseline:
         result = benchmark.pedantic(
             ProjectInfo.from_dir,
             setup=_setup,
-            rounds=10,
+            rounds=20,
             iterations=1,
         )
         # 功能正确性验证
