@@ -27,9 +27,17 @@ __all__ = ["TkinterBundler"]
 
 _logger = logging.getLogger(__name__)
 
-# 匹配 tcl8.6 / tcl9.0 等版本目录
-_TCL_DIR_RE = re.compile(r"/(tcl\d+\.\d+)/")
-_TK_DIR_RE = re.compile(r"/(tk\d+\.\d+)/")
+# 匹配 .../DLLs/tcl86t.dll / .../DLLs/tk86t.dll 等 Tcl/Tk C 运行时 DLL。
+# tcl86t.dll / tk86t.dll 是 _tkinter.pyd 的直接依赖，缺失会导致
+# ImportError: DLL load failed while importing _tkinter
+_TCL_RUNTIME_DLL_RE = re.compile(r"/DLLs/((?:tcl|tk)\d+t?\.dll)$")
+
+# 匹配 .../tcl/<subdir>/<file> 路径，捕获 <subdir>/<file> 部分。
+# 含 tcl8.6/tk8.6 主脚本目录与 dde1.4/reg1.3/tix8.4.3 等扩展包目录
+_TCL_DIR_PREFIX_RE = re.compile(r"/tcl/(.+)$")
+
+# tcl/ 目录下运行时无用的开发期文件后缀（import library / config 脚本）
+_TCL_DEV_EXTS = (".lib", ".sh")
 
 
 class TkinterBundler:
@@ -139,8 +147,12 @@ class TkinterBundler:
 
         - ``.../tkinter/**`` → ``Lib/tkinter/...``（纯 Python 包）
         - ``.../_tkinter*.pyd`` → ``_tkinter.pyd``（C 扩展，根目录）
-        - ``.../tcl{ver}/...`` → ``tcl/tcl{ver}/...``（Tcl 运行时）
-        - ``.../tk{ver}/...`` → ``tcl/tk{ver}/...``（Tk 运行时）
+        - ``.../DLLs/tcl*t.dll`` / ``.../DLLs/tk*t.dll`` → 根目录（Tcl/Tk C 运行时
+          DLL，``_tkinter.pyd`` 直接依赖，缺失导致 ``ImportError: DLL load
+          failed while importing _tkinter``）
+        - ``.../tcl/<subdir>/**`` → ``tcl/<subdir>/...``（Tcl/Tk 脚本与扩展包，
+          含 ``tcl8.6``/``tk8.6`` 主脚本与 ``dde1.4``/``reg1.3``/``tix8.4.3`` 等
+          扩展；排除 ``.lib``/``.sh`` 等开发期文件以节省空间）
         """
         with tarfile.open(tar_path, "r:gz") as tar:
             members = tar.getmembers()
@@ -176,22 +188,22 @@ class TkinterBundler:
                         zf.writestr("_tkinter.pyd", data)
                         continue
 
-                    # tcl{ver}/ → tcl/tcl{ver}/...
-                    tcl_match = _TCL_DIR_RE.search(name)
-                    if tcl_match:
-                        tcl_ver_dir = tcl_match.group(1)  # e.g. tcl8.6
-                        idx = name.find(f"/{tcl_ver_dir}/")
-                        rel = name[idx + 1 :]  # tcl8.6/...
-                        zf.writestr(f"tcl/{rel}", data)
+                    # DLLs/tcl*t.dll / DLLs/tk*t.dll → 根目录（Tcl/Tk C 运行时 DLL）
+                    # _tkinter.pyd 直接依赖 tcl86t.dll / tk86t.dll，缺失导致
+                    # ImportError: DLL load failed while importing _tkinter
+                    dll_match = _TCL_RUNTIME_DLL_RE.search(name)
+                    if dll_match:
+                        zf.writestr(dll_match.group(1), data)
                         continue
 
-                    # tk{ver}/ → tcl/tk{ver}/...
-                    tk_match = _TK_DIR_RE.search(name)
-                    if tk_match:
-                        tk_ver_dir = tk_match.group(1)  # e.g. tk8.6
-                        idx = name.find(f"/{tk_ver_dir}/")
-                        rel = name[idx + 1 :]  # tk8.6/...
-                        zf.writestr(f"tcl/{rel}", data)
+                    # tcl/<subdir>/** → tcl/<subdir>/...（Tcl/Tk 脚本与扩展包）
+                    # 含 tcl8.6/tk8.6 主脚本与 dde1.4/reg1.3/tix8.4.3 等扩展包；
+                    # 排除 .lib（import library）/ .sh（config 脚本）等开发期文件
+                    tcl_dir_match = _TCL_DIR_PREFIX_RE.search(name)
+                    if tcl_dir_match:
+                        rel = tcl_dir_match.group(1)  # <subdir>/<file>
+                        if not rel.endswith(_TCL_DEV_EXTS):
+                            zf.writestr(f"tcl/{rel}", data)
 
             zip_buffer.seek(0)
             return zip_buffer.getvalue()

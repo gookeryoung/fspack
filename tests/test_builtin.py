@@ -62,17 +62,26 @@ def _make_tkinter_tarball(path: Path) -> None:
     结构：
     - python/install/Lib/tkinter/__init__.py + dialog.py
     - python/install/DLLs/_tkinter.pyd
-    - python/install/tcl/tcl8.6/init.tcl
-    - python/install/tcl/tk8.6/tk.tcl
+    - python/install/DLLs/tcl86t.dll + tk86t.dll（Tcl/Tk C 运行时 DLL）
+    - python/install/tcl/tcl8.6/init.tcl + http1.0/http.tcl
+    - python/install/tcl/tk8.6/tk.tcl + entry.tcl
+    - python/install/tcl/dde1.4/tcldde14.dll（Tcl 扩展包 DLL）
+    - python/install/tcl/tcl86t.lib + tclConfig.sh（开发期文件，应被过滤）
     """
     members = [
         ("python/install/Lib/tkinter/__init__.py", b"# tkinter package"),
         ("python/install/Lib/tkinter/dialog.py", b"# dialog"),
         ("python/install/DLLs/_tkinter.pyd", b"PYD_BINARY"),
+        ("python/install/DLLs/tcl86t.dll", b"TCL_RUNTIME_DLL"),
+        ("python/install/DLLs/tk86t.dll", b"TK_RUNTIME_DLL"),
         ("python/install/tcl/tcl8.6/init.tcl", b"# tcl init"),
         ("python/install/tcl/tcl8.6/http1.0/http.tcl", b"# http"),
         ("python/install/tcl/tk8.6/tk.tcl", b"# tk lib"),
         ("python/install/tcl/tk8.6/entry.tcl", b"# entry"),
+        ("python/install/tcl/dde1.4/tcldde14.dll", b"DDE_DLL"),
+        # 开发期文件：.lib（import library）/ .sh（config 脚本），运行时无用应被过滤
+        ("python/install/tcl/tcl86t.lib", b"IMPORT_LIB"),
+        ("python/install/tcl/tclConfig.sh", b"CONFIG_SCRIPT"),
         # 干扰项：非 tkinter 相关文件，应被忽略
         ("python/install/python311.dll", b"DLL"),
         ("python/install/Lib/os.py", b"# os stdlib"),
@@ -98,12 +107,20 @@ def test_build_tkinter_zip_extracts_all_components(tmp_path: Path) -> None:
     assert "Lib/tkinter/dialog.py" in names
     # _tkinter C 扩展 → 根目录
     assert "_tkinter.pyd" in names
+    # Tcl/Tk C 运行时 DLL → 根目录（_tkinter.pyd 直接依赖）
+    assert "tcl86t.dll" in names
+    assert "tk86t.dll" in names
     # tcl 运行时 → tcl/tcl8.6/...
     assert "tcl/tcl8.6/init.tcl" in names
     assert "tcl/tcl8.6/http1.0/http.tcl" in names
     # tk 运行时 → tcl/tk8.6/...
     assert "tcl/tk8.6/tk.tcl" in names
     assert "tcl/tk8.6/entry.tcl" in names
+    # Tcl 扩展包 → tcl/dde1.4/...（保持原结构）
+    assert "tcl/dde1.4/tcldde14.dll" in names
+    # 开发期文件被过滤（.lib / .sh 运行时无用）
+    assert "tcl/tcl86t.lib" not in names
+    assert "tcl/tclConfig.sh" not in names
     # 干扰项被排除
     assert "python311.dll" not in names
     assert not any(n.startswith("python/install/") for n in names)
@@ -119,8 +136,11 @@ def test_build_tkinter_zip_preserves_content(tmp_path: Path) -> None:
     with zipfile.ZipFile(io.BytesIO(zip_data), "r") as zf:
         assert zf.read("Lib/tkinter/__init__.py") == b"# tkinter package"
         assert zf.read("_tkinter.pyd") == b"PYD_BINARY"
+        assert zf.read("tcl86t.dll") == b"TCL_RUNTIME_DLL"
+        assert zf.read("tk86t.dll") == b"TK_RUNTIME_DLL"
         assert zf.read("tcl/tcl8.6/init.tcl") == b"# tcl init"
         assert zf.read("tcl/tk8.6/tk.tcl") == b"# tk lib"
+        assert zf.read("tcl/dde1.4/tcldde14.dll") == b"DDE_DLL"
 
 
 def test_build_tkinter_zip_no_tkinter_raises(tmp_path: Path) -> None:
