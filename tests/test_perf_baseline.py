@@ -36,6 +36,7 @@ from fspack.analyzer import (
     collect_imports_and_submodules,
     source_fingerprint,
 )
+from fspack.config import ProjectInfo, clear_project_cache
 from fspack.slim import classify_entry, slim_unpack
 
 # ---- 测试样本 ----
@@ -116,6 +117,56 @@ def sample_wheel(tmp_path: Path) -> Path:
         for name, content in _WHEEL_ENTRIES.items():
             zf.writestr(name, content)
     return whl
+
+
+# ProjectInfo 解析样本：含完整 [project] + [tool.fspack] 配置 + 入口脚本
+_PYPROJECT_SAMPLE = """\
+[project]
+name = "myproj"
+version = "1.0.0"
+requires-python = ">=3.8"
+dependencies = ["numpy", "requests", "PySide2"]
+
+[tool.fspack]
+exclude = ["tests", "docs"]
+pyc_strip = true
+no_site = true
+"""
+
+_ENTRY_SAMPLE = '''\
+"""入口模块：含 def main() 与 __name__ 守卫，触发 detect_entry 识别."""
+from __future__ import annotations
+
+import os
+import sys
+import json
+
+import numpy as np
+from PySide2.QtWidgets import QApplication
+
+
+def main() -> None:
+    """主入口."""
+    print("hello")
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+
+@pytest.fixture
+def sample_pyproject_project(tmp_path: Path) -> Path:
+    """构造带 pyproject.toml 的样本项目（用于 ProjectInfo 解析基线）.
+
+    含完整 ``[project]`` + ``[tool.fspack]`` 配置与一个入口脚本，覆盖
+    tomllib 解析、配置项解析、入口 AST 扫描、app_type 推断完整路径。
+    """
+    project = tmp_path / "proj"
+    project.mkdir()
+    (project / "pyproject.toml").write_text(_PYPROJECT_SAMPLE, encoding="utf-8")
+    (project / "myproj.py").write_text(_ENTRY_SAMPLE, encoding="utf-8")
+    return project
 
 
 # ---- 基线测试 ----
@@ -203,3 +254,67 @@ class TestFingerprintBaseline:
         # 功能正确性：相同源码两次计算结果一致
         assert result == source_fingerprint(sample_project)
         assert len(result) == 64  # SHA-256 hex
+
+
+@pytest.mark.slow
+class TestProjectInfoBaseline:
+    """ProjectInfo 解析性能基线（iter-94 配置加载缓存优化）.
+
+    测量两个场景：
+
+    - **冷解析**：每次清空缓存后单次解析，反映实际解析耗时（tomllib + AST
+      + 入口识别 + app_type 推断）。优化前后对比验证 lru_cache 改造未引入
+      退化。
+    - **缓存命中**：预热后多次调用，反映缓存查找开销。应远低于冷解析
+      （仅 stat + lru_cache lookup），验证缓存收益稳定。
+    """
+
+    def test_project_info_from_dir_baseline(
+        self,
+        benchmark: Any,
+        sample_pyproject_project: Path,
+    ) -> None:
+        """ProjectInfo.from_dir 冷解析基线：每次清空缓存后单次解析耗时.
+
+        优化目标（iter-94）：``lru_cache`` 让 ``fsp b``/``fsp p`` 流程内多次
+        ``ProjectInfo.from_dir`` 调用复用缓存，本基线测量冷解析耗时作为
+        缓存收益评估参考。缓存命中场景见 :meth:`test_project_info_from_dir_cached_baseline`。
+        """
+
+        # 用 pedantic + setup 每轮清空缓存，确保每轮都是冷解析
+        # iterations=1 避免 inner loop 命中缓存；rounds=10 取统计
+        def _setup() -> tuple[tuple[Path], dict[str, object]]:
+            clear_project_cache()
+            return (sample_pyproject_project,), {}
+
+        result = benchmark.pedantic(
+            ProjectInfo.from_dir,
+            setup=_setup,
+            rounds=10,
+            iterations=1,
+        )
+        # 功能正确性验证
+        assert result.name == "myproj"
+        assert result.version == "1.0.0"
+        assert result.requires_python == ">=3.8"
+        assert result.dependencies == ("numpy", "requests", "PySide2")
+        assert result.exclude_dirs == ("tests", "docs")
+        assert result.build_defaults.pyc_strip is True
+        assert result.build_defaults.no_site is True
+        assert result.app_type.value == "gui"  # PySide2 import 触发 GUI 推断
+
+    def test_project_info_from_dir_cached_baseline(
+        self,
+        benchmark: Any,
+        sample_pyproject_project: Path,
+    ) -> None:
+        """ProjectInfo.from_dir 缓存命中基线：预热后多次调用耗时.
+
+        优化目标（iter-94）：缓存命中应远快于冷解析（仅 ``stat`` +
+        ``lru_cache`` lookup，无 tomllib 解析与 AST 扫描）。本基线验证缓存
+        收益稳定，退化 > 50% 失败（缓存查找是 O(1) dict 查询，退化空间极小）。
+        """
+        # 预热一次填充缓存
+        ProjectInfo.from_dir(sample_pyproject_project)
+        result = benchmark(ProjectInfo.from_dir, sample_pyproject_project)
+        assert result.name == "myproj"

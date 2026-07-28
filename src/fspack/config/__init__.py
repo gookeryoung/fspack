@@ -19,8 +19,9 @@
   ``DependencyReport``/``BuildConfig``
 - 镜像源：``MIRRORS``/``DEFAULT_MIRROR``/``get_mirror``
 - 项目解析：``parse_project``/``detect_entry``/``infer_app_type``/
-  ``resolve_py_version``/``DEFAULT_PY_VERSION``/``DEFAULT_LINUX_PY_VERSION``/
-  ``KNOWN_EMBED_VERSIONS``/``KNOWN_STANDALONE_VERSIONS``/``known_versions``
+  ``clear_project_cache``/``resolve_py_version``/``DEFAULT_PY_VERSION``/
+  ``DEFAULT_LINUX_PY_VERSION``/``KNOWN_EMBED_VERSIONS``/``KNOWN_STANDALONE_VERSIONS``/
+  ``known_versions``
 """
 
 from __future__ import annotations
@@ -64,6 +65,7 @@ from fspack.config.parsing import (
     _parse_entries,  # noqa: F401
     _parse_exclude_dirs,  # noqa: F401
     _resolve_icon,  # noqa: F401
+    clear_project_cache,
     detect_entry,
     infer_app_type,
     parse_project,
@@ -106,6 +108,7 @@ __all__ = [
     "build_options_from_defaults",
     "cache_root",
     "ccache_cache_dir",
+    "clear_project_cache",
     "detect_entry",
     "embed_cache_dir",
     "get_mirror",

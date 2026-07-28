@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import time
 from pathlib import Path
 
 import pytest
@@ -17,6 +19,7 @@ from fspack.config import (
     MirrorConfig,
     ProjectInfo,
     _satisfies,
+    clear_project_cache,
     detect_entry,
     get_mirror,
     infer_app_type,
@@ -1016,3 +1019,119 @@ def test_parse_project_private_sources_in_multi_entry(tmp_path: Path) -> None:
     info = parse_project(tmp_path)
     assert info.extra_index_urls == ("https://pypi.company.com/simple/",)
     assert info.find_links == ("./wheels",)
+
+
+# --- 解析缓存（lru_cache）测试 ---
+#
+# iter-95 引入：parse_project 按 (project_dir, py_version, mtime_ns) 缓存
+# ProjectInfo。以下测试验证缓存命中、mtime 失效、显式清空、不同参数隔离。
+
+
+def _make_minimal_project(project_dir: Path, name: str = "app", version: str = "0.1") -> None:
+    """构造最小可解析项目（pyproject.toml + 入口脚本）."""
+    (project_dir / "pyproject.toml").write_text(f'[project]\nname = "{name}"\nversion = "{version}"\n')
+    (project_dir / f"{name}.py").write_text("def main():\n    pass\n")
+
+
+def test_parse_project_cache_hit_returns_same_object(tmp_path: Path) -> None:
+    """同一目录连续调用 parse_project 返回同一缓存对象（identity 相等）."""
+    clear_project_cache()
+    _make_minimal_project(tmp_path)
+    first = parse_project(tmp_path)
+    second = parse_project(tmp_path)
+    assert first is second  # lru_cache 命中返回同一实例
+
+
+def test_parse_project_cache_hit_via_from_dir(tmp_path: Path) -> None:
+    """ProjectInfo.from_dir 同样命中缓存（委托 parse_project）."""
+    clear_project_cache()
+    _make_minimal_project(tmp_path)
+    first = ProjectInfo.from_dir(tmp_path)
+    second = ProjectInfo.from_dir(tmp_path)
+    assert first is second
+
+
+def test_parse_project_cache_invalidates_on_mtime_change(tmp_path: Path) -> None:
+    """pyproject.toml mtime 变化后下次调用获取新解析结果."""
+    clear_project_cache()
+    _make_minimal_project(tmp_path, name="v1")
+    first = parse_project(tmp_path)
+    assert first.name == "v1"
+
+    # 修改 pyproject.toml 并强制推进 mtime（覆盖部分平台 mtime 分辨率不足）
+    pp = tmp_path / "pyproject.toml"
+    pp.write_text('[project]\nname = "v2"\nversion = "0.2"\n')
+
+    # 强制 mtime 推进 1 秒，确保跨平台稳定触发缓存失效
+    new_mtime = time.time() + 1.0
+    os.utime(pp, (new_mtime, new_mtime))
+
+    second = parse_project(tmp_path)
+    assert second is not first  # 缓存未命中，新实例
+    assert second.name == "v2"
+    assert second.version == "0.2"
+
+
+def test_clear_project_cache_empties_cache(tmp_path: Path) -> None:
+    """clear_project_cache 后下次调用是新解析（不复用缓存）."""
+    clear_project_cache()
+    _make_minimal_project(tmp_path)
+    first = parse_project(tmp_path)
+    clear_project_cache()
+    second = parse_project(tmp_path)
+    assert first is not second  # 清空后重新解析
+    # 内容仍相等（frozen dataclass __eq__ 按字段比较）
+    assert first == second
+
+
+def test_clear_project_cache_idempotent() -> None:
+    """多次清空缓存不报错（空缓存再清仍安全）."""
+    clear_project_cache()
+    clear_project_cache()
+    clear_project_cache()
+
+
+def test_parse_project_cache_separates_different_py_version(tmp_path: Path) -> None:
+    """不同 py_version 参数分别缓存，互不影响."""
+    clear_project_cache()
+    _make_minimal_project(tmp_path)
+    a = parse_project(tmp_path, "3.10.0")
+    b = parse_project(tmp_path, "3.11.9")
+    c = parse_project(tmp_path, "3.10.0")
+    assert a is not b  # 不同 py_version 不同缓存条目
+    assert a is c  # 相同 py_version 命中同一缓存
+    assert a.py_version == "3.10.0"
+    assert b.py_version == "3.11.9"
+
+
+def test_parse_project_cache_separates_different_project_dirs(tmp_path: Path) -> None:
+    """不同项目目录分别缓存."""
+    clear_project_cache()
+    proj_a = tmp_path / "a"
+    proj_b = tmp_path / "b"
+    proj_a.mkdir()
+    proj_b.mkdir()
+    _make_minimal_project(proj_a, name="appa")
+    _make_minimal_project(proj_b, name="appb")
+    info_a = parse_project(proj_a)
+    info_b = parse_project(proj_b)
+    assert info_a is not info_b
+    assert info_a.name == "appa"
+    assert info_b.name == "appb"
+
+
+def test_parse_project_cache_error_not_cached(tmp_path: Path) -> None:
+    """解析失败时不缓存异常（lru_cache 仅缓存成功返回值）.
+
+    修复 pyproject.toml 后再次调用应能成功，而非复用失败的异常。
+    """
+    clear_project_cache()
+    pp = tmp_path / "pyproject.toml"
+    pp.write_text("invalid toml [")  # 语法错误
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    with pytest.raises(ProjectError, match="语法错误"):
+        parse_project(tmp_path)
+    # 修复后再次调用应成功（异常未被缓存）
+    pp.write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    info = parse_project(tmp_path)
+    assert info.name == "app"

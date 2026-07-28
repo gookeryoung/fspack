@@ -7,6 +7,12 @@
 依赖 :mod:`fspack.config.models` 提供 dataclass 与 :func:`_parse_string_list_cfg`，
 :mod:`fspack.config.versions` 提供默认 Python 版本，:mod:`fspack.analyzer`
 在 :func:`infer_app_type` 中延迟导入打破循环依赖。
+
+**解析缓存**：:func:`parse_project` 按 ``(project_dir, py_version, pyproject_mtime_ns)``
+缓存解析结果（:func:`_parse_project_cached`），同一项目目录在 pyproject.toml
+未修改时复用缓存，避免 ``fsp b``/``fsp p`` 流程内多次调用（cli → pipeline →
+installer）重复读取与 AST 扫描。缓存键含 ``mtime_ns``，pyproject.toml 修改后
+自动失效；:func:`clear_project_cache` 提供显式清空入口（测试隔离/强制重解析）。
 """
 
 from __future__ import annotations
@@ -14,6 +20,7 @@ from __future__ import annotations
 import ast
 import logging
 import re
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, cast
 
@@ -29,12 +36,17 @@ from fspack.config.versions import DEFAULT_PY_VERSION
 from fspack.exceptions import ProjectError
 
 __all__ = [
+    "clear_project_cache",
     "detect_entry",
     "infer_app_type",
     "parse_project",
 ]
 
 _logger = logging.getLogger(__name__)
+
+# 缓存上限：64 个不同 (project_dir, py_version, mtime) 组合，覆盖多数项目场景；
+# LRU 淘汰最久未用，避免长期运行内存膨胀。
+_PROJECT_CACHE_MAXSIZE = 64
 
 try:
     import tomllib
@@ -68,11 +80,36 @@ def parse_project(project_dir: Path, py_version: str | None = None) -> ProjectIn
     值为入口脚本相对项目目录的路径（POSIX 风格）。声明多入口时，
     ``ProjectInfo.entries`` 非空，``entry_module``/``entry_file``/``app_type``
     取首个入口（保持向后兼容）。
+
+    解析结果按 ``(project_dir, py_version, pyproject.toml mtime)`` 缓存（最多 64
+    个条目），同一项目在 pyproject.toml 未修改时复用缓存，避免 ``fsp b``/
+    ``fsp p`` 流程内多次调用重复读取与 AST 扫描。pyproject.toml 修改后 mtime
+    变化，下次调用自动获取新值。
     """
     project_dir = Path(project_dir).resolve()
     pp = project_dir / "pyproject.toml"
     if not pp.is_file():
         raise ProjectError(f"未找到 pyproject.toml: {pp}")
+    # 用 mtime_ns 作为缓存键：分辨率纳秒级，覆盖秒级与亚秒级修改；
+    # 文件被 touch 但内容未改也会失效，但这是可接受的过度失效（缓存重建成本低）
+    mtime_ns = pp.stat().st_mtime_ns
+    return _parse_project_cached(project_dir, py_version, mtime_ns)
+
+
+@lru_cache(maxsize=_PROJECT_CACHE_MAXSIZE)
+def _parse_project_cached(
+    project_dir: Path,
+    py_version: str | None,
+    pyproject_mtime_ns: int,  # noqa: ARG001 — 仅作缓存键，函数内不读取（避免重复 stat）
+) -> ProjectInfo:
+    """缓存版项目解析：实际读取 pyproject.toml + AST 识别入口.
+
+    缓存键含 ``pyproject_mtime_ns``，文件修改后 mtime 变化触发新解析。
+    ``project_dir`` 已在 :func:`parse_project` 中 resolve，此处不再重复。
+
+    ``pyproject_mtime_ns`` 仅作缓存键，函数内不读取该参数（避免重复 stat）。
+    """
+    pp = project_dir / "pyproject.toml"
     try:
         data = tomllib.loads(pp.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as e:
@@ -142,6 +179,20 @@ def parse_project(project_dir: Path, py_version: str | None = None) -> ProjectIn
         find_links=find_links,
         slim_rules=slim_rules,
     )
+
+
+def clear_project_cache() -> None:
+    """清空 :func:`parse_project` 的解析缓存.
+
+    用于：
+
+    - 测试隔离：测试间避免缓存污染（不同测试用不同 tmp_path 通常天然隔离，
+      但同测试内修改 pyproject.toml 后强制重解析需显式清空）
+    - 强制重解析：外部进程修改 pyproject.toml 后 mtime 未变（极少见）时
+      手动清空缓存
+    - 内存管理：长期运行进程主动释放缓存条目
+    """
+    _parse_project_cached.cache_clear()
 
 
 def _parse_entries(
