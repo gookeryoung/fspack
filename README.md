@@ -273,6 +273,7 @@ fsp b [project] [--mirror <name>] [--py-version <ver>] [--target <platform>]
               [--keep-module <mod>] [--icon <path>] [--no-stdlib-trim]
               [--no-pyc] [--pyc-strip] [--pyc-optimize <0|1|2>] [--no-site] [--nuitka]
               [-R|--recursive] [--dry-run] [--no-size-report]
+              [--log-file <path>] [--log-format <text|json>]
 ```
 
 | 选项 | 说明 |
@@ -292,10 +293,14 @@ fsp b [project] [--mirror <name>] [--py-version <ver>] [--target <platform>]
 | `-R`/`--recursive` | 递归扫描子项目依次构建 |
 | `--dry-run` | 仅预览打包计划，不执行实际构建（不下载/不编译/不复制） |
 | `--no-size-report` | 关闭构建结束后的体积报告 |
+| `--log-file` | 将构建日志写入文件（UTF-8 追加，含时间戳/级别/异常栈） |
+| `--log-format` | 日志文件格式：`text`（默认）/`json`（结构化，便于采集） |
 
 `--dry-run` 输出打包计划表格（项目信息/依赖分析/构建选项），便于打包前确认配置正确，避免无效构建。
 
 构建完成后默认输出体积报告：runtime/src/site-packages/其他 四类占比 + site-packages Top 10 包体积排序，帮助定位体积热点。`--no-size-report` 可关闭。
+
+`--log-file` 将构建过程日志写入文件，便于 CI 上传与问题排查。`--log-format json` 输出结构化 JSON（每行一条记录，含 timestamp/level/logger/message/module/function/line 字段，支持 `extra=` 业务上下文），便于 ELK/Loki 采集。
 
 ### fsp run
 

@@ -90,7 +90,7 @@ req-46 完成缓存配置 + 离线支持 + init 模板命令（iter-76~85），�
   runtime/src/site-packages 三大类统计，site-packages 按 Top 10 包占比
   排序，标注精简节省空间。复用 BuildTracker 表格渲染，支持 `--no-size-report`
   关闭。帮助用户定位体积热点
-- [ ] **iter-89 `--log-file` 构建日志持久化**：`--log-file <path>` 选项将
+- [x] **iter-89 `--log-file` 构建日志持久化**：`--log-file <path>` 选项将
   构建日志写入文件（含时间戳、阶段耗时、缓存命中、错误堆栈），便于 CI
   上传与问题排查。日志格式支持 text（默认）与 json（结构化，便于解析）
 - [ ] **iter-90 `--profile` 耗时分析报告**：`--profile` 选项输出耗时分析

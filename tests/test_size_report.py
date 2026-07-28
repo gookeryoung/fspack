@@ -394,6 +394,8 @@ def test_cli_build_no_size_report_flag_passed_to_build(tmp_path: Path, monkeypat
         extra_index_urls: tuple[str, ...] = (),
         find_links: tuple[str, ...] = (),
         dry_run: bool = False,
+        log_file: Path | None = None,
+        log_format: object = None,
     ) -> None:
         captured["options"] = options
 
@@ -418,6 +420,8 @@ def test_cli_build_without_no_size_report_defaults_false(tmp_path: Path, monkeyp
         extra_index_urls: tuple[str, ...] = (),
         find_links: tuple[str, ...] = (),
         dry_run: bool = False,
+        log_file: Path | None = None,
+        log_format: object = None,
     ) -> None:
         captured["options"] = options
 

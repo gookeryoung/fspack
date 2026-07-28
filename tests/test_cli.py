@@ -53,6 +53,8 @@ def _capture_build() -> tuple[dict[str, Any], Any]:
         extra_index_urls: tuple[str, ...] = (),
         find_links: tuple[str, ...] = (),
         dry_run: bool = False,
+        log_file: Path | None = None,
+        log_format: object = None,
     ) -> None:
         captured["project"] = project
         captured["mirror"] = mirror

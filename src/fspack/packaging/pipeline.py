@@ -40,6 +40,7 @@ from fspack.packaging.builtin import TkinterBundler
 from fspack.packaging.entry import EntryWrapper
 from fspack.packaging.icon import ensure_ico, find_favicon
 from fspack.packaging.loader import compile_loader, generate_loader_source
+from fspack.packaging.log_file import LogFormat, setup_log_file, teardown_log_file
 from fspack.packaging.pyc import (
     _inject_win7_compat_dll,
     _needs_win7_compat_dll,
@@ -131,6 +132,8 @@ def build(  # noqa: PLR0913
     extra_index_urls: Sequence[str] = (),
     find_links: Sequence[str] = (),
     dry_run: bool = False,
+    log_file: Path | None = None,
+    log_format: LogFormat = LogFormat.TEXT,
 ) -> ProjectInfo:
     """执行完整构建流水线，返回项目信息。
 
@@ -156,6 +159,11 @@ def build(  # noqa: PLR0913
 
     ``dry_run=True`` 时仅执行项目解析与依赖分析，打印打包计划后返回，
     不执行下载/编译/复制等任何写操作。用于打包前确认配置正确。
+
+    ``log_file`` 指定时将构建日志写入文件（含时间戳、级别、logger 名、消息、
+    异常栈），便于 CI 上传与问题排查。``log_format`` 控制 格式：``TEXT``（默认，
+    人类可读）或 ``JSON``（结构化，便于 ELK/Loki 采集）。日志文件在构建开始时
+    创建、结束时自动关闭，即使构建异常也会正确清理（``try/finally``）。
     """
     opts = options or BuildOptions()
     tracker = BuildTracker()
@@ -165,6 +173,40 @@ def build(  # noqa: PLR0913
     cache = embed_cache or embed_cache_dir()
     cfg = BuildConfig(project_dir=project_dir, dist_dir=dist, embed_cache_dir=cache, mirror=mirror, target=target)
 
+    log_wrapper = setup_log_file(Path(log_file), log_format) if log_file is not None else None
+    try:
+        info = _execute_build(
+            tracker,
+            project_dir,
+            py_version,
+            target,
+            cfg,
+            opts,
+            extra_index_urls,
+            find_links,
+            dry_run,
+        )
+    finally:
+        teardown_log_file(log_wrapper)
+    return info
+
+
+def _execute_build(  # noqa: PLR0913
+    tracker: BuildTracker,
+    project_dir: Path,
+    py_version: str | None,
+    target: Platform,
+    cfg: BuildConfig,
+    opts: BuildOptions,
+    extra_index_urls: Sequence[str],
+    find_links: Sequence[str],
+    dry_run: bool,
+) -> ProjectInfo:
+    """执行构建流水线主体（不含日志文件 setup/teardown）.
+
+    由 :func:`build` 调用，分离日志文件生命周期管理（``try/finally``）与
+    构建逻辑，便于阅读与维护。
+    """
     with tracker.stage("解析项目") as st:
         info = resolve_project_info(project_dir, py_version, target)
         # 合并 CLI 私有包源到 info（CLI 追加在配置之后，去重保留首次出现）

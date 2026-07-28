@@ -200,6 +200,21 @@ def _add_build_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser
         action="store_true",
         help="关闭构建结束后的体积报告（默认输出 runtime/src/site-packages 分类与 Top 10 包占比）",
     )
+    p.add_argument(
+        "--log-file",
+        default=None,
+        metavar="PATH",
+        help=(
+            "将构建日志写入文件（含时间戳、级别、logger 名、消息、异常栈），便于 CI 上传与问题排查。"
+            "文件以追加模式写入，UTF-8 编码；构建开始时创建、结束时自动关闭"
+        ),
+    )
+    p.add_argument(
+        "--log-format",
+        default="text",
+        choices=["text", "json"],
+        help="日志文件格式：text=人类可读纯文本（默认），json=结构化 JSON（便于 ELK/Loki 采集）",
+    )
 
 
 def _add_run_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -330,9 +345,11 @@ def main(argv: list[str] | None = None) -> None:
 def _run_build(project: Path, ns: argparse.Namespace) -> None:
     """执行单项目 build 子命令."""
     from dataclasses import replace
+    from pathlib import Path
 
     from fspack.builder import build
     from fspack.config import ProjectInfo, build_options_from_defaults, get_mirror
+    from fspack.packaging.log_file import LogFormat
 
     # 合并 [tool.fspack] 构建默认值与 CLI 标志：
     # - 先用 build_options_from_defaults 构造配置层 base（config or BuildOptions 默认值）
@@ -354,6 +371,8 @@ def _run_build(project: Path, ns: argparse.Namespace) -> None:
         nuitka_packages=tuple(dict.fromkeys((*base.nuitka_packages, *(ns.nuitka_pkg or [])))),
         no_size_report=ns.no_size_report or base.no_size_report,
     )
+    log_file = Path(ns.log_file).resolve() if ns.log_file else None
+    log_format = LogFormat.parse(ns.log_format)
     build(
         project,
         get_mirror(ns.mirror),
@@ -363,6 +382,8 @@ def _run_build(project: Path, ns: argparse.Namespace) -> None:
         extra_index_urls=tuple(ns.extra_index_urls or ()),
         find_links=tuple(ns.find_links or ()),
         dry_run=ns.dry_run,
+        log_file=log_file,
+        log_format=log_format,
     )
 
 
