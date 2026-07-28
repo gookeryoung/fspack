@@ -1,0 +1,626 @@
+"""``fsp doctor`` 环境诊断子命令单元测试.
+
+覆盖 :mod:`fspack.cli_doctor` 的核心场景：
+
+- :class:`CheckResult`/``CheckStatus``/``DoctorReport`` 数据结构
+- :func:`_check_tool_version` 通用工具检查（成功/未找到/超时/退出码非零）
+- :func:`_check_pillow`/``_check_pip``/``_check_mingw`` 等具体工具检查
+- :func:`_check_cache_dir` 缓存目录扫描（不存在/正常/扫描失败）
+- :func:`_format_size`/``_format_status`` 辅助函数
+- :func:`run_doctor` 聚合报告（按平台过滤工具）
+- :func:`print_doctor_report` 渲染不抛异常
+"""
+
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+from fspack.cli_doctor import (
+    CheckResult,
+    CheckStatus,
+    DoctorReport,
+    _check_cache_dir,
+    _check_pillow,
+    _check_pip,
+    _check_tool_version,
+    _dir_size,
+    _format_size,
+    _format_status,
+    print_doctor_report,
+    run_doctor,
+)
+from fspack.platform import Platform
+
+# ---- 数据结构 ----
+
+
+def test_check_status_values() -> None:
+    """CheckStatus 三态枚举：OK/WARN/ERROR."""
+    assert CheckStatus.OK.value == "ok"
+    assert CheckStatus.WARN.value == "warn"
+    assert CheckStatus.ERROR.value == "error"
+
+
+def test_check_result_frozen() -> None:
+    """CheckResult 是 frozen dataclass，不可变."""
+    result = CheckResult(name="test", status=CheckStatus.OK, detail="v1.0")
+    with pytest.raises(AttributeError):
+        result.name = "other"  # type: ignore[misc]
+
+
+def test_check_result_default_suggestion_empty() -> None:
+    """CheckResult suggestion 默认为空字符串."""
+    result = CheckResult(name="test", status=CheckStatus.OK, detail="v1.0")
+    assert result.suggestion == ""
+
+
+def test_doctor_report_has_error() -> None:
+    """DoctorReport.has_error 检测 ERROR 级别."""
+    report = DoctorReport(
+        env_info=(),
+        tool_checks=(
+            CheckResult("a", CheckStatus.OK, "v1"),
+            CheckResult("b", CheckStatus.ERROR, "缺失", "安装"),
+        ),
+    )
+    assert report.has_error is True
+    assert report.has_warn is False
+
+
+def test_doctor_report_has_warn() -> None:
+    """DoctorReport.has_warn 检测 WARN 级别."""
+    report = DoctorReport(
+        env_info=(),
+        tool_checks=(
+            CheckResult("a", CheckStatus.OK, "v1"),
+            CheckResult("b", CheckStatus.WARN, "可选", "建议安装"),
+        ),
+    )
+    assert report.has_error is False
+    assert report.has_warn is True
+
+
+def test_doctor_report_all_ok() -> None:
+    """DoctorReport 全 OK 时 has_error/has_warn 均 False."""
+    report = DoctorReport(
+        env_info=(),
+        tool_checks=(CheckResult("a", CheckStatus.OK, "v1"),),
+    )
+    assert report.has_error is False
+    assert report.has_warn is False
+
+
+# ---- _format_size ----
+
+
+@pytest.mark.parametrize(
+    ("size_bytes", "expected"),
+    [
+        (0, "0 B"),
+        (1023, "1023 B"),
+        (1024, "1.0 KiB"),
+        (1536, "1.5 KiB"),
+        (1024 * 1024, "1.0 MiB"),
+        (1024 * 1024 * 1024, "1.0 GiB"),
+        (1024 * 1024 * 1024 * 1024, "1.0 TiB"),
+    ],
+)
+def test_format_size(size_bytes: int, expected: str) -> None:
+    """_format_size 按单位阶梯格式化字节数."""
+    assert _format_size(size_bytes) == expected
+
+
+# ---- _format_status ----
+
+
+@pytest.mark.parametrize(
+    ("status", "label", "style"),
+    [
+        (CheckStatus.OK, "√ OK", "green"),
+        (CheckStatus.WARN, "! WARN", "yellow"),
+        (CheckStatus.ERROR, "× ERROR", "red"),
+    ],
+)
+def test_format_status(status: CheckStatus, label: str, style: str) -> None:
+    """_format_status 返回中文标签 + rich 样式."""
+    assert _format_status(status) == (label, style)
+
+
+# ---- _check_tool_version ----
+
+
+def test_check_tool_version_success() -> None:
+    """工具版本查询成功返回 OK + 版本首行."""
+
+    # 模拟成功结果
+    class _FakeCompleted:
+        returncode = 0
+        stdout = "gcc (Ubuntu 11.4.0) 11.4.0\nCopyright (C) 2021\n"
+        stderr = ""
+
+    with patch("fspack.cli_doctor.shutil.which", return_value="/usr/bin/gcc"), patch(
+        "fspack.cli_doctor.subprocess.run", return_value=_FakeCompleted()
+    ):
+        result = _check_tool_version("gcc", ["gcc", "--version"])
+    assert result.status is CheckStatus.OK
+    assert "11.4.0" in result.detail
+
+
+def test_check_tool_version_not_found() -> None:
+    """工具未安装在 PATH 时返回 ERROR + 修复建议."""
+    with patch("fspack.cli_doctor.shutil.which", return_value=None):
+        result = _check_tool_version(
+            "gcc",
+            ["gcc", "--version"],
+            error_suggestion="请安装 gcc",
+        )
+    assert result.status is CheckStatus.ERROR
+    assert result.detail == "未找到"
+    assert result.suggestion == "请安装 gcc"
+
+
+def test_check_tool_version_not_found_warn_only() -> None:
+    """warn_only=True 时未安装降级为 WARN."""
+    with patch("fspack.cli_doctor.shutil.which", return_value=None):
+        result = _check_tool_version(
+            "wine",
+            ["wine", "--version"],
+            error_suggestion="可选工具",
+            warn_only=True,
+        )
+    assert result.status is CheckStatus.WARN
+    assert result.suggestion == "可选工具"
+
+
+def test_check_tool_version_timeout() -> None:
+    """工具执行超时返回 ERROR（不阻塞测试，patch 抛 TimeoutExpired）."""
+    with patch("fspack.cli_doctor.shutil.which", return_value="/usr/bin/gcc"), patch(
+        "fspack.cli_doctor.subprocess.run",
+        side_effect=subprocess.TimeoutExpired(cmd=["gcc"], timeout=5),
+    ):
+        result = _check_tool_version("gcc", ["gcc", "--version"], error_suggestion="超时")
+    assert result.status is CheckStatus.ERROR
+    assert "执行失败" in result.detail
+
+
+def test_check_tool_version_oserror() -> None:
+    """工具执行 OSError 返回 ERROR."""
+    with patch("fspack.cli_doctor.shutil.which", return_value="/usr/bin/gcc"), patch(
+        "fspack.cli_doctor.subprocess.run", side_effect=OSError("permission denied")
+    ):
+        result = _check_tool_version("gcc", ["gcc", "--version"], error_suggestion="权限")
+    assert result.status is CheckStatus.ERROR
+    assert "执行失败" in result.detail
+
+
+def test_check_tool_version_nonzero_returncode() -> None:
+    """工具退出码非零返回 ERROR + stderr 首行."""
+
+    class _FakeFailed:
+        returncode = 2
+        stdout = ""
+        stderr = "Error: invalid option\nsecond line\n"
+
+    with patch("fspack.cli_doctor.shutil.which", return_value="/usr/bin/gcc"), patch(
+        "fspack.cli_doctor.subprocess.run", return_value=_FakeFailed()
+    ):
+        result = _check_tool_version("gcc", ["gcc", "--version"], error_suggestion="失败")
+    assert result.status is CheckStatus.ERROR
+    assert "退出码 2" in result.detail
+    assert "invalid option" in result.detail
+
+
+def test_check_tool_version_no_parse_version() -> None:
+    """parse_version=False 时仅返回"可用"不取版本首行."""
+
+    class _FakeOk:
+        returncode = 0
+        stdout = "wine-8.0\nsome extra\n"
+        stderr = ""
+
+    with patch("fspack.cli_doctor.shutil.which", return_value="/usr/bin/wine"), patch(
+        "fspack.cli_doctor.subprocess.run", return_value=_FakeOk()
+    ):
+        result = _check_tool_version(
+            "wine",
+            ["wine", "--version"],
+            parse_version=False,
+        )
+    assert result.status is CheckStatus.OK
+    assert result.detail == "可用"
+
+
+def test_check_tool_version_empty_stdout() -> None:
+    """工具 stdout 为空时返回"可用"（兜底，避免 IndexError）."""
+
+    class _EmptyStdout:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    with patch("fspack.cli_doctor.shutil.which", return_value="/usr/bin/gcc"), patch(
+        "fspack.cli_doctor.subprocess.run", return_value=_EmptyStdout()
+    ):
+        result = _check_tool_version("gcc", ["gcc", "--version"])
+    assert result.status is CheckStatus.OK
+    assert result.detail == "可用"
+
+
+# ---- _check_pillow ----
+
+
+def test_check_pillow_ok(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pillow 已安装且版本 >= 9.4.0 返回 OK."""
+
+    class _FakePIL:
+        __version__ = "10.2.0"
+
+    monkeypatch.setitem(__import__("sys").modules, "PIL", _FakePIL)
+    result = _check_pillow()
+    assert result.status is CheckStatus.OK
+    assert result.detail == "10.2.0"
+
+
+def test_check_pillow_version_too_low(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pillow < 9.4.0 返回 WARN（bitmap_format 参数缺失）."""
+
+    class _FakePIL:
+        __version__ = "9.3.0"
+
+    monkeypatch.setitem(__import__("sys").modules, "PIL", _FakePIL)
+    result = _check_pillow()
+    assert result.status is CheckStatus.WARN
+    assert "9.3.0" in result.detail
+    assert "9.4.0" in result.suggestion
+
+
+def test_check_pillow_not_installed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pillow 未安装返回 ERROR."""
+
+    def _raise_import(name: str, *args: object, **kwargs: object) -> None:
+        raise ImportError(name)
+
+    monkeypatch.setitem(__import__("sys").modules, "PIL", None)
+    monkeypatch.setattr("builtins.__import__", _raise_import)
+    result = _check_pillow()
+    assert result.status is CheckStatus.ERROR
+    assert result.detail == "未安装"
+    assert "Pillow>=9.4.0" in result.suggestion
+
+
+def test_check_pillow_version_unparseable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pillow 版本号无法解析时跳过版本检查仅报告已安装."""
+
+    class _FakePIL:
+        __version__ = "unknown"
+
+    monkeypatch.setitem(__import__("sys").modules, "PIL", _FakePIL)
+    result = _check_pillow()
+    assert result.status is CheckStatus.OK
+    assert result.detail == "unknown"
+
+
+# ---- _check_pip ----
+
+
+def test_check_pip_via_pip_command() -> None:
+    """pip 命令在 PATH 时直接调用 pip --version."""
+
+    class _FakePip:
+        returncode = 0
+        stdout = "pip 24.0 from /usr/lib/python3/dist-packages/pip (python 3.11)\n"
+        stderr = ""
+
+    with patch("fspack.cli_doctor.shutil.which", return_value="/usr/bin/pip"), patch(
+        "fspack.cli_doctor.subprocess.run", return_value=_FakePip()
+    ):
+        result = _check_pip()
+    assert result.status is CheckStatus.OK
+    assert "pip 24.0" in result.detail
+
+
+def test_check_pip_via_python_module() -> None:
+    """pip 命令不在 PATH 但 python -m pip 可用时回退成功."""
+
+    class _FakePipModule:
+        returncode = 0
+        stdout = "pip 23.0 from /usr/lib/python3.11/site-packages/pip (python 3.11)\n"
+        stderr = ""
+
+    def _which(name: str) -> None:
+        return None
+
+    with patch("fspack.cli_doctor.shutil.which", side_effect=_which), patch(
+        "fspack.cli_doctor.subprocess.run", return_value=_FakePipModule()
+    ):
+        result = _check_pip()
+    assert result.status is CheckStatus.OK
+    assert "pip 23.0" in result.detail
+
+
+def test_check_pip_not_found() -> None:
+    """pip 命令与 python -m pip 均不可用时返回 ERROR."""
+
+    class _FakeFail:
+        returncode = 1
+        stdout = ""
+        stderr = "No module named pip"
+
+    def _which(name: str) -> None:
+        return None
+
+    with patch("fspack.cli_doctor.shutil.which", side_effect=_which), patch(
+        "fspack.cli_doctor.subprocess.run", return_value=_FakeFail()
+    ):
+        result = _check_pip()
+    assert result.status is CheckStatus.ERROR
+    assert result.detail == "未找到"
+    assert "ensurepip" in result.suggestion
+
+
+def test_check_pip_python_module_oserror() -> None:
+    """python -m pip 执行 OSError 时返回 ERROR."""
+
+    def _which(name: str) -> None:
+        return None
+
+    with patch("fspack.cli_doctor.shutil.which", side_effect=_which), patch(
+        "fspack.cli_doctor.subprocess.run", side_effect=OSError("denied")
+    ):
+        result = _check_pip()
+    assert result.status is CheckStatus.ERROR
+
+
+# ---- _check_cache_dir ----
+
+
+def test_check_cache_dir_not_exists(tmp_path: Path) -> None:
+    """缓存目录不存在视为 OK（首次使用尚未下载）."""
+    nonexistent = tmp_path / "no-cache"
+    result = _check_cache_dir(nonexistent)
+    assert result.status is CheckStatus.OK
+    assert "尚未创建" in result.detail
+
+
+def test_check_cache_dir_with_files(tmp_path: Path) -> None:
+    """缓存目录有文件时返回 OK + 大小统计."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / "a.txt").write_bytes(b"x" * 1024)
+    (cache / "sub").mkdir()
+    (cache / "sub" / "b.bin").write_bytes(b"y" * 2048)
+
+    result = _check_cache_dir(cache)
+    assert result.status is CheckStatus.OK
+    assert "KiB" in result.detail
+    # 1024 + 2048 = 3072 B = 3.0 KiB
+    assert "3.0 KiB" in result.detail
+
+
+def test_check_cache_dir_scan_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """扫描缓存目录 OSError 时降级为 WARN（不影响打包）."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+
+    def _raise_oserror(path: Path) -> int:
+        raise OSError("permission denied")
+
+    monkeypatch.setattr("fspack.cli_doctor._dir_size", _raise_oserror)
+    result = _check_cache_dir(cache)
+    assert result.status is CheckStatus.WARN
+    assert "扫描缓存目录失败" in result.suggestion
+
+
+# ---- _dir_size ----
+
+
+def test_dir_size_empty(tmp_path: Path) -> None:
+    """空目录大小为 0."""
+    assert _dir_size(tmp_path) == 0
+
+
+def test_dir_size_with_files(tmp_path: Path) -> None:
+    """_dir_size 递归累加所有文件大小."""
+    (tmp_path / "a.txt").write_bytes(b"hello")  # 5 B
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    (sub / "b.bin").write_bytes(b"x" * 100)  # 100 B
+    assert _dir_size(tmp_path) == 105
+
+
+def test_dir_size_ignores_unreadable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_dir_size 跳过 stat 失败的文件，不抛异常."""
+    (tmp_path / "ok.txt").write_bytes(b"abc")
+
+    # 模拟 stat 失败：patch Path.stat 仅对 unreadable.txt 抛 OSError
+    real_stat = Path.stat
+
+    def _mocked_stat(self: Path, *args: object, **kwargs: object) -> object:
+        if self.name == "unreadable.txt":
+            raise OSError("denied")
+        return real_stat(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    (tmp_path / "unreadable.txt").write_bytes(b"xyz")
+    monkeypatch.setattr(Path, "stat", _mocked_stat)
+    # 应只统计 ok.txt 的 3 B，unreadable.txt 跳过
+    assert _dir_size(tmp_path) == 3
+
+
+# ---- run_doctor ----
+
+
+def test_run_doctor_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """run_doctor 在 Windows 平台检查 mingw/NSIS，不查 gcc/wine."""
+    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.WINDOWS)
+
+    # mock 所有工具检查返回 OK，避免实际依赖系统工具
+    def _fake_ok(name: str, cmd: list[str], **kwargs: object) -> CheckResult:
+        return CheckResult(name=name, status=CheckStatus.OK, detail="mocked")
+
+    monkeypatch.setattr("fspack.cli_doctor._check_tool_version", _fake_ok)
+    monkeypatch.setattr("fspack.cli_doctor._check_pillow", lambda: CheckResult("Pillow", CheckStatus.OK, "10.0"))
+    monkeypatch.setattr("fspack.cli_doctor._check_pip", lambda: CheckResult("pip", CheckStatus.OK, "24.0"))
+    monkeypatch.setattr("fspack.cli_doctor._check_uv", lambda: CheckResult("uv", CheckStatus.OK, "0.4"))
+    monkeypatch.setattr("fspack.cli_doctor._check_mingw", lambda: CheckResult("mingw-w64", CheckStatus.OK, "13.2.0"))
+    monkeypatch.setattr("fspack.cli_doctor._check_nsis", lambda: CheckResult("NSIS", CheckStatus.OK, "3.09"))
+
+    report = run_doctor()
+
+    # 环境信息应有 5 项
+    assert len(report.env_info) == 5
+    env_names = {r.name for r in report.env_info}
+    assert env_names == {"Python", "平台", "fspack", "镜像源", "缓存目录"}
+
+    # Windows 工具检查应含 mingw + NSIS，不含 gcc/wine
+    tool_names = {r.name for r in report.tool_checks}
+    assert "mingw-w64" in tool_names
+    assert "NSIS" in tool_names
+    assert "gcc" not in tool_names
+    assert "wine" not in tool_names
+
+
+def test_run_doctor_linux(monkeypatch: pytest.MonkeyPatch) -> None:
+    """run_doctor 在 Linux 平台检查 gcc/wine，不查 mingw."""
+    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+
+    monkeypatch.setattr("fspack.cli_doctor._check_pillow", lambda: CheckResult("Pillow", CheckStatus.OK, "10.0"))
+    monkeypatch.setattr("fspack.cli_doctor._check_pip", lambda: CheckResult("pip", CheckStatus.OK, "24.0"))
+    monkeypatch.setattr("fspack.cli_doctor._check_uv", lambda: CheckResult("uv", CheckStatus.OK, "0.4"))
+    monkeypatch.setattr("fspack.cli_doctor._check_gcc", lambda: CheckResult("gcc", CheckStatus.OK, "11.4"))
+    monkeypatch.setattr("fspack.cli_doctor._check_wine", lambda: CheckResult("wine", CheckStatus.WARN, "未安装"))
+    monkeypatch.setattr(
+        "fspack.cli_doctor._check_makensis_on_linux",
+        lambda: CheckResult("NSIS (交叉打包)", CheckStatus.WARN, "未安装"),
+    )
+
+    report = run_doctor()
+
+    tool_names = {r.name for r in report.tool_checks}
+    assert "gcc" in tool_names
+    assert "wine" in tool_names
+    assert "NSIS (交叉打包)" in tool_names
+    assert "mingw-w64" not in tool_names
+    assert "NSIS" not in tool_names  # 不含 Windows 专属 NSIS
+
+    # wine 警告应让 has_warn=True
+    assert report.has_warn is True
+
+
+def test_run_doctor_has_error_when_tool_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """run_doctor 必备工具缺失时 has_error=True."""
+    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+
+    monkeypatch.setattr("fspack.cli_doctor._check_pillow", lambda: CheckResult("Pillow", CheckStatus.OK, "10.0"))
+    monkeypatch.setattr(
+        "fspack.cli_doctor._check_pip",
+        lambda: CheckResult("pip", CheckStatus.ERROR, "未找到", "安装 pip"),
+    )
+    monkeypatch.setattr("fspack.cli_doctor._check_uv", lambda: CheckResult("uv", CheckStatus.OK, "0.4"))
+    monkeypatch.setattr(
+        "fspack.cli_doctor._check_gcc",
+        lambda: CheckResult("gcc", CheckStatus.ERROR, "未找到", "安装 gcc"),
+    )
+    monkeypatch.setattr("fspack.cli_doctor._check_wine", lambda: CheckResult("wine", CheckStatus.WARN, "未安装"))
+    monkeypatch.setattr(
+        "fspack.cli_doctor._check_makensis_on_linux",
+        lambda: CheckResult("NSIS (交叉打包)", CheckStatus.WARN, "未安装"),
+    )
+
+    report = run_doctor()
+    assert report.has_error is True
+
+
+# ---- print_doctor_report ----
+
+
+def test_print_doctor_report_all_ok(capsys: pytest.CaptureFixture[str]) -> None:
+    """print_doctor_report 全 OK 时输出"环境就绪"."""
+    report = DoctorReport(
+        env_info=(CheckResult("Python", CheckStatus.OK, "3.11.9"),),
+        tool_checks=(CheckResult("pip", CheckStatus.OK, "24.0"),),
+    )
+    print_doctor_report(report)
+    output = capsys.readouterr().out
+    assert "环境信息" in output
+    assert "工具检查" in output
+    assert "环境就绪" in output
+
+
+def test_print_doctor_report_with_error(capsys: pytest.CaptureFixture[str]) -> None:
+    """print_doctor_report 含 ERROR 时输出"存在错误"."""
+    report = DoctorReport(
+        env_info=(),
+        tool_checks=(
+            CheckResult("gcc", CheckStatus.ERROR, "未找到", "安装 gcc"),
+            CheckResult("pip", CheckStatus.OK, "24.0"),
+        ),
+    )
+    print_doctor_report(report)
+    output = capsys.readouterr().out
+    assert "1 错误" in output
+    assert "可能导致打包失败" in output
+
+
+def test_print_doctor_report_with_warn(capsys: pytest.CaptureFixture[str]) -> None:
+    """print_doctor_report 含 WARN 时输出"存在警告"."""
+    report = DoctorReport(
+        env_info=(),
+        tool_checks=(
+            CheckResult("wine", CheckStatus.WARN, "未安装", "可选"),
+            CheckResult("pip", CheckStatus.OK, "24.0"),
+        ),
+    )
+    print_doctor_report(report)
+    output = capsys.readouterr().out
+    assert "1 警告" in output
+    assert "不阻塞打包但建议处理" in output
+
+
+def test_print_doctor_report_renders_table(capsys: pytest.CaptureFixture[str]) -> None:
+    """print_doctor_report 渲染表格包含所有诊断项名称."""
+    report = DoctorReport(
+        env_info=(CheckResult("Python", CheckStatus.OK, "3.11.9"),),
+        tool_checks=(
+            CheckResult("gcc", CheckStatus.ERROR, "未找到", "安装 gcc"),
+            CheckResult("Pillow", CheckStatus.OK, "10.0"),
+        ),
+    )
+    print_doctor_report(report)
+    output = capsys.readouterr().out
+    assert "Python" in output
+    assert "gcc" in output
+    assert "Pillow" in output
+
+
+# ---- CLI 集成测试 ----
+
+
+def test_cli_doctor_dispatches_to_run_doctor() -> None:
+    """``fsp doctor`` 命令分发到 _run_doctor → run_doctor + print_doctor_report."""
+    from fspack.cli import main
+
+    # mock run_doctor 返回全 OK 报告，避免依赖系统工具
+    fake_report = DoctorReport(
+        env_info=(CheckResult("Python", CheckStatus.OK, "3.11.9"),),
+        tool_checks=(CheckResult("pip", CheckStatus.OK, "24.0"),),
+    )
+    with patch("fspack.cli_doctor.run_doctor", return_value=fake_report) as mock_run, patch(
+        "fspack.cli_doctor.print_doctor_report"
+    ) as mock_print:
+        main(["doctor"])
+    mock_run.assert_called_once()
+    mock_print.assert_called_once_with(fake_report)
+
+
+def test_cli_doctor_in_help() -> None:
+    """``fsp --help`` 输出含 doctor 子命令."""
+    from fspack.cli import build_parser
+
+    parser = build_parser()
+    help_text = parser.format_help()
+    assert "doctor" in help_text
+    assert "环境诊断" in help_text

@@ -74,6 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_clean_subparser(sub)
     _add_package_subparser(sub)
     _add_init_subparser(sub)
+    _add_doctor_subparser(sub)
     return parser
 
 
@@ -265,6 +266,16 @@ def _add_init_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]
     )
 
 
+def _add_doctor_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """添加 doctor 子命令：环境诊断.
+
+    检查 fspack 打包所需工具（mingw/gcc/NSIS/wine/pip/uv/Pillow）可用性，
+    显示 Python 版本、平台、镜像源、缓存目录大小，输出三色诊断结果与修复建议。
+    无参数，无项目依赖，可在任何目录执行。
+    """
+    sub.add_parser("doctor", help="环境诊断：检查打包工具可用性与配置")
+
+
 def main(argv: list[str] | None = None) -> None:
     """主入口，解析参数并分发到子命令."""
     parser = build_parser()
@@ -281,6 +292,10 @@ def main(argv: list[str] | None = None) -> None:
 
     if command in ("init", "i"):
         _run_init(ns)
+        return
+
+    if command == "doctor":
+        _run_doctor()
         return
 
     project = Path(ns.project).resolve()
@@ -401,6 +416,18 @@ def _run_init(ns: argparse.Namespace) -> None:
 
         console.error(str(exc))
         sys.exit(1)
+
+
+def _run_doctor() -> None:
+    """执行 doctor 子命令：环境诊断，输出三色诊断报告.
+
+    调用 :func:`fspack.cli_doctor.run_doctor` 收集诊断结果，
+    用 :func:`print_doctor_report` 渲染到控制台。无项目依赖，可在任何目录执行。
+    """
+    from fspack.cli_doctor import print_doctor_report, run_doctor
+
+    report = run_doctor()
+    print_doctor_report(report)
 
 
 def discover_subprojects(root: Path) -> list[Path]:
