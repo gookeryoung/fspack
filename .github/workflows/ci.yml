@@ -5,6 +5,9 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main, develop]
+  # slow-e2e job 专用：每周六 04:00 UTC 定时触发，PR/push 不触发该 job
+  schedule:
+    - cron: '0 4 * * 6'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -36,13 +39,16 @@ jobs:
       - name: Pyrefly check
         run: uv run pyrefly check
 
+  # ===== 单元测试矩阵：ubuntu + windows × Python 3.8/3.14 =====
+  # Windows 矩阵覆盖 Windows 路径处理、PATH 分隔符、注册表访问等平台特有逻辑
   test:
-    name: Test (Python 3.8 & 3.14)
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    name: Test (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, windows-latest]
         python-version: ["3.8", "3.14"]
     steps:
       - uses: actions/checkout@v5
@@ -61,3 +67,103 @@ jobs:
 
       - name: Run tests
         run: uv run pytest -m "not slow" --cov=fspack --cov-fail-under=95 --cov-report=term-missing
+
+  # ===== slow 端到端测试：仅 cron 触发，PR/push 不触发 =====
+  # 每周六 04:00 UTC 运行，覆盖真实下载 embed python + mingw 编译 + wine 运行
+  # 安装 mingw-w64 + wine，运行 tests/test_e2e_slow.py 全部 slow 用例
+  slow-e2e:
+    name: Slow E2E (cron)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule'
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Sync dependencies
+        run: uv sync --frozen --extra test --python 3.11
+
+      - name: Install mingw-w64 & wine
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y mingw-w64 wine wine32
+
+      # fspack 的 download_wheels 用 `pip download` 拉 wheel，但 uv 管理的 venv 默认不含 pip，
+      # 且 CI runner 上 PATH 中可能没有带 pip 的系统 python，故显式安装 pip 到 venv。
+      - name: Install pip
+        run: uv pip install pip
+
+      - name: Cache fspack assets
+        uses: actions/cache@v4
+        with:
+          path: ~/.fspack/cache/
+          key: fspack-slow-e2e-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            fspack-slow-e2e-
+            fspack-linux-
+            fspack-
+
+      - name: Run slow E2E tests
+        env:
+          PYTHONIOENCODING: utf-8
+        run: uv run pytest -m slow --cov=fspack --cov-report=term-missing -v
+
+  # ===== 性能基准门禁：仅 push to main 触发，PR 不触发 =====
+  # 运行 pytest-benchmark 基线测试，与上次基线对比，退化 >10% 失败
+  # 基线按平台缓存（.benchmarks/），首次运行无基线不失败，后续运行对比门禁
+  benchmark:
+    name: Benchmark gate
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Sync dependencies
+        run: uv sync --frozen --extra test --python 3.11
+
+      # 基线缓存：按平台 + Python 版本分组，避免硬件差异导致误报
+      - name: Restore benchmark baseline
+        uses: actions/cache@v4
+        with:
+          path: .benchmarks/
+          key: benchmark-ubuntu-3.11-${{ github.run_id }}
+          restore-keys: |
+            benchmark-ubuntu-3.11-
+
+      - name: Run benchmark tests
+        run: |
+          uv run pytest tests/test_perf_baseline.py -m slow \
+            --benchmark-only \
+            --benchmark-save=main \
+            --benchmark-compare \
+            --benchmark-compare-fail=mean:10% \
+            --benchmark-min-rounds=10 \
+            --benchmark-warmup=on \
+            --benchmark-columns=median,min,mean,stddev
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: .benchmarks/
+          retention-days: 30
