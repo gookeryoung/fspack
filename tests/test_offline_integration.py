@@ -118,7 +118,7 @@ def test_build_offline_uses_cache_dir_env_var(tmp_path: Path, monkeypatch: pytes
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(cache_dir))
     monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", _fail_urlopen)
     # mock extract_embed 跳过实际解压（假 zip 无法解压）
-    monkeypatch.setattr("fspack.packaging.pipeline.extract_embed", lambda zip_path, runtime_dir: None)
+    monkeypatch.setattr("fspack.packaging.pipeline_stages.extract_embed", lambda zip_path, runtime_dir: None)
 
     proj = _copy_example("cli_helloworld_pyall", tmp_path)
     from fspack.builder import build
@@ -173,7 +173,7 @@ def test_build_non_offline_falls_back_to_network(tmp_path: Path, monkeypatch: py
 
     monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", fake_urlopen)
     # mock extract_embed 跳过实际解压（假数据无法解压）
-    monkeypatch.setattr("fspack.packaging.pipeline.extract_embed", lambda zip_path, runtime_dir: None)
+    monkeypatch.setattr("fspack.packaging.pipeline_stages.extract_embed", lambda zip_path, runtime_dir: None)
 
     proj = _copy_example("cli_helloworld_pyall", tmp_path)
     from fspack.builder import build

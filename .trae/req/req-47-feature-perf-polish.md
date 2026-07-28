@@ -102,7 +102,7 @@ req-46 完成缓存配置 + 离线支持 + init 模板命令（iter-76~85），�
 
 中风险，需基线守护，先拆分大文件降低后续迭代阅读成本，再做精细优化。
 
-- [ ] **iter-91 nuitka_compile.py + nuitka_env.py 拆分**：(1) `nuitka_compile.py`
+- [x] **iter-91 nuitka_compile.py + nuitka_env.py 拆分**：(1) `nuitka_compile.py`
   809 行 → `nuitka_compile.py`（compile_src/compile_packages 编译入口 + stamp
   缓存）+ `nuitka_strip.py`（产物剥离与 .pyd 可加载性验证），`nuitka.py`
   facade 不变；(2) `nuitka_env.py` 666 行 → `nuitka_env.py`（NuitkaEnv

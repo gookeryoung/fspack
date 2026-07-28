@@ -83,7 +83,7 @@ def test_download_wheels_fallback_cmd_has_index(tmp_path: Path, monkeypatch: pyt
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
     monkeypatch.setattr("fspack.packaging.wheel_pip._stream_subprocess", fake_stream)
     monkeypatch.setattr("fspack.packaging.wheel_pip._find_pip_python", lambda: "/py/python")
-    monkeypatch.setattr("fspack.packaging.wheel_pip._find_uv", lambda: None)
+    monkeypatch.setattr("fspack.packaging.wheel_resolver._find_uv", lambda: None)
     download_wheels(("numpy",), "3.11.9", "https://idx/simple", tmp_path / "cache")
     assert len(calls) == 2
     assert "--no-index" in calls[0]
@@ -153,7 +153,7 @@ def test_download_wheels_pip_error(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
     monkeypatch.setattr("fspack.packaging.wheel_pip._stream_subprocess", fake_stream)
     monkeypatch.setattr("fspack.packaging.wheel_pip._find_pip_python", lambda: "/py/python")
-    monkeypatch.setattr("fspack.packaging.wheel_pip._find_uv", lambda: None)
+    monkeypatch.setattr("fspack.packaging.wheel_resolver._find_uv", lambda: None)
     with pytest.raises(DependencyError, match="依赖下载失败"):
         download_wheels(("numpy",), "3.11.9", "https://idx", tmp_path / "cache")
 
@@ -903,7 +903,7 @@ def test_download_wheels_sdist_fallback_retry(tmp_path: Path, monkeypatch: pytes
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
     monkeypatch.setattr("fspack.packaging.wheel_pip._stream_subprocess", fake_stream)
     monkeypatch.setattr("fspack.packaging.wheel_pip._find_pip_python", lambda: "/py/python")
-    monkeypatch.setattr("fspack.packaging.wheel_pip._find_uv", lambda: None)
+    monkeypatch.setattr("fspack.packaging.wheel_resolver._find_uv", lambda: None)
     result = download_wheels(("odfpy>=1.4.1",), "3.8.10", "https://idx/simple", cache)
     assert call_count["index_download"] == 2
     assert call_count["pip_wheel"] == 1
@@ -925,7 +925,7 @@ def test_download_wheels_sdist_fallback_no_missing_reraises(tmp_path: Path, monk
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
     monkeypatch.setattr("fspack.packaging.wheel_pip._stream_subprocess", fake_stream)
     monkeypatch.setattr("fspack.packaging.wheel_pip._find_pip_python", lambda: "/py/python")
-    monkeypatch.setattr("fspack.packaging.wheel_pip._find_uv", lambda: None)
+    monkeypatch.setattr("fspack.packaging.wheel_resolver._find_uv", lambda: None)
     with pytest.raises(DependencyError, match="依赖下载失败"):
         download_wheels(("numpy",), "3.8.10", "https://idx/simple", tmp_path / "cache")
 
@@ -947,7 +947,7 @@ def test_find_uv_returns_none_when_not_found(monkeypatch: pytest.MonkeyPatch) ->
 
 def test_resolve_with_uv_success(monkeypatch: pytest.MonkeyPatch) -> None:
     """uv pip compile 成功时返回 name==version 列表."""
-    monkeypatch.setattr("fspack.packaging.wheel_pip._find_uv", lambda: "/usr/bin/uv")
+    monkeypatch.setattr("fspack.packaging.wheel_resolver._find_uv", lambda: "/usr/bin/uv")
     # uv pip compile 输出格式：每行 "name==version"，含注释行（# 开头）
     fake_output = "numpy==1.24.0\n  # via -r -\nrequests==2.31.0\n  # via -r -\n"
     captured: dict[str, Any] = {}
@@ -975,7 +975,7 @@ def test_resolve_with_uv_success(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_resolve_with_uv_linux_platform(monkeypatch: pytest.MonkeyPatch) -> None:
     """Linux 平台标签映射到 --python-platform linux."""
-    monkeypatch.setattr("fspack.packaging.wheel_pip._find_uv", lambda: "/usr/bin/uv")
+    monkeypatch.setattr("fspack.packaging.wheel_resolver._find_uv", lambda: "/usr/bin/uv")
     captured: dict[str, list[str]] = {}
 
     def fake_run(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
@@ -989,14 +989,14 @@ def test_resolve_with_uv_linux_platform(monkeypatch: pytest.MonkeyPatch) -> None
 
 def test_resolve_with_uv_no_uv_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     """uv 不可用时抛 DependencyError."""
-    monkeypatch.setattr("fspack.packaging.wheel_pip._find_uv", lambda: None)
+    monkeypatch.setattr("fspack.packaging.wheel_resolver._find_uv", lambda: None)
     with pytest.raises(DependencyError, match="未找到 uv"):
         _resolve_with_uv(("numpy",), "3.11.9", ("win_amd64",), "https://idx/simple")
 
 
 def test_resolve_with_uv_empty_output_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     """uv 输出无匹配行时抛 DependencyError."""
-    monkeypatch.setattr("fspack.packaging.wheel_pip._find_uv", lambda: "/usr/bin/uv")
+    monkeypatch.setattr("fspack.packaging.wheel_resolver._find_uv", lambda: "/usr/bin/uv")
 
     def fake_run(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(cmd, 0, stdout="only comments\n# no packages\n", stderr="")
@@ -1008,7 +1008,7 @@ def test_resolve_with_uv_empty_output_raises(monkeypatch: pytest.MonkeyPatch) ->
 
 def test_resolve_with_uv_calledprocess_error(monkeypatch: pytest.MonkeyPatch) -> None:
     """uv pip compile 非零退出时抛 CalledProcessError（供 _download_online 捕获回退）."""
-    monkeypatch.setattr("fspack.packaging.wheel_pip._find_uv", lambda: "/usr/bin/uv")
+    monkeypatch.setattr("fspack.packaging.wheel_resolver._find_uv", lambda: "/usr/bin/uv")
 
     def fake_run(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
         raise subprocess.CalledProcessError(1, cmd, output="", stderr="resolution failed")
@@ -1022,9 +1022,9 @@ def test_download_online_uv_resolved_uses_no_deps(tmp_path: Path, monkeypatch: p
     """uv 解析成功时并行 pip download --no-deps 下载，每个包独立调用."""
     cache = tmp_path / "cache"
     cache.mkdir()
-    monkeypatch.setattr("fspack.packaging.wheel_pip._find_uv", lambda: "/usr/bin/uv")
+    monkeypatch.setattr("fspack.packaging.wheel_resolver._find_uv", lambda: "/usr/bin/uv")
     monkeypatch.setattr(
-        "fspack.packaging.wheel_pip._resolve_with_uv",
+        "fspack.packaging.wheel_resolver._resolve_with_uv",
         lambda pkgs, pv, pt, idx, **kw: ["numpy==1.24.0", "requests==2.31.0"],
     )
     captured_cmds: list[list[str]] = []
@@ -1054,9 +1054,9 @@ def test_download_online_uv_fails_falls_back_to_pip(tmp_path: Path, monkeypatch:
     """uv 解析失败时回退到 pip 完整解析+下载."""
     cache = tmp_path / "cache"
     cache.mkdir()
-    monkeypatch.setattr("fspack.packaging.wheel_pip._find_uv", lambda: "/usr/bin/uv")
+    monkeypatch.setattr("fspack.packaging.wheel_resolver._find_uv", lambda: "/usr/bin/uv")
     monkeypatch.setattr(
-        "fspack.packaging.wheel_pip._resolve_with_uv",
+        "fspack.packaging.wheel_resolver._resolve_with_uv",
         lambda pkgs, pv, pt, idx, **kw: (_ for _ in ()).throw(subprocess.CalledProcessError(1, "uv", stderr="fail")),
     )
     captured: dict[str, list[str]] = {}
@@ -1078,7 +1078,7 @@ def test_download_online_no_uv_uses_pip_full(tmp_path: Path, monkeypatch: pytest
     """uv 不可用时直接用 pip 完整解析+下载."""
     cache = tmp_path / "cache"
     cache.mkdir()
-    monkeypatch.setattr("fspack.packaging.wheel_pip._find_uv", lambda: None)
+    monkeypatch.setattr("fspack.packaging.wheel_resolver._find_uv", lambda: None)
     captured: dict[str, list[str]] = {}
 
     def fake_stream(cmd: list[str]) -> _Completed:
@@ -1098,7 +1098,7 @@ def test_download_online_sdist_fallback(tmp_path: Path, monkeypatch: pytest.Monk
     """pip 下载失败且含 missing 包时走 sdist 回退."""
     cache = tmp_path / "cache"
     cache.mkdir()
-    monkeypatch.setattr("fspack.packaging.wheel_pip._find_uv", lambda: None)
+    monkeypatch.setattr("fspack.packaging.wheel_resolver._find_uv", lambda: None)
     call_count = {"index_download": 0, "pip_wheel": 0}
     whl_name = "odfpy-1.4.1-py3-none-any.whl"
 
@@ -1137,9 +1137,9 @@ def test_download_wheels_uv_path_integration(tmp_path: Path, monkeypatch: pytest
     cache.mkdir()
     whl_name = "numpy-1.24.0-cp311-cp311-win_amd64.whl"
     monkeypatch.setattr("fspack.packaging.wheel_pip._find_pip_python", lambda: "/py/python")
-    monkeypatch.setattr("fspack.packaging.wheel_pip._find_uv", lambda: "/usr/bin/uv")
+    monkeypatch.setattr("fspack.packaging.wheel_resolver._find_uv", lambda: "/usr/bin/uv")
     monkeypatch.setattr(
-        "fspack.packaging.wheel_pip._resolve_with_uv",
+        "fspack.packaging.wheel_resolver._resolve_with_uv",
         lambda pkgs, pv, pt, idx, **kw: ["numpy==1.24.0"],
     )
 
@@ -1170,9 +1170,9 @@ def test_download_online_uv_sdist_fallback(tmp_path: Path, monkeypatch: pytest.M
     cache = tmp_path / "cache"
     cache.mkdir()
     whl_name = "win-unicode-console-0.5-py3-none-any.whl"
-    monkeypatch.setattr("fspack.packaging.wheel_pip._find_uv", lambda: "/usr/bin/uv")
+    monkeypatch.setattr("fspack.packaging.wheel_resolver._find_uv", lambda: "/usr/bin/uv")
     monkeypatch.setattr(
-        "fspack.packaging.wheel_pip._resolve_with_uv",
+        "fspack.packaging.wheel_resolver._resolve_with_uv",
         lambda pkgs, pv, pt, idx, **kw: ["win-unicode-console==0.5"],
     )
     call_count = {"pip_download": 0, "pip_wheel": 0}
@@ -1231,10 +1231,10 @@ def test_download_resolved_parallel_multiple_packages(tmp_path: Path, monkeypatc
     """多包场景并行下载：每个包触发独立 subprocess.run 调用，结果合并 stdout."""
     cache = tmp_path / "cache"
     cache.mkdir()
-    monkeypatch.setattr("fspack.packaging.wheel_pip._find_uv", lambda: "/usr/bin/uv")
+    monkeypatch.setattr("fspack.packaging.wheel_resolver._find_uv", lambda: "/usr/bin/uv")
     resolved_pkgs = ["numpy==1.24.0", "requests==2.31.0", "rich==13.5.0"]
     monkeypatch.setattr(
-        "fspack.packaging.wheel_pip._resolve_with_uv",
+        "fspack.packaging.wheel_resolver._resolve_with_uv",
         lambda pkgs, pv, pt, idx, **kw: resolved_pkgs,
     )
     captured_cmds: list[list[str]] = []
@@ -1271,10 +1271,10 @@ def test_download_resolved_parallel_partial_failure_sdist_fallback(
     """并行下载部分失败：失败包触发 sdist 回退，重试仅针对失败包."""
     cache = tmp_path / "cache"
     cache.mkdir()
-    monkeypatch.setattr("fspack.packaging.wheel_pip._find_uv", lambda: "/usr/bin/uv")
+    monkeypatch.setattr("fspack.packaging.wheel_resolver._find_uv", lambda: "/usr/bin/uv")
     # numpy 成功，odfpy 失败（无 wheel，仅 sdist）
     monkeypatch.setattr(
-        "fspack.packaging.wheel_pip._resolve_with_uv",
+        "fspack.packaging.wheel_resolver._resolve_with_uv",
         lambda pkgs, pv, pt, idx, **kw: ["numpy==1.24.0", "odfpy==1.4.1"],
     )
     call_count = {"numpy_download": 0, "odfpy_download": 0, "pip_wheel": 0, "odfpy_retry": 0}
@@ -1340,10 +1340,10 @@ def test_download_resolved_parallel_multi_sdist_fallback(tmp_path: Path, monkeyp
     """
     cache = tmp_path / "cache"
     cache.mkdir()
-    monkeypatch.setattr("fspack.packaging.wheel_pip._find_uv", lambda: "/usr/bin/uv")
+    monkeypatch.setattr("fspack.packaging.wheel_resolver._find_uv", lambda: "/usr/bin/uv")
     # 3 个包：numpy 成功，odfpy 与 win-unicode-console 均仅 sdist
     monkeypatch.setattr(
-        "fspack.packaging.wheel_pip._resolve_with_uv",
+        "fspack.packaging.wheel_resolver._resolve_with_uv",
         lambda pkgs, pv, pt, idx, **kw: [
             "numpy==1.24.0",
             "odfpy==1.4.1",
@@ -1743,7 +1743,7 @@ def test_deps_cache_key_private_sources_order_independent() -> None:
 
 def test_resolve_with_uv_passes_extra_index_urls(monkeypatch: pytest.MonkeyPatch) -> None:
     """uv pip compile 命令含 --extra-index-url 参数."""
-    monkeypatch.setattr("fspack.packaging.wheel_pip._find_uv", lambda: "/usr/bin/uv")
+    monkeypatch.setattr("fspack.packaging.wheel_resolver._find_uv", lambda: "/usr/bin/uv")
     captured: dict[str, list[str]] = {}
 
     def fake_run(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
@@ -1766,7 +1766,7 @@ def test_resolve_with_uv_passes_extra_index_urls(monkeypatch: pytest.MonkeyPatch
 
 def test_resolve_with_uv_passes_find_links(monkeypatch: pytest.MonkeyPatch) -> None:
     """uv pip compile 命令含 --find-links 参数."""
-    monkeypatch.setattr("fspack.packaging.wheel_pip._find_uv", lambda: "/usr/bin/uv")
+    monkeypatch.setattr("fspack.packaging.wheel_resolver._find_uv", lambda: "/usr/bin/uv")
     captured: dict[str, list[str]] = {}
 
     def fake_run(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
@@ -1789,7 +1789,7 @@ def test_resolve_with_uv_passes_find_links(monkeypatch: pytest.MonkeyPatch) -> N
 
 def test_resolve_with_uv_no_private_sources_omits_args(monkeypatch: pytest.MonkeyPatch) -> None:
     """无私有包源时 uv 命令不含 --extra-index-url/--find-links."""
-    monkeypatch.setattr("fspack.packaging.wheel_pip._find_uv", lambda: "/usr/bin/uv")
+    monkeypatch.setattr("fspack.packaging.wheel_resolver._find_uv", lambda: "/usr/bin/uv")
     captured: dict[str, list[str]] = {}
 
     def fake_run(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
@@ -1807,7 +1807,7 @@ def test_download_online_uv_resolved_passes_extra_sources(tmp_path: Path, monkey
     """uv 解析成功路径：并行 pip download --no-deps 命令含私有包源参数."""
     cache = tmp_path / "cache"
     cache.mkdir()
-    monkeypatch.setattr("fspack.packaging.wheel_pip._find_uv", lambda: "/usr/bin/uv")
+    monkeypatch.setattr("fspack.packaging.wheel_resolver._find_uv", lambda: "/usr/bin/uv")
 
     def fake_resolve(  # noqa: PLR0913
         pkgs: Sequence[str],
@@ -1822,7 +1822,7 @@ def test_download_online_uv_resolved_passes_extra_sources(tmp_path: Path, monkey
         assert find_links == ("./wheels",)
         return ["numpy==1.24.0"]
 
-    monkeypatch.setattr("fspack.packaging.wheel_pip._resolve_with_uv", fake_resolve)
+    monkeypatch.setattr("fspack.packaging.wheel_resolver._resolve_with_uv", fake_resolve)
     captured_cmds: list[list[str]] = []
 
     def fake_run(cmd: list[str], **kw: Any) -> _Completed:
@@ -1856,7 +1856,7 @@ def test_download_online_pip_full_passes_extra_sources(tmp_path: Path, monkeypat
     """uv 不可用时 pip 完整解析+下载命令含私有包源参数."""
     cache = tmp_path / "cache"
     cache.mkdir()
-    monkeypatch.setattr("fspack.packaging.wheel_pip._find_uv", lambda: None)
+    monkeypatch.setattr("fspack.packaging.wheel_resolver._find_uv", lambda: None)
     captured: dict[str, list[str]] = {}
 
     def fake_stream(cmd: list[str]) -> _Completed:
@@ -1887,7 +1887,7 @@ def test_download_online_sdist_fallback_passes_extra_sources(tmp_path: Path, mon
     """sdist 回退路径：pip wheel 命令含私有包源参数."""
     cache = tmp_path / "cache"
     cache.mkdir()
-    monkeypatch.setattr("fspack.packaging.wheel_pip._find_uv", lambda: None)
+    monkeypatch.setattr("fspack.packaging.wheel_resolver._find_uv", lambda: None)
     call_count = {"index_download": 0, "pip_wheel": 0}
     whl_name = "odfpy-1.4.1-py3-none-any.whl"
     pip_wheel_cmds: list[list[str]] = []
@@ -1995,7 +1995,7 @@ def test_download_wheels_passes_extra_sources_to_pip(tmp_path: Path, monkeypatch
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
     monkeypatch.setattr("fspack.packaging.wheel_pip._stream_subprocess", fake_stream)
     monkeypatch.setattr("fspack.packaging.wheel_pip._find_pip_python", lambda: "/py/python")
-    monkeypatch.setattr("fspack.packaging.wheel_pip._find_uv", lambda: None)
+    monkeypatch.setattr("fspack.packaging.wheel_resolver._find_uv", lambda: None)
     download_wheels(
         ("numpy",),
         "3.11.9",

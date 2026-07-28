@@ -190,7 +190,7 @@ def test_download_wheels_offline_disabled_falls_back(tmp_path: Path, monkeypatch
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
     monkeypatch.setattr("fspack.packaging.wheel_pip._stream_subprocess", fake_stream)
     monkeypatch.setattr("fspack.packaging.wheel_pip._find_pip_python", lambda: "/py/python")
-    monkeypatch.setattr("fspack.packaging.wheel_pip._find_uv", lambda: None)
+    monkeypatch.setattr("fspack.packaging.wheel_resolver._find_uv", lambda: None)
     # 不抛异常即通过：成功回退到在线下载
     download_wheels(("numpy",), "3.11.9", "https://idx/simple", tmp_path / "cache")
     assert len(calls) == 2

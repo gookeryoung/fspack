@@ -1,66 +1,82 @@
-"""构建流水线编排：阶段函数（解析 → runtime → 依赖 → 源码 → loader）.
+"""构建流水线编排入口：``build`` 主入口 + 阶段函数 re-export + 公共辅助.
 
-本模块从 :mod:`fspack.builder` 抽离，含构建阶段编排与依赖缓存逻辑。
-``builder.py`` 通过 re-export 保持公开 API 不变。
+本模块从 :mod:`fspack.builder` 抽离，``builder.py`` 通过 re-export 保持公开 API 不变。
+按职责拆分到两个模块：
 
-依赖 :mod:`fspack.packaging.sync` 提供 ``copy_source``，
-:mod:`fspack.packaging.pyc` 提供 ``_trim_stdlib``/``_inject_win7_compat_dll``/
-``_needs_win7_compat_dll``/``_precompile_pyc``。
+- :mod:`fspack.packaging.pipeline`（本模块）：``build``/``_execute_build``/``resolve_project_info``
+  /``clean_dist``/``_print_build_plan`` 入口与编排，``_KEEP_NSI`` 常量
+- :mod:`fspack.packaging.pipeline_stages`：阶段函数实现（``_prepare_runtime``/
+  ``_analyze_dependencies``/``_download_dependencies``/``_compile_user_sources``/
+  ``_build_entry_loaders``）+ ``BuildContext`` + 依赖缓存 + icon 解析 + wheel 解压
+
+显式 ``import`` 运行时依赖（``write_pth``/``copy_source``/``compile_loader``/
+``download_embed``/``extract_embed``/``download_standalone``/``extract_standalone``/
+``download_wheels``）是为了兼容测试 ``monkeypatch.setattr("fspack.packaging.pipeline.<attr>", ...)``
+路径解析：patch 设置的是模块对象的属性，``_execute_build`` 内的调用通过模块全局
+名字解析取到 patch 后的值。
+
+从 :mod:`fspack.packaging.pipeline_stages` re-export 阶段函数与 ``BuildContext``，
+保持 ``fspack.packaging.pipeline.<fn>`` patch 路径兼容（测试通过本模块 patch 阶段函数）。
 """
 
 from __future__ import annotations
 
-import json
 import logging
-import re
-import tempfile
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from pathlib import Path
 from typing import Sequence
 
 from fspack.config import (
     DEFAULT_LINUX_PY_VERSION,
     DEFAULT_PY_VERSION,
-    DEFAULT_SLIM_RULES,
     BuildConfig,
     BuildOptions,
     DependencyReport,
     MirrorConfig,
     ProjectInfo,
-    SlimRules,
-    cache_root,
     embed_cache_dir,
-    nuitka_cache_dir,
     resolve_py_version,
-    standalone_cache_dir,
-    wheel_cache_dir,
 )
 from fspack.console import console
-from fspack.packaging.builtin import TkinterBundler
-from fspack.packaging.entry import EntryWrapper
-from fspack.packaging.icon import ensure_ico, find_favicon
-from fspack.packaging.loader import compile_loader, generate_loader_source
+from fspack.packaging.loader import compile_loader  # noqa: F401
 from fspack.packaging.log_file import LogFormat, setup_log_file, teardown_log_file
-from fspack.packaging.profile import ProfileContext, print_profile_report
-from fspack.packaging.pyc import (
-    _inject_win7_compat_dll,
-    _needs_win7_compat_dll,
-    _precompile_pyc,
-    _trim_stdlib,
+
+# re-export 阶段函数与 BuildContext：保持 fspack.packaging.pipeline.<fn> patch 路径兼容
+from fspack.packaging.pipeline_stages import (
+    _DEFAULT_ICON,  # noqa: F401
+    BuildContext,
+    _analyze_dependencies,
+    _build_entry_loaders,
+    _compile_user_sources,
+    _dep_cache_load,  # noqa: F401
+    _dep_cache_path,  # noqa: F401
+    _dep_cache_save,  # noqa: F401
+    _download_dependencies,
+    _normalize_pkg_name,  # noqa: F401
+    _prepare_linux_runtime,  # noqa: F401
+    _prepare_runtime,
+    _prepare_windows_runtime,  # noqa: F401
+    _resolve_project_icon,
+    _site_packages_has_deps,  # noqa: F401
+    _strip_version_specifier,  # noqa: F401
+    default_icon_path,
+    fspack_wheel_cache_dir,
+    unpack_wheels,
 )
-from fspack.packaging.runtime import (
-    STANDALONE_RELEASE_TAG,
+from fspack.packaging.profile import ProfileContext, print_profile_report
+
+# 显式导入运行时依赖：兼容测试 monkeypatch.setattr("fspack.packaging.pipeline.<func>", ...)
+from fspack.packaging.runtime import (  # noqa: F401
     download_embed,
     download_standalone,
-    embed_dirname,
     extract_embed,
     extract_standalone,
     write_pth,
 )
 from fspack.packaging.sync import copy_source
-from fspack.packaging.wheels import download_wheels
-from fspack.platform import Platform, detect_platform, wheel_platform_tags
-from fspack.progress import BuildTracker, StageRecorder, spinner
+from fspack.packaging.wheels import download_wheels  # noqa: F401
+from fspack.platform import Platform, detect_platform
+from fspack.progress import BuildTracker
 
 __all__ = [
     "BuildContext",
@@ -73,37 +89,6 @@ __all__ = [
 ]
 
 _logger = logging.getLogger(__name__)
-
-# 默认 icon：打包在 fspack 包内，随 wheel 分发
-# pipeline.py 在 src/fspack/packaging/ 下，parent.parent 即 src/fspack/
-_DEFAULT_ICON = Path(__file__).parent.parent / "assets" / "icons" / "app.ico"
-
-
-@dataclass(frozen=True)
-class BuildContext:
-    """构建流水线共享上下文，聚合阶段函数共用的构建配置与状态.
-
-    避免 :func:`_prepare_runtime`/:func:`_analyze_dependencies`/
-    :func:`_download_dependencies`/:func:`_compile_user_sources`/
-    :func:`_build_entry_loaders` 等阶段函数重复接收 6-8 个参数。
-    目标平台通过 :attr:`cfg.target` 访问，无需单独字段。
-    """
-
-    tracker: BuildTracker
-    info: ProjectInfo
-    cfg: BuildConfig
-    opts: BuildOptions
-    runtime_dir: Path
-
-
-def default_icon_path() -> Path:
-    """返回 fspack 自带的默认 icon 路径（``assets/icons/app.ico``）."""
-    return _DEFAULT_ICON
-
-
-def fspack_wheel_cache_dir() -> Path:
-    """返回 fspack wheel 缓存目录（``FSPACK_CACHE_DIR`` 环境变量 > 默认 ``~/.fspack/cache/wheels``）."""
-    return wheel_cache_dir()
 
 
 def resolve_project_info(project_dir: Path, py_version: str | None, target: Platform) -> ProjectInfo:
@@ -291,440 +276,6 @@ def _execute_build(  # noqa: PLR0913
     return info
 
 
-def _prepare_runtime(ctx: BuildContext) -> Path:
-    """下载/解压运行时、精简标准库，返回 site-packages 路径.
-
-    分支：
-
-    - Linux：下载 python-build-standalone tar.gz，解压到 ``runtime/python``
-    - Windows：下载 embed python zip，解压到 ``runtime``
-
-    runtime 已就绪（dll/python bin 存在）时跳过下载解压，两 stage 均 ``hit_cache``。
-    """
-    target = ctx.cfg.target
-    if target is Platform.LINUX:
-        site_packages = _prepare_linux_runtime(ctx)
-    else:
-        site_packages = _prepare_windows_runtime(ctx)
-    site_packages.mkdir(parents=True, exist_ok=True)
-
-    # Win7 兼容性：Python 3.9+ 官方不再支持 Win7，注入 api-ms-win-core-path-l1-1-0.dll
-    # 使 embed python 3.9+ 在 Win7 SP1 / Server 2008 R2 SP1 上也能运行。
-    # 仅 Windows 目标需要（Linux standalone 不存在此问题）。
-    if target is Platform.WINDOWS and _needs_win7_compat_dll(ctx.info.py_version):
-        _inject_win7_compat_dll(ctx.runtime_dir)
-
-    # MinGW 运行时 DLL：loader.exe 与 Nuitka 编译的 .pyd 动态链接 libgcc_s_seh-1.dll
-    # / libwinpthread-1.dll / libstdc++-6.dll。这些 DLL 不随 Windows 分发，需注入到
-    # dist/runtime/ 使 Python 加载 .pyd 时能找到（DLL 搜索路径含 runtime/，由
-    # loader.exe 的 SetDllDirectoryW 设置）。仅 Windows 目标需要（Linux 用系统 glibc）。
-    if target is Platform.WINDOWS:
-        from fspack.packaging.loader import inject_mingw_runtime_dlls
-
-        inject_mingw_runtime_dlls(ctx.runtime_dir)
-
-    # 标准库精简：剥离 Linux standalone 中 test/ensurepip/idlelib 等运行时无用模块。
-    # Windows embed 标准库在 python3XX.zip 内（官方已精简），阶段内自动跳过。
-    if not ctx.opts.no_stdlib_trim:
-        with ctx.tracker.stage("精简标准库") as st:
-            _trim_stdlib(ctx.runtime_dir, ctx.info.py_version, target, st)
-
-    return site_packages
-
-
-def _prepare_linux_runtime(ctx: BuildContext) -> Path:
-    """下载并解压 python-build-standalone 到 runtime_dir（Linux 目标）."""
-    major, minor = ctx.info.py_version.split(".")[:2]
-    python_bin = ctx.runtime_dir / "python" / "bin" / f"python{major}.{minor}"
-    runtime_ready = python_bin.is_file()
-    standalone_cache = standalone_cache_dir()
-    tar_path: Path | None = None
-    with ctx.tracker.stage("下载运行时") as st:
-        if runtime_ready:
-            st.hit_cache()
-            st.set_detail("runtime 已就绪")
-        else:
-            tar_path = download_standalone(ctx.info.py_version, STANDALONE_RELEASE_TAG, standalone_cache, stage=st)
-            st.set_detail("python-build-standalone")
-    with ctx.tracker.stage("解压运行时") as st:
-        if runtime_ready:
-            st.hit_cache()
-            st.set_detail("runtime 已就绪")
-        else:
-            assert tar_path is not None
-            extract_standalone(tar_path, ctx.runtime_dir)
-            st.processed(1)
-            st.set_detail("python-build-standalone")
-    return ctx.runtime_dir / "python" / "lib" / f"python{major}.{minor}" / "site-packages"
-
-
-def _prepare_windows_runtime(ctx: BuildContext) -> Path:
-    """下载并解压 embed python 到 runtime_dir（Windows 目标）."""
-    dll_marker = ctx.runtime_dir / f"{embed_dirname(ctx.info.py_version)}.dll"
-    runtime_ready = dll_marker.is_file()
-    zip_path: Path | None = None
-    with ctx.tracker.stage("下载运行时") as st:
-        if runtime_ready:
-            st.hit_cache()
-            st.set_detail("runtime 已就绪")
-        else:
-            zip_path = download_embed(ctx.info.py_version, ctx.cfg.mirror, ctx.cfg.embed_cache_dir, stage=st)
-            st.set_detail("embed python")
-    with ctx.tracker.stage("解压运行时") as st:
-        if runtime_ready:
-            st.hit_cache()
-            st.set_detail("runtime 已就绪")
-        else:
-            assert zip_path is not None
-            extract_embed(zip_path, ctx.runtime_dir)
-            st.processed(1)
-            st.set_detail("embed python")
-    return ctx.runtime_dir / "Lib" / "site-packages"
-
-
-def _analyze_dependencies(ctx: BuildContext, *, save_cache: bool = True) -> DependencyReport:
-    """分析依赖（源码指纹缓存命中则跳过 AST 扫描）.
-
-    ``save_cache=False`` 时跳过缓存写入（用于 ``--dry-run`` 模式，避免创建
-    ``dist/.dep_cache.json`` 触发 dist 目录创建）。
-    """
-    project_dir = ctx.cfg.project_dir
-    with ctx.tracker.stage("分析依赖") as st:
-        # 源码指纹缓存：源码未变时跳过 AST 分析，重复构建加速 ~478ms
-        from fspack.analyzer import source_fingerprint
-
-        fingerprint = source_fingerprint(project_dir)
-        report = _dep_cache_load(ctx.cfg.dist_dir, fingerprint, ctx.info.dependencies)
-        if report is not None:
-            st.hit_cache()
-            ast_count = len(report.ast_third_party)
-            st.set_detail(f"缓存命中，AST {ast_count} 个第三方")
-        else:
-            report = DependencyReport.from_src(project_dir, ctx.info.name, ctx.info.dependencies)
-            if save_cache:
-                _dep_cache_save(ctx.cfg.dist_dir, fingerprint, report)
-            if report.missing:
-                _logger.info("AST 发现未声明依赖: %s", ", ".join(report.missing))
-            ast_count = len(report.ast_third_party)
-            st.processed(ast_count)
-            st.set_detail(f"AST {ast_count} 个第三方")
-    return report
-
-
-def _download_dependencies(ctx: BuildContext, site_packages: Path, report: DependencyReport) -> bool:
-    """下载并解压第三方依赖 wheel 到 site-packages，返回是否补充了 tkinter.
-
-    补充内置库 tkinter（embed python 缺失，AST 检测到使用时从 python-build-standalone 提取）。
-    下载用包名优先 declared（PyPI 包名权威），declared 为空时回退 ast_third_party。
-    """
-    target = ctx.cfg.target
-    # 补充内置库：embed python 缺失 tkinter（纯 Python 包 + _tkinter.pyd + Tcl/Tk 脚本），
-    # 若 AST 检测到 tkinter 使用则从 python-build-standalone Windows 构建提取并补充到 runtime。
-    # Linux standalone 已含全部 stdlib，无需补充。
-    has_tkinter = False
-    if TkinterBundler.is_needed(report.ast_stdlib, target):
-        builtin_cache = cache_root()
-        with ctx.tracker.stage("补充内置库") as st:
-            TkinterBundler.ensure(ctx.runtime_dir, ctx.info.py_version, builtin_cache, stage=st)
-            has_tkinter = True
-            st.set_detail("tkinter")
-
-    # 下载用包名：优先 declared（pyproject.toml 声明的 PyPI 包名，权威），
-    # declared 为空时回退到 ast_third_party（AST 扫描的导入名，best effort）。
-    # 原因：导入名 ≠ PyPI 包名时（如 orderedset → ordered-set），用导入名 pip download 会失败。
-    # declared 非空时以声明为准，未声明的依赖通过 report.missing 日志提示用户补充。
-    packages_to_download: tuple[str, ...] = report.declared if report.declared else report.ast_third_party
-
-    if packages_to_download:
-        if _site_packages_has_deps(site_packages, packages_to_download):
-            with ctx.tracker.stage("下载依赖") as st:
-                _logger.info("site-packages 已有依赖，跳过下载解压")
-                st.skip(len(packages_to_download))
-                st.set_detail("已存在跳过")
-        else:
-            wheel_cache = fspack_wheel_cache_dir()
-            with ctx.tracker.stage("下载依赖") as st:
-                wheels = download_wheels(
-                    packages_to_download,
-                    ctx.info.py_version,
-                    ctx.cfg.mirror.pypi_index,
-                    wheel_cache,
-                    platform_tags=wheel_platform_tags(target),
-                    stage=st,
-                    extra_index_urls=ctx.info.extra_index_urls,
-                    find_links=ctx.info.find_links,
-                )
-            with ctx.tracker.stage("解压 wheel(精简)") as st:
-                unpack_wheels(
-                    wheels,
-                    site_packages,
-                    report.ast_submodules,
-                    ctx.opts.keep_modules,
-                    slim_rules=ctx.info.slim_rules,
-                    stage=st,
-                )
-    else:
-        _logger.info("无第三方依赖，跳过 wheel 下载")
-    return has_tkinter
-
-
-def _compile_user_sources(ctx: BuildContext, src_dst: Path) -> None:
-    """编译用户源码：Nuitka 编译（可选）+ 字节码预编译.
-
-    Nuitka 编译模式：用 runtime python -c "sys.path.insert(0, <nuitka_cache>); ..." 调用
-    nuitka --module 将 dist/src 下用户源码编译为 .pyd。
-    用户源码以 .pyd 形式本机执行，速度提升 30-50%（参考 RimSort Nuitka 打包方案）。
-    仅编译用户源码（src/），第三方依赖（site-packages/）保持 wheel 解压 + .pyc。
-    交叉构建跳过（Nuitka 无法生成目标平台 .pyd）。
-    nuitka 装到本地缓存 ~/.fspack/cache/nuitka/<py_version>/，不污染 dist/runtime；
-    编译时用 -c 注入 sys.path 绕过 _pth 对 PYTHONPATH 的限制。
-    stamp 命中跳过整个阶段（含 ensure_env 与 compile_src）。
-    入口文件跳过编译与剥离：入口包装器用 ``runpy.run_module``/``run_path`` 调用
-    用户代码，需 ``.py`` 存在才能被 ``find_spec`` 定位（``.pyd`` 无字节码无法被
-    ``runpy`` 执行，``__pycache__`` 下的 ``.pyc`` 不在 ``FileFinder`` 搜索范围）。
-    """
-    target = ctx.cfg.target
-    # 入口文件相对 src 的 POSIX 路径集合：Nuitka 编译与 pyc_strip 剥离均跳过这些文件
-    entry_rels = frozenset(ep.entry_rel(ctx.info.src_dir) for ep in ctx.info.all_entries)
-    if ctx.opts.nuitka and target is detect_platform():
-        with ctx.tracker.stage("Nuitka 编译") as st:
-            from fspack.packaging.nuitka import NuitkaCompiler
-
-            nuitka_cache_root = nuitka_cache_dir()
-            NuitkaCompiler.compile_with_stamp(
-                src_dst,
-                ctx.cfg.dist_dir,
-                ctx.runtime_dir,
-                ctx.info.py_version,
-                target,
-                ctx.cfg.mirror,
-                nuitka_cache_root,
-                stage=st,
-                entry_rels=entry_rels,
-                ccache=ctx.opts.ccache,
-                nuitka_packages=ctx.opts.nuitka_packages,
-            )
-
-    # 预编译字节码：用 runtime 自身 python 编译 src + site-packages 为 .pyc，加速首次启动。
-    # pyc_strip=True 时额外剥离非 __init__.py 源码（源码保护，保留包标识避免命名空间包问题）。
-    # 交叉构建时（构建机平台 ≠ 目标平台）runtime python 无法执行，跳过预编译。
-    # Nuitka 模式下 src 已编译为 .pyd，compileall 会跳过（找不到 .py 不生成 .pyc），
-    # site-packages 仍按 pyc_optimize 编译，故本步保留不跳过。
-    if not ctx.opts.no_pyc and target is detect_platform():
-        with ctx.tracker.stage("预编译字节码") as st:
-            _precompile_pyc(
-                ctx.cfg.dist_dir,
-                ctx.runtime_dir,
-                ctx.info.py_version,
-                target,
-                strip_py=ctx.opts.pyc_strip,
-                stage=st,
-                optimize=ctx.opts.pyc_optimize,
-                entry_rels=entry_rels,
-            )
-
-
-def _build_entry_loaders(ctx: BuildContext, resolved_icon: Path | None, has_tkinter: bool) -> list[Path]:
-    """为每个入口生成 C loader 与入口包装器，返回生成的 exe 路径列表.
-
-    用 ``tempfile.TemporaryDirectory`` 作为 loader 编译工作目录，编译完成后自动清理，
-    避免 ``dist/build/`` 残留 ``loader.c``/``icon.rc``/``icon.ico``/``icon.o`` 中间文件
-    被打包进发行包。loader 缓存命中路径不创建工作目录，无副作用。
-    """
-    target = ctx.cfg.target
-    exes: list[Path] = []
-    with ctx.tracker.stage("生成 C loader") as st:
-        source = generate_loader_source(ctx.info.py_xy, target)
-        # 临时工作目录：编译完成（或异常）后自动清理，不污染 dist/
-        with tempfile.TemporaryDirectory(prefix="fspack_loader_") as tmp:
-            build_dir = Path(tmp)
-            for ep in ctx.info.all_entries:
-                entry_rel = ep.entry_rel(ctx.info.src_dir)
-                result = EntryWrapper.dotted_module_name(ctx.info.src_dir, ep.file)
-                module_dotted = result[0] if result is not None else None
-                pkg_root_rel = result[1] if result is not None else "."
-                # 生成入口包装器：处理 sys.path、Qt 插件路径与包上下文（相对导入）
-                wrapper_name = f"_entry_{ep.name}.py"
-                wrapper_path = ctx.cfg.dist_dir / wrapper_name
-                wrapper_path.write_text(
-                    EntryWrapper.generate_wrapper_source(
-                        ep.name, module_dotted, entry_rel, pkg_root_rel, has_tkinter=has_tkinter
-                    ),
-                    encoding="utf-8",
-                )
-                # .entry 指向 wrapper（loader 读 .entry 路径运行）
-                if ctx.info.entries:
-                    # 多入口模式：每个入口写 <name>.entry
-                    (ctx.cfg.dist_dir / f"{ep.name}.entry").write_text(wrapper_name, encoding="utf-8")
-                else:
-                    # 单入口模式：写 .entry（向后兼容）
-                    (ctx.cfg.dist_dir / ".entry").write_text(wrapper_name, encoding="utf-8")
-                exe_name = f"{ep.name}.exe" if target is Platform.WINDOWS else ep.name
-                exe = ctx.cfg.dist_dir / exe_name
-                compile_loader(source, exe, ep.app_type, build_dir, target, icon=resolved_icon, stage=st)
-                exes.append(exe)
-        st.processed(len(exes))
-    return exes
-
-
-def _dep_cache_path(dist_dir: Path) -> Path:
-    """依赖分析缓存文件路径：``dist/.dep_cache.json``."""
-    return dist_dir / ".dep_cache.json"
-
-
-def _dep_cache_load(dist_dir: Path, fingerprint: str, declared: tuple[str, ...]) -> DependencyReport | None:
-    """加载依赖分析缓存，指纹或声明依赖不匹配时返回 ``None``."""
-    cache = _dep_cache_path(dist_dir)
-    if not cache.is_file():
-        return None
-    try:
-        data = json.loads(cache.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return None
-    if data.get("fingerprint") != fingerprint or tuple(data.get("declared", [])) != declared:
-        return None
-    r = data["report"]
-    return DependencyReport(
-        declared=tuple(r["declared"]),
-        ast_third_party=tuple(r["ast_third_party"]),
-        ast_stdlib=tuple(r["ast_stdlib"]),
-        ast_local=tuple(r["ast_local"]),
-        ast_submodules={k: frozenset(v) for k, v in r["ast_submodules"].items()},
-    )
-
-
-def _dep_cache_save(dist_dir: Path, fingerprint: str, report: DependencyReport) -> None:
-    """保存依赖分析缓存."""
-    cache = _dep_cache_path(dist_dir)
-    cache.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "fingerprint": fingerprint,
-        "declared": list(report.declared),
-        "report": {
-            "declared": list(report.declared),
-            "ast_third_party": list(report.ast_third_party),
-            "ast_stdlib": list(report.ast_stdlib),
-            "ast_local": list(report.ast_local),
-            "ast_submodules": {k: sorted(v) for k, v in report.ast_submodules.items()},
-        },
-    }
-    cache.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-
-
-def _resolve_project_icon(
-    cli_icon: Path | None,
-    project_icon: Path | None,
-    project_dir: Path,
-    work_dir: Path,
-    target: Platform,
-) -> Path | None:
-    """按优先级解析最终 icon 路径，非 .ico 格式自动转换。
-
-    优先级：``cli_icon`` > ``project_icon`` > 自动搜索 ``favicon.*`` > 默认 ``app.ico``。
-
-    - Linux 目标：始终返回 ``None``（ELF 无图标资源概念）
-    - 非 ``.ico`` 格式（``.png``/``.jpg`` 等）：调用 :func:`ensure_ico` 转换，
-      转换失败（如 Pillow 未安装）回退到默认 ``app.ico``
-    - 默认 ``app.ico`` 是 fspack 自带资源，必定存在，无需转换
-
-    ``work_dir`` 为图片转换的临时目录（通常是 ``dist/build``）。
-    """
-    if target is Platform.LINUX:
-        return None
-
-    # 选定候选 icon：CLI > 项目配置 > favicon 自动搜索
-    candidate = cli_icon
-    if candidate is None:
-        candidate = project_icon
-    if candidate is None:
-        candidate = find_favicon(project_dir)
-        if candidate is not None:
-            _logger.info("使用 favicon 作为 icon: %s", candidate)
-
-    # 无任何候选 → 默认 icon（.ico，无需转换）
-    if candidate is None:
-        return _DEFAULT_ICON
-
-    # 转换为 .ico（.ico 原样返回，其他格式用 Pillow 转换，失败回退默认）
-    resolved = ensure_ico(candidate, work_dir)
-    if resolved is not None:
-        return resolved
-    _logger.warning("icon 转换失败，回退到默认 icon: %s", _DEFAULT_ICON)
-    return _DEFAULT_ICON
-
-
-def _site_packages_has_deps(site_packages: Path, packages: Sequence[str]) -> bool:
-    """检查 site-packages 是否已安装全部声明依赖。
-
-    逐个检查 ``packages`` 中的包是否有对应的 ``*.dist-info`` 目录。
-    仅当全部声明依赖均已安装时返回 True，可跳过下载+解压阶段
-    （需 ``fspack c`` 清理后才会重新解压）。
-
-    不能仅检查 ``any(*.dist-info)``：python-build-standalone 预装 pip
-    （含 ``pip-*.dist-info``），embed python 也会预装 pip，导致无用户依赖时
-    误判为已安装。必须按声明的包名逐一匹配。
-    """
-    if not site_packages.is_dir():
-        return False
-    # 收集 site-packages 中所有已安装包的规范化名（PEP 503）
-    installed: set[str] = set()
-    for d in site_packages.glob("*.dist-info"):
-        if not d.is_dir():
-            continue
-        # dist-info 目录名格式: <name>-<version>.dist-info
-        stem = d.name[: -len(".dist-info")]
-        # 从右侧分离 version（最后一个 - 之后的部分）
-        parts = stem.rsplit("-", 1)
-        pkg_name = parts[0] if len(parts) == 2 else stem
-        installed.add(_normalize_pkg_name(pkg_name))
-
-    return all(_normalize_pkg_name(_strip_version_specifier(pkg)) in installed for pkg in packages)
-
-
-def _strip_version_specifier(pkg: str) -> str:
-    """从依赖字符串中剥离版本 specifier，返回纯包名。
-
-    ``pygame>=2.5.0`` → ``pygame``；``requests`` → ``requests``。
-    """
-    return re.split(r"[<>=!~;\[]", pkg, maxsplit=1)[0].strip()
-
-
-def _normalize_pkg_name(name: str) -> str:
-    """按 PEP 503 规范化包名：连续的 ``-_.`` 替换为单 ``-``，转小写。
-
-    使 ``ordered_set``/``ordered-set``/``Ordered.Set`` 均映射到 ``ordered-set``，
-    便于跨命名风格匹配 dist-info 目录。
-    """
-    return re.sub(r"[-_.]+", "-", name).lower()
-
-
-def unpack_wheels(  # noqa: PLR0913
-    wheels: Sequence[Path],
-    site_packages_dir: Path,
-    submodule_usage: dict[str, frozenset[str]] | None = None,
-    keep_modules: set[str] | None = None,
-    *,
-    slim_rules: SlimRules = DEFAULT_SLIM_RULES,
-    stage: StageRecorder | None = None,
-) -> int:
-    """将给定 wheel 列表解包到 site-packages 目录，返回解包数量。
-
-    当提供 ``submodule_usage`` 时按子模块分析选择性解压（精简打包），
-    否则全量解压。``slim_rules`` 透传给 ``slim_unpack``，作为用户自定义
-    glob 规则覆盖 spec 自动分类。
-    """
-    from fspack.slim import slim_unpack
-
-    return slim_unpack(
-        wheels,
-        site_packages_dir,
-        submodule_usage,
-        keep_modules,
-        slim_rules=slim_rules,
-        stage=stage,
-    )
-
-
 # 清理 dist 时保留的 NSIS 脚本文件名（便于改代码后重新打包分发）
 _KEEP_NSI = "installer.nsi"
 
@@ -859,3 +410,7 @@ def _print_build_plan(ctx: BuildContext, report: DependencyReport) -> None:
         f"{len(entries)} 入口 / {wheel_count} 声明依赖"
     )
     console.rich.print("[dim]以上为 dry-run 预览，未执行任何下载/编译/复制。去掉 --dry-run 执行实际构建。[/]")
+
+
+# 显式导入 spinner：_execute_build 内使用，兼容测试 monkeypatch
+from fspack.progress import spinner  # noqa: E402
