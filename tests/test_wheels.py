@@ -1331,6 +1331,118 @@ def test_download_resolved_parallel_partial_failure_sdist_fallback(
     assert "Saved odfpy-wheel.whl" in result.stdout
 
 
+def test_download_resolved_parallel_multi_sdist_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """并行下载多包失败：合并所有失败包 stderr 触发 sdist 回退，确保所有 sdist-only 包被构建.
+
+    回归场景：win-unicode-console==0.5 等多个 sdist-only 包并行下载时，
+    旧实现仅取 failed[0][1].stderr 解析缺失包，导致第二个失败包的 stderr
+    被丢弃，sdist 构建遗漏，重试仍失败。修复后合并所有失败包 stderr。
+    """
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setattr("fspack.packaging.wheel_pip._find_uv", lambda: "/usr/bin/uv")
+    # 3 个包：numpy 成功，odfpy 与 win-unicode-console 均仅 sdist
+    monkeypatch.setattr(
+        "fspack.packaging.wheel_pip._resolve_with_uv",
+        lambda pkgs, pv, pt, idx, **kw: [
+            "numpy==1.24.0",
+            "odfpy==1.4.1",
+            "win-unicode-console==0.5",
+        ],
+    )
+    call_count = {
+        "numpy_download": 0,
+        "odfpy_download": 0,
+        "wuc_download": 0,
+        "pip_wheel": 0,
+        "odfpy_retry": 0,
+        "wuc_retry": 0,
+    }
+    # 记录 pip wheel 构建的包名，验证两个 sdist-only 包都被构建
+    built_pkgs: list[str] = []
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+        req = cmd[-1]
+        if "numpy==1.24.0" in req:
+            call_count["numpy_download"] += 1
+            r = _Completed()
+            r.stdout = "Saved numpy-wheel.whl\n"
+            return r
+        # 带 -i 的重试路径
+        if "-i" in cmd and "https://idx/simple" in cmd:
+            if "odfpy==1.4.1" in req:
+                call_count["odfpy_retry"] += 1
+                r = _Completed()
+                r.stdout = "Saved odfpy-wheel.whl\n"
+                return r
+            if "win-unicode-console==0.5" in req:
+                call_count["wuc_retry"] += 1
+                r = _Completed()
+                r.stdout = "Saved win_unicode_console-wheel.whl\n"
+                return r
+        # 首次下载失败
+        if "odfpy==1.4.1" in req:
+            call_count["odfpy_download"] += 1
+            raise subprocess.CalledProcessError(
+                1,
+                cmd,
+                stderr="ERROR: Could not find a version that satisfies the requirement odfpy==1.4.1 (from versions: none)\n"
+                "ERROR: No matching distribution found for odfpy==1.4.1",
+            )
+        if "win-unicode-console==0.5" in req:
+            call_count["wuc_download"] += 1
+            raise subprocess.CalledProcessError(
+                1,
+                cmd,
+                stderr="ERROR: Could not find a version that satisfies the requirement win-unicode-console==0.5 (from versions: none)\n"
+                "ERROR: No matching distribution found for win-unicode-console==0.5",
+            )
+        r = _Completed()
+        return r
+
+    def fake_stream(cmd: list[str]) -> _Completed:
+        # pip wheel --no-deps 构建路径：从 cmd 提取被构建的包名
+        if "wheel" in cmd and "--no-deps" in cmd and "-w" in cmd:
+            call_count["pip_wheel"] += 1
+            # pip wheel 命令格式：... -w <dir> --no-deps <pkg>==<ver>
+            # 取最后一个非版本参数作为包名
+            for arg in reversed(cmd):
+                if "==" in arg and not arg.startswith("-"):
+                    built_pkgs.append(arg)
+                    break
+            return _Completed()
+        return _Completed()
+
+    monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.wheel_pip._stream_subprocess", fake_stream)
+    base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache), "--only-binary=:all:"]
+    result = _download_online(
+        ["numpy>=1.0", "odfpy>=1.4.1", "win-unicode-console==0.5"],
+        base_args,
+        "/py/python",
+        "3.8.10",
+        ("win_amd64",),
+        "https://idx/simple",
+        cache,
+    )
+    # numpy 成功，odfpy 与 wuc 首次下载均失败
+    assert call_count["numpy_download"] == 1
+    assert call_count["odfpy_download"] == 1
+    assert call_count["wuc_download"] == 1
+    # sdist 构建必须触发 2 次（odfpy + wuc），证明合并 stderr 解析出两个缺失包
+    assert call_count["pip_wheel"] == 2
+    # 两个失败包都被重试
+    assert call_count["odfpy_retry"] == 1
+    assert call_count["wuc_retry"] == 1
+    # 验证两个 sdist-only 包都被 pip wheel 构建
+    assert any("odfpy==1.4.1" in p for p in built_pkgs)
+    assert any("win-unicode-console==0.5" in p for p in built_pkgs)
+    # 合并 stdout 包含所有 3 个包的 Saved 行
+    assert "Saved numpy-wheel.whl" in result.stdout
+    assert "Saved odfpy-wheel.whl" in result.stdout
+    assert "Saved win_unicode_console-wheel.whl" in result.stdout
+
+
 def test_download_one_resolved_with_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """_download_one_resolved with_index=True 时附加 -i <pypi_index>."""
     cache = tmp_path / "cache"

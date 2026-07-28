@@ -492,10 +492,12 @@ def _download_resolved_parallel(  # noqa: PLR0913
     if not failed:
         return _merge_parallel_results(succeeded)
 
-    # 有失败包：sdist 回退（用首个失败的 stderr 解析 missing 包名）
+    # 有失败包：sdist 回退（合并所有失败包的 stderr 解析 missing 包名）
+    # 注意：并行模式下每个包的 stderr 独立捕获，必须合并才能解析出所有 sdist-only 包
+    # （如 win-unicode-console==0.5 无 wheel，--only-binary=:all: 失败）
     _logger.warning("并行下载 %d 个失败，尝试 sdist 回退: %s", len(failed), [r for r, _ in failed])
-    first_err = failed[0][1]
-    fallback_err = DependencyError(f"依赖下载失败:\n{first_err.stderr}")
+    combined_stderr = "\n".join(e.stderr or "" for _, e in failed)
+    fallback_err = DependencyError(f"依赖下载失败:\n{combined_stderr}")
     _handle_sdist_fallback(
         fallback_err, py, pypi_index, cache_dir, extra_index_urls=extra_index_urls, find_links=find_links
     )
