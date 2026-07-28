@@ -32,8 +32,9 @@ from fspack.console import console
 from fspack.exceptions import DependencyError
 from fspack.platform import Platform
 from fspack.progress import StageRecorder
+from fspack.templates.loader import project_templates_dir
 
-_EXAMPLES = Path(__file__).parent.parent / "examples"
+_EXAMPLES = project_templates_dir()
 
 
 def test_copy_source_excludes_dist(tmp_path: Path) -> None:

@@ -21,8 +21,9 @@ from fspack.config import get_mirror
 from fspack.console import console
 from fspack.packaging.pipeline import BuildContext, _print_build_plan, build
 from fspack.platform import Platform
+from fspack.templates.loader import project_templates_dir
 
-_EXAMPLES = Path(__file__).parent.parent / "examples"
+_EXAMPLES = project_templates_dir()
 
 
 # ---- pipeline.build(dry_run=True) 不执行写操作 ----

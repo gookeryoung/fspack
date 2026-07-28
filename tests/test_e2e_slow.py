@@ -18,7 +18,9 @@ from pathlib import Path
 
 import pytest
 
-_EXAMPLES = Path(__file__).parent.parent / "examples"
+from fspack.templates.loader import project_templates_dir
+
+_EXAMPLES = project_templates_dir()
 
 
 def _build_and_run(  # noqa: PLR0913

@@ -301,13 +301,24 @@ def _add_init_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]
 
 
 def _add_doctor_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    """添加 doctor 子命令：环境诊断.
+    """添加 doctor 子命令：环境诊断 + 模板构建测试 + 性能基准.
 
-    检查 fspack 打包所需工具（mingw/gcc/NSIS/wine/pip/uv/Pillow）可用性，
-    显示 Python 版本、平台、镜像源、缓存目录大小，输出三色诊断结果与修复建议。
-    无参数，无项目依赖，可在任何目录执行。
+    无参数时仅执行环境诊断（检查工具可用性与配置）。``--test`` 运行
+    ``assets/templates/`` 下所有项目模板的构建，打印汇总结果。``--bench``
+    在 ``--test`` 基础上收集性能数据（各阶段耗时、下载量、缓存命中），
+    输出性能分析报告，作为后续优化的基准。
     """
-    sub.add_parser("doctor", help="环境诊断：检查打包工具可用性与配置")
+    p = sub.add_parser("doctor", help="环境诊断：检查打包工具可用性与配置")
+    p.add_argument(
+        "--test",
+        action="store_true",
+        help="运行 assets/templates/ 下所有项目模板构建，打印汇总结果",
+    )
+    p.add_argument(
+        "--bench",
+        action="store_true",
+        help="运行所有模板构建并收集性能数据，输出性能分析报告（基准评估）",
+    )
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -329,7 +340,7 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if command == "doctor":
-        _run_doctor()
+        _run_doctor(ns)
         return
 
     project = Path(ns.project).resolve()
@@ -461,16 +472,22 @@ def _run_init(ns: argparse.Namespace) -> None:
         sys.exit(1)
 
 
-def _run_doctor() -> None:
-    """执行 doctor 子命令：环境诊断，输出三色诊断报告.
+def _run_doctor(ns: argparse.Namespace) -> None:
+    """执行 doctor 子命令：环境诊断 + 可选的模板构建测试/性能基准.
 
-    调用 :func:`fspack.cli_doctor.run_doctor` 收集诊断结果，
-    用 :func:`print_doctor_report` 渲染到控制台。无项目依赖，可在任何目录执行。
+    无 ``--test``/``--bench`` 时仅执行环境诊断，输出三色诊断报告。
+    ``--test`` 运行所有模板构建并打印汇总结果。``--bench`` 额外收集
+    性能数据并输出性能分析报告。
     """
-    from fspack.cli_doctor import print_doctor_report, run_doctor
+    from fspack.cli_doctor import print_doctor_report, run_doctor, run_doctor_bench, run_doctor_test
 
     report = run_doctor()
     print_doctor_report(report)
+
+    if getattr(ns, "bench", False):
+        run_doctor_bench()
+    elif getattr(ns, "test", False):
+        run_doctor_test()
 
 
 def discover_subprojects(root: Path) -> list[Path]:

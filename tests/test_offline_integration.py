@@ -8,8 +8,8 @@
 3. ``FSPACK_CACHE_DIR`` 环境变量 → build() 用此路径作为 embed 缓存
 4. 非离线模式缓存未命中 → 不抛离线异常，回退到网络下载路径
 
-集成测试用 ``examples/cli_helloworld_pyall``（无第三方依赖）与
-``examples/cli_office_py38``（有 pypdf 依赖）作为真实项目输入，避免构造
+集成测试用 ``assets/templates/cli_helloworld_pyall``（无第三方依赖）与
+``assets/templates/cli_office_py38``（有 pypdf 依赖）作为真实项目输入，避免构造
 虚假项目结构。runtime/网络层用 monkeypatch 替身，不实际下载或解压。
 """
 
@@ -24,14 +24,15 @@ import pytest
 from fspack.config import get_mirror
 from fspack.exceptions import DependencyError, EmbedError
 from fspack.platform import Platform
+from fspack.templates.loader import project_templates_dir
 
-_EXAMPLES = Path(__file__).parent.parent / "examples"
+_EXAMPLES = project_templates_dir()
 
 _MIRROR = get_mirror()
 
 
 def _copy_example(proj_name: str, tmp_path: Path) -> Path:
-    """复制 examples/<proj_name> 到 tmp_path/<proj_name>，返回项目路径."""
+    """复制 assets/templates/<proj_name> 到 tmp_path/<proj_name>，返回项目路径."""
     src = _EXAMPLES / proj_name
     dst = tmp_path / proj_name
     shutil.copytree(src, dst)

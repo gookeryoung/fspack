@@ -27,6 +27,8 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
+import time
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -39,13 +41,17 @@ if TYPE_CHECKING:
     from rich.table import Table
 
     from fspack.platform import Platform
+    from fspack.templates.loader import ProjectTemplate
 
 __all__ = [
     "CheckResult",
     "CheckStatus",
     "DoctorReport",
+    "TemplateBuildResult",
     "print_doctor_report",
     "run_doctor",
+    "run_doctor_bench",
+    "run_doctor_test",
 ]
 
 _logger = logging.getLogger(__name__)
@@ -475,3 +481,259 @@ def _print_summary(report: DoctorReport) -> None:
     else:
         console.success(f"诊断完成：{oks} OK / {warns} 警告 / {errors} 错误")
         console.success("环境就绪，可以开始打包")
+
+
+# ---- 模板构建测试（--test）与性能基准（--bench）----
+
+
+@dataclass(frozen=True)
+class TemplateBuildResult:
+    """单个模板构建结果.
+
+    :param template_id: 模板目录名
+    :param success: 构建是否成功
+    :param duration_sec: 总构建耗时（秒）
+    :param error: 失败时的错误信息（截断到 200 字符）
+    :param dist_size: 构建产物 ``dist/`` 目录大小（字节），失败时为 0
+    :param entry_count: 入口 exe 数量
+    """
+
+    template_id: str
+    success: bool
+    duration_sec: float
+    error: str = ""
+    dist_size: int = 0
+    entry_count: int = 0
+
+
+def _build_single_template(  # pragma: no cover
+    template: ProjectTemplate,
+    work_dir: Path,
+    *,
+    bench: bool = False,
+) -> TemplateBuildResult:
+    """构建单个模板项目，返回结果.
+
+    :param template: 项目模板
+    :param work_dir: 临时工作目录（构建在此目录下的子目录进行）
+    :param bench: ``True`` 时启用 ``profile=True``，输出详细性能报告
+    """
+    from fspack.builder import build
+    from fspack.config import BuildOptions, get_mirror
+    from fspack.platform import detect_platform
+
+    proj_dir = work_dir / template.id
+    shutil.copytree(template.dir, proj_dir, dirs_exist_ok=True)
+
+    opts = BuildOptions(no_size_report=True)
+    mirror = get_mirror()
+    target = detect_platform()
+
+    start = time.perf_counter()
+    try:
+        build(
+            proj_dir,
+            mirror,
+            target=target,
+            options=opts,
+            profile=bench,
+        )
+    except Exception as e:
+        elapsed = time.perf_counter() - start
+        err_msg = str(e)[:200]
+        _logger.warning("模板 %s 构建失败: %s", template.id, err_msg)
+        return TemplateBuildResult(
+            template_id=template.id,
+            success=False,
+            duration_sec=elapsed,
+            error=err_msg,
+        )
+
+    elapsed = time.perf_counter() - start
+    dist_dir = proj_dir / "dist"
+    dist_size = _dir_size(dist_dir) if dist_dir.is_dir() else 0
+    entry_count = len(list(dist_dir.glob("*.exe"))) if dist_dir.is_dir() else 0
+
+    return TemplateBuildResult(
+        template_id=template.id,
+        success=True,
+        duration_sec=elapsed,
+        dist_size=dist_size,
+        entry_count=entry_count,
+    )
+
+
+def run_doctor_test() -> None:  # pragma: no cover
+    """运行所有项目模板构建，打印汇总结果.
+
+    从 ``assets/templates/`` 加载所有项目模板，逐个复制到临时目录并执行
+    :func:`fspack.builder.build`，收集成功/失败/耗时，输出汇总表格。
+
+    用于验证打包流程对所有模板项目的兼容性，CI 中可作为回归门禁。
+    """
+    from fspack.templates.loader import list_project_templates
+
+    templates = list_project_templates()
+    if not templates:
+        console.warn("未找到项目模板")
+        return
+
+    console.step(f"模板构建测试（{len(templates)} 个模板）")
+    results: list[TemplateBuildResult] = []
+
+    with tempfile.TemporaryDirectory(prefix="fsp-doctor-test-") as tmp:
+        work_dir = Path(tmp)
+        for i, tpl in enumerate(templates, 1):
+            console.rich.print(f"[cyan][{i}/{len(templates)}][/cyan] 构建 {tpl.id} ...")
+            result = _build_single_template(tpl, work_dir, bench=False)
+            results.append(result)
+            if result.success:
+                console.rich.print(
+                    f"  [green]√[/green] 成功 ({result.duration_sec:.1f}s, {_format_size(result.dist_size)})"
+                )
+            else:
+                console.rich.print(f"  [red]×[/red] 失败: {result.error}")
+
+    _print_template_build_summary(results, bench=False)
+
+
+def run_doctor_bench() -> None:  # pragma: no cover
+    """运行所有项目模板构建，收集性能数据，输出性能分析报告.
+
+    与 :func:`run_doctor_test` 相同的构建流程，但每个模板启用
+    ``profile=True``，输出详细的各阶段耗时报告。最后打印汇总表格与
+    性能分析（耗时排名、产物大小排名、总时间）。
+
+    用于建立性能基准，后续优化措施可与此基准对比评估效果。
+    """
+    from fspack.templates.loader import list_project_templates
+
+    templates = list_project_templates()
+    if not templates:
+        console.warn("未找到项目模板")
+        return
+
+    console.step(f"性能基准测试（{len(templates)} 个模板）")
+    results: list[TemplateBuildResult] = []
+
+    with tempfile.TemporaryDirectory(prefix="fsp-doctor-bench-") as tmp:
+        work_dir = Path(tmp)
+        for i, tpl in enumerate(templates, 1):
+            console.rich.print(f"[cyan][{i}/{len(templates)}][/cyan] 基准构建 {tpl.id} ...")
+            result = _build_single_template(tpl, work_dir, bench=True)
+            results.append(result)
+            if result.success:
+                console.rich.print(
+                    f"  [green]√[/green] 成功 ({result.duration_sec:.1f}s, {_format_size(result.dist_size)})"
+                )
+            else:
+                console.rich.print(f"  [red]×[/red] 失败: {result.error}")
+
+    _print_template_build_summary(results, bench=True)
+
+
+def _print_template_build_summary(results: list[TemplateBuildResult], *, bench: bool) -> None:
+    """打印模板构建汇总表格与性能分析.
+
+    :param results: 所有模板构建结果
+    :param bench: ``True`` 时额外输出性能分析（耗时排名、产物大小排名）
+    """
+    from rich.table import Table
+
+    console.rich.print()
+    table = Table(title="模板构建汇总", show_lines=False)
+    table.add_column("#", justify="right", style="dim")
+    table.add_column("模板", style="cyan")
+    table.add_column("状态", justify="center")
+    table.add_column("耗时", justify="right")
+    table.add_column("产物大小", justify="right")
+    table.add_column("入口数", justify="right")
+    if bench:
+        table.add_column("错误信息", style="dim")
+
+    succeeded = 0
+    total_time = 0.0
+    total_size = 0
+    for i, r in enumerate(results, 1):
+        status_str = "[green]√ 成功[/green]" if r.success else "[red]× 失败[/red]"
+        if r.success:
+            succeeded += 1
+            total_time += r.duration_sec
+            total_size += r.dist_size
+        table.add_row(
+            str(i),
+            r.template_id,
+            status_str,
+            f"{r.duration_sec:.1f}s",
+            _format_size(r.dist_size) if r.dist_size else "-",
+            str(r.entry_count) if r.entry_count else "-",
+            r.error if not r.success else "",
+        )
+
+    console.rich.print(table)
+    console.rich.print()
+
+    # 汇总统计
+    failed = len(results) - succeeded
+    if failed:
+        console.warn(f"构建完成：{succeeded} 成功 / {failed} 失败 / {len(results)} 总计")
+    else:
+        console.success(f"构建完成：{succeeded}/{len(results)} 全部成功")
+
+    if succeeded > 0:
+        avg_time = total_time / succeeded
+        console.rich.print(f"  总耗时 {total_time:.1f}s | 平均 {avg_time:.1f}s | 总产物 {_format_size(total_size)}")
+
+    # 性能分析（仅 --bench 模式）
+    if bench and succeeded > 1:
+        _print_performance_analysis(results)
+
+
+def _print_performance_analysis(results: list[TemplateBuildResult]) -> None:
+    """打印性能分析：耗时排名、产物大小排名、瓶颈识别.
+
+    :param results: 所有模板构建结果（仅成功的参与排名）
+    """
+    from rich.table import Table
+
+    ok_results = [r for r in results if r.success]
+    if len(ok_results) < 2:
+        return
+
+    console.rich.print()
+    console.step("性能分析")
+
+    # 耗时排名
+    by_time = sorted(ok_results, key=lambda r: r.duration_sec, reverse=True)
+    time_table = Table(title="耗时排名（降序）", show_lines=False)
+    time_table.add_column("#", justify="right", style="dim")
+    time_table.add_column("模板", style="cyan")
+    time_table.add_column("耗时", justify="right")
+    time_table.add_column("占比", justify="right")
+    total = sum(r.duration_sec for r in ok_results)
+    for i, r in enumerate(by_time, 1):
+        ratio = r.duration_sec / total * 100 if total > 0 else 0
+        marker = " [red](最慢)[/red]" if i == 1 else ""
+        time_table.add_row(str(i), r.template_id, f"{r.duration_sec:.1f}s", f"{ratio:.1f}%{marker}")
+    console.rich.print(time_table)
+
+    # 产物大小排名
+    by_size = sorted(ok_results, key=lambda r: r.dist_size, reverse=True)
+    size_table = Table(title="产物大小排名（降序）", show_lines=False)
+    size_table.add_column("#", justify="right", style="dim")
+    size_table.add_column("模板", style="cyan")
+    size_table.add_column("大小", justify="right")
+    for i, r in enumerate(by_size, 1):
+        marker = " [red](最大)[/red]" if i == 1 else ""
+        size_table.add_row(str(i), r.template_id, _format_size(r.dist_size) + marker)
+    console.rich.print(size_table)
+
+    # 瓶颈识别
+    slowest = by_time[0]
+    fastest = by_time[-1]
+    if fastest.duration_sec > 0:
+        ratio = slowest.duration_sec / fastest.duration_sec
+        console.rich.print(
+            f"\n最慢模板 [cyan]{slowest.template_id}[/cyan] ({slowest.duration_sec:.1f}s) "
+            f"是最快 [cyan]{fastest.template_id}[/cyan] ({fastest.duration_sec:.1f}s) 的 {ratio:.1f} 倍"
+        )

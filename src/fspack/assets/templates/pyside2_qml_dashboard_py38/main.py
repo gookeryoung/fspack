@@ -1,9 +1,10 @@
 import sys
 from pathlib import Path
+
+from PySide2.QtCore import Property, QObject, Signal, Slot
 from PySide2.QtGui import QGuiApplication
 from PySide2.QtQml import QQmlApplicationEngine
 from PySide2.QtQuickControls2 import QQuickStyle
-from PySide2.QtCore import QObject, Signal, Slot, Property
 
 
 # ========== 主题控制器（供 QML 双向绑定） ==========
@@ -30,7 +31,7 @@ if __name__ == "__main__":
 
     theme = ThemeController()
     qml_file = Path(__file__).parent / "views" / "Main.qml"
-    
+
     engine = QQmlApplicationEngine()
     engine.rootContext().setContextProperty("Theme", theme)
     engine.load(str(qml_file))

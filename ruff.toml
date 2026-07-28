@@ -1,4 +1,4 @@
-extend-exclude = ["template", "docs", "examples"]
+extend-exclude = ["template", "docs", "examples", "src/fspack/assets/templates"]
 line-length    = 120
 target-version = "py38"
 

@@ -23,6 +23,7 @@ from fspack.cli_doctor import (
     CheckResult,
     CheckStatus,
     DoctorReport,
+    TemplateBuildResult,
     _check_cache_dir,
     _check_pillow,
     _check_pip,
@@ -30,6 +31,8 @@ from fspack.cli_doctor import (
     _dir_size,
     _format_size,
     _format_status,
+    _print_performance_analysis,
+    _print_template_build_summary,
     print_doctor_report,
     run_doctor,
 )
@@ -624,3 +627,85 @@ def test_cli_doctor_in_help() -> None:
     help_text = parser.format_help()
     assert "doctor" in help_text
     assert "环境诊断" in help_text
+
+
+# ---- TemplateBuildResult / 模板构建汇总 ----
+
+
+def test_template_build_result_frozen() -> None:
+    """TemplateBuildResult 是 frozen dataclass，不可变."""
+    r = TemplateBuildResult(template_id="test", success=True, duration_sec=1.0)
+    with pytest.raises(AttributeError):
+        r.success = False  # type: ignore[misc]
+
+
+def test_template_build_result_defaults() -> None:
+    """TemplateBuildResult 默认值：error/dist_size/entry_count 为零值."""
+    r = TemplateBuildResult(template_id="test", success=True, duration_sec=1.0)
+    assert r.error == ""
+    assert r.dist_size == 0
+    assert r.entry_count == 0
+
+
+def test_print_template_build_summary_all_success(capsys: pytest.CaptureFixture[str]) -> None:
+    """全部成功时汇总输出含"全部成功"与总耗时."""
+    results = [
+        TemplateBuildResult(template_id="a", success=True, duration_sec=1.5, dist_size=1024, entry_count=1),
+        TemplateBuildResult(template_id="b", success=True, duration_sec=2.5, dist_size=2048, entry_count=1),
+    ]
+    _print_template_build_summary(results, bench=False)
+    out = capsys.readouterr().out
+    assert "全部成功" in out
+    assert "2/2" in out
+    assert "4.0s" in out  # 1.5 + 2.5
+
+
+def test_print_template_build_summary_with_failure(capsys: pytest.CaptureFixture[str]) -> None:
+    """有失败时汇总输出含"失败"与错误信息."""
+    results = [
+        TemplateBuildResult(template_id="a", success=True, duration_sec=1.0, dist_size=100, entry_count=1),
+        TemplateBuildResult(template_id="b", success=False, duration_sec=0.5, error="网络超时"),
+    ]
+    _print_template_build_summary(results, bench=False)
+    out = capsys.readouterr().out
+    assert "1 成功" in out
+    assert "1 失败" in out
+    assert "网络超时" in out
+
+
+def test_print_template_build_summary_bench_mode(capsys: pytest.CaptureFixture[str]) -> None:
+    """bench 模式输出性能分析（耗时排名、产物大小排名）."""
+    results = [
+        TemplateBuildResult(template_id="a", success=True, duration_sec=1.0, dist_size=100, entry_count=1),
+        TemplateBuildResult(template_id="b", success=True, duration_sec=3.0, dist_size=500, entry_count=1),
+        TemplateBuildResult(template_id="c", success=False, duration_sec=0.1, error="失败"),
+    ]
+    _print_template_build_summary(results, bench=True)
+    out = capsys.readouterr().out
+    assert "性能分析" in out
+    assert "耗时排名" in out
+    assert "产物大小排名" in out
+    assert "最慢" in out
+    assert "最大" in out
+
+
+def test_print_performance_analysis_single_success(capsys: pytest.CaptureFixture[str]) -> None:
+    """仅 1 个成功时不输出性能分析（需 >1 才排名）."""
+    results = [
+        TemplateBuildResult(template_id="a", success=True, duration_sec=1.0, dist_size=100),
+    ]
+    _print_performance_analysis(results)
+    out = capsys.readouterr().out
+    # 单个成功不输出分析表格
+    assert "耗时排名" not in out
+
+
+def test_print_performance_analysis_all_failed(capsys: pytest.CaptureFixture[str]) -> None:
+    """全部失败时不输出性能分析."""
+    results = [
+        TemplateBuildResult(template_id="a", success=False, duration_sec=0.1, error="err1"),
+        TemplateBuildResult(template_id="b", success=False, duration_sec=0.2, error="err2"),
+    ]
+    _print_performance_analysis(results)
+    out = capsys.readouterr().out
+    assert "耗时排名" not in out

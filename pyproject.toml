@@ -65,7 +65,7 @@ packages = ["src/fspack"]
 "src/fspack/py.typed" = "fspack/py.typed"
 
 [tool.hatch.build.targets.sdist]
-# 排除开发内部目录与文件，仅保留源码分发必需内容（src/tests/docs/examples + 配置 + README/LICENSE）
+# 排除开发内部目录与文件，仅保留源码分发必需内容（src/tests/docs + 配置 + README/LICENSE）
 exclude = [
     ".benchmarks",        # 性能测试基线数据
     ".github",            # CI 工作流配置
@@ -81,8 +81,8 @@ exclude = [
 ]
 
 [tool.fspack]
-# 自身打包配置：排除示例目录，启用 .pyc 剥离优化
-exclude = ["examples", "templates"]
+# 自身打包配置：排除开发期模板与 GitHub Actions 模板，启用 .pyc 剥离优化
+exclude = ["templates", ".trae"]
 pyc_strip = true
 no_site = true
 
