@@ -73,14 +73,14 @@ _PYPROJECT_NO_DEPS = """[project]
 name = "$project_name"
 version = "0.1.0"
 description = "$description"
-requires-python = ">=3.8"
+requires-python = "$requires_python"
 """
 
 _PYPROJECT_WITH_DEPS = """[project]
 name = "$project_name"
 version = "0.1.0"
 description = "$description"
-requires-python = ">=3.8"
+requires-python = "$requires_python"
 dependencies = [
 $dependencies_block
 ]
@@ -92,11 +92,19 @@ def _format_dependencies_block(dependencies: tuple[str, ...]) -> str:
     return "\n".join(f'    "{dep}",' for dep in dependencies)
 
 
-def _pyproject(dependencies: tuple[str, ...] = ()) -> str:
-    """根据依赖列表返回 pyproject.toml 内容模板."""
+def _pyproject(dependencies: tuple[str, ...] = (), requires_python: str = ">=3.8") -> str:
+    """根据依赖列表与 Python 版本约束返回 pyproject.toml 内容模板.
+
+    Args:
+        dependencies: 依赖包名列表（含版本约束），空元组省略 dependencies 字段。
+        requires_python: ``requires-python`` 约束字符串，默认 ``">=3.8"``。
+            PySide2 不支持 Python 3.11+，其模板应传 ``">=3.8,<3.11"``。
+    """
     if not dependencies:
-        return _PYPROJECT_NO_DEPS
-    return _PYPROJECT_WITH_DEPS.replace("$dependencies_block", _format_dependencies_block(dependencies))
+        return _PYPROJECT_NO_DEPS.replace("$requires_python", requires_python)
+    return _PYPROJECT_WITH_DEPS.replace("$requires_python", requires_python).replace(
+        "$dependencies_block", _format_dependencies_block(dependencies)
+    )
 
 
 # ---- CLI 模板（iter-82）----
@@ -1017,7 +1025,11 @@ _TEMPLATES: tuple[Template, ...] = (
         app_type="gui",
         dependencies=("PySide2",),
         files=(
-            TemplateFile(rel_path="pyproject.toml", content=_pyproject(("PySide2",))),
+            TemplateFile(
+                rel_path="pyproject.toml",
+                # PySide2 不支持 Python 3.11+，约束到 3.8-3.10
+                content=_pyproject(("PySide2",), requires_python=">=3.8,<3.11"),
+            ),
             TemplateFile(rel_path="$entry_module.py", content=_PYSIDE2_ENTRY),
         ),
     ),
@@ -1041,7 +1053,11 @@ _TEMPLATES: tuple[Template, ...] = (
         app_type="gui",
         dependencies=("PySide2",),
         files=(
-            TemplateFile(rel_path="pyproject.toml", content=_pyproject(("PySide2",))),
+            TemplateFile(
+                rel_path="pyproject.toml",
+                # PySide2 不支持 Python 3.11+，约束到 3.8-3.10
+                content=_pyproject(("PySide2",), requires_python=">=3.8,<3.11"),
+            ),
             TemplateFile(rel_path="$entry_module.py", content=_PYSIDE2_QML_ENTRY),
             TemplateFile(rel_path="main.qml", content=_MAIN_QML),
         ),

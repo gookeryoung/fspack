@@ -144,6 +144,8 @@ def test_init_project_pyside2(tmp_path: Path) -> None:
     pyproject = (target / "pyproject.toml").read_text(encoding="utf-8")
     assert 'name = "my-gui"' in pyproject
     assert '"PySide2"' in pyproject
+    # PySide2 不支持 Python 3.11+，模板约束 requires-python
+    assert 'requires-python = ">=3.8,<3.11"' in pyproject
     entry = (target / "my_gui.py").read_text(encoding="utf-8")
     assert "from PySide2.QtWidgets" in entry
     assert "QMainWindow" in entry
@@ -162,6 +164,9 @@ def test_init_project_tkinter(tmp_path: Path) -> None:
 def test_init_project_pyside2_qml(tmp_path: Path) -> None:
     """init_project 用 pyside2-qml 模板创建项目，含 main.qml 文件."""
     target = init_project("qml-app", template_id="pyside2-qml", directory=tmp_path)
+    # PySide2 不支持 Python 3.11+，模板约束 requires-python
+    pyproject = (target / "pyproject.toml").read_text(encoding="utf-8")
+    assert 'requires-python = ">=3.8,<3.11"' in pyproject
     # 入口脚本
     entry = (target / "qml_app.py").read_text(encoding="utf-8")
     assert "QQmlApplicationEngine" in entry

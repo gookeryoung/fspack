@@ -68,13 +68,23 @@ if not os.path.isdir(_SITE_PACKAGES):
 if os.path.isdir(_SITE_PACKAGES) and _SITE_PACKAGES not in sys.path:
     sys.path.insert(0, _SITE_PACKAGES)
 
-# Qt 插件路径（PySide2/PySide6/PyQt5/PyQt6）——必须在 import 用户代码前设置，
-# 否则 QApplication 启动时报 "Failed to load platform plugin windows"
+# Qt 插件路径与 DLL 目录（PySide2/PySide6/PyQt5/PyQt6）——必须在 import 用户代码前设置，
+# 否则 QApplication 启动时报 "Failed to load platform plugin windows"。
+# QML 插件（qml/QtQuick.2/qtquick2plugin.dll）加载时依赖 Qt5/6*.dll，默认 DLL
+# 搜索路径不含 site-packages/<qt_pkg>/，需显式 add_dll_directory 使其可被发现。
 for _qt_pkg in ("PySide2", "PySide6", "PyQt5", "PyQt6"):
-    _qt_plugins = os.path.join(_SITE_PACKAGES, _qt_pkg, "plugins")
+    _qt_root = os.path.join(_SITE_PACKAGES, _qt_pkg)
+    _qt_plugins = os.path.join(_qt_root, "plugins")
     if os.path.isdir(_qt_plugins):
         os.environ.setdefault("QT_PLUGIN_PATH", _qt_plugins)
         os.environ.setdefault("QT_QPA_PLATFORM_PLUGIN_PATH", _qt_plugins)
+        # 添加 Qt DLL 目录到搜索路径（Python 3.8+ 推荐 API，取代修改 PATH）
+        # 使 QML 插件能找到 Qt5Core.dll/Qt5Quick.dll 等 C 层依赖
+        if os.path.isdir(_qt_root):
+            try:
+                os.add_dll_directory(_qt_root)
+            except (OSError, FileNotFoundError):
+                pass
         break
 
 # tkinter 环境变量（embed python 缺失 Tcl/Tk 脚本路径，需手动指定）

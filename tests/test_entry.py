@@ -207,6 +207,18 @@ def test_generate_wrapper_source_qt_plugin_paths() -> None:
     assert "QT_QPA_PLATFORM_PLUGIN_PATH" in source
 
 
+def test_generate_wrapper_source_qt_dll_directory() -> None:
+    """wrapper 源码含 os.add_dll_directory 调用，使 QML 插件能找到 Qt5/6*.dll 依赖.
+
+    QML 插件（qml/QtQuick.2/qtquick2plugin.dll）加载时依赖 Qt5Core.dll/
+    Qt5Quick.dll 等，这些 DLL 在 site-packages/<qt_pkg>/ 目录下，默认 DLL
+    搜索路径不含此目录，需显式 add_dll_directory。
+    """
+    source = EntryWrapper.generate_wrapper_source("app", None, "app.py")
+    assert "os.add_dll_directory" in source
+    assert "_qt_root" in source
+
+
 def test_generate_wrapper_source_tkinter_disabled_by_default() -> None:
     """has_tkinter 默认 False：wrapper 注入 `if False:` 跳过 Tcl/Tk 环境变量."""
     source = EntryWrapper.generate_wrapper_source("app", None, "app.py")
