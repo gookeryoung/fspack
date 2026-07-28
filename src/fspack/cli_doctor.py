@@ -778,23 +778,29 @@ def _build_single_template(  # pragma: no cover
     dist_size = _dir_size(dist_dir) if dist_dir.is_dir() else 0
     entry_count = len(list(dist_dir.glob("*.exe"))) if dist_dir.is_dir() else 0
 
-    # 构建成功后运行验证：优先用 debug 模式（embed python + wrapper），
-    # 模拟 `fsp r --debug`：console 子系统 stdout 可见，wrapper 设置 Qt 插件路径、
-    # Tcl/Tk 环境变量、site-packages sys.path 等，避免 GUI 应用因环境变量缺失启动失败。
+    # 构建成功后解析项目入口：多入口项目产出的 exe 名是 [tool.fspack.entries]
+    # 的键（如 cli/gui/web），不等于 template.name。用 ProjectInfo.all_entries[0]
+    # 取首个入口名（与 `fsp r` 默认行为一致），避免多入口项目跳过运行验证。
+    from fspack.config import ProjectInfo
+
+    entry_name = ProjectInfo.from_dir(proj_dir).all_entries[0].name
+
+    # 运行验证：优先用 debug 模式（embed python + wrapper），模拟 `fsp r --debug`：
+    # console 子系统 stdout 可见，wrapper 设置 Qt 插件路径、Tcl/Tk 环境变量、
+    # site-packages sys.path 等，避免 GUI 应用因环境变量缺失启动失败。
     # debug 模式不可用（wrapper/embed python 缺失）时回退直跑 loader exe。
-    # 多入口项目产出的 exe 名与 template.name 不一致时跳过验证（run_result=None）。
-    debug = _build_debug_cmd(proj_dir, template.name)
+    debug = _build_debug_cmd(proj_dir, entry_name)
     if debug is not None:
         cmd, env = debug
         run_result = _run_template(cmd, env)
     else:
-        exe = _find_dist_exe(proj_dir, template.name)
+        exe = _find_dist_exe(proj_dir, entry_name)
         if exe is not None:
             run_result = _run_template(_build_run_cmd(exe))
         else:
             run_result = None
         if exe is None and entry_count > 0:
-            _logger.debug("模板 %s 未找到匹配的可执行文件（多入口？），跳过运行验证", template.id)
+            _logger.debug("模板 %s 未找到入口 %s 的可执行文件，跳过运行验证", template.id, entry_name)
 
     return TemplateBuildResult(
         template_id=template.id,
@@ -955,12 +961,12 @@ def _print_run_summary(succeeded: int, run_ok: int, run_fail: int, run_skip: int
     :param succeeded: 构建成功的模板数
     :param run_ok: 运行验证成功数（含超时视为 GUI 事件循环正常）
     :param run_fail: 运行验证失败数（退出码非 0 或启动失败）
-    :param run_skip: 跳过运行验证数（多入口或未找到可执行文件）
+    :param run_skip: 跳过运行验证数（未找到可执行文件）
     """
     run_total = run_ok + run_fail
     if run_total == 0:
         if succeeded > 0 and run_skip > 0:
-            console.warn(f"运行验证：{run_skip} 个模板跳过（多入口或未找到可执行文件）")
+            console.warn(f"运行验证：{run_skip} 个模板跳过（未找到可执行文件）")
         return
     if run_fail > 0:
         console.warn(f"运行验证：{run_ok} 成功 / {run_fail} 失败 / {run_total} 验证 / {run_skip} 跳过")
@@ -974,7 +980,7 @@ def _format_run_status(result: TemplateBuildResult) -> tuple[str, str]:
     :param result: 模板构建结果
     :return: (运行状态字符串, 错误信息)。运行状态字符串含 rich 标记：
         - 构建失败 → ``"-"``（不运行验证）
-        - ``run_result`` 为 ``None`` → ``"[dim]跳过[/]"``（多入口或未找到 exe）
+        - ``run_result`` 为 ``None`` → ``"[dim]跳过[/]"``（未找到 exe）
         - 成功且超时 → ``"[green]√ 超时[/]"``（GUI/Web 事件循环正常）
         - 成功未超时 → ``"[green]√ 成功[/]"``（CLI 正常退出码 0）
         - 失败 → ``"[red]× 失败[/]"``
