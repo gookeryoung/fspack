@@ -15,7 +15,6 @@
 """
 
 from __future__ import annotations
-from dataclasses import dataclass
 
 from fspack._compat import override
 from fspack.slim.base import SlimSpec
