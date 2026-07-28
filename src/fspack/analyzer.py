@@ -1,10 +1,18 @@
-"""AST 依赖分析：扫描 import，分类标准库/本地/第三方."""
+"""AST 依赖分析：扫描 import，分类标准库/本地/第三方.
+
+同时扫描 QML 文件（``.qml``）中的 ``import QtXxx`` 语句，将 QML 运行时
+依赖映射为 Qt 子模块名（如 ``QtQuick`` → ``Quick``），补充 AST 静态分析
+无法发现的 QML 运行时依赖——QML 引擎加载 ``qml/QtQuick.2/qtquick2plugin.dll``
+时依赖 ``Qt5Quick.dll``，但 Python 入口仅 ``import PySide2.QtQml`` 不会
+触发 ``Quick`` 子模块保留，导致 DLL 缺失。
+"""
 
 from __future__ import annotations
 
 import ast
 import hashlib
 import os
+import re
 import sys
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -18,8 +26,92 @@ __all__ = [
     "collect_imports",
     "collect_imports_and_submodules",
     "collect_submodule_imports",
+    "parse_qml_imports",
     "source_fingerprint",
 ]
+
+# Qt Python 绑定包名集合：QML 模块依赖需加入这些包的子模块集合。
+# PySide2/PySide6/PyQt5/PyQt6 共享同一 QML 模块系统。
+_QT_PYTHON_PACKAGES: frozenset[str] = frozenset({"PySide2", "PySide6", "PyQt5", "PyQt6"})
+
+# QML 模块名 → Qt 子模块名（归一化名）显式映射表。
+# 处理 QML 模块名与 DLL 子模块名不一致的情况：
+# - ``QtQuick.Controls`` → ``QuickControls2``（Qt5/6 均为 Controls 2，DLL 名带 2 后缀）
+# - ``QtQuick.Templates`` → ``QuickTemplates2``（同上）
+# - ``QtQuick.Layouts`` → ``QuickLayouts``（去点号）
+# - ``QtQuick.Shapes`` → ``QuickShapes``（去点号）
+# - ``QtQuick.Window``/``QtQuick.Particles``/``QtQuick.LocalStorage`` 等 → ``Quick``
+#   （这些是 QtQuick 的子模块，对应同一 ``Qt5Quick.dll``）
+# - ``QtWebEngine`` → ``WebEngineCore``（QML 模块对应 WebEngineCore DLL）
+_QML_MODULE_TO_QT_SUB: dict[str, str] = {
+    "QtQuick.Controls": "QuickControls2",
+    "QtQuick.Templates": "QuickTemplates2",
+    "QtQuick.Layouts": "QuickLayouts",
+    "QtQuick.Shapes": "QuickShapes",
+    # 以下均为 QtQuick 子模块，对应 Qt5Quick.dll
+    "QtQuick.Window": "Quick",
+    "QtQuick.Particles": "Quick",
+    "QtQuick.LocalStorage": "Quick",
+    "QtQuick.Dialogs": "Quick",
+    "QtQuick.Extras": "Quick",
+    "QtQuick.PrivateWidgets": "Quick",
+    "QtQuick.VirtualKeyboard": "Quick",
+    "QtQuick.Timeline": "Quick",
+    "QtQuick.Scene2D": "Quick",
+    "QtQuick.Scene3D": "Quick",
+    "QtQuick.Pdf": "Quick",
+    # QML 模块对应不同 DLL 子模块名
+    "QtWebEngine": "WebEngineCore",
+}
+
+# QML import 语句正则：``import QtXxx[.Yyy] [version]``
+# 匹配 ``import QtQuick 2.15``/``import QtQuick.Controls 2.15``/``import QtQuick3D 2.15``
+# 不匹配 ``import "."``/``import "scripts.js" as Scripts``（相对/JS 导入）
+_QML_IMPORT_RE = re.compile(r"^\s*import\s+(Qt[\w.]+)(?:\s+\d+(?:\.\d+)*)?\s*$")
+
+
+def _qml_module_to_qt_sub(qml_module: str) -> str | None:
+    """QML 模块名 → Qt 子模块名（归一化名）.
+
+    返回 None 表示非 Qt 模块（如 ``import "."`` 相对导入）。
+    先查 :data:`_QML_MODULE_TO_QT_SUB` 显式映射，未命中时按默认规则
+    去掉 ``Qt`` 前缀（如 ``QtQuick`` → ``Quick``、``QtCharts`` → ``Charts``、
+    ``QtMultimedia`` → ``Multimedia``）。
+    """
+    # 仅 "Qt" 无后续字符或非 Qt 前缀返回 None
+    if not qml_module.startswith("Qt") or qml_module == "Qt":
+        return None
+    if qml_module in _QML_MODULE_TO_QT_SUB:
+        return _QML_MODULE_TO_QT_SUB[qml_module]
+    return qml_module[2:]
+
+
+def parse_qml_imports(qml_file: Path) -> set[str]:
+    """解析 QML 文件中的 import 语句，返回 Qt 子模块名（归一化名）集合.
+
+    QML import 语法：
+    - ``import QtQuick 2.15`` → ``Quick``
+    - ``import QtQuick.Controls 2.15`` → ``QuickControls2``
+    - ``import QtQuick.Layouts 1.15`` → ``QuickLayouts``
+    - ``import "."`` → 忽略（相对导入）
+    - ``import "scripts.js" as Scripts`` → 忽略（JS 文件导入）
+
+    文件读取失败返回空集合（不抛异常，避免阻塞依赖分析）。
+    """
+    subs: set[str] = set()
+    try:
+        text = qml_file.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return subs
+    for line in text.splitlines():
+        m = _QML_IMPORT_RE.match(line)
+        if m:
+            qml_module = m.group(1)
+            qt_sub = _qml_module_to_qt_sub(qml_module)
+            if qt_sub:
+                subs.add(qt_sub)
+    return subs
+
 
 # Python 3.8/3.9 没有 sys.stdlib_module_names，用 curate 的集合回退
 STDLIB_FALLBACK: frozenset[str] = frozenset(
@@ -364,13 +456,17 @@ _EXCLUDED_DIRS = frozenset(
 
 
 def _is_excluded(path: Path, src_dir: Path) -> bool:
-    """判断 .py 文件是否位于构建产物或缓存目录下，应跳过扫描."""
+    """判断文件是否位于构建产物或缓存目录下，应跳过扫描.
+
+    适用于 .py 与 .qml 文件：仅检查路径的目录前缀是否在
+    :data:`_EXCLUDED_DIRS` 中或为 ``.egg-info`` 后缀。
+    """
     parts = path.relative_to(src_dir).parts[:-1]
     return any(part in _EXCLUDED_DIRS or part.endswith(".egg-info") for part in parts)
 
 
 def analyze_dependencies(src_dir: Path, project_name: str, declared: tuple[str, ...]) -> DependencyReport:
-    """扫描 src_dir 下所有 .py，分类 import 为标准库/本地/第三方。
+    """扫描 src_dir 下所有 .py 与 .qml，分类 import 为标准库/本地/第三方。
 
     自动排除 dist/build/.venv 等构建产物与缓存目录，避免扫描到已解包的
     embed python 或 python-build-standalone 标准库源码导致误报依赖。
@@ -378,6 +474,12 @@ def analyze_dependencies(src_dir: Path, project_name: str, declared: tuple[str, 
     文件数超过 :data:`_PARALLEL_THRESHOLD` 时使用 :class:`ProcessPoolExecutor`
     并行解析（CPU 密集 ``ast.parse``），大项目显著提速。小项目走串行路径
     避免进程池启动开销（Windows spawn 约 100-200ms，需足够工作量摊销）。
+
+    QML 文件（``.qml``）中的 ``import QtXxx`` 语句会被解析并映射为 Qt 子模块名
+    （如 ``QtQuick`` → ``Quick``），加入对应 Qt 绑定包（PySide2/PySide6/PyQt5/PyQt6）
+    的子模块集合——QML 引擎加载插件时依赖 ``Qt5Quick.dll`` 等 C 层 DLL，但 Python
+    入口仅 ``import PySide2.QtQml`` 不会触发 ``Quick`` 子模块保留，AST 无法发现
+    此运行时依赖。
     """
     py_files: list[Path] = [py for py in src_dir.rglob("*.py") if not _is_excluded(py, src_dir)]
 
@@ -388,6 +490,18 @@ def analyze_dependencies(src_dir: Path, project_name: str, declared: tuple[str, 
         _parse_parallel(py_files, all_imports, all_submodules)
     else:
         _parse_serial(py_files, all_imports, all_submodules)
+
+    # 扫描 QML 文件提取 QtQuick 等 QML 运行时依赖（AST 无法发现）
+    # 仅当项目 import 了 Qt 绑定包时才扫描，避免非 Qt 项目无谓 I/O
+    imported_qt_pkgs = _QT_PYTHON_PACKAGES & set(all_imports)
+    if imported_qt_pkgs:
+        qml_files: list[Path] = [qml for qml in src_dir.rglob("*.qml") if not _is_excluded(qml, src_dir)]
+        qml_qt_subs: set[str] = set()
+        for qml_file in qml_files:
+            qml_qt_subs.update(parse_qml_imports(qml_file))
+        if qml_qt_subs:
+            for qt_pkg in imported_qt_pkgs:
+                all_submodules.setdefault(qt_pkg, set()).update(qml_qt_subs)
 
     local = _local_packages(src_dir, project_name)
     stdlib: list[str] = []
