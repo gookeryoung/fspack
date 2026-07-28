@@ -264,6 +264,7 @@ fsp r --entry gui         # 运行 gui 入口
 | `fsp clean` | `fsp c` | 清理 dist/ 目录 |
 | `fsp package` | `fsp p` | 生成安装包（Windows NSIS / Linux .deb + tar.gz） |
 | `fsp init` | `fsp i` | 从模板创建新项目（22 个模板可选） |
+| `fsp doctor` | — | 环境诊断：检查打包工具可用性与配置 |
 
 ### fsp build
 
@@ -340,6 +341,20 @@ fsp init [project_name] [--template <id>] [--list] [--description <desc>] [--dir
 | `--directory <path>` | 父目录（默认当前目录） |
 
 22 个模板按分类：CLI(6) / GUI(6) / 游戏(2) / 科学(3) / Web(2) / 配置(3)。详见 `fsp init --list`。
+
+### fsp doctor
+
+```text
+fsp doctor                # 环境诊断：检查打包工具与配置
+```
+
+输出三色诊断报告（绿=OK / 黄=WARN / 红=ERROR）：
+
+- **环境信息**：Python 版本、平台、fspack 版本、镜像源、缓存目录大小
+- **工具检查**：mingw-w64/gcc/NSIS/wine/pip/uv/Pillow（按平台过滤）
+- **修复建议**：缺失工具给出安装命令（如 `choco install mingw` / `sudo apt install gcc`）
+
+打包失败时先跑 `fsp doctor` 前置发现环境问题。
 
 ## 示例
 
