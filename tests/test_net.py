@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import io
 import ssl
 from pathlib import Path
 from urllib.request import Request
@@ -11,26 +10,7 @@ import pytest
 
 from fspack.packaging.net import Downloader
 from fspack.progress import StageRecorder
-
-
-class _FakeResp:
-    """模拟 urlopen 响应，支持分块 read(n)."""
-
-    def __init__(self, data: bytes, block_size: int = 64) -> None:
-        self._buf = io.BytesIO(data)
-        self._block_size = block_size
-        self.headers = {"Content-Length": str(len(data))}
-
-    def read(self, n: int = -1) -> bytes:
-        if n < 0:
-            return self._buf.read(self._block_size)
-        return self._buf.read(min(n, self._block_size))
-
-    def __enter__(self) -> _FakeResp:
-        return self
-
-    def __exit__(self, *a: object) -> bool:
-        return False
+from tests._stubs import FakeResp
 
 
 class TestCreateSslContext:
@@ -74,9 +54,9 @@ class TestDownloaderDownload:
     def test_downloads_file_and_returns_bytes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         captured: dict[str, str] = {}
 
-        def fake_urlopen(req: Request, timeout: int, **kwargs: object) -> _FakeResp:
+        def fake_urlopen(req: Request, timeout: int, **kwargs: object) -> FakeResp:
             captured["url"] = req.full_url
-            return _FakeResp(b"hello world data")
+            return FakeResp(b"hello world data")
 
         monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", fake_urlopen)
         dest = tmp_path / "out" / "file.zip"
@@ -89,7 +69,7 @@ class TestDownloaderDownload:
     def test_stage_receives_bytes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
             "fspack.packaging.net.urllib.request.urlopen",
-            lambda req, timeout, **kw: _FakeResp(b"abc" * 100),
+            lambda req, timeout, **kw: FakeResp(b"abc" * 100),
         )
         rec = StageRecorder("download")
         downloader = Downloader(ssl_ctx=ssl.create_default_context())
@@ -100,7 +80,7 @@ class TestDownloaderDownload:
     def test_no_stage_works(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
             "fspack.packaging.net.urllib.request.urlopen",
-            lambda req, timeout, **kw: _FakeResp(b"abc"),
+            lambda req, timeout, **kw: FakeResp(b"abc"),
         )
         downloader = Downloader(ssl_ctx=ssl.create_default_context())
         written = downloader.download("https://x/d", tmp_path / "f.zip")

@@ -29,6 +29,7 @@ from fspack.exceptions import DependencyError, EmbedError
 from fspack.packaging.runtime import STANDALONE_RELEASE_TAG, standalone_tarball_name
 from fspack.platform import Platform
 from fspack.templates.loader import project_templates_dir
+from tests._stubs import fail_urlopen
 
 _EXAMPLES = project_templates_dir()
 
@@ -46,11 +47,6 @@ def _copy_example(proj_name: str, tmp_path: Path) -> Path:
     return dst
 
 
-def _fail_urlopen(*a: object, **kw: object) -> object:
-    """守卫：离线模式不应触发网络请求."""
-    raise AssertionError("离线模式不应触发网络请求")
-
-
 # ---- 离线模式 + runtime 缓存未命中 → build() 抛 EmbedError ----
 
 
@@ -63,7 +59,7 @@ def test_build_offline_embed_cache_miss_raises_embed_error(tmp_path: Path, monke
     monkeypatch.setenv("FSPACK_OFFLINE", "1")
     # 缓存目录指向空目录，确保 cache miss
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
-    monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", _fail_urlopen)
+    monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", fail_urlopen)
 
     proj = _copy_example("cli_helloworld_pyall", tmp_path)
     from fspack.builder import build
@@ -82,7 +78,7 @@ def test_build_offline_wheel_cache_miss_raises_dependency_error(
     """
     monkeypatch.setenv("FSPACK_OFFLINE", "1")
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
-    monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", _fail_urlopen)
+    monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", fail_urlopen)
 
     proj = _copy_example("cli_office_py38", tmp_path)
     # 让 runtime 已就绪：在 dist/runtime/ 下创建 python311.dll marker
@@ -124,7 +120,7 @@ def test_build_offline_uses_cache_dir_env_var(tmp_path: Path, monkeypatch: pytes
 
     monkeypatch.setenv("FSPACK_OFFLINE", "1")
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(cache_dir))
-    monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", _fail_urlopen)
+    monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", fail_urlopen)
     # mock extract_embed 跳过实际解压（假 zip 无法解压）
     monkeypatch.setattr("fspack.packaging.pipeline_stages.extract_embed", lambda zip_path, runtime_dir: None)
 
@@ -205,7 +201,7 @@ def test_build_offline_error_lists_searched_paths(tmp_path: Path, monkeypatch: p
     monkeypatch.setenv("FSPACK_OFFLINE", "1")
     custom_cache = tmp_path / "my-cache"
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(custom_cache))
-    monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", _fail_urlopen)
+    monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", fail_urlopen)
 
     proj = _copy_example("cli_helloworld_pyall", tmp_path)
     from fspack.builder import build
@@ -239,7 +235,7 @@ def test_build_offline_standalone_cache_miss_raises_embed_error(
     """
     monkeypatch.setenv("FSPACK_OFFLINE", "1")
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
-    monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", _fail_urlopen)
+    monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", fail_urlopen)
 
     proj = _copy_example("cli_helloworld_pyall", tmp_path)
     from fspack.builder import build
@@ -259,7 +255,7 @@ def test_build_offline_wheel_cache_miss_raises_dependency_error_linux(
     """
     monkeypatch.setenv("FSPACK_OFFLINE", "1")
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
-    monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", _fail_urlopen)
+    monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", fail_urlopen)
 
     proj = _copy_example("cli_office_py38", tmp_path)
     # Linux runtime marker：runtime/python/bin/python3.11（对应 py_version 3.11.15）
@@ -296,7 +292,7 @@ def test_build_offline_uses_cache_dir_env_var_linux(tmp_path: Path, monkeypatch:
 
     monkeypatch.setenv("FSPACK_OFFLINE", "1")
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(cache_dir))
-    monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", _fail_urlopen)
+    monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", fail_urlopen)
     # mock extract_standalone 跳过实际解压
     monkeypatch.setattr("fspack.packaging.pipeline_stages.extract_standalone", lambda tar, runtime_dir: None)
 
@@ -367,7 +363,7 @@ def test_build_offline_error_lists_searched_paths_linux(tmp_path: Path, monkeypa
     monkeypatch.setenv("FSPACK_OFFLINE", "1")
     custom_cache = tmp_path / "my-cache"
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(custom_cache))
-    monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", _fail_urlopen)
+    monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", fail_urlopen)
 
     proj = _copy_example("cli_helloworld_pyall", tmp_path)
     from fspack.builder import build

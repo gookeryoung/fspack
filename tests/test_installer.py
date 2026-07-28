@@ -23,12 +23,7 @@ from fspack.packaging.installer import (
     generate_nsis_script,
 )
 from fspack.platform import Platform
-
-
-class _Completed:
-    returncode = 0
-    stdout = ""
-    stderr = ""
+from tests._stubs import CompletedStub
 
 
 def _make_info(tmp_path: Path, app_type: AppType = AppType.CLI, name: str = "app") -> ProjectInfo:
@@ -143,7 +138,7 @@ def test_compile_installer_makensis_error(tmp_path: Path, monkeypatch: pytest.Mo
 
 
 def test_compile_installer_no_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("fspack.packaging.installer.subprocess.run", lambda cmd, **kw: _Completed())
+    monkeypatch.setattr("fspack.packaging.installer.subprocess.run", lambda cmd, **kw: CompletedStub())
     with pytest.raises(InstallerError, match="未产出安装包"):
         compile_installer(tmp_path / "x.nsi", tmp_path / "out.exe")
 
@@ -151,9 +146,9 @@ def test_compile_installer_no_output(tmp_path: Path, monkeypatch: pytest.MonkeyP
 def test_compile_installer_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     out = tmp_path / "out.exe"
 
-    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         out.write_bytes(b"")
-        return _Completed()
+        return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.installer.subprocess.run", fake_run)
     result = compile_installer(tmp_path / "x.nsi", out)
@@ -182,10 +177,10 @@ def test_build_installer_no_build_success(tmp_path: Path, monkeypatch: pytest.Mo
     (dist / "app.exe").write_bytes(b"")
     out_setup = dist / "release" / "app-1.0-py3.11.9-windows-slim-setup.exe"
 
-    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         out_setup.parent.mkdir(parents=True, exist_ok=True)
         out_setup.write_bytes(b"")
-        return _Completed()
+        return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.installer.subprocess.run", fake_run)
     result = build_installer(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True)
@@ -225,10 +220,10 @@ def test_build_installer_with_build(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr("fspack.packaging.installer.build", fake_build)
 
-    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         out_setup.parent.mkdir(parents=True, exist_ok=True)
         out_setup.write_bytes(b"")
-        return _Completed()
+        return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.installer.subprocess.run", fake_run)
     result = build_installer(tmp_path, get_mirror("huawei"), "3.11.9", no_build=False)
@@ -461,12 +456,12 @@ def test_build_deb_release_no_build_success(tmp_path: Path, monkeypatch: pytest.
     dist.mkdir()
     (dist / "app").write_bytes(b"")
 
-    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         # dpkg-deb --build <staging> <deb_path>，模拟生成 .deb
         deb_path = Path(cmd[-1])
         deb_path.parent.mkdir(parents=True, exist_ok=True)
         deb_path.write_bytes(b"deb-content")
-        return _Completed()
+        return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.installer.subprocess.run", fake_run)
     result = build_deb_release(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True)
@@ -604,10 +599,10 @@ def test_prepare_dist_passes_build_defaults_to_build(tmp_path: Path, monkeypatch
     # mock makensis 编译，避免 Linux CI 无 NSIS 导致测试失败
     out_setup = tmp_path / "dist" / "release" / "app-1.0-py3.11.9-windows-slim-setup.exe"
 
-    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         out_setup.parent.mkdir(parents=True, exist_ok=True)
         out_setup.write_bytes(b"")
-        return _Completed()
+        return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.installer.subprocess.run", fake_run)
 
@@ -660,10 +655,10 @@ def test_prepare_dist_no_config_uses_default_options(tmp_path: Path, monkeypatch
     # mock makensis 编译，避免 Linux CI 无 NSIS 导致测试失败
     out_setup = tmp_path / "dist" / "release" / "app-1.0-py3.11.9-windows-slim-setup.exe"
 
-    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         out_setup.parent.mkdir(parents=True, exist_ok=True)
         out_setup.write_bytes(b"")
-        return _Completed()
+        return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.installer.subprocess.run", fake_run)
     build_release(tmp_path, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, fmt="nsis")
@@ -716,10 +711,10 @@ def test_prepare_dist_skips_build_when_dist_and_exe_ready(tmp_path: Path, monkey
     # mock makensis 编译，避免 Linux CI 无 NSIS 导致测试失败
     out_setup = dist / "release" / "app-1.0-py3.11.9-windows-slim-setup.exe"
 
-    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         out_setup.parent.mkdir(parents=True, exist_ok=True)
         out_setup.write_bytes(b"")
-        return _Completed()
+        return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.installer.subprocess.run", fake_run)
     # 走 build_installer 路径（NsisInstaller），no_build=False
@@ -771,10 +766,10 @@ def test_prepare_dist_rebuilds_when_dist_exists_but_exe_missing(
     # mock makensis 编译，避免 Linux CI 无 NSIS 导致测试失败
     out_setup = dist / "release" / "app-1.0-py3.11.9-windows-slim-setup.exe"
 
-    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         out_setup.parent.mkdir(parents=True, exist_ok=True)
         out_setup.write_bytes(b"")
-        return _Completed()
+        return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.installer.subprocess.run", fake_run)
     build_installer(tmp_path, get_mirror("huawei"), "3.11.9", no_build=False)

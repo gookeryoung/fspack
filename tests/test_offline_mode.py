@@ -35,22 +35,14 @@ from fspack.packaging.wheels import (
 )
 from fspack.platform import Platform
 from fspack.progress import StageRecorder
-
-_MIRROR = MirrorConfig(name="t", python_base="https://x/py", pypi_index="https://x/s")
-
-
-class _Completed:
-    """subprocess.run 成功返回值桩."""
-
-    returncode = 0
-    stdout = ""
-    stderr = ""
-
+from tests._stubs import CompletedStub, fail_urlopen
 
 # ---- runtime.py：embed / standalone 离线模式 ----
 
 
-def test_download_embed_offline_cache_hit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_download_embed_offline_cache_hit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mirror: MirrorConfig
+) -> None:
     """离线模式下 embed 缓存命中 → 正常返回，不尝试网络."""
     monkeypatch.setenv("FSPACK_OFFLINE", "1")
     cache = tmp_path / "cache"
@@ -58,25 +50,19 @@ def test_download_embed_offline_cache_hit(tmp_path: Path, monkeypatch: pytest.Mo
     zip_path = cache / "python-3.11.9-embed-amd64.zip"
     zip_path.write_bytes(b"cached")
 
-    # 守卫：若误触发网络请求，urlopen 抛错使测试失败
-    def fail_urlopen(*a: object, **kw: object) -> object:
-        raise AssertionError("离线模式不应触发网络请求")
-
     monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", fail_urlopen)
-    path = download_embed("3.11.9", _MIRROR, cache)
+    path = download_embed("3.11.9", mirror, cache)
     assert path.read_bytes() == b"cached"
 
 
-def test_download_embed_offline_cache_miss(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_download_embed_offline_cache_miss(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mirror: MirrorConfig
+) -> None:
     """离线模式下 embed 缓存未命中 → 立即抛 EmbedError，不尝试网络."""
     monkeypatch.setenv("FSPACK_OFFLINE", "1")
-
-    def fail_urlopen(*a: object, **kw: object) -> object:
-        raise AssertionError("离线模式不应触发网络请求")
-
     monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", fail_urlopen)
     with pytest.raises(EmbedError, match=r"离线模式下.*缓存未命中"):
-        download_embed("3.11.9", _MIRROR, tmp_path / "cache")
+        download_embed("3.11.9", mirror, tmp_path / "cache")
 
 
 def test_download_standalone_offline_cache_hit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -87,9 +73,6 @@ def test_download_standalone_offline_cache_hit(tmp_path: Path, monkeypatch: pyte
     archive = cache / f"cpython-3.10.20+{STANDALONE_RELEASE_TAG}-x86_64-unknown-linux-gnu-install_only.tar.gz"
     archive.write_bytes(b"cached")
 
-    def fail_urlopen(*a: object, **kw: object) -> object:
-        raise AssertionError("离线模式不应触发网络请求")
-
     monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", fail_urlopen)
     path = download_standalone("3.10.20", STANDALONE_RELEASE_TAG, cache)
     assert path.read_bytes() == b"cached"
@@ -98,16 +81,12 @@ def test_download_standalone_offline_cache_hit(tmp_path: Path, monkeypatch: pyte
 def test_download_standalone_offline_cache_miss(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """离线模式下 standalone 缓存未命中 → 立即抛 EmbedError."""
     monkeypatch.setenv("FSPACK_OFFLINE", "1")
-
-    def fail_urlopen(*a: object, **kw: object) -> object:
-        raise AssertionError("离线模式不应触发网络请求")
-
     monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", fail_urlopen)
     with pytest.raises(EmbedError, match=r"离线模式下.*缓存未命中"):
         download_standalone("3.10.20", STANDALONE_RELEASE_TAG, tmp_path / "cache")
 
 
-def test_download_embed_offline_disabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_download_embed_offline_disabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mirror: MirrorConfig) -> None:
     """非离线模式缓存未命中 → 正常走网络下载路径（不抛离线异常）."""
     monkeypatch.delenv("FSPACK_OFFLINE", raising=False)
 
@@ -134,7 +113,7 @@ def test_download_embed_offline_disabled(tmp_path: Path, monkeypatch: pytest.Mon
         return _FakeResp()
 
     monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", fake_urlopen)
-    path = download_embed("3.11.9", _MIRROR, tmp_path / "cache")
+    path = download_embed("3.11.9", mirror, tmp_path / "cache")
     assert path.read_bytes() == b"DATA"
 
 
@@ -149,9 +128,9 @@ def test_download_wheels_offline_cache_hit(tmp_path: Path, monkeypatch: pytest.M
     # 模拟 pip download --no-index 成功（返回 stdout 含 Saved 行）
     captured: dict[str, list[str]] = {}
 
-    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         captured["cmd"] = cmd
-        return _Completed()
+        return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
     monkeypatch.setattr("fspack.packaging.wheel_pip._find_pip_python", lambda: "/py/python")
@@ -165,7 +144,7 @@ def test_download_wheels_offline_cache_miss(tmp_path: Path, monkeypatch: pytest.
     """离线模式下 wheel 缓存未命中（--no-index 失败） → 立即抛 DependencyError."""
     monkeypatch.setenv("FSPACK_OFFLINE", "1")
 
-    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         raise subprocess.CalledProcessError(1, "pip", stderr="not in cache")
 
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
@@ -179,13 +158,13 @@ def test_download_wheels_offline_disabled_falls_back(tmp_path: Path, monkeypatch
     monkeypatch.delenv("FSPACK_OFFLINE", raising=False)
     calls: list[list[str]] = []
 
-    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         calls.append(cmd)
         raise subprocess.CalledProcessError(1, "pip", stderr="not in cache")
 
-    def fake_stream(cmd: list[str]) -> _Completed:
+    def fake_stream(cmd: list[str]) -> CompletedStub:
         calls.append(cmd)
-        return _Completed()
+        return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
     monkeypatch.setattr("fspack.packaging.wheel_pip._stream_subprocess", fake_stream)
@@ -202,7 +181,7 @@ def test_run_pip_download_offline_cache_miss_direct(tmp_path: Path, monkeypatch:
     """直接测试 _run_pip_download：离线模式 + --no-index 失败 → 抛 DependencyError."""
     monkeypatch.setenv("FSPACK_OFFLINE", "1")
 
-    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         raise subprocess.CalledProcessError(1, "pip", stderr="not in cache")
 
     monkeypatch.setattr("fspack.packaging.wheel_pip._run_pip", lambda *a, **kw: None)
@@ -223,9 +202,9 @@ def test_run_pip_download_offline_includes_user_find_links(tmp_path: Path, monke
     monkeypatch.setenv("FSPACK_OFFLINE", "1")
     captured: dict[str, list[str]] = {}
 
-    def fake_run_pip(cmd: list[str], *args: object, **kw: object) -> _Completed:
+    def fake_run_pip(cmd: list[str], *args: object, **kw: object) -> CompletedStub:
         captured["cmd"] = cmd
-        return _Completed()
+        return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.wheel_pip._run_pip", fake_run_pip)
     user_find_links = ["/custom/wheels", "/shared/wheels"]
@@ -275,9 +254,9 @@ def test_download_wheels_offline_with_user_find_links(tmp_path: Path, monkeypatc
     monkeypatch.setenv("FSPACK_OFFLINE", "1")
     captured: dict[str, list[str]] = {}
 
-    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         captured["cmd"] = cmd
-        return _Completed()
+        return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
     monkeypatch.setattr("fspack.packaging.wheel_pip._find_pip_python", lambda: "/py/python")
@@ -300,9 +279,9 @@ def test_download_wheels_offline_no_user_find_links(tmp_path: Path, monkeypatch:
     monkeypatch.setenv("FSPACK_OFFLINE", "1")
     captured: dict[str, list[str]] = {}
 
-    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         captured["cmd"] = cmd
-        return _Completed()
+        return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
     monkeypatch.setattr("fspack.packaging.wheel_pip._find_pip_python", lambda: "/py/python")
@@ -348,7 +327,9 @@ def test_nuitka_ensure_ccache_offline_skips_download(tmp_path: Path, monkeypatch
     assert result is None
 
 
-def test_nuitka_ensure_env_offline_cache_miss(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_nuitka_ensure_env_offline_cache_miss(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mirror: MirrorConfig
+) -> None:
     """离线模式下 nuitka 包缓存未命中 → 抛 NuitkaError，不调 pip install."""
     monkeypatch.setenv("FSPACK_OFFLINE", "1")
     cache_root = tmp_path / "nuitka"
@@ -364,10 +345,12 @@ def test_nuitka_ensure_env_offline_cache_miss(tmp_path: Path, monkeypatch: pytes
 
     monkeypatch.setattr("fspack.packaging.nuitka_env.subprocess.run", fail_run)
     with pytest.raises(NuitkaError, match=r"离线模式下.*nuitka 缓存未命中"):
-        NuitkaCompiler.ensure_env(cache_root, "3.11.9", Platform.LINUX, _MIRROR, stage=stage)
+        NuitkaCompiler.ensure_env(cache_root, "3.11.9", Platform.LINUX, mirror, stage=stage)
 
 
-def test_nuitka_ensure_env_offline_cache_hit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_nuitka_ensure_env_offline_cache_hit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mirror: MirrorConfig
+) -> None:
     """离线模式下 nuitka 缓存命中 → 正常返回，不调 pip install."""
     monkeypatch.setenv("FSPACK_OFFLINE", "1")
     cache_root = tmp_path / "nuitka"
@@ -384,7 +367,7 @@ def test_nuitka_ensure_env_offline_cache_hit(tmp_path: Path, monkeypatch: pytest
         raise AssertionError("离线模式缓存命中不应触发 pip install")
 
     monkeypatch.setattr("fspack.packaging.nuitka_env.subprocess.run", fail_run)
-    version = NuitkaCompiler.ensure_env(cache_root, "3.11.9", Platform.LINUX, _MIRROR, stage=stage)
+    version = NuitkaCompiler.ensure_env(cache_root, "3.11.9", Platform.LINUX, mirror, stage=stage)
     assert version  # 返回非空版本号
 
 

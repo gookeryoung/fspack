@@ -13,12 +13,7 @@ import pytest
 from fspack.config import AppType, BuildOptions, ProjectInfo, get_mirror
 from fspack.exceptions import InstallerError
 from fspack.packaging.installer import build_deb, build_linux_installer, build_tarball
-
-
-class _Completed:
-    returncode = 0
-    stdout = ""
-    stderr = ""
+from tests._stubs import CompletedStub
 
 
 def _make_info(tmp_path: Path, name: str = "app") -> ProjectInfo:
@@ -98,7 +93,7 @@ def test_build_deb_creates_deb(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
     captured: dict[str, Any] = {}
 
-    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         captured["cmd"] = cmd
         staging = Path(cmd[-2])
         deb_path = Path(cmd[-1])
@@ -125,7 +120,7 @@ def test_build_deb_creates_deb(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
         deb_path.parent.mkdir(parents=True, exist_ok=True)
         deb_path.write_bytes(b"fake deb")
-        return _Completed()
+        return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.installer.subprocess.run", fake_run)
 

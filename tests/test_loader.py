@@ -27,6 +27,7 @@ from fspack.packaging.loader import (
 )
 from fspack.platform import Platform
 from fspack.progress import StageRecorder
+from tests._stubs import CompletedStub
 
 
 def test_generate_loader_source_contains_dll_and_entry_reading() -> None:
@@ -51,12 +52,6 @@ def test_generate_loader_source_no_entry_hardcoded() -> None:
     assert "app.py" not in src1
 
 
-class _Completed:
-    returncode = 0
-    stdout = ""
-    stderr = ""
-
-
 def _touch_out(cmd: list[str]) -> None:
     Path(cmd[cmd.index("-o") + 1]).touch()
 
@@ -64,10 +59,10 @@ def _touch_out(cmd: list[str]) -> None:
 def test_compile_loader_cli_invokes_mingw(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, list[str]] = {}
 
-    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         captured["cmd"] = cmd
         _touch_out(cmd)
-        return _Completed()
+        return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
     out = tmp_path / "app.exe"
@@ -81,10 +76,10 @@ def test_compile_loader_cli_invokes_mingw(tmp_path: Path, monkeypatch: pytest.Mo
 def test_compile_loader_gui_adds_mwindows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, list[str]] = {}
 
-    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         captured["cmd"] = cmd
         _touch_out(cmd)
-        return _Completed()
+        return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
     out = tmp_path / "app.exe"
@@ -151,10 +146,10 @@ def test_loader_cache_key_same_for_different_entries() -> None:
 def test_compile_loader_linux_uses_gcc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, list[str]] = {}
 
-    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         captured["cmd"] = cmd
         _touch_out(cmd)
-        return _Completed()
+        return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
     out = tmp_path / "app"
@@ -207,10 +202,10 @@ def test_compile_loader_cache_miss_writes_back(tmp_path: Path, monkeypatch: pyte
     source = "int wmain(){return 0;}"
     cache = tmp_path / "cache"
 
-    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         out_path = Path(cmd[cmd.index("-o") + 1])
         out_path.write_bytes(b"compiled-exe")
-        return _Completed()
+        return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
     out = tmp_path / "app.exe"
@@ -226,12 +221,12 @@ def test_compile_loader_second_call_hits_cache(tmp_path: Path, monkeypatch: pyte
     """相同配置第二次调用命中缓存，只编译一次."""
     call_count = 0
 
-    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         nonlocal call_count
         call_count += 1
         out_path = Path(cmd[cmd.index("-o") + 1])
         out_path.write_bytes(b"compiled")
-        return _Completed()
+        return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
     cache = tmp_path / "cache"
@@ -250,11 +245,11 @@ def test_compile_loader_cache_key_differs_by_app_type(tmp_path: Path, monkeypatc
     cache = tmp_path / "cache"
     calls: list[str] = []
 
-    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         calls.append(cmd[0])
         out_path = Path(cmd[cmd.index("-o") + 1])
         out_path.write_bytes(b"exe")
-        return _Completed()
+        return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
     compile_loader(source, tmp_path / "cli.exe", AppType.CLI, tmp_path / "w1", Platform.WINDOWS, cache_dir=cache)
@@ -290,10 +285,10 @@ def test_loader_cache_dir_default() -> None:
 def test_compile_loader_compile_path_sets_stage_detail(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """编译路径（非缓存命中）设置 stage.detail 为编译器名."""
 
-    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         out_path = Path(cmd[cmd.index("-o") + 1])
         out_path.write_bytes(b"exe")
-        return _Completed()
+        return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
     stage = StageRecorder("生成 C loader")
@@ -432,10 +427,10 @@ def test_inject_mingw_runtime_dlls_warns_when_gcc_returns_relative_only(
 def test_compile_loader_cache_writeback_failure_logged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """缓存回写失败时不影响构建，仅记录警告."""
 
-    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         out_path = Path(cmd[cmd.index("-o") + 1])
         out_path.write_bytes(b"exe")
-        return _Completed()
+        return CompletedStub()
 
     def fake_copy2(src: Path, dst: Path) -> None:
         raise OSError("disk full")
@@ -571,11 +566,11 @@ def test_compile_icon_resource_success_returns_obj_path(tmp_path: Path, monkeypa
     def fake_which(name: str) -> str | None:
         return "/usr/bin/" + name
 
-    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         # 模拟 windres 生成 icon.o
         output = Path(cmd[cmd.index("--output") + 1])
         output.write_bytes(b"coff-obj")
-        return _Completed()
+        return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.loader.shutil.which", fake_which)
     monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
@@ -597,7 +592,7 @@ def test_compile_loader_with_icon_appends_obj_to_cmd(tmp_path: Path, monkeypatch
     def fake_which(name: str) -> str | None:
         return "/usr/bin/" + name
 
-    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         captured["cmd"] = cmd
         # 模拟 windres 与 gcc 都生成输出
         if "--output-format=coff" in cmd:
@@ -606,7 +601,7 @@ def test_compile_loader_with_icon_appends_obj_to_cmd(tmp_path: Path, monkeypatch
         else:
             out_path = Path(cmd[cmd.index("-o") + 1])
             out_path.write_bytes(b"exe")
-        return _Completed()
+        return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.loader.shutil.which", fake_which)
     monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
@@ -632,10 +627,10 @@ def test_compile_loader_linux_ignores_icon(tmp_path: Path, monkeypatch: pytest.M
     """compile_loader Linux 平台忽略 icon 参数（ELF 无图标资源概念）。"""
     captured: dict[str, list[str]] = {}
 
-    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         captured["cmd"] = cmd
         _touch_out(cmd)
-        return _Completed()
+        return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
 
@@ -671,7 +666,7 @@ def test_compile_loader_with_icon_second_call_hits_cache(tmp_path: Path, monkeyp
     def fake_which(name: str) -> str | None:
         return "/usr/bin/" + name
 
-    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         nonlocal call_count
         call_count += 1
         if "--output-format=coff" in cmd:
@@ -680,7 +675,7 @@ def test_compile_loader_with_icon_second_call_hits_cache(tmp_path: Path, monkeyp
         else:
             out_path = Path(cmd[cmd.index("-o") + 1])
             out_path.write_bytes(b"exe")
-        return _Completed()
+        return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.loader.shutil.which", fake_which)
     monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
@@ -719,7 +714,7 @@ def test_compile_loader_different_icon_misses_cache(tmp_path: Path, monkeypatch:
     def fake_which(name: str) -> str | None:
         return "/usr/bin/" + name
 
-    def fake_run(cmd: list[str], **kw: Any) -> _Completed:
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         calls.append(cmd[0])
         if "--output-format=coff" in cmd:
             output = Path(cmd[cmd.index("--output") + 1])
@@ -727,7 +722,7 @@ def test_compile_loader_different_icon_misses_cache(tmp_path: Path, monkeypatch:
         else:
             out_path = Path(cmd[cmd.index("-o") + 1])
             out_path.write_bytes(b"exe")
-        return _Completed()
+        return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.loader.shutil.which", fake_which)
     monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
