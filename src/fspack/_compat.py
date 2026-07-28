@@ -10,14 +10,11 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from rich.console import Console
-    from rich.theme import Theme
-
 import os
 import sys
+
+from rich.console import Console
+from rich.theme import Theme
 
 if sys.version_info >= (3, 12):
     from typing import override
@@ -68,8 +65,8 @@ class CICompat:
                 with contextlib.suppress(OSError, ValueError):  # 流已关闭或不支持重配置，忽略
                     reconfigure(encoding="utf-8")
 
-    @staticmethod
-    def make_console() -> Console:
+    @classmethod
+    def make_console(cls) -> Console:
         """创建 rich Console 实例。
 
         CI 环境（``CI`` 或 ``GITHUB_ACTIONS`` 等环境变量存在）下显式禁用
@@ -82,7 +79,7 @@ class CICompat:
         另在创建 Console 前调用 :func:`_ensure_utf8_stdio` 重配置 stdout/stderr
         为 UTF-8，避免 Windows 默认 cp1252 编码导致中文日志 UnicodeEncodeError。
         """
-        CICompat.ensure_utf8_stdio()
+        cls.ensure_utf8_stdio()
 
         in_ci = any(os.environ.get(name) for name in ("CI", "GITHUB_ACTIONS", "BUILD_NUMBER"))
-        return Console(theme=CICompat.get_theme(), legacy_windows=False if in_ci else None)
+        return Console(theme=cls.get_theme(), legacy_windows=False if in_ci else None)
