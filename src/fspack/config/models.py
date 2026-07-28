@@ -147,6 +147,7 @@ class BuildDefaults:
     no_stdlib_trim: bool | None = None
     ccache: bool | None = None
     nuitka_packages: tuple[str, ...] = ()
+    no_size_report: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -310,6 +311,8 @@ class BuildOptions:
     nuitka: bool = False
     ccache: bool = False
     nuitka_packages: tuple[str, ...] = ()
+    # 关闭构建结束后的体积报告（默认输出，--no-size-report 关闭）
+    no_size_report: bool = False
 
 
 def build_options_from_defaults(defaults: BuildDefaults) -> BuildOptions:
@@ -334,6 +337,7 @@ def build_options_from_defaults(defaults: BuildDefaults) -> BuildOptions:
         nuitka=defaults.nuitka if defaults.nuitka is not None else base.nuitka,
         ccache=defaults.ccache if defaults.ccache is not None else base.ccache,
         nuitka_packages=defaults.nuitka_packages,
+        no_size_report=defaults.no_size_report if defaults.no_size_report is not None else base.no_size_report,
     )
 
 

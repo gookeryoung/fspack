@@ -86,7 +86,7 @@ req-46 完成缓存配置 + 离线支持 + init 模板命令（iter-76~85），�
   + 自动解析 Python 版本 + AST 扫描依赖 + 显示打包计划（目标平台、Python
   版本、依赖列表、预估 wheel 数、runtime 来源、loader 编译器）不执行下载
   与编译。帮助用户在打包前确认配置正确
-- [ ] **iter-88 打包产物大小报告**：`fsp b` 完成后输出 dist 体积报告，按
+- [x] **iter-88 打包产物大小报告**：`fsp b` 完成后输出 dist 体积报告，按
   runtime/src/site-packages 三大类统计，site-packages 按 Top 10 包占比
   排序，标注精简节省空间。复用 BuildTracker 表格渲染，支持 `--no-size-report`
   关闭。帮助用户定位体积热点

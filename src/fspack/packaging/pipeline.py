@@ -211,6 +211,10 @@ def build(  # noqa: PLR0913
     exes = _build_entry_loaders(ctx, resolved_icon, has_tkinter)
 
     console.rich.print(tracker.summary())
+    if not opts.no_size_report:
+        from fspack.packaging.size_report import print_size_report
+
+        print_size_report(cfg.dist_dir)
     if len(exes) == 1:
         console.success(f"构建完成: {exes[0]}")
     else:

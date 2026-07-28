@@ -195,6 +195,11 @@ def _add_build_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser
         action="store_true",
         help="仅预览打包计划，不执行实际构建（不下载/不编译/不复制文件）",
     )
+    p.add_argument(
+        "--no-size-report",
+        action="store_true",
+        help="关闭构建结束后的体积报告（默认输出 runtime/src/site-packages 分类与 Top 10 包占比）",
+    )
 
 
 def _add_run_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -347,6 +352,7 @@ def _run_build(project: Path, ns: argparse.Namespace) -> None:
         nuitka=ns.nuitka or base.nuitka,
         ccache=ns.ccache or base.ccache,
         nuitka_packages=tuple(dict.fromkeys((*base.nuitka_packages, *(ns.nuitka_pkg or [])))),
+        no_size_report=ns.no_size_report or base.no_size_report,
     )
     build(
         project,
