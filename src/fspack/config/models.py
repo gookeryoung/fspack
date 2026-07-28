@@ -148,6 +148,7 @@ class BuildDefaults:
     ccache: bool | None = None
     nuitka_packages: tuple[str, ...] = ()
     no_size_report: bool | None = None
+    analyze_deps: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -313,6 +314,9 @@ class BuildOptions:
     nuitka_packages: tuple[str, ...] = ()
     # 关闭构建结束后的体积报告（默认输出，--no-size-report 关闭）
     no_size_report: bool = False
+    # 启用二进制依赖分析：解析 .dll/.so/.dylib 依赖树，剥离无引用文件
+    # （默认关闭，耗时；iter-101）
+    analyze_deps: bool = False
 
 
 def build_options_from_defaults(defaults: BuildDefaults) -> BuildOptions:
@@ -338,6 +342,7 @@ def build_options_from_defaults(defaults: BuildDefaults) -> BuildOptions:
         ccache=defaults.ccache if defaults.ccache is not None else base.ccache,
         nuitka_packages=defaults.nuitka_packages,
         no_size_report=defaults.no_size_report if defaults.no_size_report is not None else base.no_size_report,
+        analyze_deps=defaults.analyze_deps if defaults.analyze_deps is not None else base.analyze_deps,
     )
 
 

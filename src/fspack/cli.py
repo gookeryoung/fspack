@@ -224,6 +224,16 @@ def _add_build_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser
             "用 tracemalloc 采集内存峰值（无新依赖）"
         ),
     )
+    p.add_argument(
+        "--analyze-deps",
+        action="store_true",
+        help=(
+            "启用二进制依赖分析：解析 .dll/.so/.dylib 依赖树，剥离无引用文件"
+            "（如 Qt6Core.dll 依赖的 ICU 未用时仍保留）。"
+            "Windows 用纯 Python 解析 PE 导入表，Linux 用 objdump，macOS 用 otool；"
+            "默认关闭，分析耗时但典型项目体积减少 5-15%%"
+        ),
+    )
 
 
 def _add_run_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -399,6 +409,7 @@ def _run_build(project: Path, ns: argparse.Namespace) -> None:
         ccache=ns.ccache or base.ccache,
         nuitka_packages=tuple(dict.fromkeys((*base.nuitka_packages, *(ns.nuitka_pkg or [])))),
         no_size_report=ns.no_size_report or base.no_size_report,
+        analyze_deps=ns.analyze_deps or base.analyze_deps,
     )
     log_file = Path(ns.log_file).resolve() if ns.log_file else None
     log_format = LogFormat.parse(ns.log_format)

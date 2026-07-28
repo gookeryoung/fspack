@@ -45,6 +45,7 @@ from fspack.packaging.log_file import LogFormat, setup_log_file, teardown_log_fi
 from fspack.packaging.pipeline_stages import (
     _DEFAULT_ICON,  # noqa: F401
     BuildContext,
+    _analyze_binary_dependencies,
     _analyze_dependencies,
     _build_entry_loaders,
     _compile_user_sources,
@@ -262,6 +263,11 @@ def _execute_build(  # noqa: PLR0913
             st.set_detail(str(resolved_icon.name))
 
     exes = _build_entry_loaders(ctx, resolved_icon, has_tkinter)
+
+    # 二进制依赖分析（可选）：解析 .dll/.so/.dylib 依赖树，剥离无引用文件。
+    # 仅当 --analyze-deps 启用时执行，节省字节数写入 tracker 的"依赖分析"stage。
+    if opts.analyze_deps:
+        _analyze_binary_dependencies(ctx)
 
     console.rich.print(tracker.summary())
     if not opts.no_size_report:

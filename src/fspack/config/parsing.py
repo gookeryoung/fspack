@@ -67,6 +67,7 @@ _BUILD_DEFAULT_KEYS: dict[str, str] = {
     "no_stdlib_trim": "no_stdlib_trim",
     "ccache": "ccache",
     "no_size_report": "no_size_report",
+    "analyze_deps": "analyze_deps",
 }
 
 # GUI 框架导入名集合：用于按入口脚本 import 推断 AppType
@@ -232,9 +233,9 @@ def _parse_build_defaults(fspack_cfg: dict[str, Any]) -> BuildDefaults:
     """从 ``[tool.fspack]`` 解析构建默认值.
 
     识别 ``nuitka``/``pyc_strip``/``pyc_optimize``/``no_site``/``no_pyc``/
-    ``no_stdlib_trim``/``ccache``/``no_size_report``/``nuitka_packages`` 键，
-    其余键忽略（如 ``icon``/``entries``/``exclude``）。类型不匹配时报错，
-    避免静默忽略错误配置。
+    ``no_stdlib_trim``/``ccache``/``no_size_report``/``analyze_deps``/
+    ``nuitka_packages`` 键，其余键忽略（如 ``icon``/``entries``/``exclude``）。
+    类型不匹配时报错，避免静默忽略错误配置。
     """
     kwargs: dict[str, bool | int | None | tuple[str, ...]] = {}
     for cfg_key, field_name in _BUILD_DEFAULT_KEYS.items():

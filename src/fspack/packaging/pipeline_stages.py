@@ -58,6 +58,7 @@ from fspack.progress import BuildTracker, StageRecorder
 
 __all__ = [
     "BuildContext",
+    "_analyze_binary_dependencies",
     "_analyze_dependencies",
     "_build_entry_loaders",
     "_compile_user_sources",
@@ -405,6 +406,43 @@ def _build_entry_loaders(ctx: BuildContext, resolved_icon: Path | None, has_tkin
                 exes.append(exe)
         st.processed(len(exes))
     return exes
+
+
+def _analyze_binary_dependencies(ctx: BuildContext) -> int:
+    """执行二进制依赖分析，剥离 dist 内无引用的 .dll/.so/.dylib.
+
+    仅当 ``ctx.opts.analyze_deps=True`` 时调用。流程：
+
+    1. :func:`analyze_binary_dependencies` 扫描 dist 下所有二进制，构建依赖图
+    2. :func:`find_unused_binaries` 从入口 BFS，返回不可达二进制列表
+    3. :func:`strip_unused_binaries` 删除未引用文件，累加节省字节数到 stage
+
+    工具缺失（objdump/otool 未安装）时静默跳过，不阻断构建。
+    节省字节数通过 :meth:`StageRecorder.add_saved_bytes` 写入 tracker，
+    在 ``BuildTracker.summary()`` 中体现为"依赖分析"阶段"节省"列。
+    """
+    from fspack.packaging.dep_analyzer import (
+        analyze_binary_dependencies,
+        find_unused_binaries,
+        strip_unused_binaries,
+    )
+
+    with ctx.tracker.stage("依赖分析") as st:
+        graph = analyze_binary_dependencies(ctx.cfg.dist_dir, ctx.cfg.target, runtime_dir=ctx.runtime_dir)
+        if not graph.binaries:
+            st.set_detail("无二进制或工具缺失，跳过")
+            return 0
+
+        unused = find_unused_binaries(graph)
+        if not unused:
+            st.set_detail(f"扫描 {len(graph.binaries)} 个二进制，全部可达")
+            return 0
+
+        saved = strip_unused_binaries(unused)
+        st.add_saved_bytes(saved)
+        st.set_detail(f"剥离 {len(unused)} 个无引用二进制")
+        _logger.info("依赖分析：剥离 %d 个无引用二进制，节省 %d bytes", len(unused), saved)
+        return saved
 
 
 def _dep_cache_path(dist_dir: Path) -> Path:
