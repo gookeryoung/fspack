@@ -35,6 +35,7 @@ from fspack.packaging.dep_analyzer import (
     _parse_objdump_deps,
     _parse_otool_deps,
     _parse_pe_imports,
+    _read_ascii_string,
     analyze_binary_dependencies,
     find_unused_binaries,
     strip_unused_binaries,
@@ -376,6 +377,24 @@ class TestParseOtoolDeps:
             lambda *a, **k: _make_completed(stdout="/path/to/foo.dylib:"),
         )
         assert _parse_otool_deps(tmp_path / "foo.dylib") == []
+
+    def test_skips_blank_lines(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """otool 输出中的空行被跳过."""
+        stdout = "\n".join(
+            [
+                "/path/to/foo.dylib:",
+                "\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0)",
+                "",
+                "\t@rpath/libfoo.dylib (compatibility version 1.0.0)",
+                "   ",
+            ]
+        )
+        monkeypatch.setattr(
+            "fspack.packaging.dep_analyzer.subprocess.run",
+            lambda *a, **k: _make_completed(stdout=stdout),
+        )
+        deps = _parse_otool_deps(tmp_path / "foo.dylib")
+        assert deps == ["/usr/lib/libSystem.B.dylib", "@rpath/libfoo.dylib"]
 
     def test_returns_none_when_otool_missing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """otool 不存在返回 None."""
@@ -800,7 +819,7 @@ class TestIdentifyEntries:
 
     def test_macos_loader_no_suffix_and_dylib(self, tmp_path: Path) -> None:
         """macOS 入口：dist 根无后缀 loader + runtime python/bin/python3.X + .so.
-        
+
         注意：``.dylib`` 在 ``_BINARY_EXTS`` 但不在 ``_ENTRY_EXTS``（仅 ``.pyd``/``.so``），
         故 ``.dylib`` 不作为入口（仅被依赖图引用）。
         """

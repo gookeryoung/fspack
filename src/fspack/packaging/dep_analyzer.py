@@ -186,7 +186,7 @@ def find_unused_binaries(graph: DepGraph) -> list[Path]:
             continue
         visited.add(current)
         info = graph.binaries.get(current)
-        if info is None:
+        if info is None:  # pragma: no cover — current 来自 binaries 键集合，不可能为 None
             continue
         for dep in info.deps:
             dep_basename = _dep_basename(dep, _detect_platform_from_path(current))
@@ -377,7 +377,7 @@ def _parse_pe_imports(path: Path) -> list[str] | None:  # noqa: PLR0911, PLR0912
     # 1. DOS header：e_lfanew @ 0x3C
     try:
         pe_offset = struct.unpack_from("<I", data, 0x3C)[0]
-    except struct.error:
+    except struct.error:  # pragma: no cover — len(data) >= 64 已保证 0x3C+4 不越界
         return None
 
     if pe_offset + 24 > len(data):
@@ -392,7 +392,7 @@ def _parse_pe_imports(path: Path) -> list[str] | None:  # noqa: PLR0911, PLR0912
     try:
         num_sections = struct.unpack_from("<H", data, pe_offset + 6)[0]
         opt_header_size = struct.unpack_from("<H", data, pe_offset + 20)[0]
-    except struct.error:
+    except struct.error:  # pragma: no cover — pe_offset+24 <= len(data) 已保证不越界
         return None
 
     opt_offset = pe_offset + 24
@@ -402,7 +402,7 @@ def _parse_pe_imports(path: Path) -> list[str] | None:  # noqa: PLR0911, PLR0912
     # 3. Optional header magic：PE32=0x10b, PE32+=0x20b
     try:
         magic = struct.unpack_from("<H", data, opt_offset)[0]
-    except struct.error:
+    except struct.error:  # pragma: no cover — opt_offset+opt_header_size <= len(data) 已保证
         return None
 
     # DataDirectory 起始偏移：PE32=96+16*0, PE32+=112+16*0
@@ -421,7 +421,7 @@ def _parse_pe_imports(path: Path) -> list[str] | None:  # noqa: PLR0911, PLR0912
 
     try:
         import_rva = struct.unpack_from("<I", data, dd_offset + 8)[0]
-    except struct.error:
+    except struct.error:  # pragma: no cover — dd_offset+16 <= len(data) 已保证
         return None
 
     if import_rva == 0:
@@ -439,7 +439,7 @@ def _parse_pe_imports(path: Path) -> list[str] | None:  # noqa: PLR0911, PLR0912
             virtual_addr = struct.unpack_from("<I", data, sec_offset + 12)[0]
             size_of_raw = struct.unpack_from("<I", data, sec_offset + 16)[0]
             pointer_to_raw = struct.unpack_from("<I", data, sec_offset + 20)[0]
-        except struct.error:
+        except struct.error:  # pragma: no cover — sec_offset+40 <= len(data) 已保证
             return None
         sections.append((virtual_addr, size_of_raw, pointer_to_raw))
 
@@ -460,7 +460,7 @@ def _parse_pe_imports(path: Path) -> list[str] | None:  # noqa: PLR0911, PLR0912
     while cursor + 20 <= len(data):
         try:
             name_rva, _, _, _, _ = struct.unpack_from("<IIIII", data, cursor)
-        except struct.error:
+        except struct.error:  # pragma: no cover — while 条件已保证 cursor+20 <= len(data)
             break
 
         if name_rva == 0:
@@ -485,7 +485,7 @@ def _read_ascii_string(data: bytes, offset: int) -> str:
         return ""
     try:
         return data[offset:end].decode("ascii", errors="ignore")
-    except (ValueError, IndexError):
+    except (ValueError, IndexError):  # pragma: no cover — errors="ignore" 保证不抛
         return ""
 
 
