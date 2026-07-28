@@ -1,49 +1,71 @@
 fspack
 ======
 
-极速 Python 项目打包器。
+把 Python 项目变成可执行文件与安装包 —— 一行命令搞定。
+
+.. image:: https://img.shields.io/pypi/v/fspack
+   :target: https://pypi.org/project/fspack/
+.. image:: https://github.com/gookeryoung/fspack/actions/workflows/ci.yml/badge.svg
+   :target: https://github.com/gookeryoung/fspack/actions/workflows/ci.yml
+.. image:: https://img.shields.io/badge/python-3.8%2B-blue.svg
+.. image:: https://img.shields.io/badge/license-MIT-green.svg
+.. image:: https://img.shields.io/badge/coverage-%E2%89%A595%25-brightgreen.svg
+
+fspack 让你的 Python 项目秒变可分发的桌面应用。无需改一行代码，``fsp b`` 一行命令
+产出 ``.exe``，``fsp p`` 再一行产出 Windows 安装包或 Linux ``.deb``。自动分析依赖、
+精简体积、预编译加速，开箱即用。
 
 .. toctree::
    :maxdepth: 2
-   :caption: 目录
+   :caption: 指南
 
-   api
-   changelog
    integration
 
-简介
-====
+.. toctree::
+   :maxdepth: 2
+   :caption: 参考
 
-fspack 将 Python 项目打包为可执行文件与跨平台安装包：用 embed python（Windows）
-或 python-build-standalone（Linux）提供运行时，C loader 配置环境并调用用户脚本，
-NSIS 生成 Windows 安装包、dpkg-deb 生成 Linux .deb 与 tar.gz 便携包。命令风格参考
-cargo，常用操作均可用两字母短命令完成。
+   architecture
+   api
+   changelog
 
-架构概览
-========
+30 秒上手
+=========
 
-源码位于 ``src/fspack/``，按职责分包，每个子包通过 facade 模式暴露公开 API：
+.. code-block:: bash
 
-- **顶层模块**：``cli``（cargo 风格短命令）/``builder``（构建 facade）/``analyzer``
-  （AST 依赖分析）/``runner``（运行打包产物）/``platform``/``progress``/``exceptions``
-- **``config/``**：配置 facade，拆分为 ``models``（数据结构）+ ``parsing``（pyproject.toml
-  解析）+ ``versions``（Python/Nuitka 版本映射）
-- **``packaging/``**：打包流程 facade，子模块按职责拆分
+   pip install fspack
+   cd your-project          # 含 pyproject.toml 的 Python 项目
+   fsp b                    # 产出 dist/your-app.exe
+   fsp p                    # 产出 dist/release/your-app-setup.exe
 
-  - 流水线编排：``pipeline``
-  - 运行时下载：``runtime``
-  - C loader：``loader`` facade + ``loader_source`` + ``loader_compile``
-  - 安装包：``installer`` facade + ``installer_nsis`` + ``installer_linux`` + ``installer_zip``
-  - wheel 下载：``wheels`` facade + ``wheel_pip`` + ``wheel_cache`` + ``wheel_markers``
-  - Nuitka 编译：``nuitka`` facade + ``nuitka_env`` + ``nuitka_compile`` + ``nuitka_verify``
-  - 字节码预编译：``pyc``；源码同步：``sync``；内置库补充：``builtin``；
-    入口包装：``entry``；图标处理：``icon``；HTTP 下载：``net``
+就这样。你的 Python 项目已经变成可以分发给别人双击运行的桌面应用了。
 
-- **``slim/``**：wheel 精简 facade，``base``（抽象基类）+ ``spec``（注册表）+
-  ``qt``/``libs``/``default``（具体 spec）+ ``unpack``（按需解压）
+为什么选 fspack
+===============
 
-完整模块职责索引与 API 参考见 `README <https://github.com/gookeryoung/fspack#readme>`_
-的"模块索引"章节与 :doc:`api`。
+.. list-table::
+   :widths: 30 70
+   :header-rows: 1
+
+   * - 你想要的
+     - fspack 给你的
+   * - 一行命令打包
+     - ``fsp b`` 生成可执行文件，``fsp p`` 生成安装包，cargo 风格两字母短命令
+   * - 不改源码
+     - 自动 AST 扫描 import 推断依赖，无需手动声明打包配置
+   * - 小体积安装包
+     - 自动精简 wheel、预编译 ``.pyc``、可选剥离 ``.py``
+   * - 跨平台分发
+     - Windows 出 ``.exe`` + NSIS 安装包，Linux 出 ``.deb`` + ``.tar.gz``，支持交叉编译
+   * - 双击就能跑
+     - 内置便携运行时，用户机无需装 Python；Windows 安装包含快捷方式与卸载器
+   * - 首次启动快
+     - 默认预编译字节码，``--nuitka`` 可本机编译提速 30-50%
+   * - 多入口项目
+     - 一个项目生成多个 exe（cli/gui/web），共享运行时与依赖
+   * - 国内网络友好
+     - 默认清华镜像，``--mirror`` 一键切换阿里/华为源
 
 安装
 ====
@@ -67,16 +89,16 @@ cargo，常用操作均可用两字母短命令完成。
 
 .. code-block:: bash
 
-   # 打包当前项目（生成 dist/<name>.exe 与 dist/runtime/）
+   # 1. 打包：生成 dist/<name>.exe 与 dist/runtime/
    fsp b
 
-   # 运行已打包项目
+   # 2. 运行验证：直接跑打包产物
    fsp r
 
-   # 生成安装包到 dist/release/（Windows: <name>-setup.exe / Linux: .deb + tar.gz）
+   # 3. 生成安装包：产出 dist/release/<name>-setup.exe
    fsp p
 
-   # 清理 dist/
+   # 4. 清理：删除 dist/
    fsp c
 
 也可指定项目目录与选项：
@@ -85,7 +107,7 @@ cargo，常用操作均可用两字母短命令完成。
 
    fsp b /path/to/project --mirror aliyun --py-version 3.11.9 --target windows
 
-完整命令参考与工作原理见 `README <https://github.com/gookeryoung/fspack#readme>`_。
+完整命令参考、配置项与示例见 `README <https://github.com/gookeryoung/fspack#readme>`_。
 
 开发
 ====
@@ -106,3 +128,4 @@ cargo，常用操作均可用两字母短命令完成。
    uv run ruff format --check src tests
 
 项目提供 ``make help`` 列出全部快捷命令；多版本测试可用 ``make tox``。
+架构与工作原理见 :doc:`architecture`。
