@@ -318,7 +318,19 @@ def _is_system_dep(dep: str, target: Platform) -> bool:
         # Windows 系统 DLL（KERNEL32/USER32/api-ms-win-* 等）
         upper = dep.upper()
         return upper.startswith(
-            ("API-MS-WIN-", "KERNEL32", "USER32", "GDI32", "ADVAPI32", "SHELL32", "OLE32", "OLEAUT32", "MSVCRT", "NTDLL", "WS2_32")
+            (
+                "API-MS-WIN-",
+                "KERNEL32",
+                "USER32",
+                "GDI32",
+                "ADVAPI32",
+                "SHELL32",
+                "OLE32",
+                "OLEAUT32",
+                "MSVCRT",
+                "NTDLL",
+                "WS2_32",
+            )
         )
     # Linux/macOS：检查路径前缀
     return any(dep.startswith(p) for p in _SYSTEM_PREFIXES)
@@ -507,10 +519,10 @@ def _parse_objdump_deps(path: Path) -> list[str] | None:
         return None
 
     deps: list[str] = []
-    for line in result.stdout.splitlines():
-        line = line.strip()
-        if line.startswith("NEEDED "):
-            deps.append(line[len("NEEDED ") :].strip())
+    for raw_line in result.stdout.splitlines():
+        stripped = raw_line.strip()
+        if stripped.startswith("NEEDED "):
+            deps.append(stripped[len("NEEDED ") :].strip())
     return deps
 
 
@@ -544,13 +556,13 @@ def _parse_otool_deps(path: Path) -> list[str] | None:
     deps: list[str] = []
     lines = result.stdout.splitlines()
     # 第一行是文件自身路径，跳过
-    for line in lines[1:]:
-        line = line.strip()
-        if not line:
+    for raw_line in lines[1:]:
+        stripped = raw_line.strip()
+        if not stripped:
             continue
         # 每行格式："<path> (compatibility version ...)"
         # 取首个空格前的部分作为依赖名
-        dep = line.split(" ", 1)[0].strip()
+        dep = stripped.split(" ", 1)[0].strip()
         if dep:
             deps.append(dep)
     return deps
