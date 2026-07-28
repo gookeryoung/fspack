@@ -77,12 +77,12 @@ req-46 完成缓存配置 + 离线支持 + init 模板命令（iter-76~85），�
 
 低风险、高用户价值，无需新依赖，先解决用户痛点。
 
-- [ ] **iter-86 `fsp doctor` 环境诊断命令**：新增 `fsp doctor` 子命令，检查
+- [x] **iter-86 `fsp doctor` 环境诊断命令**：新增 `fsp doctor` 子命令，检查
   mingw-w64/gcc/NSIS/wine/pip/uv/Pillow 等工具可用性与版本，显示 Python
   版本、平台、镜像源配置、缓存目录大小。输出绿/黄/红三色诊断结果与修复
   建议（如"mingw-w64 未安装，运行 choco install mingw"）。帮助用户前置
   发现环境问题，避免打包中途失败
-- [ ] **iter-87 `--dry-run` 预览模式**：`fsp b --dry-run` 解析 pyproject.toml
+- [x] **iter-87 `--dry-run` 预览模式**：`fsp b --dry-run` 解析 pyproject.toml
   + 自动解析 Python 版本 + AST 扫描依赖 + 显示打包计划（目标平台、Python
   版本、依赖列表、预估 wheel 数、runtime 来源、loader 编译器）不执行下载
   与编译。帮助用户在打包前确认配置正确

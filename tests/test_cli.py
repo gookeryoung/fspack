@@ -52,6 +52,7 @@ def _capture_build() -> tuple[dict[str, Any], Any]:
         options: BuildOptions | None = None,
         extra_index_urls: tuple[str, ...] = (),
         find_links: tuple[str, ...] = (),
+        dry_run: bool = False,
     ) -> None:
         captured["project"] = project
         captured["mirror"] = mirror
@@ -60,6 +61,7 @@ def _capture_build() -> tuple[dict[str, Any], Any]:
         captured["options"] = options
         captured["extra_index_urls"] = extra_index_urls
         captured["find_links"] = find_links
+        captured["dry_run"] = dry_run
 
     return captured, fake_build
 

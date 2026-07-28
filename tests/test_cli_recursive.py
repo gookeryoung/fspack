@@ -72,6 +72,7 @@ def _capture_build_call() -> tuple[list[Path], Any]:
         options: object = None,
         extra_index_urls: tuple[str, ...] = (),
         find_links: tuple[str, ...] = (),
+        dry_run: bool = False,
     ) -> None:
         called_projects.append(project)
 
@@ -339,6 +340,7 @@ def test_run_recursive_single_failure_does_not_break_others(tmp_path: Path, monk
         options: object = None,
         extra_index_urls: tuple[str, ...] = (),
         find_links: tuple[str, ...] = (),
+        dry_run: bool = False,
     ) -> None:
         call_log.append(project.name)
         if project.name == "app2":
@@ -394,6 +396,7 @@ def test_run_recursive_outputs_summary(
         options: object = None,
         extra_index_urls: tuple[str, ...] = (),
         find_links: tuple[str, ...] = (),
+        dry_run: bool = False,
     ) -> None:
         if project.name == "app2":
             raise RuntimeError("simulated failure")

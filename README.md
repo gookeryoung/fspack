@@ -272,7 +272,7 @@ fsp r --entry gui         # 运行 gui 入口
 fsp b [project] [--mirror <name>] [--py-version <ver>] [--target <platform>]
               [--keep-module <mod>] [--icon <path>] [--no-stdlib-trim]
               [--no-pyc] [--pyc-strip] [--pyc-optimize <0|1|2>] [--no-site] [--nuitka]
-              [-R|--recursive]
+              [-R|--recursive] [--dry-run]
 ```
 
 | 选项 | 说明 |
@@ -290,6 +290,9 @@ fsp b [project] [--mirror <name>] [--py-version <ver>] [--target <platform>]
 | `--no-site` | 禁用 site.py（节省 ~20-30ms 启动） |
 | `--nuitka` | 启用 Nuitka 本机编译（提速 30-50%） |
 | `-R`/`--recursive` | 递归扫描子项目依次构建 |
+| `--dry-run` | 仅预览打包计划，不执行实际构建（不下载/不编译/不复制） |
+
+`--dry-run` 输出打包计划表格（项目信息/依赖分析/构建选项），便于打包前确认配置正确，避免无效构建。
 
 ### fsp run
 

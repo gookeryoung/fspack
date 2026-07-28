@@ -190,6 +190,11 @@ def _add_build_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser
             "最后汇总成功/失败列表"
         ),
     )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="仅预览打包计划，不执行实际构建（不下载/不编译/不复制文件）",
+    )
 
 
 def _add_run_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -351,6 +356,7 @@ def _run_build(project: Path, ns: argparse.Namespace) -> None:
         options=options,
         extra_index_urls=tuple(ns.extra_index_urls or ()),
         find_links=tuple(ns.find_links or ()),
+        dry_run=ns.dry_run,
     )
 
 
