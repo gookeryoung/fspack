@@ -26,6 +26,17 @@
 from __future__ import annotations
 
 # 公开 API 与私有辅助：re-export 保持 ``from fspack.config import X`` 路径兼容
+from fspack.config.cache import (
+    cache_root,
+    ccache_cache_dir,
+    embed_cache_dir,
+    is_offline,
+    loader_cache_dir,
+    nuitka_cache_dir,
+    standalone_cache_dir,
+    tkinter_cache_dir,
+    wheel_cache_dir,
+)
 from fspack.config.models import (
     DEFAULT_MIRROR,
     DEFAULT_SLIM_RULES,  # noqa: F401
@@ -93,11 +104,20 @@ __all__ = [
     "MirrorConfig",
     "ProjectInfo",
     "build_options_from_defaults",
+    "cache_root",
+    "ccache_cache_dir",
     "detect_entry",
+    "embed_cache_dir",
     "get_mirror",
     "infer_app_type",
+    "is_offline",
     "known_versions",
+    "loader_cache_dir",
+    "nuitka_cache_dir",
     "nuitka_version_for",
     "parse_project",
     "resolve_py_version",
+    "standalone_cache_dir",
+    "tkinter_cache_dir",
+    "wheel_cache_dir",
 ]

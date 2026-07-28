@@ -51,8 +51,10 @@ _ICON_RC_TEMPLATE = 'id ICON "{icon_path}"\n'
 
 
 def loader_cache_dir() -> Path:
-    """返回 fspack loader 缓存目录 ``~/.fspack/cache/loaders/``."""
-    return Path.home() / ".fspack" / "cache" / "loaders"
+    """返回 fspack loader 缓存目录（``FSPACK_CACHE_DIR`` 环境变量 > 默认 ``~/.fspack/cache/loaders``）."""
+    from fspack.config.cache import loader_cache_dir as _cache_dir
+
+    return _cache_dir()
 
 
 def _loader_cache_key(source: str, app_type: AppType, platform: Platform, icon_hash: str = "") -> str:

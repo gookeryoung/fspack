@@ -28,7 +28,12 @@ from fspack.config import (
     MirrorConfig,
     ProjectInfo,
     SlimRules,
+    cache_root,
+    embed_cache_dir,
+    nuitka_cache_dir,
     resolve_py_version,
+    standalone_cache_dir,
+    wheel_cache_dir,
 )
 from fspack.console import console
 from fspack.packaging.builtin import TkinterBundler
@@ -95,8 +100,8 @@ def default_icon_path() -> Path:
 
 
 def fspack_wheel_cache_dir() -> Path:
-    """返回 fspack wheel 缓存目录 ``~/.fspack/cache/wheels/``."""
-    return Path.home() / ".fspack" / "cache" / "wheels"
+    """返回 fspack wheel 缓存目录（``FSPACK_CACHE_DIR`` 环境变量 > 默认 ``~/.fspack/cache/wheels``）."""
+    return wheel_cache_dir()
 
 
 def resolve_project_info(project_dir: Path, py_version: str | None, target: Platform) -> ProjectInfo:
@@ -153,7 +158,7 @@ def build(  # noqa: PLR0913
     project_dir = Path(project_dir).resolve()
     target = target or detect_platform()
     dist = dist_dir or project_dir / "dist"
-    cache = embed_cache or Path.home() / ".fspack" / "cache" / "embed"
+    cache = embed_cache or embed_cache_dir()
     cfg = BuildConfig(project_dir=project_dir, dist_dir=dist, embed_cache_dir=cache, mirror=mirror, target=target)
 
     with tracker.stage("解析项目") as st:
@@ -251,7 +256,7 @@ def _prepare_linux_runtime(ctx: BuildContext) -> Path:
     major, minor = ctx.info.py_version.split(".")[:2]
     python_bin = ctx.runtime_dir / "python" / "bin" / f"python{major}.{minor}"
     runtime_ready = python_bin.is_file()
-    standalone_cache = Path.home() / ".fspack" / "cache" / "standalone"
+    standalone_cache = standalone_cache_dir()
     tar_path: Path | None = None
     with ctx.tracker.stage("下载运行时") as st:
         if runtime_ready:
@@ -332,7 +337,7 @@ def _download_dependencies(ctx: BuildContext, site_packages: Path, report: Depen
     # Linux standalone 已含全部 stdlib，无需补充。
     has_tkinter = False
     if TkinterBundler.is_needed(report.ast_stdlib, target):
-        builtin_cache = Path.home() / ".fspack" / "cache"
+        builtin_cache = cache_root()
         with ctx.tracker.stage("补充内置库") as st:
             TkinterBundler.ensure(ctx.runtime_dir, ctx.info.py_version, builtin_cache, stage=st)
             has_tkinter = True
@@ -399,7 +404,7 @@ def _compile_user_sources(ctx: BuildContext, src_dst: Path) -> None:
         with ctx.tracker.stage("Nuitka 编译") as st:
             from fspack.packaging.nuitka import NuitkaCompiler
 
-            nuitka_cache_root = Path.home() / ".fspack" / "cache" / "nuitka"
+            nuitka_cache_root = nuitka_cache_dir()
             NuitkaCompiler.compile_with_stamp(
                 src_dst,
                 ctx.cfg.dist_dir,

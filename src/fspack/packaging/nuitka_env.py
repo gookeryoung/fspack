@@ -329,7 +329,9 @@ class NuitkaEnv:
         if ccache_exe is not None:
             env["CC"] = f"{ccache_exe} {compiler}"
             # ccache 缓存目录：默认 ~/.cache/ccache，显式指定到 fspack 缓存根便于管理
-            ccache_dir = Path.home() / ".fspack" / "cache" / "ccache-cache"
+            from fspack.config.cache import cache_root
+
+            ccache_dir = cache_root() / "ccache-cache"
             ccache_dir.mkdir(parents=True, exist_ok=True)
             env["CCACHE_DIR"] = str(ccache_dir)
             _logger.info("启用 ccache: CC=%s, CCACHE_DIR=%s", env["CC"], env["CCACHE_DIR"])
