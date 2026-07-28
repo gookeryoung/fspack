@@ -247,12 +247,29 @@ if __name__ == "__main__":
 # GUI 类型由 fspack.config.infer_app_type 根据 import 自动推断：
 # PySide2/PySide6/PyQt5/tkinter 在 _GUI_HINTS 中，入口脚本 import 任一即识别为 GUI，
 # 打包时自动关闭控制台窗口。模板无需在 [tool.fspack] 显式声明 app_type。
+#
+# PySide2/PySide6/PyQt5 的 widgets 入口共享 MainWindow 骨架，PySide2/PySide6 的
+# QML 入口共享 QQmlApplicationEngine 骨架，仅在框架名与 ``exec``/``exec_`` 方法
+# 上存在差异。用 ``_qt_widgets_entry``/``_qt_qml_entry`` 工厂函数组合生成，
+# 避免 5 段近乎一致的模板源码重复维护。
 
-_PYSIDE2_ENTRY = '''"""$project_name 入口：PySide2 主窗口示例."""
+
+def _qt_widgets_entry(framework: str, exec_method: str = "exec_") -> str:
+    """生成 PySide2/PySide6/PyQt5 widgets 入口模板（MainWindow 点击计数）.
+
+    三个框架的 widgets 入口共享 MainWindow 类骨架与按钮计数逻辑，仅在框架名
+    与事件循环方法上存在差异。``exec_`` 是 PySide2/PyQt5 的旧 API（``exec`` 在
+    Python 2 是保留字故加下划线），PySide6 改用 ``exec``。
+
+    :param framework: 框架名（``PySide2``/``PySide6``/``PyQt5``）
+    :param exec_method: 事件循环方法名（``exec_`` 或 ``exec``）
+    :return: 入口脚本模板（含 ``$project_name`` 占位符，未渲染）
+    """
+    return f'''"""$project_name 入口：{framework} 主窗口示例."""
 
 import sys
 
-from PySide2.QtWidgets import QApplication, QLabel, QMainWindow, QPushButton, QVBoxLayout, QWidget
+from {framework}.QtWidgets import QApplication, QLabel, QMainWindow, QPushButton, QVBoxLayout, QWidget
 
 
 class MainWindow(QMainWindow):
@@ -277,115 +294,58 @@ class MainWindow(QMainWindow):
 
     def _on_click(self) -> None:
         self._count += 1
-        self.label.setText(f"点击按钮 {self._count} 次")
+        self.label.setText(f"点击按钮 {{self._count}} 次")
 
 
 def main() -> None:
-    """启动 PySide2 应用."""
+    """启动 {framework} 应用."""
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()
-    sys.exit(app.exec_())
+    sys.exit(app.{exec_method}())
 
 
 if __name__ == "__main__":
     main()
 '''
 
-_PYSIDE6_ENTRY = '''"""$project_name 入口：PySide6 主窗口示例."""
 
-import sys
+def _qt_qml_entry(framework: str, exec_method: str = "exec_") -> str:
+    """生成 PySide2/PySide6 + QML 入口模板（QQmlApplicationEngine 加载 main.qml）.
 
-from PySide6.QtWidgets import QApplication, QLabel, QMainWindow, QPushButton, QVBoxLayout, QWidget
-
-
-class MainWindow(QMainWindow):
-    """主窗口：点击按钮计数."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.setWindowTitle("$project_name")
-        self.resize(400, 200)
-
-        self._count = 0
-        central = QWidget(self)
-        layout = QVBoxLayout(central)
-
-        self.label = QLabel("点击按钮 0 次", central)
-        self.button = QPushButton("点我", central)
-        self.button.clicked.connect(self._on_click)
-
-        layout.addWidget(self.label)
-        layout.addWidget(self.button)
-        self.setCentralWidget(central)
-
-    def _on_click(self) -> None:
-        self._count += 1
-        self.label.setText(f"点击按钮 {self._count} 次")
-
-
-def main() -> None:
-    """启动 PySide6 应用."""
-    app = QApplication(sys.argv)
-    window = MainWindow()
-    window.show()
-    sys.exit(app.exec())
-
-
-if __name__ == "__main__":
-    main()
-'''
-
-# 注意：PySide6 的 app.exec() 返回 int，无需 sys.exit；PySide2 的 app.exec_() 同理。
-# 上述两段代码仅在 import 与 exec_/exec 调用上存在差异，保持各框架原生风格。
-
-_PYSIDE2_QML_ENTRY = '''"""$project_name 入口：PySide2 + QML 示例."""
+    :param framework: 框架名（``PySide2``/``PySide6``）
+    :param exec_method: 事件循环方法名（``exec_`` 或 ``exec``）
+    :return: 入口脚本模板（含 ``$project_name`` 占位符，未渲染）
+    """
+    return f'''"""$project_name 入口：{framework} + QML 示例."""
 
 import sys
 from pathlib import Path
 
-from PySide2.QtGui import QGuiApplication
-from PySide2.QtQml import QQmlApplicationEngine
+from {framework}.QtGui import QGuiApplication
+from {framework}.QtQml import QQmlApplicationEngine
 
 
 def main() -> None:
-    """加载 main.qml 并启动 PySide2 应用."""
+    """加载 main.qml 并启动 {framework} 应用."""
     app = QGuiApplication(sys.argv)
     engine = QQmlApplicationEngine()
     qml_path = Path(__file__).parent / "main.qml"
     engine.load(str(qml_path))
     if not engine.rootObjects():
         sys.exit(1)
-    sys.exit(app.exec_())
+    sys.exit(app.{exec_method}())
 
 
 if __name__ == "__main__":
     main()
 '''
 
-_PYSIDE6_QML_ENTRY = '''"""$project_name 入口：PySide6 + QML 示例."""
 
-import sys
-from pathlib import Path
-
-from PySide6.QtGui import QGuiApplication
-from PySide6.QtQml import QQmlApplicationEngine
-
-
-def main() -> None:
-    """加载 main.qml 并启动 PySide6 应用."""
-    app = QGuiApplication(sys.argv)
-    engine = QQmlApplicationEngine()
-    qml_path = Path(__file__).parent / "main.qml"
-    engine.load(str(qml_path))
-    if not engine.rootObjects():
-        sys.exit(1)
-    sys.exit(app.exec())
-
-
-if __name__ == "__main__":
-    main()
-'''
+_PYSIDE2_ENTRY = _qt_widgets_entry("PySide2")
+_PYSIDE6_ENTRY = _qt_widgets_entry("PySide6", exec_method="exec")
+_PYSIDE2_QML_ENTRY = _qt_qml_entry("PySide2")
+_PYSIDE6_QML_ENTRY = _qt_qml_entry("PySide6", exec_method="exec")
 
 _MAIN_QML = """// $project_name QML 主窗口
 import QtQuick 2.15
@@ -420,49 +380,7 @@ ApplicationWindow {
 }
 """
 
-_PYQT5_ENTRY = '''"""$project_name 入口：PyQt5 主窗口示例."""
-
-import sys
-
-from PyQt5.QtWidgets import QApplication, QLabel, QMainWindow, QPushButton, QVBoxLayout, QWidget
-
-
-class MainWindow(QMainWindow):
-    """主窗口：点击按钮计数."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.setWindowTitle("$project_name")
-        self.resize(400, 200)
-
-        self._count = 0
-        central = QWidget(self)
-        layout = QVBoxLayout(central)
-
-        self.label = QLabel("点击按钮 0 次", central)
-        self.button = QPushButton("点我", central)
-        self.button.clicked.connect(self._on_click)
-
-        layout.addWidget(self.label)
-        layout.addWidget(self.button)
-        self.setCentralWidget(central)
-
-    def _on_click(self) -> None:
-        self._count += 1
-        self.label.setText(f"点击按钮 {self._count} 次")
-
-
-def main() -> None:
-    """启动 PyQt5 应用."""
-    app = QApplication(sys.argv)
-    window = MainWindow()
-    window.show()
-    sys.exit(app.exec_())
-
-
-if __name__ == "__main__":
-    main()
-'''
+_PYQT5_ENTRY = _qt_widgets_entry("PyQt5")
 
 _TKINTER_ENTRY = '''"""$project_name 入口：tkinter 标准库 GUI 示例."""
 

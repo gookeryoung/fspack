@@ -28,9 +28,9 @@ from fspack.config import (
 )
 from fspack.exceptions import ProjectError
 from fspack.platform import Platform
-from fspack.templates.loader import project_templates_dir
+from fspack.templates.project_template import ProjectTemplate
 
-_EXAMPLES = project_templates_dir()
+_EXAMPLES = ProjectTemplate.root_dir()
 
 
 # --- 镜像源测试 ---

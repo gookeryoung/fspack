@@ -41,7 +41,7 @@ if TYPE_CHECKING:
     from rich.table import Table
 
     from fspack.platform import Platform
-    from fspack.templates.loader import ProjectTemplate
+    from fspack.templates.project_template import ProjectTemplate
 
 __all__ = [
     "CheckResult",
@@ -582,9 +582,9 @@ def run_doctor_test() -> None:  # pragma: no cover
 
     用于验证打包流程对所有模板项目的兼容性，CI 中可作为回归门禁。
     """
-    from fspack.templates.loader import list_project_templates
+    from fspack.templates.project_template import ProjectTemplate
 
-    templates = list_project_templates()
+    templates = ProjectTemplate.list_all()
     if not templates:
         console.warn("未找到项目模板")
         return
@@ -617,9 +617,9 @@ def run_doctor_bench() -> None:  # pragma: no cover
 
     用于建立性能基准，后续优化措施可与此基准对比评估效果。
     """
-    from fspack.templates.loader import list_project_templates
+    from fspack.templates.project_template import ProjectTemplate
 
-    templates = list_project_templates()
+    templates = ProjectTemplate.list_all()
     if not templates:
         console.warn("未找到项目模板")
         return

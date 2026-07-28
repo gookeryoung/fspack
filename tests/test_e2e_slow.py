@@ -18,9 +18,9 @@ from pathlib import Path
 
 import pytest
 
-from fspack.templates.loader import project_templates_dir
+from fspack.templates.project_template import ProjectTemplate
 
-_EXAMPLES = project_templates_dir()
+_EXAMPLES = ProjectTemplate.root_dir()
 
 
 def _build_and_run(  # noqa: PLR0913

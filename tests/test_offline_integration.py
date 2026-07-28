@@ -28,10 +28,10 @@ from fspack.config import get_mirror
 from fspack.exceptions import DependencyError, EmbedError
 from fspack.packaging.runtime import STANDALONE_RELEASE_TAG, standalone_tarball_name
 from fspack.platform import Platform
-from fspack.templates.loader import project_templates_dir
+from fspack.templates.project_template import ProjectTemplate
 from tests._stubs import fail_urlopen
 
-_EXAMPLES = project_templates_dir()
+_EXAMPLES = ProjectTemplate.root_dir()
 
 _MIRROR = get_mirror()
 
