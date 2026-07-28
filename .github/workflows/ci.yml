@@ -129,7 +129,7 @@ jobs:
       # .benchmarks/ 可能为空，此为正常情况，不报 warning
       - name: Upload benchmark results
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: benchmark-results
           path: .benchmarks/
