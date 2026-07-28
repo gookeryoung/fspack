@@ -23,6 +23,35 @@ fsp p                    # 产出 dist/release/your-app-setup.exe
 
 就这样。你的 Python 项目已经变成可以分发给别人双击运行的桌面应用了。
 
+## 从模板开始：fsp init
+
+没有项目？一行命令从模板创建：
+
+```bash
+fsp init my-app                          # 交互式选择模板（22 个可选）
+fsp init my-app --template pyside2       # 直接指定模板
+fsp init --list                          # 查看所有可用模板
+```
+
+22 个模板覆盖常见场景：
+
+| 分类 | 模板 |
+|------|------|
+| CLI | helloworld / args / rich / requests / click / typer |
+| GUI | pyside2 / pyside6 / pyside2-qml / pyside6-qml / pyqt5 / tkinter |
+| 游戏 | pygame / snake |
+| 科学 | matplotlib / numpy / scipy |
+| Web | flask / fastapi |
+| 配置 | pyinstaller / multi-entry / full-config |
+
+每个模板生成可直接打包的项目骨架（`pyproject.toml` + 入口脚本），`cd` 进去立即 `fsp b`。
+
+```bash
+fsp init my-gui --template pyside2       # 创建 PySide2 GUI 项目
+cd my-gui
+fsp b                                    # 打包为 my-gui.exe
+```
+
 ## 为什么选 fspack
 
 | 你想要的 | fspack 给你的 |
@@ -88,6 +117,89 @@ web = "web.py"        # 生成 web.exe
 `-R/--recursive` 递归扫描目录下所有含 `pyproject.toml` 的子项目，依次构建/打包，
 便于一次性处理 monorepo 或 `examples/` 目录。单项目失败不中断，最后汇总结果。
 
+### 离线打包（内网/无网络环境）
+
+fspack 内置离线模式，适用于内网 CI、离线打包机或需精确控制缓存来源的场景。
+启用离线模式后，所有下载阶段（运行时、wheel、Nuitka、ccache、tkinter 补充包）
+**只从本地缓存读取**，缓存未命中时立即报清晰错误，不卡死、不重试网络。
+
+#### 环境变量
+
+| 变量 | 作用 | 默认值 |
+|------|------|--------|
+| `FSPACK_OFFLINE=1` | 启用离线模式（值为 `1`/`true`/`yes`/`on`，不区分大小写） | 关闭 |
+| `FSPACK_CACHE_DIR` | 自定义缓存根目录 | `~/.fspack/cache` |
+
+缓存目录结构：
+
+```text
+<cache_root>/
+├── embed/          # Windows embed python zip
+├── standalone/     # Linux python-build-standalone tar.gz
+├── wheels/         # 第三方 wheel + 依赖解析缓存
+├── nuitka/         # Nuitka 包 + 编译用 standalone python
+├── loaders/        # C loader 编译缓存
+├── ccache/         # ccache 二进制与编译缓存
+└── tkinter/        # tkinter 补充包缓存
+```
+
+#### 典型用法
+
+**1. 预下载缓存（联网机器）**
+
+在能联网的机器上跑一次正常构建，缓存会自动填充到 `~/.fspack/cache/`：
+
+```bash
+fsp b                    # 正常构建，自动下载并缓存
+```
+
+将整个 `~/.fspack/cache/` 目录拷贝到离线机器（或用 `FSPACK_CACHE_DIR` 指定路径）。
+
+**2. 离线机器构建**
+
+```bash
+# 设置环境变量启用离线模式 + 指定缓存路径
+export FSPACK_OFFLINE=1
+export FSPACK_CACHE_DIR=/path/to/cache
+
+fsp b                    # 仅从本地缓存读取，不联网
+```
+
+**3. 用 --find-links 指定额外的本地 wheel 目录**
+
+若 wheel 不在默认缓存目录，可通过 `--find-links`（或 `pyproject.toml` 的
+`find-links`）指定额外的本地 wheel 仓库，离线模式下也会搜索这些路径：
+
+```bash
+export FSPACK_OFFLINE=1
+fsp b --find-links /data/wheels --find-links /shared/wheels
+```
+
+```toml
+# pyproject.toml
+[tool.fspack]
+find-links = ["./wheels", "/shared/wheels"]
+```
+
+#### 离线模式错误排查
+
+缓存未命中时，fspack 会抛出包含"离线模式"关键字的明确异常，并列出**已搜索路径**，
+便于快速定位：
+
+```text
+fspack.exceptions.DependencyError: 离线模式下依赖缓存未命中: pypdf，
+已搜索路径: /home/user/.fspack/cache/wheels; /data/wheels。
+请预先下载 wheel 放入上述路径之一，或通过 --find-links 指定本地 wheel 目录，
+或取消 FSPACK_OFFLINE 环境变量
+```
+
+排查步骤：
+
+1. 检查错误信息中"已搜索路径"是否包含你预下载的目录
+2. 用 `pip download -d <cache_path> <package>` 预下载缺失的 wheel
+3. 运行时缓存（embed python、standalone）放入对应子目录（`embed/`、`standalone/`）
+4. 若需联网，删除 `FSPACK_OFFLINE` 环境变量即可恢复在线模式
+
 ## 安装
 
 ```bash
@@ -151,6 +263,7 @@ fsp r --entry gui         # 运行 gui 入口
 | `fsp run` | `fsp r` | 运行已打包项目（Linux 原生，`.exe` 自动用 wine） |
 | `fsp clean` | `fsp c` | 清理 dist/ 目录 |
 | `fsp package` | `fsp p` | 生成安装包（Windows NSIS / Linux .deb + tar.gz） |
+| `fsp init` | `fsp i` | 从模板创建新项目（22 个模板可选） |
 
 ### fsp build
 
@@ -211,6 +324,22 @@ fsp p [project] [--mirror <name>] [--py-version <ver>] [--target <plat>] [--no-b
 | `nsis` | Windows 安装包 |
 | `tar.gz`/`deb` | Linux 便携包/安装包 |
 | `all` | 当前平台全部格式 |
+
+### fsp init
+
+```text
+fsp init [project_name] [--template <id>] [--list] [--description <desc>] [--directory <path>]
+```
+
+| 选项 | 说明 |
+|------|------|
+| `project_name` | 项目名（默认当前目录名） |
+| `--template <id>` | 模板 id（未指定且 stdin 是 TTY 时交互式选择；非 TTY 用 helloworld） |
+| `--list` | 列出所有可用模板后退出 |
+| `--description <desc>` | 项目描述（写入 pyproject.toml） |
+| `--directory <path>` | 父目录（默认当前目录） |
+
+22 个模板按分类：CLI(6) / GUI(6) / 游戏(2) / 科学(3) / Web(2) / 配置(3)。详见 `fsp init --list`。
 
 ## 示例
 

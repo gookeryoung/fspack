@@ -73,6 +73,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_run_subparser(sub)
     _add_clean_subparser(sub)
     _add_package_subparser(sub)
+    _add_init_subparser(sub)
     return parser
 
 
@@ -242,6 +243,28 @@ def _add_package_subparser(sub: argparse._SubParsersAction[argparse.ArgumentPars
     )
 
 
+def _add_init_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """添加 init/i 子命令：从模板创建新项目."""
+    p = sub.add_parser("init", aliases=["i"], help="从模板创建新项目")
+    p.add_argument("project_name", nargs="?", help="项目名（默认当前目录名）")
+    p.add_argument(
+        "--template",
+        default=None,
+        help="模板 id（未指定且 stdin 是 TTY 时弹出交互式选择；非 TTY 用 helloworld）",
+    )
+    p.add_argument("--list", action="store_true", help="列出所有可用模板后退出")
+    p.add_argument(
+        "--directory",
+        default=None,
+        help="项目父目录（默认当前目录），项目创建在 <directory>/<project_name>",
+    )
+    p.add_argument(
+        "--description",
+        default="",
+        help="项目描述（写入 pyproject.toml 的 description 字段）",
+    )
+
+
 def main(argv: list[str] | None = None) -> None:
     """主入口，解析参数并分发到子命令."""
     parser = build_parser()
@@ -255,6 +278,10 @@ def main(argv: list[str] | None = None) -> None:
     from fspack.console import console
 
     console.setup_logging(verbose=ns.verbose)
+
+    if command in ("init", "i"):
+        _run_init(ns)
+        return
 
     project = Path(ns.project).resolve()
     if command in ("build", "b"):
@@ -327,6 +354,53 @@ def _run_package(project: Path, ns: argparse.Namespace) -> None:
     )
     for out in outputs:
         _logger.info("发行包已生成: %s", out)
+
+
+def _run_init(ns: argparse.Namespace) -> None:
+    """执行 init/i 子命令：从模板创建新项目.
+
+    分发逻辑：
+
+    - ``--list`` → 打印模板列表后退出
+    - ``--template`` 显式指定 → 用指定模板
+    - ``--template`` 未指定 → 调 :func:`prompt_template_selection` 交互式选择
+      （非 TTY 环境自动回退到 helloworld）
+    """
+    from fspack.cli_init import init_project, print_template_list, prompt_template_selection
+
+    if ns.list:
+        print_template_list()
+        return
+
+    if not ns.project_name:
+        # 未指定项目名且未 --list：用当前目录名作为项目名
+        ns.project_name = Path.cwd().name
+        _logger.info("未指定项目名，使用当前目录名: %s", ns.project_name)
+
+    template_id = ns.template
+    if template_id is None:
+        # 未指定 --template：交互式选择（非 TTY 自动回退 helloworld）
+        try:
+            template_id = prompt_template_selection()
+        except KeyboardInterrupt:
+            from fspack.console import console
+
+            console.rich.print("\n[yellow]已取消[/]")
+            sys.exit(1)
+
+    directory = Path(ns.directory).resolve() if ns.directory else None
+    try:
+        init_project(
+            ns.project_name,
+            template_id=template_id,
+            directory=directory,
+            description=ns.description,
+        )
+    except ValueError as exc:
+        from fspack.console import console
+
+        console.error(str(exc))
+        sys.exit(1)
 
 
 def discover_subprojects(root: Path) -> list[Path]:
