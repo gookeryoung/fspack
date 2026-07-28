@@ -46,7 +46,7 @@ jobs:
         run: uv publish
 
       - name: Upload sdist & wheel artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: pypi-dist
           path: dist/*
@@ -87,7 +87,7 @@ jobs:
         run: uv pip install pip
 
       - name: Cache fspack assets
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.fspack/cache/
           key: fspack-windows-${{ hashFiles('pyproject.toml') }}
@@ -116,7 +116,7 @@ jobs:
 
       - name: Upload failure artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: pack-windows-failure
           path: dist/
@@ -124,7 +124,7 @@ jobs:
 
       - name: Upload release artifacts
         if: success()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: release-windows
           path: dist/release/
@@ -159,7 +159,7 @@ jobs:
         run: uv pip install pip
 
       - name: Cache fspack assets
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.fspack/cache/
           key: fspack-linux-${{ hashFiles('pyproject.toml') }}
@@ -184,7 +184,7 @@ jobs:
 
       - name: Upload failure artifacts
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: pack-linux-failure
           path: dist/
@@ -192,7 +192,7 @@ jobs:
 
       - name: Upload release artifacts
         if: success()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: release-linux
           path: dist/release/
@@ -207,7 +207,7 @@ jobs:
     if: always() && !cancelled()
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           path: release-assets/
 

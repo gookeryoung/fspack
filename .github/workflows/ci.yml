@@ -73,7 +73,7 @@ jobs:
         run: uv run pytest -m "not slow" --cov=fspack --cov-fail-under=95 --cov-report=term-missing
 
   # ===== 性能基准门禁：仅 push to main 触发，PR 不触发 =====
-  # 运行 pytest-benchmark 基线测试，与上次基线对比，退化 >10% 失败
+  # 运行 pytest-benchmark 基线测试，与上次基线对比，退化 >25% 失败
   # 基线按平台缓存（.benchmarks/），首次运行无基线不失败，后续运行对比门禁
   benchmark:
     name: Benchmark gate
@@ -99,7 +99,7 @@ jobs:
       # key 含 v2 后缀：rounds=10→20 + median:25% 门禁调整后基线数据不兼容，
       # 用 v2 让旧缓存失效，重新建立基线
       - name: Restore benchmark baseline
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .benchmarks/
           key: benchmark-ubuntu-3.11-v2-${{ github.run_id }}
@@ -125,10 +125,13 @@ jobs:
             --benchmark-warmup=on \
             --benchmark-columns=median,min,mean,stddev
 
+      # if-no-files-found=ignore：首次运行（v2 缓存未命中）无历史基线时
+      # .benchmarks/ 可能为空，此为正常情况，不报 warning
       - name: Upload benchmark results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: benchmark-results
           path: .benchmarks/
+          if-no-files-found: ignore
           retention-days: 30
