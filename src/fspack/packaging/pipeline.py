@@ -41,6 +41,7 @@ from fspack.packaging.entry import EntryWrapper
 from fspack.packaging.icon import ensure_ico, find_favicon
 from fspack.packaging.loader import compile_loader, generate_loader_source
 from fspack.packaging.log_file import LogFormat, setup_log_file, teardown_log_file
+from fspack.packaging.profile import ProfileContext, print_profile_report
 from fspack.packaging.pyc import (
     _inject_win7_compat_dll,
     _needs_win7_compat_dll,
@@ -134,6 +135,7 @@ def build(  # noqa: PLR0913
     dry_run: bool = False,
     log_file: Path | None = None,
     log_format: LogFormat = LogFormat.TEXT,
+    profile: bool = False,
 ) -> ProjectInfo:
     """执行完整构建流水线，返回项目信息。
 
@@ -164,6 +166,11 @@ def build(  # noqa: PLR0913
     异常栈），便于 CI 上传与问题排查。``log_format`` 控制 格式：``TEXT``（默认，
     人类可读）或 ``JSON``（结构化，便于 ELK/Loki 采集）。日志文件在构建开始时
     创建、结束时自动关闭，即使构建异常也会正确清理（``try/finally``）。
+
+    ``profile=True`` 时启用耗时分析：用 ``tracemalloc`` 采集内存峰值，
+    ``time.process_time()`` 采集 CPU 时间，构建结束后输出各阶段 wall time /
+    占比 / 缓存命中 / 下载 / 节省等指标的表格，以及资源总览（wall/CPU/CPU 占比/
+    内存峰值）。便于识别瓶颈阶段。
     """
     opts = options or BuildOptions()
     tracker = BuildTracker()
@@ -174,20 +181,38 @@ def build(  # noqa: PLR0913
     cfg = BuildConfig(project_dir=project_dir, dist_dir=dist, embed_cache_dir=cache, mirror=mirror, target=target)
 
     log_wrapper = setup_log_file(Path(log_file), log_format) if log_file is not None else None
+    profile_ctx = ProfileContext() if profile else None
     try:
-        info = _execute_build(
-            tracker,
-            project_dir,
-            py_version,
-            target,
-            cfg,
-            opts,
-            extra_index_urls,
-            find_links,
-            dry_run,
-        )
+        if profile_ctx is not None:
+            with profile_ctx:
+                info = _execute_build(
+                    tracker,
+                    project_dir,
+                    py_version,
+                    target,
+                    cfg,
+                    opts,
+                    extra_index_urls,
+                    find_links,
+                    dry_run,
+                )
+        else:
+            info = _execute_build(
+                tracker,
+                project_dir,
+                py_version,
+                target,
+                cfg,
+                opts,
+                extra_index_urls,
+                find_links,
+                dry_run,
+            )
     finally:
         teardown_log_file(log_wrapper)
+    if profile_ctx is not None:
+        report = profile_ctx.collect(tracker)
+        print_profile_report(report)
     return info
 
 

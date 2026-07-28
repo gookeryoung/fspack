@@ -419,6 +419,7 @@ def test_cli_build_log_file_passed_to_build(tmp_path: Path, monkeypatch: pytest.
         dry_run: bool = False,
         log_file: Path | None = None,
         log_format: object = None,
+        profile: bool = False,
     ) -> None:
         captured["log_file"] = log_file
         captured["log_format"] = log_format
@@ -448,6 +449,7 @@ def test_cli_build_log_format_json_passed_to_build(tmp_path: Path, monkeypatch: 
         dry_run: bool = False,
         log_file: Path | None = None,
         log_format: object = None,
+        profile: bool = False,
     ) -> None:
         captured["log_file"] = log_file
         captured["log_format"] = log_format
@@ -476,6 +478,7 @@ def test_cli_build_without_log_file_passes_none(tmp_path: Path, monkeypatch: pyt
         dry_run: bool = False,
         log_file: Path | None = None,
         log_format: object = None,
+        profile: bool = False,
     ) -> None:
         captured["log_file"] = log_file
         captured["log_format"] = log_format

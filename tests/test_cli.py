@@ -55,6 +55,7 @@ def _capture_build() -> tuple[dict[str, Any], Any]:
         dry_run: bool = False,
         log_file: Path | None = None,
         log_format: object = None,
+        profile: bool = False,
     ) -> None:
         captured["project"] = project
         captured["mirror"] = mirror

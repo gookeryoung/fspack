@@ -215,6 +215,15 @@ def _add_build_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser
         choices=["text", "json"],
         help="日志文件格式：text=人类可读纯文本（默认），json=结构化 JSON（便于 ELK/Loki 采集）",
     )
+    p.add_argument(
+        "--profile",
+        action="store_true",
+        help=(
+            "启用耗时分析报告：构建结束后输出各阶段 wall time/占比/缓存命中/下载/节省，"
+            "以及资源总览（wall/CPU/CPU 占比/内存峰值），识别瓶颈阶段。"
+            "用 tracemalloc 采集内存峰值（无新依赖）"
+        ),
+    )
 
 
 def _add_run_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -384,6 +393,7 @@ def _run_build(project: Path, ns: argparse.Namespace) -> None:
         dry_run=ns.dry_run,
         log_file=log_file,
         log_format=log_format,
+        profile=ns.profile,
     )
 
 
