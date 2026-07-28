@@ -25,13 +25,16 @@ from fspack.cli_doctor import (
     DoctorReport,
     TemplateBuildResult,
     TemplateRunResult,
+    _build_debug_cmd,
     _build_run_cmd,
     _check_cache_dir,
     _check_pillow,
     _check_pip,
     _check_tool_version,
     _dir_size,
+    _find_debug_python,
     _find_dist_exe,
+    _find_wrapper,
     _format_run_status,
     _format_size,
     _format_status,
@@ -851,6 +854,104 @@ def test_build_run_cmd_exe_on_linux_no_wine(tmp_path: Path, monkeypatch: pytest.
     assert _build_run_cmd(exe) == ["wine", str(exe)]
 
 
+# ---- _find_debug_python / _find_wrapper / _build_debug_cmd ----
+
+
+def test_find_debug_python_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Linux debug 模式查 dist/runtime/python/bin/python3.X."""
+    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    bin_dir = tmp_path / "dist" / "runtime" / "python" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "python3.11").write_bytes(b"")
+    (bin_dir / "python3.12").write_bytes(b"")
+    py = _find_debug_python(tmp_path)
+    assert py == bin_dir / "python3.11"  # sorted 取首个
+
+
+def test_find_debug_python_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows debug 模式查 dist/runtime/python.exe."""
+    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.WINDOWS)
+    runtime = tmp_path / "dist" / "runtime"
+    runtime.mkdir(parents=True)
+    (runtime / "python.exe").write_bytes(b"")
+    py = _find_debug_python(tmp_path)
+    assert py == runtime / "python.exe"
+
+
+def test_find_debug_python_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """runtime 目录不存在时返回 None."""
+    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    assert _find_debug_python(tmp_path) is None
+
+
+def test_find_wrapper_present(tmp_path: Path) -> None:
+    """存在 dist/_entry_<name>.py 时返回路径."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    wrapper = dist / "_entry_app.py"
+    wrapper.write_text("")
+    assert _find_wrapper(tmp_path, "app") == wrapper
+
+
+def test_find_wrapper_absent(tmp_path: Path) -> None:
+    """wrapper 不存在时返回 None."""
+    assert _find_wrapper(tmp_path, "app") is None
+
+
+def test_build_debug_cmd_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Linux debug 命令 = [python, wrapper]，env 含 PYTHONHOME + PYTHONUNBUFFERED."""
+    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    bin_dir = tmp_path / "dist" / "runtime" / "python" / "bin"
+    bin_dir.mkdir(parents=True)
+    py_file = bin_dir / "python3.11"
+    py_file.write_bytes(b"")
+    wrapper = tmp_path / "dist" / "_entry_app.py"
+    wrapper.write_text("")
+    result = _build_debug_cmd(tmp_path, "app")
+    assert result is not None
+    cmd, env = result
+    assert cmd == [str(py_file), str(wrapper)]
+    assert env["PYTHONHOME"] == str(tmp_path / "dist" / "runtime" / "python")
+    assert env["PYTHONUNBUFFERED"] == "1"
+
+
+def test_build_debug_cmd_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows debug 命令不含 PYTHONHOME（embed python 用 _pth 定位标准库）."""
+    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.WINDOWS)
+    runtime = tmp_path / "dist" / "runtime"
+    runtime.mkdir(parents=True)
+    py_file = runtime / "python.exe"
+    py_file.write_bytes(b"")
+    wrapper = tmp_path / "dist" / "_entry_app.py"
+    wrapper.write_text("")
+    result = _build_debug_cmd(tmp_path, "app")
+    assert result is not None
+    cmd, env = result
+    assert cmd == [str(py_file), str(wrapper)]
+    assert "PYTHONHOME" not in env
+    assert env["PYTHONUNBUFFERED"] == "1"
+
+
+def test_build_debug_cmd_wrapper_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """wrapper 缺失时返回 None（调用方回退直跑 exe）."""
+    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    bin_dir = tmp_path / "dist" / "runtime" / "python" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "python3.11").write_bytes(b"")
+    # 不创建 _entry_app.py
+    assert _build_debug_cmd(tmp_path, "app") is None
+
+
+def test_build_debug_cmd_python_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """embed python 缺失时返回 None."""
+    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "_entry_app.py").write_text("")
+    # runtime 目录不存在
+    assert _build_debug_cmd(tmp_path, "app") is None
+
+
 # ---- _run_template ----
 
 
@@ -884,7 +985,7 @@ def test_run_template_success_exit_zero(tmp_path: Path, monkeypatch: pytest.Monk
     monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
     proc = _FakeProc(returncode=0, stdout="hello, world\n", stderr="")
     monkeypatch.setattr("fspack.cli_doctor.subprocess.Popen", lambda *a, **kw: proc)
-    result = _run_template(tmp_path / "app", timeout=1.0)
+    result = _run_template([str(tmp_path / "app")], timeout=1.0)
     assert result.success is True
     assert result.timed_out is False
     assert result.exit_code == 0
@@ -900,7 +1001,7 @@ def test_run_template_failure_nonzero_exit(tmp_path: Path, monkeypatch: pytest.M
         stderr="ModuleNotFoundError: No module named 'modules'\nTraceback follows",
     )
     monkeypatch.setattr("fspack.cli_doctor.subprocess.Popen", lambda *a, **kw: proc)
-    result = _run_template(tmp_path / "app", timeout=1.0)
+    result = _run_template([str(tmp_path / "app")], timeout=1.0)
     assert result.success is False
     assert result.timed_out is False
     assert result.exit_code == 1
@@ -912,7 +1013,7 @@ def test_run_template_failure_empty_stderr(tmp_path: Path, monkeypatch: pytest.M
     monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
     proc = _FakeProc(returncode=2, stdout="", stderr="")
     monkeypatch.setattr("fspack.cli_doctor.subprocess.Popen", lambda *a, **kw: proc)
-    result = _run_template(tmp_path / "app", timeout=1.0)
+    result = _run_template([str(tmp_path / "app")], timeout=1.0)
     assert result.success is False
     assert result.exit_code == 2
     assert "退出码 2" in result.error
@@ -929,7 +1030,7 @@ def test_run_template_timeout_treated_as_success(tmp_path: Path, monkeypatch: py
     monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
     proc = _TimeoutProc()
     monkeypatch.setattr("fspack.cli_doctor.subprocess.Popen", lambda *a, **kw: proc)
-    result = _run_template(tmp_path / "app", timeout=0.5)
+    result = _run_template([str(tmp_path / "app")], timeout=0.5)
     assert result.success is True
     assert result.timed_out is True
     assert result.exit_code is None
@@ -947,7 +1048,7 @@ def test_run_template_timeout_terminate_then_kill(tmp_path: Path, monkeypatch: p
     monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
     proc = _StubbornProc()
     monkeypatch.setattr("fspack.cli_doctor.subprocess.Popen", lambda *a, **kw: proc)
-    result = _run_template(tmp_path / "app", timeout=0.3)
+    result = _run_template([str(tmp_path / "app")], timeout=0.3)
     assert result.success is True
     assert result.timed_out is True
     # terminate 后再次 communicate 超时 → 调 kill
@@ -963,12 +1064,28 @@ def test_run_template_oserror_startup_failure(tmp_path: Path, monkeypatch: pytes
 
     monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
     monkeypatch.setattr("fspack.cli_doctor.subprocess.Popen", _raise_popen)
-    result = _run_template(tmp_path / "app.exe", timeout=1.0)
+    result = _run_template(["wine", str(tmp_path / "app.exe")], timeout=1.0)
     assert result.success is False
     assert result.timed_out is False
     assert result.exit_code is None
     assert "启动失败" in result.error
     assert "wine" in result.error
+
+
+def test_run_template_passes_env_to_popen(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """debug 模式传入 env 时，env 透传给 subprocess.Popen（PYTHONHOME 等）."""
+    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    captured: dict[str, object] = {}
+    proc = _FakeProc(returncode=0)
+
+    def _capture_popen(*args: object, **kwargs: object) -> _FakeProc:
+        captured["env"] = kwargs.get("env")
+        return proc
+
+    monkeypatch.setattr("fspack.cli_doctor.subprocess.Popen", _capture_popen)
+    env = {"PYTHONHOME": "/tmp/python", "PYTHONUNBUFFERED": "1"}
+    _run_template([str(tmp_path / "app")], env, timeout=1.0)  # type: ignore[arg-type]
+    assert captured["env"] == env
 
 
 # ---- _format_run_status ----

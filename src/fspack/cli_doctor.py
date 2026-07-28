@@ -562,6 +562,8 @@ def _build_run_cmd(exe: Path) -> list[str]:
     与 :func:`fspack.runner._build_cmd` 同逻辑，独立于 runner 模块以避免
     doctor ↔ runner 循环依赖。wine 不在 PATH 时回退字符串 ``"wine"``，
     :func:`_run_template` 会捕获 :class:`FileNotFoundError` 报告未安装。
+
+    仅作为 debug 模式不可用时的回退方案（直跑 loader exe）。
     """
     from fspack.platform import Platform, detect_platform
 
@@ -571,7 +573,68 @@ def _build_run_cmd(exe: Path) -> list[str]:
     return [str(exe)]
 
 
-def _run_template(exe: Path, *, timeout: float = _RUN_TIMEOUT_SEC) -> TemplateRunResult:
+def _find_debug_python(proj_dir: Path) -> Path | None:
+    """查找 debug 模式用的 embed python 路径.
+
+    Windows 用 ``dist/runtime/python.exe``，Linux/macOS 用
+    ``dist/runtime/python/bin/python3.X``（standalone python）。
+    """
+    from fspack.platform import Platform, detect_platform
+
+    dist = proj_dir / "dist"
+    if detect_platform() is Platform.WINDOWS:
+        py = dist / "runtime" / "python.exe"
+        return py if py.is_file() else None
+    bin_dir = dist / "runtime" / "python" / "bin"
+    pys = sorted(bin_dir.glob("python3.*"))
+    return pys[0] if pys else None
+
+
+def _find_wrapper(proj_dir: Path, name: str) -> Path | None:
+    """查找入口包装器 ``dist/_entry_<name>.py`` 路径."""
+    wrapper = proj_dir / "dist" / f"_entry_{name}.py"
+    return wrapper if wrapper.is_file() else None
+
+
+def _build_debug_cmd(proj_dir: Path, name: str) -> tuple[list[str], dict[str, str]] | None:
+    """构造 debug 模式运行命令：embed python + 入口包装器.
+
+    模拟 ``fsp r --debug`` 行为：用 console 子系统的 embed python 直跑
+    ``_entry_<name>.py`` 包装器，使 stdout/stderr 可见（GUI subsystem
+    下被 Windows 吞掉），且 wrapper 设置 Qt 插件路径、Tcl/Tk 环境变量、
+    site-packages sys.path 等，避免 GUI 应用（PySide2/PyQt5/tkinter）
+    因环境变量缺失启动失败。
+
+    与直跑 loader exe 的差异：
+
+    - debug 模式用 console 子系统，``print`` 输出可见，便于诊断
+    - Linux 用原生 standalone python（不需 wine），避免 wine 下 GUI 应用
+      缺 X11/Qt 插件路径问题
+    - wrapper 显式设置 ``PYTHONHOME``（Linux）使 standalone python 找到标准库
+
+    :param proj_dir: 项目根目录（含 ``dist/``）
+    :param name: 入口名（``pyproject.toml`` 的 ``name``）
+    :return: ``(cmd, env)`` 或 ``None``（wrapper/embed python 缺失，调用方回退直跑 exe）
+    """
+    from fspack.platform import Platform, detect_platform
+
+    py = _find_debug_python(proj_dir)
+    wrapper = _find_wrapper(proj_dir, name)
+    if py is None or wrapper is None:
+        return None
+    cmd = [str(py), str(wrapper)]
+    env: dict[str, str] = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    if detect_platform() is not Platform.WINDOWS:
+        env["PYTHONHOME"] = str(proj_dir / "dist" / "runtime" / "python")
+    return cmd, env
+
+
+def _run_template(
+    cmd: list[str],
+    env: Mapping[str, str] | None = None,
+    *,
+    timeout: float = _RUN_TIMEOUT_SEC,
+) -> TemplateRunResult:
     """运行已构建的可执行文件，验证可调用性.
 
     统一用超时策略处理 CLI/GUI/Web 应用，无需依赖 ``app_type`` 字段：
@@ -581,11 +644,11 @@ def _run_template(exe: Path, *, timeout: float = _RUN_TIMEOUT_SEC) -> TemplateRu
     - 超时未退出 → 视为成功（GUI/Web 进入事件循环不退出），
       主动 ``terminate`` + ``kill``，``exit_code=None``
 
-    :param exe: 可执行文件路径
+    :param cmd: 运行命令（debug 模式为 ``[python, wrapper]``，回退为 ``[exe]``/``[wine, exe]``）
+    :param env: 环境变量（debug 模式含 ``PYTHONHOME``/``PYTHONUNBUFFERED``），``None`` 继承当前环境
     :param timeout: 超时秒数（默认 :data:`_RUN_TIMEOUT_SEC`）
     :return: 运行验证结果
     """
-    cmd = _build_run_cmd(exe)
     start = time.perf_counter()
     try:
         proc = subprocess.Popen(
@@ -593,6 +656,7 @@ def _run_template(exe: Path, *, timeout: float = _RUN_TIMEOUT_SEC) -> TemplateRu
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            env=env,
         )
     except (OSError, ValueError) as exc:
         elapsed = time.perf_counter() - start
@@ -615,7 +679,7 @@ def _run_template(exe: Path, *, timeout: float = _RUN_TIMEOUT_SEC) -> TemplateRu
             proc.kill()
             proc.communicate()
         elapsed = time.perf_counter() - start
-        _logger.debug("模板运行超时（视为 GUI/Web 事件循环正常）: %s", exe.name)
+        _logger.debug("模板运行超时（视为 GUI/Web 事件循环正常）: %s", " ".join(cmd))
         return TemplateRunResult(
             success=True,
             timed_out=True,
@@ -634,7 +698,7 @@ def _run_template(exe: Path, *, timeout: float = _RUN_TIMEOUT_SEC) -> TemplateRu
     stderr_first = (stderr or "").splitlines()[0] if stderr else ""
     if len(stderr_first) > 200:
         stderr_first = stderr_first[:197] + "..."
-    _logger.warning("模板运行失败 %s: 退出码 %s", exe.name, proc.returncode)
+    _logger.warning("模板运行失败 %s: 退出码 %s", " ".join(cmd), proc.returncode)
     return TemplateRunResult(
         success=False,
         timed_out=False,
@@ -714,13 +778,23 @@ def _build_single_template(  # pragma: no cover
     dist_size = _dir_size(dist_dir) if dist_dir.is_dir() else 0
     entry_count = len(list(dist_dir.glob("*.exe"))) if dist_dir.is_dir() else 0
 
-    # 构建成功后运行验证：实际启动 exe，捕获运行时崩溃（如入口脚本 import
-    # 不存在的模块，构建阶段 analyzer 不执行代码无法发现）。
+    # 构建成功后运行验证：优先用 debug 模式（embed python + wrapper），
+    # 模拟 `fsp r --debug`：console 子系统 stdout 可见，wrapper 设置 Qt 插件路径、
+    # Tcl/Tk 环境变量、site-packages sys.path 等，避免 GUI 应用因环境变量缺失启动失败。
+    # debug 模式不可用（wrapper/embed python 缺失）时回退直跑 loader exe。
     # 多入口项目产出的 exe 名与 template.name 不一致时跳过验证（run_result=None）。
-    exe = _find_dist_exe(proj_dir, template.name)
-    run_result = _run_template(exe) if exe is not None else None
-    if exe is None and entry_count > 0:
-        _logger.debug("模板 %s 未找到匹配的可执行文件（多入口？），跳过运行验证", template.id)
+    debug = _build_debug_cmd(proj_dir, template.name)
+    if debug is not None:
+        cmd, env = debug
+        run_result = _run_template(cmd, env)
+    else:
+        exe = _find_dist_exe(proj_dir, template.name)
+        if exe is not None:
+            run_result = _run_template(_build_run_cmd(exe))
+        else:
+            run_result = None
+        if exe is None and entry_count > 0:
+            _logger.debug("模板 %s 未找到匹配的可执行文件（多入口？），跳过运行验证", template.id)
 
     return TemplateBuildResult(
         template_id=template.id,

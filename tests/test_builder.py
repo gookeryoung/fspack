@@ -1242,6 +1242,7 @@ def test_precompile_pyc_linux_uses_python3_bin(tmp_path: Path, monkeypatch: pyte
     st = StageRecorder("预编译字节码")
     _precompile_pyc(dist, runtime, "3.11.9", Platform.LINUX, strip_py=False, stage=st)
 
+    # pyrefly: ignore [unnecessary-type-conversion]
     assert "python3.11" in str(captured[0][0])
 
 
