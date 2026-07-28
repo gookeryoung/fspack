@@ -512,16 +512,17 @@ def test_build_and_run_cli_office_py38(tmp_path: Path) -> None:
 
 
 @pytest.mark.slow
-def test_build_and_run_pygame_conway_py38(tmp_path: Path) -> None:
-    """pygame_conway_py38 示例：numpy/attrs/pygame 依赖，dummy 驱动验证."""
+def test_build_and_run_pygame_conway_py313(tmp_path: Path) -> None:
+    """pygame_conway_py313 示例：numpy/attrs/pygame 依赖，dummy 驱动验证."""
     _build_and_run(
-        "pygame_conway_py38",
+        "pygame_conway_py313",
         "Hello from the pygame community",
         tmp_path,
         extra_env={"SDL_VIDEODRIVER": "dummy", "SDL_AUDIODRIVER": "dummy"},
+        py_version="3.13.0",
         debug=True,
     )
-    proj = tmp_path / "pygame_conway_py38"
+    proj = tmp_path / "pygame_conway_py313"
     assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "numpy").is_dir()
     assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "attrs").is_dir()
     assert (proj / "dist" / "runtime" / "Lib" / "site-packages" / "pygame").is_dir()

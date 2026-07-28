@@ -66,6 +66,13 @@ jobs:
         run: uv sync --frozen --extra test --python ${{ matrix.python-version }}
 
       - name: Run tests
+        env:
+          # Windows 默认控制台编码（cp1252/cp936）无法编码中文日志字符，
+          # console.py 的 _ensure_utf8_stdio 只重配置 pytest 捕获流，
+          # pytest 回放失败输出到真实 stdout/stderr 时仍触发 UnicodeEncodeError。
+          # 强制 UTF-8 确保 CI 日志与本地非交互终端均可正常输出中文。
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: "1"
         run: uv run pytest -m "not slow" --cov=fspack --cov-fail-under=95 --cov-report=term-missing
 
   # ===== slow 端到端测试：仅 cron 触发，PR/push 不触发 =====
@@ -151,11 +158,17 @@ jobs:
 
       - name: Run benchmark tests
         run: |
+          # 首次运行（缓存未命中）无历史基线，--benchmark-compare 无效，
+          # --benchmark-compare-fail 会报 "requires valid --benchmark-compare"。
+          # 仅当 .benchmarks/ 有历史 JSON 时才启用对比与退化门禁。
+          COMPARE_OPTS=""
+          if find .benchmarks -name '*.json' -type f 2>/dev/null | grep -q .; then
+            COMPARE_OPTS="--benchmark-compare --benchmark-compare-fail=mean:10%"
+          fi
           uv run pytest tests/test_perf_baseline.py -m slow \
             --benchmark-only \
             --benchmark-save=main \
-            --benchmark-compare \
-            --benchmark-compare-fail=mean:10% \
+            $COMPARE_OPTS \
             --benchmark-min-rounds=10 \
             --benchmark-warmup=on \
             --benchmark-columns=median,min,mean,stddev
