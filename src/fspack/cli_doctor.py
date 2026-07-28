@@ -48,6 +48,7 @@ __all__ = [
     "CheckStatus",
     "DoctorReport",
     "TemplateBuildResult",
+    "TemplateRunResult",
     "print_doctor_report",
     "run_doctor",
     "run_doctor_bench",
@@ -498,6 +499,152 @@ def _print_summary(report: DoctorReport) -> None:
 
 
 @dataclass(frozen=True)
+class TemplateRunResult:
+    """单个模板运行验证结果.
+
+    构建成功后实际运行产出的可执行文件，验证「能调用」：
+    CLI 应用应正常退出（退出码 0）；GUI/Web 应用启动后进入事件循环
+    不退出，用超时判定为「启动成功」并主动终止进程。
+
+    :param success: 运行是否成功（退出码 0 或超时视为 GUI 事件循环正常）
+    :param timed_out: 是否因超时被终止（True 表示应用进入事件循环不退出，
+        视为 GUI/Web 应用启动成功；False 表示进程自行退出）
+    :param exit_code: 进程退出码（超时被终止时为 ``None``）
+    :param duration_sec: 运行耗时（秒，超时场景为超时阈值）
+    :param error: 失败时的错误信息（stderr 首行，截断到 200 字符）
+    """
+
+    success: bool
+    timed_out: bool
+    exit_code: int | None
+    duration_sec: float
+    error: str = ""
+
+
+# 运行验证超时（秒）：CLI 应用通常 <1s 退出，GUI/Web 进入事件循环不退出。
+# 5s 给慢启动足够余量，超时后视为「启动成功」（GUI 正常运行）并主动终止。
+_RUN_TIMEOUT_SEC = 5.0
+
+# 终止进程后的等待时间（秒）：terminate 后给进程 2s 清理，仍不退出则 kill。
+_TERMINATE_GRACE_SEC = 2.0
+
+
+def _find_dist_exe(proj_dir: Path, name: str) -> Path | None:
+    """在 ``proj_dir/dist/`` 下查找项目可执行文件.
+
+    与 :func:`fspack.runner._find_exe` 同逻辑，但接收 ``proj_dir`` 而非
+    project（doctor 在临时工作目录下构建，project 路径即 ``proj_dir``）。
+
+    Linux 优先原生无后缀可执行文件，回退 ``.exe``（用 wine 运行）；
+    Windows/macOS 仅查 ``.exe``。
+
+    :param proj_dir: 项目根目录（含 ``dist/``）
+    :param name: 可执行文件名（取自 ``pyproject.toml`` 的 ``name``）
+    :return: 可执行文件路径或 ``None``（未找到）
+    """
+    from fspack.platform import Platform, detect_platform
+
+    dist = proj_dir / "dist"
+    candidates: list[Path]
+    if detect_platform() is Platform.LINUX:
+        candidates = [dist / name, dist / f"{name}.exe"]
+    else:
+        candidates = [dist / f"{name}.exe"]
+    for cand in candidates:
+        if cand.is_file():
+            return cand
+    return None
+
+
+def _build_run_cmd(exe: Path) -> list[str]:
+    """构造运行命令：Linux 下 ``.exe`` 用 wine，原生可执行文件直跑.
+
+    与 :func:`fspack.runner._build_cmd` 同逻辑，独立于 runner 模块以避免
+    doctor ↔ runner 循环依赖。wine 不在 PATH 时回退字符串 ``"wine"``，
+    :func:`_run_template` 会捕获 :class:`FileNotFoundError` 报告未安装。
+    """
+    from fspack.platform import Platform, detect_platform
+
+    if exe.suffix == ".exe" and detect_platform() is Platform.LINUX:
+        wine = shutil.which("wine") or "wine"
+        return [wine, str(exe)]
+    return [str(exe)]
+
+
+def _run_template(exe: Path, *, timeout: float = _RUN_TIMEOUT_SEC) -> TemplateRunResult:
+    """运行已构建的可执行文件，验证可调用性.
+
+    统一用超时策略处理 CLI/GUI/Web 应用，无需依赖 ``app_type`` 字段：
+
+    - 进程自行退出且退出码 ``0`` → 成功（CLI 正常执行完成）
+    - 进程自行退出且退出码非 ``0`` → 失败（启动崩溃，捕获 stderr 首行）
+    - 超时未退出 → 视为成功（GUI/Web 进入事件循环不退出），
+      主动 ``terminate`` + ``kill``，``exit_code=None``
+
+    :param exe: 可执行文件路径
+    :param timeout: 超时秒数（默认 :data:`_RUN_TIMEOUT_SEC`）
+    :return: 运行验证结果
+    """
+    cmd = _build_run_cmd(exe)
+    start = time.perf_counter()
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except (OSError, ValueError) as exc:
+        elapsed = time.perf_counter() - start
+        return TemplateRunResult(
+            success=False,
+            timed_out=False,
+            exit_code=None,
+            duration_sec=elapsed,
+            error=f"启动失败: {exc}",
+        )
+
+    try:
+        _stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        # 超时未退出 → 视为 GUI/Web 事件循环正常运行，主动终止
+        proc.terminate()
+        try:
+            proc.communicate(timeout=_TERMINATE_GRACE_SEC)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+        elapsed = time.perf_counter() - start
+        _logger.debug("模板运行超时（视为 GUI/Web 事件循环正常）: %s", exe.name)
+        return TemplateRunResult(
+            success=True,
+            timed_out=True,
+            exit_code=None,
+            duration_sec=elapsed,
+        )
+
+    elapsed = time.perf_counter() - start
+    if proc.returncode == 0:
+        return TemplateRunResult(
+            success=True,
+            timed_out=False,
+            exit_code=0,
+            duration_sec=elapsed,
+        )
+    stderr_first = (stderr or "").splitlines()[0] if stderr else ""
+    if len(stderr_first) > 200:
+        stderr_first = stderr_first[:197] + "..."
+    _logger.warning("模板运行失败 %s: 退出码 %s", exe.name, proc.returncode)
+    return TemplateRunResult(
+        success=False,
+        timed_out=False,
+        exit_code=proc.returncode,
+        duration_sec=elapsed,
+        error=stderr_first or f"退出码 {proc.returncode}",
+    )
+
+
+@dataclass(frozen=True)
 class TemplateBuildResult:
     """单个模板构建结果.
 
@@ -507,6 +654,7 @@ class TemplateBuildResult:
     :param error: 失败时的错误信息（截断到 200 字符）
     :param dist_size: 构建产物 ``dist/`` 目录大小（字节），失败时为 0
     :param entry_count: 入口 exe 数量
+    :param run_result: 构建成功后的运行验证结果；构建失败或未运行验证时为 ``None``
     """
 
     template_id: str
@@ -515,6 +663,7 @@ class TemplateBuildResult:
     error: str = ""
     dist_size: int = 0
     entry_count: int = 0
+    run_result: TemplateRunResult | None = None
 
 
 def _build_single_template(  # pragma: no cover
@@ -565,12 +714,21 @@ def _build_single_template(  # pragma: no cover
     dist_size = _dir_size(dist_dir) if dist_dir.is_dir() else 0
     entry_count = len(list(dist_dir.glob("*.exe"))) if dist_dir.is_dir() else 0
 
+    # 构建成功后运行验证：实际启动 exe，捕获运行时崩溃（如入口脚本 import
+    # 不存在的模块，构建阶段 analyzer 不执行代码无法发现）。
+    # 多入口项目产出的 exe 名与 template.name 不一致时跳过验证（run_result=None）。
+    exe = _find_dist_exe(proj_dir, template.name)
+    run_result = _run_template(exe) if exe is not None else None
+    if exe is None and entry_count > 0:
+        _logger.debug("模板 %s 未找到匹配的可执行文件（多入口？），跳过运行验证", template.id)
+
     return TemplateBuildResult(
         template_id=template.id,
         success=True,
         duration_sec=elapsed,
         dist_size=dist_size,
         entry_count=entry_count,
+        run_result=run_result,
     )
 
 
@@ -655,7 +813,8 @@ def _print_template_build_summary(results: list[TemplateBuildResult], *, bench: 
     table = Table(title="模板构建汇总", show_lines=False)
     table.add_column("#", justify="right", style="dim")
     table.add_column("模板", style="cyan")
-    table.add_column("状态", justify="center")
+    table.add_column("构建", justify="center")
+    table.add_column("运行", justify="center")
     table.add_column("耗时", justify="right")
     table.add_column("产物大小", justify="right")
     table.add_column("入口数", justify="right")
@@ -665,20 +824,34 @@ def _print_template_build_summary(results: list[TemplateBuildResult], *, bench: 
     succeeded = 0
     total_time = 0.0
     total_size = 0
+    run_ok = 0
+    run_fail = 0
+    run_skip = 0
     for i, r in enumerate(results, 1):
-        status_str = "[green]√ 成功[/green]" if r.success else "[red]× 失败[/red]"
+        build_str = "[green]√ 成功[/green]" if r.success else "[red]× 失败[/red]"
         if r.success:
             succeeded += 1
             total_time += r.duration_sec
             total_size += r.dist_size
+        run_str, err_msg = _format_run_status(r)
+        if r.success:
+            if r.run_result is None:
+                run_skip += 1
+            elif r.run_result.success:
+                run_ok += 1
+            else:
+                run_fail += 1
+        # bench 模式错误信息：构建失败显示构建错误，构建成功但运行失败显示运行错误
+        error_msg = r.error if not r.success else err_msg
         table.add_row(
             str(i),
             r.template_id,
-            status_str,
+            build_str,
+            run_str,
             f"{r.duration_sec:.1f}s",
             _format_size(r.dist_size) if r.dist_size else "-",
             str(r.entry_count) if r.entry_count else "-",
-            r.error if not r.success else "",
+            error_msg if bench else "",
         )
 
     console.rich.print(table)
@@ -691,6 +864,8 @@ def _print_template_build_summary(results: list[TemplateBuildResult], *, bench: 
     else:
         console.success(f"构建完成：{succeeded}/{len(results)} 全部成功")
 
+    _print_run_summary(succeeded, run_ok, run_fail, run_skip)
+
     if succeeded > 0:
         avg_time = total_time / succeeded
         console.rich.print(f"  总耗时 {total_time:.1f}s | 平均 {avg_time:.1f}s | 总产物 {_format_size(total_size)}")
@@ -698,6 +873,48 @@ def _print_template_build_summary(results: list[TemplateBuildResult], *, bench: 
     # 性能分析（仅 --bench 模式）
     if bench and succeeded > 1:
         _print_performance_analysis(results)
+
+
+def _print_run_summary(succeeded: int, run_ok: int, run_fail: int, run_skip: int) -> None:
+    """打印运行验证汇总：构建成功的模板参与验证，区分成功/失败/跳过.
+
+    :param succeeded: 构建成功的模板数
+    :param run_ok: 运行验证成功数（含超时视为 GUI 事件循环正常）
+    :param run_fail: 运行验证失败数（退出码非 0 或启动失败）
+    :param run_skip: 跳过运行验证数（多入口或未找到可执行文件）
+    """
+    run_total = run_ok + run_fail
+    if run_total == 0:
+        if succeeded > 0 and run_skip > 0:
+            console.warn(f"运行验证：{run_skip} 个模板跳过（多入口或未找到可执行文件）")
+        return
+    if run_fail > 0:
+        console.warn(f"运行验证：{run_ok} 成功 / {run_fail} 失败 / {run_total} 验证 / {run_skip} 跳过")
+    else:
+        console.success(f"运行验证：{run_ok}/{run_total} 全部通过（{run_skip} 跳过）")
+
+
+def _format_run_status(result: TemplateBuildResult) -> tuple[str, str]:
+    """格式化运行验证状态为 rich 标记字符串.
+
+    :param result: 模板构建结果
+    :return: (运行状态字符串, 错误信息)。运行状态字符串含 rich 标记：
+        - 构建失败 → ``"-"``（不运行验证）
+        - ``run_result`` 为 ``None`` → ``"[dim]跳过[/]"``（多入口或未找到 exe）
+        - 成功且超时 → ``"[green]√ 超时[/]"``（GUI/Web 事件循环正常）
+        - 成功未超时 → ``"[green]√ 成功[/]"``（CLI 正常退出码 0）
+        - 失败 → ``"[red]× 失败[/]"``
+    """
+    if not result.success:
+        return ("-", "")
+    rr = result.run_result
+    if rr is None:
+        return ("[dim]跳过[/]", "")
+    if rr.success:
+        if rr.timed_out:
+            return ("[green]√ 超时[/]", "")
+        return ("[green]√ 成功[/]", "")
+    return ("[red]× 失败[/]", rr.error)
 
 
 def _print_performance_analysis(results: list[TemplateBuildResult]) -> None:

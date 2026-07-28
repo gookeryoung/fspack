@@ -24,15 +24,20 @@ from fspack.cli_doctor import (
     CheckStatus,
     DoctorReport,
     TemplateBuildResult,
+    TemplateRunResult,
+    _build_run_cmd,
     _check_cache_dir,
     _check_pillow,
     _check_pip,
     _check_tool_version,
     _dir_size,
+    _find_dist_exe,
+    _format_run_status,
     _format_size,
     _format_status,
     _print_performance_analysis,
     _print_template_build_summary,
+    _run_template,
     print_doctor_report,
     run_doctor,
 )
@@ -681,7 +686,7 @@ def test_print_template_build_summary_all_success(capsys: pytest.CaptureFixture[
 
 
 def test_print_template_build_summary_with_failure(capsys: pytest.CaptureFixture[str]) -> None:
-    """有失败时汇总输出含"失败"与错误信息."""
+    """有失败时汇总输出含"失败"（错误信息仅在 bench 模式显示）."""
     results = [
         TemplateBuildResult(template_id="a", success=True, duration_sec=1.0, dist_size=100, entry_count=1),
         TemplateBuildResult(template_id="b", success=False, duration_sec=0.5, error="网络超时"),
@@ -689,6 +694,19 @@ def test_print_template_build_summary_with_failure(capsys: pytest.CaptureFixture
     _print_template_build_summary(results, bench=False)
     out = capsys.readouterr().out
     assert "1 成功" in out
+    assert "1 失败" in out
+    # 非 bench 模式无错误信息列，错误信息不输出
+    assert "网络超时" not in out
+
+
+def test_print_template_build_summary_with_failure_bench(capsys: pytest.CaptureFixture[str]) -> None:
+    """bench 模式有失败时输出含错误信息."""
+    results = [
+        TemplateBuildResult(template_id="a", success=True, duration_sec=1.0, dist_size=100, entry_count=1),
+        TemplateBuildResult(template_id="b", success=False, duration_sec=0.5, error="网络超时"),
+    ]
+    _print_template_build_summary(results, bench=True)
+    out = capsys.readouterr().out
     assert "1 失败" in out
     assert "网络超时" in out
 
@@ -729,3 +747,340 @@ def test_print_performance_analysis_all_failed(capsys: pytest.CaptureFixture[str
     _print_performance_analysis(results)
     out = capsys.readouterr().out
     assert "耗时排名" not in out
+
+
+# ---- TemplateRunResult 数据结构 ----
+
+
+def test_template_run_result_frozen() -> None:
+    """TemplateRunResult 是 frozen dataclass，不可变."""
+    r = TemplateRunResult(success=True, timed_out=False, exit_code=0, duration_sec=0.5)
+    with pytest.raises(AttributeError):
+        r.success = False  # type: ignore[misc]
+
+
+def test_template_run_result_defaults() -> None:
+    """TemplateRunResult 默认 error 为空字符串."""
+    r = TemplateRunResult(success=True, timed_out=False, exit_code=0, duration_sec=0.5)
+    assert r.error == ""
+
+
+def test_template_build_result_run_result_default_none() -> None:
+    """TemplateBuildResult.run_result 默认 None（构建失败或未运行验证）."""
+    r = TemplateBuildResult(template_id="t", success=True, duration_sec=1.0)
+    assert r.run_result is None
+
+
+# ---- _find_dist_exe ----
+
+
+def test_find_dist_exe_linux_native(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Linux 优先返回原生无后缀可执行文件."""
+    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "app").write_bytes(b"")
+    (dist / "app.exe").write_bytes(b"")
+    found = _find_dist_exe(tmp_path, "app")
+    assert found == dist / "app"
+
+
+def test_find_dist_exe_linux_fallback_exe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Linux 无原生可执行文件时回退 .exe（用 wine 运行）."""
+    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "app.exe").write_bytes(b"")
+    found = _find_dist_exe(tmp_path, "app")
+    assert found == dist / "app.exe"
+
+
+def test_find_dist_exe_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows 仅查 .exe."""
+    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.WINDOWS)
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "app.exe").write_bytes(b"")
+    found = _find_dist_exe(tmp_path, "app")
+    assert found == dist / "app.exe"
+
+
+def test_find_dist_exe_not_found(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """dist 下无可执行文件时返回 None."""
+    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    (tmp_path / "dist").mkdir()
+    assert _find_dist_exe(tmp_path, "missing") is None
+
+
+def test_find_dist_exe_no_dist_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """dist 目录不存在时返回 None."""
+    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    assert _find_dist_exe(tmp_path, "app") is None
+
+
+# ---- _build_run_cmd ----
+
+
+def test_build_run_cmd_native_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Linux 原生可执行文件（无 .exe 后缀）直跑."""
+    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    exe = tmp_path / "app"
+    assert _build_run_cmd(exe) == [str(exe)]
+
+
+def test_build_run_cmd_exe_on_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows 下 .exe 直跑，不调 wine."""
+    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.WINDOWS)
+    exe = tmp_path / "app.exe"
+    assert _build_run_cmd(exe) == [str(exe)]
+
+
+def test_build_run_cmd_exe_on_linux_with_wine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Linux 下 .exe 用 wine 运行（wine 在 PATH）."""
+    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    monkeypatch.setattr("fspack.cli_doctor.shutil.which", lambda name: "/usr/bin/wine")
+    exe = tmp_path / "app.exe"
+    assert _build_run_cmd(exe) == ["/usr/bin/wine", str(exe)]
+
+
+def test_build_run_cmd_exe_on_linux_no_wine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Linux 下 .exe 但 wine 未安装时回退字符串 'wine'（_run_template 捕获 OSError）."""
+    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    monkeypatch.setattr("fspack.cli_doctor.shutil.which", lambda name: None)
+    exe = tmp_path / "app.exe"
+    assert _build_run_cmd(exe) == ["wine", str(exe)]
+
+
+# ---- _run_template ----
+
+
+class _FakeProc:
+    """模拟 subprocess.Popen 返回的进程对象."""
+
+    def __init__(self, returncode: int = 0, stdout: str = "", stderr: str = "") -> None:
+        self.returncode = returncode
+        self._stdout = stdout
+        self._stderr = stderr
+        self.terminated = False
+        self.killed = False
+        self.communicate_calls = 0
+        self._raise_timeout = False
+
+    def communicate(self, timeout: float | None = None):  # type: ignore[no-untyped-def]
+        self.communicate_calls += 1
+        if timeout is not None and self._raise_timeout:
+            raise subprocess.TimeoutExpired(cmd=[], timeout=timeout)
+        return (self._stdout, self._stderr)
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def kill(self) -> None:
+        self.killed = True
+
+
+def test_run_template_success_exit_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """进程退出码 0 → 运行成功（CLI 正常执行完成）."""
+    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    proc = _FakeProc(returncode=0, stdout="hello, world\n", stderr="")
+    monkeypatch.setattr("fspack.cli_doctor.subprocess.Popen", lambda *a, **kw: proc)
+    result = _run_template(tmp_path / "app", timeout=1.0)
+    assert result.success is True
+    assert result.timed_out is False
+    assert result.exit_code == 0
+    assert result.error == ""
+
+
+def test_run_template_failure_nonzero_exit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """进程退出码非 0 → 运行失败，捕获 stderr 首行."""
+    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    proc = _FakeProc(
+        returncode=1,
+        stdout="",
+        stderr="ModuleNotFoundError: No module named 'modules'\nTraceback follows",
+    )
+    monkeypatch.setattr("fspack.cli_doctor.subprocess.Popen", lambda *a, **kw: proc)
+    result = _run_template(tmp_path / "app", timeout=1.0)
+    assert result.success is False
+    assert result.timed_out is False
+    assert result.exit_code == 1
+    assert "ModuleNotFoundError" in result.error
+
+
+def test_run_template_failure_empty_stderr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """进程退出码非 0 且 stderr 为空时 error 显示退出码."""
+    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    proc = _FakeProc(returncode=2, stdout="", stderr="")
+    monkeypatch.setattr("fspack.cli_doctor.subprocess.Popen", lambda *a, **kw: proc)
+    result = _run_template(tmp_path / "app", timeout=1.0)
+    assert result.success is False
+    assert result.exit_code == 2
+    assert "退出码 2" in result.error
+
+
+def test_run_template_timeout_treated_as_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """超时未退出视为 GUI/Web 事件循环正常，主动 terminate 后返回成功."""
+
+    class _TimeoutProc(_FakeProc):
+        def __init__(self) -> None:
+            super().__init__(returncode=0)
+            self._raise_timeout = True
+
+    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    proc = _TimeoutProc()
+    monkeypatch.setattr("fspack.cli_doctor.subprocess.Popen", lambda *a, **kw: proc)
+    result = _run_template(tmp_path / "app", timeout=0.5)
+    assert result.success is True
+    assert result.timed_out is True
+    assert result.exit_code is None
+    assert proc.terminated is True
+
+
+def test_run_template_timeout_terminate_then_kill(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """超时后 terminate 仍超时则升级为 kill."""
+
+    class _StubbornProc(_FakeProc):
+        def __init__(self) -> None:
+            super().__init__(returncode=0)
+            self._raise_timeout = True
+
+    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    proc = _StubbornProc()
+    monkeypatch.setattr("fspack.cli_doctor.subprocess.Popen", lambda *a, **kw: proc)
+    result = _run_template(tmp_path / "app", timeout=0.3)
+    assert result.success is True
+    assert result.timed_out is True
+    # terminate 后再次 communicate 超时 → 调 kill
+    assert proc.terminated is True
+    assert proc.killed is True
+
+
+def test_run_template_oserror_startup_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Popen 抛 OSError（如 wine 未安装）→ 运行失败，error 含启动失败."""
+
+    def _raise_popen(*args: object, **kwargs: object) -> None:
+        raise FileNotFoundError("[Errno 2] No such file or directory: 'wine'")
+
+    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    monkeypatch.setattr("fspack.cli_doctor.subprocess.Popen", _raise_popen)
+    result = _run_template(tmp_path / "app.exe", timeout=1.0)
+    assert result.success is False
+    assert result.timed_out is False
+    assert result.exit_code is None
+    assert "启动失败" in result.error
+    assert "wine" in result.error
+
+
+# ---- _format_run_status ----
+
+
+def test_format_run_status_build_failed() -> None:
+    """构建失败时运行状态显示 '-'（不运行验证）."""
+    r = TemplateBuildResult(template_id="t", success=False, duration_sec=0.1, error="构建错误")
+    status, err = _format_run_status(r)
+    assert status == "-"
+    assert err == ""
+
+
+def test_format_run_status_no_run_result() -> None:
+    """构建成功但未运行验证（多入口或未找到 exe）显示 '跳过'."""
+    r = TemplateBuildResult(template_id="t", success=True, duration_sec=1.0)
+    status, err = _format_run_status(r)
+    assert "跳过" in status
+    assert err == ""
+
+
+def test_format_run_status_success_no_timeout() -> None:
+    """运行成功且未超时（CLI 正常退出码 0）显示 '√ 成功'."""
+    rr = TemplateRunResult(success=True, timed_out=False, exit_code=0, duration_sec=0.2)
+    r = TemplateBuildResult(template_id="t", success=True, duration_sec=1.0, run_result=rr)
+    status, err = _format_run_status(r)
+    assert "成功" in status
+    assert err == ""
+
+
+def test_format_run_status_success_timeout() -> None:
+    """运行成功但超时（GUI/Web 事件循环）显示 '√ 超时'."""
+    rr = TemplateRunResult(success=True, timed_out=True, exit_code=None, duration_sec=5.0)
+    r = TemplateBuildResult(template_id="t", success=True, duration_sec=1.0, run_result=rr)
+    status, _ = _format_run_status(r)
+    assert "超时" in status
+
+
+def test_format_run_status_failure() -> None:
+    """运行失败显示 '× 失败' 并返回 stderr 错误."""
+    rr = TemplateRunResult(success=False, timed_out=False, exit_code=1, duration_sec=0.1, error="ModuleNotFoundError")
+    r = TemplateBuildResult(template_id="t", success=True, duration_sec=1.0, run_result=rr)
+    status, err = _format_run_status(r)
+    assert "失败" in status
+    assert err == "ModuleNotFoundError"
+
+
+# ---- _print_template_build_summary 运行列 ----
+
+
+def test_print_summary_run_column_success(capsys: pytest.CaptureFixture[str]) -> None:
+    """汇总表含运行列：构建+运行均成功."""
+    rr = TemplateRunResult(success=True, timed_out=False, exit_code=0, duration_sec=0.2)
+    results = [
+        TemplateBuildResult(
+            template_id="a", success=True, duration_sec=1.5, dist_size=1024, entry_count=1, run_result=rr
+        ),
+    ]
+    _print_template_build_summary(results, bench=False)
+    out = capsys.readouterr().out
+    assert "运行" in out
+    assert "全部成功" in out
+    assert "运行验证" in out
+    assert "全部通过" in out
+
+
+def test_print_summary_run_column_failure(capsys: pytest.CaptureFixture[str]) -> None:
+    """汇总表含运行列：构建成功但运行失败，输出运行失败统计."""
+    rr = TemplateRunResult(success=False, timed_out=False, exit_code=1, duration_sec=0.1, error="ImportError")
+    results = [
+        TemplateBuildResult(
+            template_id="a", success=True, duration_sec=1.0, dist_size=100, entry_count=1, run_result=rr
+        ),
+    ]
+    _print_template_build_summary(results, bench=False)
+    out = capsys.readouterr().out
+    assert "运行验证" in out
+    assert "1 失败" in out
+    assert "ImportError" not in out  # 非 bench 模式不显示错误信息列
+
+
+def test_print_summary_run_column_skipped(capsys: pytest.CaptureFixture[str]) -> None:
+    """汇总表含运行列：构建成功但跳过运行验证（多入口）。"""
+    results = [
+        TemplateBuildResult(template_id="multi", success=True, duration_sec=1.0, dist_size=100, entry_count=2),
+    ]
+    _print_template_build_summary(results, bench=False)
+    out = capsys.readouterr().out
+    assert "跳过" in out
+    assert "运行验证" in out
+
+
+def test_print_summary_bench_shows_run_error(capsys: pytest.CaptureFixture[str]) -> None:
+    """bench 模式下显示运行错误信息列."""
+    rr = TemplateRunResult(
+        success=False, timed_out=False, exit_code=1, duration_sec=0.1, error="ModuleNotFoundError: x"
+    )
+    results = [
+        TemplateBuildResult(
+            template_id="a", success=True, duration_sec=1.0, dist_size=100, entry_count=1, run_result=rr
+        ),
+        TemplateBuildResult(
+            template_id="b",
+            success=True,
+            duration_sec=2.0,
+            dist_size=200,
+            entry_count=1,
+            run_result=TemplateRunResult(success=True, timed_out=False, exit_code=0, duration_sec=0.1),
+        ),
+    ]
+    _print_template_build_summary(results, bench=True)
+    out = capsys.readouterr().out
+    assert "ModuleNotFoundError" in out
+    assert "运行验证" in out
+    assert "1 失败" in out
