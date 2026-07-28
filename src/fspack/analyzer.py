@@ -382,6 +382,7 @@ def collect_imports(tree: ast.AST) -> list[str]:
 
 
 def _push(top: str, result: list[str], seen: set[str]) -> None:
+    """将顶层模块名添加到结果列表，去重保序."""
     if top and top not in seen:
         seen.add(top)
         result.append(top)
