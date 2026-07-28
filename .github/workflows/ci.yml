@@ -65,7 +65,7 @@ jobs:
       - name: Run tests
         env:
           # Windows 默认控制台编码（cp1252/cp936）无法编码中文日志字符，
-          # console.py 的 _ensure_utf8_stdio 只重配置 pytest 捕获流，
+          # _compat.py 的 CICompat.ensure_utf8_stdio 只重配置 pytest 捕获流，
           # pytest 回放失败输出到真实 stdout/stderr 时仍触发 UnicodeEncodeError。
           # 强制 UTF-8 确保 CI 日志与本地非交互终端均可正常输出中文。
           PYTHONIOENCODING: utf-8

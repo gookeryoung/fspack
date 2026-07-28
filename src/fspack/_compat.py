@@ -1,15 +1,18 @@
-"""跨 Python 版本兼容性 shim。
+"""跨 Python 版本与环境兼容性 shim。
 
-集中放置版本相关的回退导入，避免在各模块散落 ``# type: ignore[import-not-found]``。
+集中放置版本相关的回退导入与 CI 环境兼容逻辑，避免在各模块散落
+``# type: ignore[import-not-found]``。
 
 当前导出：
 
 - :func:`override` — PEP 698，3.12+ 进入 ``typing``，低版本回退 ``typing_extensions``
 - :mod:`tomllib` — 3.11+ 标准库，低版本回退 ``tomli``（解析 ``pyproject.toml`` 用）
+- :class:`CICompat` — CI 环境兼容性（rich Console 主题、UTF-8 编码适配、legacy_windows 禁用）
 """
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 
@@ -51,8 +54,6 @@ class CICompat:
     @staticmethod
     def ensure_utf8_stdio() -> None:
         """将 stdout/stderr 重配置为 UTF-8 编码。"""
-        import contextlib
-
         for stream_name in ("stdout", "stderr"):
             stream = getattr(sys, stream_name, None)
             if stream is None:
@@ -76,7 +77,7 @@ class CICompat:
         在重定向 stdout 上失败），导致 RichHandler emit 时崩溃。强制 ANSI 转义
         即可规避：Windows 10+ 与所有 POSIX 系统均原生支持。
 
-        另在创建 Console 前调用 :func:`_ensure_utf8_stdio` 重配置 stdout/stderr
+        另在创建 Console 前调用 :meth:`ensure_utf8_stdio` 重配置 stdout/stderr
         为 UTF-8，避免 Windows 默认 cp1252 编码导致中文日志 UnicodeEncodeError。
         """
         cls.ensure_utf8_stdio()

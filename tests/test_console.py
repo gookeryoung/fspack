@@ -66,10 +66,10 @@ def test_setup_logging_configures_root() -> None:
 
 def _spy_console_init() -> tuple[dict[str, object], Callable[..., object]]:
     """构造 Console.__init__ 的 spy，返回 (captured_kwargs, real_init)."""
-    import fspack.console as mod
+    from rich.console import Console
 
     captured: dict[str, object] = {}
-    real_init = mod.Console.__init__
+    real_init = Console.__init__
 
     def spy_init(self: Any, *args: Any, **kwargs: Any) -> Any:
         captured.update(kwargs)
@@ -85,25 +85,29 @@ def test_make_console_disables_legacy_windows_in_ci(monkeypatch: pytest.MonkeyPa
     导致 RichHandler emit 时 ``SetConsoleTextAttribute`` 在重定向 stdout
     上失败。
     """
-    import fspack.console as mod
+    from rich.console import Console
+
+    from fspack._compat import CICompat
 
     captured, spy_init = _spy_console_init()
-    monkeypatch.setattr(mod.Console, "__init__", spy_init)
+    monkeypatch.setattr(Console, "__init__", spy_init)
     monkeypatch.setenv("CI", "true")
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    mod._make_console()
+    CICompat.make_console()
     assert captured.get("legacy_windows") is False
 
 
 def test_make_console_keeps_auto_detection_outside_ci(monkeypatch: pytest.MonkeyPatch) -> None:
     """非 CI 环境下保持 legacy_windows=None，交由 rich 自动检测."""
-    import fspack.console as mod
+    from rich.console import Console
+
+    from fspack._compat import CICompat
 
     captured, spy_init = _spy_console_init()
-    monkeypatch.setattr(mod.Console, "__init__", spy_init)
+    monkeypatch.setattr(Console, "__init__", spy_init)
     for name in ("CI", "GITHUB_ACTIONS", "BUILD_NUMBER"):
         monkeypatch.delenv(name, raising=False)
-    mod._make_console()
+    CICompat.make_console()
     assert captured.get("legacy_windows") is None
 
 
@@ -120,45 +124,45 @@ class _FakeStream:
 
 def test_ensure_utf8_stdio_reconfigures_non_utf8(monkeypatch: pytest.MonkeyPatch) -> None:
     """非 UTF-8 编码的 stdout/stderr 应被重配置为 UTF-8."""
-    import fspack.console as mod
+    from fspack._compat import CICompat, sys
 
     fake_out = _FakeStream("cp1252")
     fake_err = _FakeStream("cp936")
-    monkeypatch.setattr(mod.sys, "stdout", fake_out)
-    monkeypatch.setattr(mod.sys, "stderr", fake_err)
-    mod._ensure_utf8_stdio()
+    monkeypatch.setattr(sys, "stdout", fake_out)
+    monkeypatch.setattr(sys, "stderr", fake_err)
+    CICompat.ensure_utf8_stdio()
     assert fake_out.reconfigured == [{"encoding": "utf-8"}]
     assert fake_err.reconfigured == [{"encoding": "utf-8"}]
 
 
 def test_ensure_utf8_stdio_skips_already_utf8(monkeypatch: pytest.MonkeyPatch) -> None:
     """已经是 UTF-8 编码的流不应被重配置."""
-    import fspack.console as mod
+    from fspack._compat import CICompat, sys
 
     fake_out = _FakeStream("utf-8")
     fake_err = _FakeStream("UTF-8")
-    monkeypatch.setattr(mod.sys, "stdout", fake_out)
-    monkeypatch.setattr(mod.sys, "stderr", fake_err)
-    mod._ensure_utf8_stdio()
+    monkeypatch.setattr(sys, "stdout", fake_out)
+    monkeypatch.setattr(sys, "stderr", fake_err)
+    CICompat.ensure_utf8_stdio()
     assert fake_out.reconfigured == []
     assert fake_err.reconfigured == []
 
 
 def test_ensure_utf8_stdio_handles_no_reconfigure(monkeypatch: pytest.MonkeyPatch) -> None:
     """流无 reconfigure 方法时不应崩溃（如已关闭的流或自定义对象）."""
-    import fspack.console as mod
+    from fspack._compat import CICompat, sys
 
     class _NoReconfigure:
         encoding = "cp1252"
 
-    monkeypatch.setattr(mod.sys, "stdout", _NoReconfigure())
-    monkeypatch.setattr(mod.sys, "stderr", None)
-    mod._ensure_utf8_stdio()  # 不应抛异常
+    monkeypatch.setattr(sys, "stdout", _NoReconfigure())
+    monkeypatch.setattr(sys, "stderr", None)
+    CICompat.ensure_utf8_stdio()  # 不应抛异常
 
 
 def test_ensure_utf8_stdio_handles_reconfigure_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     """reconfigure 抛 OSError/ValueError 时应静默忽略（流已关闭等场景）."""
-    import fspack.console as mod
+    from fspack._compat import CICompat, sys
 
     class _FailingStream:
         encoding = "cp1252"
@@ -166,6 +170,45 @@ def test_ensure_utf8_stdio_handles_reconfigure_failure(monkeypatch: pytest.Monke
         def reconfigure(self, **kwargs: str) -> None:
             raise OSError("流已关闭")
 
-    monkeypatch.setattr(mod.sys, "stdout", _FailingStream())
-    monkeypatch.setattr(mod.sys, "stderr", _FailingStream())
-    mod._ensure_utf8_stdio()  # 不应抛异常
+    monkeypatch.setattr(sys, "stdout", _FailingStream())
+    monkeypatch.setattr(sys, "stderr", _FailingStream())
+    CICompat.ensure_utf8_stdio()  # 不应抛异常
+
+
+def test_get_theme_returns_expected_styles() -> None:
+    """get_theme 返回含 info/warning/error/success/step 样式的 Theme."""
+    from rich.theme import Theme
+
+    from fspack._compat import CICompat
+
+    theme = CICompat.get_theme()
+    assert isinstance(theme, Theme)
+    # 验证所有自定义样式键存在
+    styles = theme.styles
+    assert "info" in styles
+    assert "warning" in styles
+    assert "error" in styles
+    assert "success" in styles
+    assert "step" in styles
+
+
+def test_console_ui_delegates_to_ci_compat(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ConsoleUI.__init__ 通过 CICompat.make_console 创建底层 Console."""
+    from rich.console import Console
+
+    from fspack._compat import CICompat
+    from fspack.console import ConsoleUI
+
+    captured: dict[str, object] = {}
+    real_make = CICompat.make_console
+
+    def spy_make(cls: Any) -> Console:
+        result = real_make.__func__(cls)  # type: ignore[attr-defined]
+        captured["called"] = True
+        captured["result"] = result
+        return result
+
+    monkeypatch.setattr(CICompat, "make_console", classmethod(spy_make))
+    ui = ConsoleUI()
+    assert captured.get("called") is True
+    assert ui.rich is captured.get("result")
