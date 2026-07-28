@@ -28,6 +28,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Sequence
 
+from fspack.config import is_offline
 from fspack.exceptions import DependencyError
 from fspack.packaging.wheel_cache import _deps_cache_key, _load_deps_cache, _save_deps_cache
 from fspack.packaging.wheel_markers import _filter_by_python_version
@@ -193,11 +194,37 @@ def _run_pip_download(  # noqa: PLR0913
     extra_index_urls: Sequence[str] = (),
     find_links: Sequence[str] = (),
 ) -> subprocess.CompletedProcess[str]:
-    """执行 pip download：先用 ``--no-index`` 离线解析，失败回退到在线解析下载."""
-    # 先用 --no-index 从本地缓存解析（离线模式），命中则跳过网络查询；
-    # 缓存不完整或条件依赖未满足时回退到在线解析+下载
-    result = _run_pip([*base_args, "--no-index", *filtered], f"检查缓存 {len(filtered)} 个依赖", suppress_error=True)
+    """执行 pip download：先用 ``--no-index`` 离线解析，失败回退到在线解析下载.
+
+    离线解析时除默认的 ``cache_dir`` 外，**同时搜索用户提供的 ``find_links``
+    本地 wheel 目录**，扩大本地搜索范围。这使离线模式下用户可通过
+    ``--find-links /path/to/local/wheels`` 指定额外的本地 wheel 仓库。
+
+    离线模式（``FSPACK_OFFLINE=1``）下 ``--no-index`` 解析失败时立即抛
+    :class:`DependencyError`，不回退到在线下载避免超时卡死。错误信息列出
+    缺失的依赖名、本地缓存路径与已搜索的 find-links 路径，便于用户预下载
+    wheel 放入缓存或新增 find-links 路径。
+    """
+    # 构造用户提供的 find-links 参数：附加到 base_args 已有的 --find-links <cache_dir> 之后
+    user_find_links_args: list[str] = []
+    for link in find_links:
+        user_find_links_args.extend(["--find-links", link])
+
+    # 先用 --no-index 从本地缓存 + 用户 find-links 解析（离线模式），命中则跳过网络查询
+    result = _run_pip(
+        [*base_args, *user_find_links_args, "--no-index", *filtered],
+        f"检查缓存 {len(filtered)} 个依赖",
+        suppress_error=True,
+    )
     if result is None:
+        if is_offline():
+            searched = [str(cache_dir), *find_links]
+            raise DependencyError(
+                f"离线模式下依赖缓存未命中: {', '.join(filtered)}，"
+                f"已搜索路径: {'; '.join(searched)}。"
+                f"请预先下载 wheel 放入上述路径之一，或通过 --find-links 指定本地 wheel 目录，"
+                f"或取消 FSPACK_OFFLINE 环境变量"
+            )
         _logger.info("缓存解析失败，回退到在线解析下载")
         return _download_online(
             filtered,

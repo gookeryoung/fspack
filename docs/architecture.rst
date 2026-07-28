@@ -85,6 +85,132 @@ cli/gui/web 混合。
 - 退出码：0=全部成功，1=有失败（便于 CI 检测）
 - 子项目按路径字母序排序，保证可重复构建
 
+离线模式
+--------
+
+fspack 支持通过环境变量启用的离线模式，适用于无网络环境（内网 CI、离线打包机）
+或需精确控制缓存来源的场景。
+
+环境变量
+~~~~~~~~
+
+.. list-table::
+   :widths: 30 70
+   :header-rows: 1
+
+   * - 变量
+     - 作用
+   * - ``FSPACK_OFFLINE``
+     - 设为 ``1``/``true``/``yes``/``on``（不区分大小写）启用离线模式
+   * - ``FSPACK_CACHE_DIR``
+     - 覆盖缓存根目录（默认 ``~/.fspack/cache``），所有子模块缓存目录派生自此
+
+缓存目录结构
+~~~~~~~~~~~~
+
+缓存根目录下按子模块划分，互不干扰：
+
+.. code-block:: text
+
+   <cache_root>/
+   ├── embed/          # Windows embed python zip
+   ├── standalone/     # Linux python-build-standalone tar.gz
+   ├── wheels/         # 第三方 wheel + 依赖解析缓存（.deps_cache.json）
+   ├── nuitka/         # Nuitka 包 + 编译用 standalone python（按 py_version 分目录）
+   ├── loaders/        # C loader 编译缓存（按 source hash 命名）
+   ├── ccache/         # ccache 二进制与编译缓存
+   └── tkinter/        # tkinter 补充包缓存（按 standalone 版本命名的 zip）
+
+子模块缓存目录通过 :mod:`fspack.config.cache` 的 ``embed_cache_dir()``/
+``standalone_cache_dir()``/``wheel_cache_dir()``/``nuitka_cache_dir()``/
+``loader_cache_dir()``/``ccache_cache_dir()``/``tkinter_cache_dir()`` 派生，
+统一从 ``cache_root()`` 计算，确保 ``FSPACK_CACHE_DIR`` 环境变量对所有子模块生效。
+
+工作原理
+~~~~~~~~
+
+离线模式在所有下载入口（``runtime.py``/``wheel_pip.py``/``nuitka_env.py``/
+``builtin.py``）检查 ``is_offline()``，缓存命中时正常返回，缓存未命中时立即抛出
+包含"离线模式"关键字的明确异常，不尝试网络请求。错误信息包含：
+
+- 缺失的文件名或依赖名
+- 已搜索的所有路径（缓存目录 + 用户 ``--find-links`` 路径）
+- 解决方案提示（预下载到缓存、新增 ``--find-links``、取消 ``FSPACK_OFFLINE``）
+
+.. code-block:: python
+
+   # runtime.py：embed python 下载
+   def download(...):
+       if archive_path.is_file():
+           return archive_path          # 缓存命中
+       if is_offline():
+           raise EmbedError(
+               f"离线模式下 {cls.runtime_label} 缓存未命中: {archive_path.name}，"
+               f"请预先下载放入 {cache_dir} 或取消 FSPACK_OFFLINE 环境变量"
+           )
+       # 在线下载逻辑...
+
+离线 wheel 本地搜索
+~~~~~~~~~~~~~~~~~~~
+
+``wheel_pip.py`` 的 ``_run_pip_download`` 在离线模式下用 ``--no-index`` 参数
+调用 ``pip download``，仅从本地目录解析依赖。除默认的 ``wheel_cache_dir()``
+外，**用户通过 ``--find-links`` 提供的本地 wheel 目录也参与 ``--no-index`` 解析**，
+扩大本地搜索范围：
+
+.. code-block:: python
+
+   # 构造用户提供的 find-links 参数
+   user_find_links_args = []
+   for link in find_links:
+       user_find_links_args.extend(["--find-links", link])
+
+   # --no-index 调用同时搜索 cache_dir 和用户 find_links
+   result = _run_pip(
+       [*base_args, *user_find_links_args, "--no-index", *filtered],
+       f"检查缓存 {len(filtered)} 个依赖",
+       suppress_error=True,
+   )
+   if result is None:
+       if is_offline():
+           searched = [str(cache_dir), *find_links]
+           raise DependencyError(
+               f"离线模式下依赖缓存未命中: {', '.join(filtered)}，"
+               f"已搜索路径: {'; '.join(searched)}。..."
+           )
+
+错误处理流程
+~~~~~~~~~~~
+
+各下载层的离线异常类型：
+
+.. list-table::
+   :widths: 30 30 40
+   :header-rows: 1
+
+   * - 下载层
+     - 异常类型
+     - 触发条件
+   * - ``runtime.py``
+     - ``EmbedError``
+     - embed python / standalone tarball 缓存未命中
+   * - ``wheel_pip.py``
+     - ``DependencyError``
+     - ``--no-index`` 解析失败（缓存 + find-links 均未命中）
+   * - ``nuitka_env.py``
+     - ``NuitkaError``
+     - standalone python / Nuitka 包缓存未命中
+   * - ``builtin.py``
+     - ``BuiltinError``
+     - tkinter 补充包的 standalone Windows tarball 缓存未命中
+
+非离线模式下，缓存未命中的处理：
+
+- runtime/standalone：回退到 ``Downloader.download`` 网络下载
+- wheel：从 ``--no-index`` 回退到 ``_download_online``，用 ``uv pip compile``
+  或 ``pip download`` 在线解析下载
+- ccache：无系统级且无缓存时跳过（不强制下载，Nuitka 编译时若 ccache 不可用自动降级）
+
 模块结构
 --------
 
@@ -127,6 +253,7 @@ config/ 子包
 - ``models`` — 数据结构（dataclass）
 - ``parsing`` — pyproject.toml 解析
 - ``versions`` — Python/Nuitka 版本映射
+- ``cache`` — 缓存目录与离线模式配置（``cache_root``/``is_offline`` 及各子模块缓存目录）
 
 packaging/ 子包
 ~~~~~~~~~~~~~~~

@@ -16,6 +16,7 @@ import tarfile
 import zipfile
 from pathlib import Path
 
+from fspack.config import is_offline
 from fspack.exceptions import BuiltinError
 from fspack.packaging.net import Downloader
 from fspack.packaging.runtime import STANDALONE_BASE_URL, STANDALONE_RELEASE_TAG
@@ -106,6 +107,12 @@ class TkinterBundler:
         )
 
         if not tarball_path.is_file():
+            # 离线模式 fail-fast：standalone tarball 缓存未命中时立即报错
+            if is_offline():
+                raise BuiltinError(
+                    f"离线模式下 standalone Windows tarball 缓存未命中: {tarball_path.name}，"
+                    f"请预先下载放入 {standalone_windows_cache} 或取消 FSPACK_OFFLINE 环境变量"
+                )
             url = cls.standalone_windows_url(standalone_ver, STANDALONE_RELEASE_TAG)
             _logger.info("tkinter 打包: 下载 Windows standalone 构建 %s", standalone_ver)
             downloader = Downloader()

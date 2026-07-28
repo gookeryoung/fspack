@@ -21,7 +21,7 @@ import zipfile
 from pathlib import Path
 
 from fspack._compat import override
-from fspack.config import MirrorConfig
+from fspack.config import MirrorConfig, is_offline
 from fspack.exceptions import EmbedError
 from fspack.packaging.net import Downloader
 from fspack.progress import StageRecorder
@@ -152,6 +152,10 @@ class RuntimeDownloader(abc.ABC):
 
         缓存命中时调 ``stage.hit_cache()``；下载时用 :class:`Downloader` 显示
         实时进度条，并通过 ``stage.add_bytes`` 回写字节数。
+
+        离线模式（``FSPACK_OFFLINE=1``）下缓存未命中时立即抛 :class:`EmbedError`，
+        不尝试网络请求避免超时卡死。错误信息包含缺失文件名与缓存路径，
+        便于用户预下载归档放入缓存。
         """
         cache_dir.mkdir(parents=True, exist_ok=True)
         archive_path = cache_dir / cls.archive_name(version, **kwargs)
@@ -160,6 +164,11 @@ class RuntimeDownloader(abc.ABC):
             if stage is not None:
                 stage.hit_cache()
             return archive_path
+        if is_offline():
+            raise EmbedError(
+                f"离线模式下 {cls.runtime_label} 缓存未命中: {archive_path.name}，"
+                f"请预先下载放入 {cache_dir} 或取消 FSPACK_OFFLINE 环境变量"
+            )
         url = cls.download_url(version, **kwargs)
         _logger.info("下载 %s: %s", cls.runtime_label, url)
         try:

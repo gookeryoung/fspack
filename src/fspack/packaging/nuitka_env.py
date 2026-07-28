@@ -28,7 +28,7 @@ import tarfile
 import zipfile
 from pathlib import Path
 
-from fspack.config import KNOWN_STANDALONE_VERSIONS, MirrorConfig, nuitka_version_for
+from fspack.config import KNOWN_STANDALONE_VERSIONS, MirrorConfig, is_offline, nuitka_version_for
 from fspack.exceptions import NuitkaError
 from fspack.platform import Platform
 from fspack.progress import StageRecorder
@@ -165,17 +165,24 @@ class NuitkaEnv:
         """下载 python-build-standalone Windows tarball 到 build_python_dir，返回 tarball 路径.
 
         Raises:
-            NuitkaError: 下载失败。
+            NuitkaError: 下载失败，或离线模式下缓存未命中。
         """
         # 惰性导入避免循环依赖
         from fspack.packaging.net import Downloader
         from fspack.packaging.runtime import STANDALONE_RELEASE_TAG, standalone_url
 
-        url = standalone_url(standalone_version, STANDALONE_RELEASE_TAG, windows=True)
-        _logger.info("下载 standalone python %s: %s", standalone_version, url)
-
         build_python_dir.mkdir(parents=True, exist_ok=True)
         archive_path = build_python_dir / f"cpython-{standalone_version}+{STANDALONE_RELEASE_TAG}-windows.tar.gz"
+
+        # 离线模式 fail-fast：缓存未命中时立即报错，避免等待网络超时卡死
+        if is_offline():
+            raise NuitkaError(
+                f"离线模式下 standalone python 缓存未命中: {archive_path.name}，"
+                f"请预先下载放入 {build_python_dir} 或取消 FSPACK_OFFLINE 环境变量"
+            )
+
+        url = standalone_url(standalone_version, STANDALONE_RELEASE_TAG, windows=True)
+        _logger.info("下载 standalone python %s: %s", standalone_version, url)
 
         try:
             downloader = Downloader(timeout=300)
@@ -407,6 +414,15 @@ class NuitkaEnv:
             _logger.warning("ccache 无 %s 平台预编译二进制，请手动安装到 PATH", target.value)
             return None
 
+        # 离线模式跳过下载，回退到无 ccache 模式（编译仍可完成，仅无缓存加速）
+        if is_offline():
+            _logger.warning(
+                "离线模式下 ccache 缓存未命中且无系统 ccache，跳过下载回退到无缓存模式。"
+                "请预先下载 ccache 放入 %s 或安装系统 ccache 到 PATH",
+                ccache_dir,
+            )
+            return None
+
         _logger.info("下载 ccache %s 到 %s", CCACHE_VERSION, ccache_dir)
         try:
             cls._download_and_extract_ccache(url, ccache_dir, target)
@@ -601,6 +617,14 @@ class NuitkaEnv:
             stage.hit_cache()
             stage.set_detail(f"nuitka {nuitka_ver} 已就绪")
             return nuitka_ver
+
+        # 离线模式 fail-fast：nuitka 在 PyPI 只发布 sdist，缓存未命中时无法离线构建
+        if is_offline():
+            raise NuitkaError(
+                f"离线模式下 nuitka 缓存未命中: nuitka=={nuitka_ver}，"
+                f"请预先 `pip install --target {cache_dir} nuitka=={nuitka_ver}` 安装到缓存目录，"
+                f"或取消 FSPACK_OFFLINE 环境变量"
+            )
 
         # nuitka 4.x 在 PyPI 只发布 sdist，用构建机 pip install --target 从 sdist
         # 构建并解压到本地缓存（不污染 dist/runtime）。nuitka 是纯 Python，跨版本可 import。
