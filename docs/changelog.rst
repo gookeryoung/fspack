@@ -20,6 +20,7 @@ v0.2.7（未发布）
 - feat: 新增 ``--pyc-optimize`` 字节码优化级别与 ``--no-site`` 禁用 site.py 加载选项
 - feat: QtWebEngine 资源按需保留（.debug.pak 无条件剥离，icudtl.dat/QtWebEngineProcess 按 WebEngine 使用情况保留）
 - feat: 打包阶段（生成 NSIS 脚本/编译安装包）纳入 BuildTracker 汇总表统计
+- feat: NSIS 安装包支持升级安装，``.onInit`` 检测注册表已安装版本；同版本直接覆盖不打扰，不同版本弹出对话框询问"是否先卸载再安装"，确认后静默调用旧版 ``uninstall.exe /S`` 等待完成再继续；``InstallDirRegKey`` 读取上次安装路径作为默认目录，避免重复选择
 - feat(pyside2-qml-dashboard): 新增 WSL 管理仪表盘 QML 示例项目
 - fix(slim): 补全 Qt QML/Quick 模块依赖映射，修复 QML 项目运行时 DLL 缺失
 - fix(slim): 修复 PySide6 6.6+ 拆分 wheel（pyside6_essentials/addons）全量解压问题；``_detect_top_pkg`` 回退匹配使 QtSlimSpec 识别拆分 wheel 的 ``PySide6`` 顶层目录，共享主包 keep_subs；补全 WebEngineCore/WebEngineWidgets 的 Quick/QuickWidgets/PrintSupport 依赖与 Quick 的 OpenGL/QmlMeta 依赖（dumpbin 验证 C 层 DLL 导入表）

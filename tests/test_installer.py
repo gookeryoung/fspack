@@ -51,6 +51,14 @@ def test_generate_nsis_script_cli(tmp_path: Path) -> None:
     assert 'Name "app 1.0"' in content
     assert 'OutFile "release\\app-1.0-py3.11.9-windows-slim-setup.exe"' in content
     assert 'InstallDir "$PROGRAMFILES64\\app"' in content
+    # 从注册表读取上次安装路径作为默认目录
+    assert (
+        'InstallDirRegKey HKLM "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\app" "InstallLocation"'
+        in content
+    )
+    # 包含版本比较所需的头文件
+    assert '!include "LogicLib.nsh"' in content
+    assert '!include "WordFunc.nsh"' in content
     # NSIS 排除构建中间文件（.dep_cache.json/.nuitka_compile_stamp/.pyc_stamp/*.build）
     assert "File /r /x installer.nsi /x release /x *.whl /x *.tar.gz" in content
     assert "/x .dep_cache.json" in content
@@ -115,6 +123,32 @@ def test_generate_nsis_script_registry_block(tmp_path: Path) -> None:
     assert f'WriteRegDWORD HKLM "{key}" "NoRepair" 1' in content
     # 卸载时删除注册表键
     assert f'DeleteRegKey HKLM "{key}"' in content
+
+
+def test_generate_nsis_script_uninstall_old_version(tmp_path: Path) -> None:
+    """安装时检测已安装版本，不同版本询问并静默卸载旧版，相同版本直接覆盖."""
+    info = _make_info(tmp_path, name="app")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    nsi = generate_nsis_script(info, dist, dist / "release")
+    content = nsi.read_text(encoding="utf-8")
+    key = "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\app"
+    # .onInit 函数：读取已安装版本与卸载命令
+    assert "Function .onInit" in content
+    assert f'ReadRegStr $R0 HKLM "{key}" "DisplayVersion"' in content
+    assert f'ReadRegStr $R1 HKLM "{key}" "UninstallString"' in content
+    # 未安装（$R1 为空）时跳过整个逻辑块
+    assert '${If} $R1 != ""' in content
+    # 相同版本直接 Return 不打扰
+    assert '${If} $R0 == "1.0"' in content
+    assert "  Return" in content
+    # 不同版本询问是否卸载
+    assert "MessageBox MB_YESNO|MB_ICONQUESTION" in content
+    assert "检测到已安装 $R0 版本，是否先卸载再安装 1.0？" in content
+    # 静默卸载旧版并等待完成
+    assert "ExecWait '$R1 /S'" in content
+    # 用户拒绝卸载时直接覆盖安装
+    assert "skip_uninstall:" in content
 
 
 def test_compile_installer_makensis_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

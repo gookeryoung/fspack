@@ -41,10 +41,14 @@ _NSIS_EXCLUDE_INTERMEDIATE = " ".join(f"/x {pat}" for pat in _DIST_INTERMEDIATE_
 
 _NSIS_TEMPLATE = """\
 !include "MUI2.nsh"
+!include "LogicLib.nsh"
+!include "WordFunc.nsh"
 
 Name "{name} {version}"
 OutFile "{out_setup}"
 InstallDir "$PROGRAMFILES64\\{name}"
+# 从注册表读取上次安装路径作为默认目录，避免重复选择目录
+InstallDirRegKey HKLM "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{name}" "InstallLocation"
 RequestExecutionLevel admin
 Unicode True
 
@@ -55,6 +59,27 @@ Unicode True
 
 !insertmacro MUI_LANGUAGE "SimpChinese"
 !insertmacro MUI_LANGUAGE "English"
+
+# 安装前检测已安装版本：版本不同时询问是否先卸载旧版再安装新版
+Function .onInit
+  ReadRegStr $R0 HKLM "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{name}" "DisplayVersion"
+  ReadRegStr $R1 HKLM "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{name}" "UninstallString"
+  ${{If}} $R1 != ""
+    ${{If}} $R0 == "{version}"
+      # 已安装相同版本，直接覆盖不打扰
+      Return
+    ${{EndIf}}
+    # 已安装不同版本，询问是否先卸载
+    MessageBox MB_YESNO|MB_ICONQUESTION "检测到已安装 $R0 版本，是否先卸载再安装 {version}？" IDYES uninstall_old IDNO skip_uninstall
+    uninstall_old:
+      # 静默卸载旧版并等待完成，确保文件不被占用
+      ExecWait '$R1 /S'
+      Goto done
+    skip_uninstall:
+      # 用户选择直接覆盖安装
+    done:
+  ${{EndIf}}
+FunctionEnd
 
 Section "Main"
   SetOutPath "$INSTDIR"
