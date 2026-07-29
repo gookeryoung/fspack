@@ -992,6 +992,208 @@ def test_parse_project_empty_scripts_table_falls_back_to_detect(tmp_path: Path) 
     assert info.entry_module == "app"
 
 
+# --- [project.scripts] 典型场景测试 ---
+#
+# 贴近真实项目结构的端到端测试：包式项目、GUI 类型推断、深层 dotted module、
+# 混合声明、真实 fspack 自身场景等。区别于上方的单元/错误场景测试。
+
+
+def test_scripts_flat_layout_package_project(tmp_path: Path) -> None:
+    """典型：flat layout 包项目（mypkg/__init__.py + mypkg/cli.py）.
+
+    真实项目常见结构：包目录在项目根下，[project.scripts] 用 dotted module。
+    """
+    _write_script(tmp_path / "mypkg" / "__init__.py", content="")
+    _write_script(tmp_path / "mypkg" / "cli.py")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "mypkg"\nversion = "0.1"\n\n[project.scripts]\nmycli = "mypkg.cli:main"\n'
+    )
+    clear_project_cache()
+    info = parse_project(tmp_path)
+    assert len(info.entries) == 1
+    assert info.entries[0].name == "mycli"
+    assert info.entries[0].file == (tmp_path / "mypkg" / "cli.py").resolve()
+    assert info.entries[0].app_type is AppType.CLI
+
+
+def test_scripts_src_layout_package_project(tmp_path: Path) -> None:
+    """典型：src layout 包项目（src/mypkg/__init__.py + src/mypkg/cli.py）.
+
+    PEP 628 推荐的 src layout，包在 src/ 下，src/ 本身不是包。
+    """
+    _write_script(tmp_path / "src" / "mypkg" / "__init__.py", content="")
+    _write_script(tmp_path / "src" / "mypkg" / "cli.py")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "mypkg"\nversion = "0.1"\n\n[project.scripts]\nmycli = "mypkg.cli:main"\n'
+    )
+    clear_project_cache()
+    info = parse_project(tmp_path)
+    assert len(info.entries) == 1
+    assert info.entries[0].file == (tmp_path / "src" / "mypkg" / "cli.py").resolve()
+
+
+def test_scripts_gui_app_type_inferred(tmp_path: Path) -> None:
+    """典型：[project.scripts] 脚本 import PySide2 推断为 GUI.
+
+    验证 app_type 按 [project.scripts] 入口脚本自身 import 推断，
+    与 [tool.fspack.entries] 行为一致。
+    """
+    _write_script(tmp_path / "app.py", content="import PySide2\ndef main():\n    pass\n")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[project.scripts]\napp = "app:main"\n'
+    )
+    clear_project_cache()
+    info = parse_project(tmp_path)
+    assert len(info.entries) == 1
+    assert info.entries[0].app_type is AppType.GUI
+    assert info.app_type is AppType.GUI  # 首个入口作为主入口
+
+
+def test_scripts_deep_dotted_module(tmp_path: Path) -> None:
+    """典型：深层 dotted module（a.b.c:main → a/b/c.py）.
+
+    多层包嵌套场景，验证 dotted module 正确解析为深层文件路径。
+    """
+    _write_script(tmp_path / "a" / "b" / "c.py")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[project.scripts]\napp = "a.b.c:main"\n'
+    )
+    clear_project_cache()
+    info = parse_project(tmp_path)
+    assert len(info.entries) == 1
+    assert info.entries[0].file == (tmp_path / "a" / "b" / "c.py").resolve()
+
+
+def test_scripts_single_seg_package_main_entry(tmp_path: Path) -> None:
+    """典型：单段 module 指向包入口（pkg → pkg/__main__.py）.
+
+    当 pkg.py 不存在但 pkg/__main__.py 存在时，单段 module 解析为包入口。
+    与 :func:`detect_entry` 的 ``<name>/__main__.py`` 兜底逻辑一致。
+    """
+    _write_script(tmp_path / "mypkg" / "__init__.py", content="")
+    _write_script(tmp_path / "mypkg" / "__main__.py")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "mypkg"\nversion = "0.1"\n\n[project.scripts]\nmycli = "mypkg:main"\n'
+    )
+    clear_project_cache()
+    info = parse_project(tmp_path)
+    assert len(info.entries) == 1
+    assert info.entries[0].file == (tmp_path / "mypkg" / "__main__.py").resolve()
+
+
+def test_scripts_mixed_cli_gui_entries(tmp_path: Path) -> None:
+    """典型：[project.scripts] 多入口混合 CLI/GUI 类型.
+
+    不同入口脚本按自身 import 推断类型，CLI 与 GUI 共存。
+    """
+    _write_script(tmp_path / "cli.py", content="def main():\n    pass\n")
+    _write_script(tmp_path / "gui.py", content="import tkinter\ndef main():\n    pass\n")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[project.scripts]\ncli = "cli:main"\ngui = "gui:main"\n'
+    )
+    clear_project_cache()
+    info = parse_project(tmp_path)
+    assert len(info.entries) == 2
+    assert info.entries[0].name == "cli"
+    assert info.entries[0].app_type is AppType.CLI
+    assert info.entries[1].name == "gui"
+    assert info.entries[1].app_type is AppType.GUI
+
+
+def test_scripts_real_fspack_self_scenario(tmp_path: Path) -> None:
+    """典型：真实 fspack 自身场景.
+
+    fspack 的 pyproject.toml 同时声明：
+    - [project.scripts] fspack = "fspack.cli:main" / fsp = "fspack.cli:main"
+    - [tool.fspack.entries] fsp = "src/fspack/cli.py" / fspack = "src/fspack/cli.py"
+
+    fsp 与 fspack 同名，fspack entries 覆盖 scripts；
+    合并后 2 个入口，文件路径指向 src/fspack/cli.py（src layout 解析）。
+    """
+    _write_script(tmp_path / "src" / "fspack" / "__init__.py", content="")
+    _write_script(tmp_path / "src" / "fspack" / "cli.py")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "fspack"\nversion = "0.3.10"\n\n'
+        '[project.scripts]\nfspack = "fspack.cli:main"\nfsp = "fspack.cli:main"\n\n'
+        '[tool.fspack.entries]\nfsp = "src/fspack/cli.py"\nfspack = "src/fspack/cli.py"\n'
+    )
+    clear_project_cache()
+    info = parse_project(tmp_path)
+    assert len(info.entries) == 2
+    assert [ep.name for ep in info.entries] == ["fspack", "fsp"]
+    # 两者都被 fspack entries 覆盖，指向 src/fspack/cli.py
+    assert info.entries[0].file == (tmp_path / "src" / "fspack" / "cli.py").resolve()
+    assert info.entries[1].file == (tmp_path / "src" / "fspack" / "cli.py").resolve()
+
+
+def test_scripts_partial_overlap_with_unique_entries(tmp_path: Path) -> None:
+    """典型：scripts 与 fspack 部分重叠、部分独有.
+
+    scripts: cli, gui, web
+    fspack:  cli, admin
+    合并后:  cli(fspack覆盖), gui(scripts), web(scripts), admin(fspack新增)
+    """
+    _write_script(tmp_path / "scripts_cli.py")
+    _write_script(tmp_path / "scripts_gui.py")
+    _write_script(tmp_path / "scripts_web.py")
+    _write_script(tmp_path / "fspack_cli.py")
+    _write_script(tmp_path / "admin.py")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n'
+        '[project.scripts]\ncli = "scripts_cli:main"\ngui = "scripts_gui:main"\nweb = "scripts_web:main"\n\n'
+        '[tool.fspack.entries]\ncli = "fspack_cli.py"\nadmin = "admin.py"\n'
+    )
+    clear_project_cache()
+    info = parse_project(tmp_path)
+    assert [ep.name for ep in info.entries] == ["cli", "gui", "web", "admin"]
+    # cli 被 fspack 覆盖
+    assert info.entries[0].file == (tmp_path / "fspack_cli.py").resolve()
+    # gui/web 保留 scripts
+    assert info.entries[1].file == (tmp_path / "scripts_gui.py").resolve()
+    assert info.entries[2].file == (tmp_path / "scripts_web.py").resolve()
+    # admin 是 fspack 新增
+    assert info.entries[3].file == (tmp_path / "admin.py").resolve()
+
+
+def test_multi_entry_py310_template_backward_compat() -> None:
+    """典型：multi_entry_py310 模板（仅 [tool.fspack.entries]）向后兼容.
+
+    现有模板不使用 [project.scripts]，仅用 [tool.fspack.entries]，
+    新逻辑不应破坏其行为。
+    """
+    clear_project_cache()
+    info = parse_project(_EXAMPLES / "multi_entry_py310")
+    assert len(info.entries) == 3
+    assert [ep.name for ep in info.entries] == ["cli", "gui", "web"]
+    # cli 是 CLI，gui 是 GUI（import PySide2）
+    assert info.entries[0].app_type is AppType.CLI
+    assert info.entries[1].app_type is AppType.GUI
+    assert info.entries[2].app_type is AppType.CLI
+
+
+def test_scripts_with_fspack_supplements_extra_entry(tmp_path: Path) -> None:
+    """典型：[project.scripts] 主入口 + [tool.fspack.entries] 补充额外入口.
+
+    常见场景：[project.scripts] 声明标准入口（pip install 时生成），
+    [tool.fspack.entries] 补充打包专属入口（如调试脚本）。
+    """
+    _write_script(tmp_path / "src" / "mypkg" / "cli.py")
+    _write_script(tmp_path / "debug.py")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "mypkg"\nversion = "0.1"\n\n'
+        '[project.scripts]\nmycli = "mypkg.cli:main"\n\n'
+        '[tool.fspack.entries]\ndebug = "debug.py"\n'
+    )
+    clear_project_cache()
+    info = parse_project(tmp_path)
+    assert len(info.entries) == 2
+    assert [ep.name for ep in info.entries] == ["mycli", "debug"]
+    # mycli 来自 scripts（src layout 解析）
+    assert info.entries[0].file == (tmp_path / "src" / "mypkg" / "cli.py").resolve()
+    # debug 来自 fspack entries（相对路径）
+    assert info.entries[1].file == (tmp_path / "debug.py").resolve()
+
+
 # --- 应用类型推断（infer_app_type / EntryPoint）测试 ---
 
 
