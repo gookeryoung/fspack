@@ -53,9 +53,7 @@ def build_zip(  # noqa: PLR0913
     """
     own_tracker = tracker is None
     tk = tracker or BuildTracker(title="打包阶段汇总")
-    dist, info = _prepare_dist(
-        project_dir, mirror, py_version, no_build, dist_dir, target, extras=extras, tracker=tk
-    )
+    dist, info = _prepare_dist(project_dir, mirror, py_version, no_build, dist_dir, target, extras=extras, tracker=tk)
     _check_exe(dist, info, target)
     release = dist / "release"
     zip_name = f"{_release_base(info, 'windows' if target is Platform.WINDOWS else 'linux')}.zip"

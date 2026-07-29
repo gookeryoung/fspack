@@ -152,33 +152,47 @@ def _sync_tree(src: Path, dst: Path, ignore_fn: Callable[..., set[str]]) -> None
                 item.unlink()
 
     for name in keep:
-        src_entry = src_entries[name]
-        src_item = src / name
-        dst_item = dst / name
-        try:
-            is_dir = src_entry.is_dir(follow_symlinks=False)
-        except OSError:
-            continue
-        if is_dir:
-            dst_item.mkdir(exist_ok=True)
-            _sync_tree(src_item, dst_item, ignore_fn)
-        elif dst_item.is_file():
-            # mtime_ns + size 相同视为未改动，跳过 copy2 避免不必要的磁盘写
-            # 用 DirEntry 缓存的 stat 避免独立 stat 调用
-            try:
-                src_st = src_entry.stat(follow_symlinks=False)
-            except OSError:
-                continue
-            try:
-                dst_st = dst_item.stat()
-            except OSError:
-                shutil.copy2(src_item, dst_item)
-                continue
-            if src_st.st_mtime_ns == dst_st.st_mtime_ns and src_st.st_size == dst_st.st_size:
-                continue
-            shutil.copy2(src_item, dst_item)
-        else:
-            shutil.copy2(src_item, dst_item)
+        _sync_entry(src_entries[name], src / name, dst / name, ignore_fn)
+
+
+def _sync_entry(
+    src_entry: os.DirEntry[str],
+    src_item: Path,
+    dst_item: Path,
+    ignore_fn: Callable[..., set[str]],
+) -> None:
+    """同步单个 ``src_entry`` 到 ``dst_item``（从 :func:`_sync_tree` 拆分，降低分支数）.
+
+    - 目录：递归 :func:`_sync_tree`
+    - 已存在文件：mtime_ns + size 相同跳过，否则 ``copy2`` 覆盖
+    - 不存在文件：直接 ``copy2``
+
+    ``DirEntry.stat(follow_symlinks=False)`` 复用枚举缓存，避免独立 stat 调用。
+    """
+    try:
+        is_dir = src_entry.is_dir(follow_symlinks=False)
+    except OSError:
+        return
+    if is_dir:
+        dst_item.mkdir(exist_ok=True)
+        _sync_tree(src_item, dst_item, ignore_fn)
+        return
+    if not dst_item.is_file():
+        shutil.copy2(src_item, dst_item)
+        return
+    # mtime_ns + size 相同视为未改动，跳过 copy2 避免不必要的磁盘写
+    try:
+        src_st = src_entry.stat(follow_symlinks=False)
+    except OSError:
+        return
+    try:
+        dst_st = dst_item.stat()
+    except OSError:
+        shutil.copy2(src_item, dst_item)
+        return
+    if src_st.st_mtime_ns == dst_st.st_mtime_ns and src_st.st_size == dst_st.st_size:
+        return
+    shutil.copy2(src_item, dst_item)
 
 
 def _dir_size(path: Path) -> int:
@@ -199,7 +213,7 @@ def _dir_size(path: Path) -> int:
     return total
 
 
-def _scandir_tree(root: Path) -> "Iterator[os.DirEntry[str]]":
+def _scandir_tree(root: Path) -> Iterator[os.DirEntry[str]]:
     """递归遍历 ``root``，yield 所有文件 ``DirEntry``（不含目录自身）.
 
     用 ``os.scandir`` 替代 ``Path.rglob("*")``：DirEntry 缓存 stat 信息，

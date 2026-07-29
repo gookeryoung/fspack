@@ -165,28 +165,49 @@ def _package_dir_size(
     normalized = _normalize_pkg_name(pkg_name)
     # 包名含命名空间时只取首段（如 "package.name" → "package"）
     top_name = normalized.split("-")[0].replace("-", "_")
+    if name_index is not None:
+        return _size_from_name_index(name_index, normalized, top_name)
+    return _size_from_scan(site_packages, normalized, top_name)
+
+
+def _size_from_name_index(
+    name_index: dict[str, list[Path]],
+    normalized: str,
+    top_name: str,
+) -> tuple[int, int]:
+    """用预构建索引查找包体积（O(1) 查找，从 :func:`_package_dir_size` 拆分）.
+
+    合并 ``normalized`` 与 ``top_name`` 两个键的候选路径，去重后累加。
+    """
+    candidates = name_index.get(normalized, []) + name_index.get(top_name, [])
+    seen: set[Path] = set()
     total = 0
     count = 0
-    if name_index is not None:
-        # 用预构建索引：O(1) 查找而非 O(M) 扫描
-        candidates = name_index.get(normalized, []) + name_index.get(top_name, [])
-        seen: set[Path] = set()
-        for entry in candidates:
-            if entry in seen:
+    for entry in candidates:
+        if entry in seen:
+            continue
+        seen.add(entry)
+        if entry.is_dir():
+            sz, n = _dir_size(entry)
+            total += sz
+            count += n
+        elif entry.is_file():
+            try:
+                total += entry.stat().st_size
+                count += 1
+            except OSError:
                 continue
-            seen.add(entry)
-            if entry.is_dir():
-                sz, n = _dir_size(entry)
-                total += sz
-                count += n
-            elif entry.is_file():
-                try:
-                    total += entry.stat().st_size
-                    count += 1
-                except OSError:
-                    continue
-        return total, count
+    return total, count
 
+
+def _size_from_scan(site_packages: Path, normalized: str, top_name: str) -> tuple[int, int]:
+    """无索引时扫描 site-packages 按包名前缀匹配（从 :func:`_package_dir_size` 拆分）.
+
+    遍历 site-packages 顶层，跳过 ``.dist-info``/``.egg-info`` 元数据目录，
+    匹配 normalized 名或 top_name 前缀。
+    """
+    total = 0
+    count = 0
     for entry in site_packages.iterdir():
         # 跳过 .dist-info/.egg-info 元数据目录（按包名前缀会误匹配）
         if entry.name.endswith((".dist-info", ".egg-info")):
