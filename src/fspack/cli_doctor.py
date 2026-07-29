@@ -905,6 +905,7 @@ def _print_template_build_summary(results: list[TemplateBuildResult], *, bench: 
     table.add_column("产物大小", justify="right")
     table.add_column("入口数", justify="right")
     if bench:
+        table.add_column("启动耗时", justify="right")
         table.add_column("错误信息", style="dim")
 
     succeeded = 0
@@ -929,7 +930,7 @@ def _print_template_build_summary(results: list[TemplateBuildResult], *, bench: 
                 run_fail += 1
         # bench 模式错误信息：构建失败显示构建错误，构建成功但运行失败显示运行错误
         error_msg = r.error if not r.success else err_msg
-        table.add_row(
+        row = [
             str(i),
             r.template_id,
             build_str,
@@ -937,8 +938,13 @@ def _print_template_build_summary(results: list[TemplateBuildResult], *, bench: 
             f"{r.duration_sec:.1f}s",
             _format_size(r.dist_size) if r.dist_size else "-",
             str(r.entry_count) if r.entry_count else "-",
-            error_msg if bench else "",
-        )
+        ]
+        if bench:
+            # 启动耗时：应用调用响应速度（run_result.duration_sec）
+            run_dur = f"{r.run_result.duration_sec:.2f}s" if r.run_result else "-"
+            row.append(run_dur)
+            row.append(error_msg)
+        table.add_row(*row)
 
     console.rich.print(table)
     console.rich.print()
@@ -1004,7 +1010,7 @@ def _format_run_status(result: TemplateBuildResult) -> tuple[str, str]:
 
 
 def _print_performance_analysis(results: list[TemplateBuildResult]) -> None:
-    """打印性能分析：耗时排名、产物大小排名、瓶颈识别.
+    """打印性能分析：构建耗时排名、启动耗时排名、产物大小排名、瓶颈识别.
 
     :param results: 所有模板构建结果（仅成功的参与排名）
     """
@@ -1017,9 +1023,9 @@ def _print_performance_analysis(results: list[TemplateBuildResult]) -> None:
     console.rich.print()
     console.step("性能分析")
 
-    # 耗时排名
+    # 构建耗时排名
     by_time = sorted(ok_results, key=lambda r: r.duration_sec, reverse=True)
-    time_table = Table(title="耗时排名（降序）", show_lines=False)
+    time_table = Table(title="构建耗时排名（降序）", show_lines=False)
     time_table.add_column("#", justify="right", style="dim")
     time_table.add_column("模板", style="cyan")
     time_table.add_column("耗时", justify="right")
@@ -1030,6 +1036,23 @@ def _print_performance_analysis(results: list[TemplateBuildResult]) -> None:
         marker = " [red](最慢)[/red]" if i == 1 else ""
         time_table.add_row(str(i), r.template_id, f"{r.duration_sec:.1f}s", f"{ratio:.1f}%{marker}")
     console.rich.print(time_table)
+
+    # 启动耗时排名（应用调用响应速度）
+    run_results = [r for r in ok_results if r.run_result and r.run_result.duration_sec > 0]
+    if len(run_results) >= 2:
+        by_run = sorted(run_results, key=lambda r: r.run_result.duration_sec, reverse=True)  # type: ignore[union-attr]
+        run_table = Table(title="启动耗时排名（降序，应用调用响应速度）", show_lines=False)
+        run_table.add_column("#", justify="right", style="dim")
+        run_table.add_column("模板", style="cyan")
+        run_table.add_column("启动耗时", justify="right")
+        run_table.add_column("占比", justify="right")
+        total_run = sum(r.run_result.duration_sec for r in run_results)  # type: ignore[union-attr]
+        for i, r in enumerate(by_run, 1):
+            dur = r.run_result.duration_sec  # type: ignore[union-attr]
+            ratio = dur / total_run * 100 if total_run > 0 else 0
+            marker = " [red](最慢)[/red]" if i == 1 else ""
+            run_table.add_row(str(i), r.template_id, f"{dur:.2f}s", f"{ratio:.1f}%{marker}")
+        console.rich.print(run_table)
 
     # 产物大小排名
     by_size = sorted(ok_results, key=lambda r: r.dist_size, reverse=True)
@@ -1059,16 +1082,16 @@ def _print_performance_analysis(results: list[TemplateBuildResult]) -> None:
 def _bench_history_group_dir(base: Path) -> Path:
     """返回当前机器与 Python 版本对应的基准历史分组目录.
 
-    按 ``{System}-CPython-{major}.{minor}-{bits}bit`` 分组，与 pytest-benchmark
-    目录命名一致。``base`` 下用 ``doctor/`` 子目录隔离 doctor 基准与
-    pytest-benchmark 数据，避免互相干扰。
+    按 ``{System}-CPython-{major}.{minor}-{bits}bit-doctor`` 分组，与
+    pytest-benchmark 的 ``{System}-CPython-{ver}-{bits}bit`` 目录区分
+    （``-doctor`` 后缀），避免互相干扰。
 
     :param base: 基准根目录（如 ``<project>/.benchmarks``）
-    :return: 分组目录路径（如 ``<base>/doctor/Windows-CPython-3.11-64bit``）
+    :return: 分组目录路径（如 ``<base>/Windows-CPython-3.11-64bit-doctor``）
     """
     py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
     bits = struct.calcsize("P") * 8
-    return base / "doctor" / f"{platform.system()}-CPython-{py_ver}-{bits}bit"
+    return base / f"{platform.system()}-CPython-{py_ver}-{bits}bit-doctor"
 
 
 def _serialize_bench_results(results: list[TemplateBuildResult]) -> dict[str, Any]:
@@ -1076,7 +1099,8 @@ def _serialize_bench_results(results: list[TemplateBuildResult]) -> dict[str, An
 
     :return: 含 ``timestamp``/``machine``/``results`` 三段的字典，
         ``results`` 每项含 ``template_id``/``success``/``duration_sec``/
-        ``dist_size``/``entry_count``/``error``/``run_success``/``run_exit_code``。
+        ``dist_size``/``entry_count``/``error``/``run_success``/``run_exit_code``/
+        ``run_duration_sec``（应用调用响应速度）。
     """
     return {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
@@ -1095,6 +1119,7 @@ def _serialize_bench_results(results: list[TemplateBuildResult]) -> dict[str, An
                 "error": r.error,
                 "run_success": r.run_result.success if r.run_result else None,
                 "run_exit_code": r.run_result.exit_code if r.run_result else None,
+                "run_duration_sec": r.run_result.duration_sec if r.run_result else None,
             }
             for r in results
         ],
@@ -1115,7 +1140,7 @@ def _deserialize_bench_results(data: dict[str, Any]) -> tuple[list[TemplateBuild
                 success=item["run_success"],
                 timed_out=False,
                 exit_code=item.get("run_exit_code", -1),
-                duration_sec=0.0,
+                duration_sec=item.get("run_duration_sec", 0.0) or 0.0,
             )
         results.append(
             TemplateBuildResult(
@@ -1204,8 +1229,9 @@ def _print_bench_comparison(
 ) -> None:
     """打印当前基准与历史基准的横向对比表.
 
-    仅对比构建成功的模板，按 ``template_id`` 匹配。耗时变化与产物大小变化
-    以 rich 标记着色：变慢/变大红色、变快/变小绿色、持平灰色、无历史灰色 ``--``。
+    仅对比构建成功的模板，按 ``template_id`` 匹配。构建耗时变化、启动耗时变化
+    （应用调用响应速度）与产物大小变化以 rich 标记着色：变慢/变大红色、
+    变快/变小绿色、持平灰色、无历史灰色 ``--``。
 
     :param current: 当前基准结果
     :param previous: 上次基准结果
@@ -1224,21 +1250,30 @@ def _print_bench_comparison(
     table = Table(title="横向对比", show_lines=False)
     table.add_column("#", justify="right", style="dim")
     table.add_column("模板", style="cyan")
-    table.add_column("本次耗时", justify="right")
-    table.add_column("上次耗时", justify="right")
-    table.add_column("耗时变化", justify="right")
+    table.add_column("本次构建", justify="right")
+    table.add_column("上次构建", justify="right")
+    table.add_column("构建变化", justify="right")
+    table.add_column("本次启动", justify="right")
+    table.add_column("上次启动", justify="right")
+    table.add_column("启动变化", justify="right")
     table.add_column("本次大小", justify="right")
     table.add_column("大小变化", justify="right")
 
     for i, r in enumerate(ok_current, 1):
         prev = prev_by_id.get(r.template_id)
+        cur_run = r.run_result.duration_sec if r.run_result else 0.0
         if prev:
             prev_time_str = f"{prev.duration_sec:.1f}s"
             time_delta = _format_bench_delta(r.duration_sec, prev.duration_sec, lambda v: f"{v:.1f}s")
+            prev_run = prev.run_result.duration_sec if prev.run_result else 0.0
+            prev_run_str = f"{prev_run:.2f}s" if prev_run > 0 else "-"
+            run_delta = _format_bench_delta(cur_run, prev_run, lambda v: f"{v:.2f}s")
             size_delta = _format_bench_delta(r.dist_size, prev.dist_size, lambda v: _format_size(int(v)))
         else:
             prev_time_str = "-"
             time_delta = "[dim]--[/dim]"
+            prev_run_str = "-"
+            run_delta = "[dim]--[/dim]"
             size_delta = "[dim]--[/dim]"
 
         table.add_row(
@@ -1247,6 +1282,9 @@ def _print_bench_comparison(
             f"{r.duration_sec:.1f}s",
             prev_time_str,
             time_delta,
+            f"{cur_run:.2f}s" if cur_run > 0 else "-",
+            prev_run_str,
+            run_delta,
             _format_size(r.dist_size) if r.dist_size else "-",
             size_delta,
         )

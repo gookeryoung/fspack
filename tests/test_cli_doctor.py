@@ -1233,21 +1233,19 @@ def test_print_summary_bench_shows_run_error(capsys: pytest.CaptureFixture[str])
 
 
 def test_bench_history_group_dir_format(tmp_path: Path) -> None:
-    """分组目录格式：{base}/doctor/{System}-CPython-{major}.{minor}-{bits}bit."""
+    """分组目录格式：{base}/{System}-CPython-{major}.{minor}-{bits}bit-doctor."""
     result = _bench_history_group_dir(tmp_path)
-    # 子目录在 doctor/ 下，与 pytest-benchmark 数据隔离
-    assert "doctor" in result.parts
-    # 目录名含 CPython 和 bit 标识
+    # 直接在 base 下，无 doctor/ 子目录层级
+    assert result.parent == tmp_path
+    # 目录名含 CPython、bit 和 -doctor 后缀
     group_name = result.name
     assert "CPython" in group_name
     assert "bit" in group_name
-    # 父目录是 doctor
-    assert result.parent.name == "doctor"
-    assert result.parent.parent == tmp_path
+    assert group_name.endswith("-doctor")
 
 
 def test_serialize_deserialize_roundtrip() -> None:
-    """序列化/反序列化往返测试：数据完整保留."""
+    """序列化/反序列化往返测试：数据完整保留（含启动耗时）."""
     rr = TemplateRunResult(success=True, timed_out=False, exit_code=0, duration_sec=0.5)
     results = [
         TemplateBuildResult(
@@ -1266,6 +1264,10 @@ def test_serialize_deserialize_roundtrip() -> None:
         ),
     ]
     data = _serialize_bench_results(results)
+    # 验证 run_duration_sec 被序列化
+    assert data["results"][0]["run_duration_sec"] == 0.5
+    assert data["results"][1]["run_duration_sec"] is None
+
     restored, ts = _deserialize_bench_results(data)
 
     assert isinstance(ts, str)
@@ -1278,6 +1280,7 @@ def test_serialize_deserialize_roundtrip() -> None:
     assert restored[0].run_result is not None
     assert restored[0].run_result.success is True
     assert restored[0].run_result.exit_code == 0
+    assert restored[0].run_result.duration_sec == 0.5  # 启动耗时保留
 
     assert restored[1].template_id == "tpl_b"
     assert restored[1].success is False
@@ -1417,14 +1420,18 @@ def test_format_bench_delta_size_uses_format_size() -> None:
 
 
 def test_print_bench_comparison_renders_table(capsys: pytest.CaptureFixture[str]) -> None:
-    """对比表渲染含模板名、耗时变化、大小变化."""
+    """对比表渲染含模板名、构建变化、启动变化、大小变化."""
+    cur_rr_a = TemplateRunResult(success=True, timed_out=False, exit_code=0, duration_sec=0.8)
+    cur_rr_b = TemplateRunResult(success=True, timed_out=False, exit_code=0, duration_sec=0.3)
+    prev_rr_a = TemplateRunResult(success=True, timed_out=False, exit_code=0, duration_sec=0.5)
+    prev_rr_b = TemplateRunResult(success=True, timed_out=False, exit_code=0, duration_sec=0.5)
     current = [
-        TemplateBuildResult(template_id="a", success=True, duration_sec=12.0, dist_size=102400),
-        TemplateBuildResult(template_id="b", success=True, duration_sec=8.0, dist_size=51200),
+        TemplateBuildResult(template_id="a", success=True, duration_sec=12.0, dist_size=102400, run_result=cur_rr_a),
+        TemplateBuildResult(template_id="b", success=True, duration_sec=8.0, dist_size=51200, run_result=cur_rr_b),
     ]
     previous = [
-        TemplateBuildResult(template_id="a", success=True, duration_sec=10.0, dist_size=102400),
-        TemplateBuildResult(template_id="b", success=True, duration_sec=10.0, dist_size=51200),
+        TemplateBuildResult(template_id="a", success=True, duration_sec=10.0, dist_size=102400, run_result=prev_rr_a),
+        TemplateBuildResult(template_id="b", success=True, duration_sec=10.0, dist_size=51200, run_result=prev_rr_b),
     ]
     _print_bench_comparison(current, previous, "2026-07-28T14:30")
     out = capsys.readouterr().out
@@ -1432,9 +1439,16 @@ def test_print_bench_comparison_renders_table(capsys: pytest.CaptureFixture[str]
     assert "横向对比" in out
     assert "a" in out
     assert "b" in out
-    # a 变慢（12 vs 10），b 变快（8 vs 10）
+    # 构建耗时变化：a 变慢（12 vs 10），b 变快（8 vs 10）
     assert "+2.0s" in out
     assert "-2.0s" in out
+    # 启动耗时变化：a 变慢（0.8 vs 0.5），b 变快（0.3 vs 0.5）
+    assert "+0.30s" in out
+    assert "-0.20s" in out
+    # 列标题
+    assert "本次启动" in out
+    assert "上次启动" in out
+    assert "启动变化" in out
 
 
 def test_print_bench_comparison_skips_failed_current(capsys: pytest.CaptureFixture[str]) -> None:
@@ -1511,3 +1525,41 @@ def test_save_and_compare_bench_with_history(
     assert "+2.0s" in out  # 12 vs 10，变慢
     # 确认两个文件存在（历史 + 当前）
     assert len(list(group_dir.glob("*.json"))) == 2
+
+
+def test_print_summary_bench_shows_startup_column(capsys: pytest.CaptureFixture[str]) -> None:
+    """bench 模式汇总表含'启动耗时'列，显示应用调用响应速度."""
+    rr = TemplateRunResult(success=True, timed_out=False, exit_code=0, duration_sec=0.42)
+    results = [
+        TemplateBuildResult(
+            template_id="tpl_a",
+            success=True,
+            duration_sec=10.0,
+            dist_size=102400,
+            entry_count=1,
+            run_result=rr,
+        ),
+        TemplateBuildResult(template_id="tpl_b", success=True, duration_sec=5.0, dist_size=51200),
+    ]
+    _print_template_build_summary(results, bench=True)
+    out = capsys.readouterr().out
+    assert "启动耗时" in out
+    assert "0.42s" in out  # tpl_a 的启动耗时
+    assert "-" in out  # tpl_b 无 run_result，显示 -
+
+
+def test_print_performance_analysis_includes_startup_ranking(capsys: pytest.CaptureFixture[str]) -> None:
+    """性能分析含'启动耗时排名'表，按应用调用响应速度降序."""
+    rr_a = TemplateRunResult(success=True, timed_out=False, exit_code=0, duration_sec=0.8)
+    rr_b = TemplateRunResult(success=True, timed_out=False, exit_code=0, duration_sec=0.3)
+    results = [
+        TemplateBuildResult(template_id="a", success=True, duration_sec=10.0, dist_size=100, run_result=rr_a),
+        TemplateBuildResult(template_id="b", success=True, duration_sec=8.0, dist_size=200, run_result=rr_b),
+    ]
+    _print_performance_analysis(results)
+    out = capsys.readouterr().out
+    assert "启动耗时排名" in out
+    assert "应用调用响应速度" in out
+    # a (0.8s) 最慢排第一，b (0.3s) 排第二
+    assert "0.80s" in out
+    assert "0.30s" in out
