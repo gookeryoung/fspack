@@ -23,8 +23,9 @@ from __future__ import annotations
 import abc
 import logging
 import subprocess  # noqa: F401 # 测试 monkeypatch 通过 fspack.packaging.installer.subprocess.run 访问
+from dataclasses import replace
 from pathlib import Path
-from typing import Callable, TypeVar
+from typing import Callable, Sequence, TypeVar
 
 from fspack.builder import build, resolve_project_info
 from fspack.config import MirrorConfig, ProjectInfo, build_options_from_defaults
@@ -132,11 +133,20 @@ class Installer(abc.ABC):
         dist_dir: Path | None = None,
         *,
         tracker: BuildTracker | None = None,
+        extras: Sequence[str] | None = None,
     ) -> Path:
-        """编排：可选 build → 校验可执行文件 → build_package，返回安装包路径。"""
+        """编排：可选 build → 校验可执行文件 → build_package，返回安装包路径。
+
+        ``extras`` 为 CLI ``--extra`` 透传的分组名列表，``None`` 时用
+        ``[tool.fspack] extras`` 配置默认；非 ``None`` 时完全覆盖配置默认
+        （集合语义，与 ``build`` 子命令一致）。仅在需要重新构建时生效，
+        dist 已就绪时复用构建结果，extras 不再生效。
+        """
         own_tracker = tracker is None
         tk = tracker or BuildTracker(title="打包阶段汇总")
-        dist, info = _prepare_dist(project_dir, mirror, py_version, no_build, dist_dir, cls.target_platform())
+        dist, info = _prepare_dist(
+            project_dir, mirror, py_version, no_build, dist_dir, cls.target_platform(), extras=extras
+        )
         exe = dist / cls.exe_filename(info)
         if not exe.is_file():
             raise InstallerError(f"未找到已构建的可执行文件: {exe}（请先执行 fsp b）")
@@ -154,6 +164,8 @@ def _prepare_dist(  # noqa: PLR0913
     no_build: bool,
     dist_dir: Path | None,
     target: Platform,
+    *,
+    extras: Sequence[str] | None = None,
 ) -> tuple[Path, ProjectInfo]:
     """通用编排：可选 ``build()`` 构建项目到 dist，返回 ``(dist_dir, info)``。
 
@@ -163,6 +175,9 @@ def _prepare_dist(  # noqa: PLR0913
     - ``no_build=False``（默认）：dist 存在且可执行文件就绪时复用，避免 ``fsp b``
       后 ``fsp p`` 重复构建（尤其 Nuitka 编译耗时较长）；dist 或可执行文件缺失时
       调用 :func:`build` 重建，并透传 ``[tool.fspack]`` 配置的构建默认值
+
+    ``extras`` 为 CLI ``--extra`` 透传的分组名，``None`` 时用配置默认；
+    非 ``None`` 时覆盖 ``BuildOptions.extras``，仅在重新构建时生效。
 
     不校验可执行文件存在（由调用方按平台 ``exe_filename`` 自行校验）。
     """
@@ -178,6 +193,8 @@ def _prepare_dist(  # noqa: PLR0913
     if dist.is_dir() and _exe_exists(dist, info, target):
         return dist, info
     options = build_options_from_defaults(info.build_defaults)
+    if extras is not None:
+        options = replace(options, extras=frozenset(extras))
     info = build(project_dir, mirror, py_version, dist_dir=dist, target=target, options=options)
     return dist, info
 
@@ -238,10 +255,11 @@ def build_installer(  # noqa: PLR0913
     dist_dir: Path | None = None,
     *,
     tracker: BuildTracker | None = None,
+    extras: Sequence[str] | None = None,
 ) -> Path:
     """编排：可选 build → 生成 NSIS 脚本 → 编译安装包，返回安装包路径。"""
     return NsisInstaller.build_installer(
-        project_dir, mirror, py_version, no_build=no_build, dist_dir=dist_dir, tracker=tracker
+        project_dir, mirror, py_version, no_build=no_build, dist_dir=dist_dir, tracker=tracker, extras=extras
     )
 
 
@@ -253,10 +271,11 @@ def build_linux_installer(  # noqa: PLR0913
     dist_dir: Path | None = None,
     *,
     tracker: BuildTracker | None = None,
+    extras: Sequence[str] | None = None,
 ) -> Path:
     """编排：可选 build → tar.gz 便携包 → .deb 安装包，返回 .deb 路径。"""
     return LinuxInstaller.build_installer(
-        project_dir, mirror, py_version, no_build=no_build, dist_dir=dist_dir, tracker=tracker
+        project_dir, mirror, py_version, no_build=no_build, dist_dir=dist_dir, tracker=tracker, extras=extras
     )
 
 
@@ -303,6 +322,7 @@ def build_release(  # noqa: PLR0913
     target: Platform | None = None,
     fmt: str = "auto",
     codesign: bool = False,
+    extras: Sequence[str] | None = None,
 ) -> list[Path]:
     """按 ``--format`` 调度生成发行包，返回产物路径列表。
 
@@ -315,6 +335,9 @@ def build_release(  # noqa: PLR0913
     Args:
         codesign: macOS 产物是否做 ad-hoc 签名（``codesign --sign -``），仅对
             ``pkg``/``dmg`` 格式生效，其他平台忽略
+        extras: 启用的 ``[project.optional-dependencies]`` 分组名，``None`` 时用
+            ``[tool.fspack] extras`` 配置默认；非 ``None`` 时覆盖配置默认。
+            仅在需要重新构建时生效（dist 不存在或 ``no_build=False`` 且 dist 未就绪）
     """
     resolved_target = target or detect_platform()
     formats = _resolve_formats(fmt, resolved_target)
@@ -323,6 +346,8 @@ def build_release(  # noqa: PLR0913
     for index, f in enumerate(formats):
         # 首个格式负责 build，后续格式 no_build=True 复用同一 dist
         skip_build = no_build or index > 0
+        # extras 仅在首个格式（可能触发 build）透传，后续格式复用 dist 无需 extras
+        format_extras = extras if index == 0 else None
         if f == "zip":
             outputs.append(
                 build_zip(
@@ -333,24 +358,43 @@ def build_release(  # noqa: PLR0913
                     dist_dir=dist_dir,
                     target=resolved_target,
                     tracker=tracker,
+                    extras=format_extras,
                 )
             )
         elif f == "nsis":
             outputs.append(
                 NsisInstaller.build_installer(
-                    project_dir, mirror, py_version, no_build=skip_build, dist_dir=dist_dir, tracker=tracker
+                    project_dir,
+                    mirror,
+                    py_version,
+                    no_build=skip_build,
+                    dist_dir=dist_dir,
+                    tracker=tracker,
+                    extras=format_extras,
                 )
             )
         elif f == "tar.gz":
             outputs.append(
                 build_tarball_release(
-                    project_dir, mirror, py_version, no_build=skip_build, dist_dir=dist_dir, tracker=tracker
+                    project_dir,
+                    mirror,
+                    py_version,
+                    no_build=skip_build,
+                    dist_dir=dist_dir,
+                    tracker=tracker,
+                    extras=format_extras,
                 )
             )
         elif f == "deb":
             outputs.append(
                 build_deb_release(
-                    project_dir, mirror, py_version, no_build=skip_build, dist_dir=dist_dir, tracker=tracker
+                    project_dir,
+                    mirror,
+                    py_version,
+                    no_build=skip_build,
+                    dist_dir=dist_dir,
+                    tracker=tracker,
+                    extras=format_extras,
                 )
             )
         elif f == "pkg":
@@ -363,6 +407,7 @@ def build_release(  # noqa: PLR0913
                     dist_dir=dist_dir,
                     tracker=tracker,
                     codesign=codesign,
+                    extras=format_extras,
                 )
             )
         elif f == "dmg":
@@ -375,6 +420,7 @@ def build_release(  # noqa: PLR0913
                     dist_dir=dist_dir,
                     tracker=tracker,
                     codesign=codesign,
+                    extras=format_extras,
                 )
             )
     console.rich.print(tracker.summary())

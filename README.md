@@ -272,7 +272,7 @@ fsp r --entry gui         # 运行 gui 入口
 fsp b [project] [--mirror <name>] [--py-version <ver>] [--target <platform>]
               [--keep-module <mod>] [--icon <path>] [--no-stdlib-trim]
               [--no-pyc] [--pyc-strip] [--pyc-optimize <0|1|2>] [--no-site] [--nuitka]
-              [-R|--recursive] [--dry-run] [--no-size-report]
+              [--extra <name>] [-R|--recursive] [--dry-run] [--no-size-report]
               [--log-file <path>] [--log-format <text|json>]
               [--profile]
 ```
@@ -291,6 +291,7 @@ fsp b [project] [--mirror <name>] [--py-version <ver>] [--target <platform>]
 | `--pyc-optimize` | 字节码优化级别：0/1/2（默认 2，体积减 5-15%） |
 | `--no-site` | 禁用 site.py（节省 ~20-30ms 启动） |
 | `--nuitka` | 启用 Nuitka 本机编译（提速 30-50%） |
+| `--extra` | 启用 `[project.optional-dependencies]` 分组（可重复，覆盖 `[tool.fspack] extras`） |
 | `-R`/`--recursive` | 递归扫描子项目依次构建 |
 | `--dry-run` | 仅预览打包计划，不执行实际构建（不下载/不编译/不复制） |
 | `--no-size-report` | 关闭构建结束后的体积报告 |
@@ -322,13 +323,14 @@ fsp r [project] [--entry <name>] [--debug] [-- <args>...]
 
 ```text
 fsp p [project] [--mirror <name>] [--py-version <ver>] [--target <plat>] [--no-build] [--format <fmt>]
-              [-R|--recursive]
+              [--extra <name>] [-R|--recursive]
 ```
 
 | 选项 | 说明 |
 |------|------|
 | `--no-build` | 跳过重建，直接打包已有 dist |
 | `--format` | 发行包格式（auto/zip/nsis/tar.gz/deb/all，默认 auto） |
+| `--extra` | 启用 `[project.optional-dependencies]` 分组（可重复，仅在重建时生效） |
 | `-R`/`--recursive` | 递归扫描子项目依次打包 |
 
 `--format` 选项：
@@ -449,6 +451,31 @@ no_stdlib_trim = false   # 关闭标准库精简
 ccache = false           # Nuitka 编译启用 ccache
 nuitka_packages = []     # Nuitka 编译包含的额外包
 ```
+
+### 可选依赖分组（extras）
+
+fspack 支持 [PEP 621](https://peps.python.org/pep-0621/) 的 `[project.optional-dependencies]`，
+按需启用分组依赖。等价 `pip install pkg[extra]` 语义：分组内依赖合并到下载集合，
+自引用 `my-pkg[extra]` 递归展开，第三方 `pkg[extra]` 原样透传 pip。
+
+```toml
+[project.optional-dependencies]
+gui = ["PySide2"]
+web = ["flask", "uvicorn"]
+full = ["myapp[gui]", "myapp[web]", "numpy"]  # 自引用递归展开
+
+[tool.fspack]
+extras = ["gui"]   # 配置默认启用分组（可省略，用 CLI --extra 覆盖）
+```
+
+```bash
+fsp b --extra gui --extra web    # CLI 启用多个分组（覆盖配置默认）
+fsp p --extra full               # package 子命令同样支持
+```
+
+**优先级**：CLI `--extra` 完全覆盖 `[tool.fspack] extras` 配置默认（集合语义，非合并）。
+未指定 CLI `--extra` 时用配置默认；两者均未指定时仅打包 `[project] dependencies`。
+未知分组名报错并列出可选分组。extras 变化触发依赖分析缓存失效（重新分析）。
 
 ## 平台支持
 

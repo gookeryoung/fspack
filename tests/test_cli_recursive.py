@@ -100,6 +100,7 @@ def _capture_package_call(*, with_outputs: bool = False) -> tuple[list[Path], An
         target: object = None,
         fmt: str = "auto",
         codesign: bool = False,
+        extras: object = None,
     ) -> list[Path]:
         called_projects.append(project)
         if with_outputs:

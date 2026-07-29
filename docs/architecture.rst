@@ -13,7 +13,10 @@
 2. **下载运行时**：Windows 下载 embed python zip 并解压到 ``dist/runtime/``；
    Linux 下载 python-build-standalone tar.gz 并解压到 ``dist/runtime/python/``
 3. **分析依赖**：AST 扫描源码 import，分类标准库/本地/第三方，与
-   ``pyproject.toml`` 声明依赖比对；结果按源码指纹缓存，未改动跳过
+   ``pyproject.toml`` 声明依赖比对；结果按源码指纹缓存，未改动跳过。
+   ``[project.optional-dependencies]`` 分组经 ``--extra`` / ``[tool.fspack] extras``
+   启用后合并到声明依赖集合：自引用 ``"my-pkg[extra]"`` 递归展开，第三方
+   ``"pkg[extra]"`` 原样透传 pip；扩展后依赖参与缓存键，extras 变化触发缓存失效
 4. **补充内置库**（仅 Windows）：AST 检出 ``tkinter`` 使用时，从
    python-build-standalone Windows 构建提取 tkinter 组件（纯 Python 包 +
    ``_tkinter.pyd`` + Tcl/Tk 运行时脚本）补充到 runtime，按版本缓存 zip 避免重复下载

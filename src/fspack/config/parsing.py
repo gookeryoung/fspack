@@ -52,6 +52,7 @@ from fspack.exceptions import ProjectError
 __all__ = [
     "clear_project_cache",
     "detect_entry",
+    "expand_extras",
     "infer_app_type",
     "parse_project",
 ]
@@ -144,6 +145,8 @@ def _parse_project_cached(
     version = str(proj.get("version", "0.0.0"))
     deps = tuple(str(d) for d in proj.get("dependencies", []))
     requires_python = str(proj.get("requires-python") or "") or None
+    # [project.optional-dependencies] 全部分组：extra_name → 依赖声明元组
+    optional_deps = _parse_optional_dependencies(proj.get("optional-dependencies"))
 
     tool: dict[str, Any] = data.get("tool", {}) if isinstance(data.get("tool"), dict) else {}
     fspack_cfg: dict[str, Any] = tool.get("fspack", {}) if isinstance(tool.get("fspack"), dict) else {}
@@ -190,6 +193,7 @@ def _parse_project_cached(
                 extra_index_urls=extra_index_urls,
                 find_links=find_links,
                 slim_rules=slim_rules,
+                optional_dependencies=optional_deps,
             )
 
     entry_module, entry_file, app_type = detect_entry(project_dir, name, deps)
@@ -209,6 +213,7 @@ def _parse_project_cached(
         extra_index_urls=extra_index_urls,
         find_links=find_links,
         slim_rules=slim_rules,
+        optional_dependencies=optional_deps,
     )
 
 
@@ -374,12 +379,44 @@ def _parse_exclude_dirs(value: object) -> tuple[str, ...]:
     return _parse_string_list_cfg(value, "exclude", reject_empty=True)
 
 
+def _parse_optional_dependencies(value: object) -> dict[str, tuple[str, ...]]:
+    """解析 ``[project.optional-dependencies]`` 为 ``{extra_name: deps}`` 字典.
+
+    PEP 621 规定该字段为表，键为分组名（非空字符串），值为依赖声明字符串列表
+    （含版本约束与环境标记）。fspack 仅做结构与类型校验，不解析依赖本身——
+    自引用 ``"my-pkg[extra1,extra2]"`` 由 :func:`_expand_extras` 在合并阶段展开。
+
+    Args:
+        value: ``proj.get("optional-dependencies")`` 原始值（dict 或 None）
+
+    Returns:
+        ``{extra_name: (dep1, dep2, ...)}`` 字典；``value`` 为 None 时返回空字典
+
+    Raises:
+        ProjectError: ``value`` 非 dict、分组名非空字符串、依赖列表非字符串列表
+    """
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ProjectError("[project.optional-dependencies] 必须是表")
+    result: dict[str, tuple[str, ...]] = {}
+    for extra_name, dep_list in value.items():
+        if not isinstance(extra_name, str) or not extra_name.strip():
+            raise ProjectError(f"[project.optional-dependencies] 分组名无效: {extra_name!r}")
+        if not isinstance(dep_list, list) or not all(isinstance(x, str) for x in dep_list):
+            raise ProjectError(
+                f"[project.optional-dependencies] {extra_name} 必须是字符串列表，得到 {type(dep_list).__name__}"
+            )
+        result[extra_name] = tuple(dep_list)
+    return result
+
+
 def _parse_build_defaults(fspack_cfg: dict[str, Any]) -> BuildDefaults:
     """从 ``[tool.fspack]`` 解析构建默认值.
 
     识别 ``nuitka``/``pyc_strip``/``pyc_optimize``/``no_site``/``no_pyc``/
     ``no_stdlib_trim``/``no_slim_runtime``/``ccache``/``no_size_report``/``analyze_deps``/
-    ``nuitka_packages`` 键，其余键忽略（如 ``icon``/``entries``/``exclude``）。
+    ``nuitka_packages``/``extras`` 键，其余键忽略（如 ``icon``/``entries``/``exclude``）。
     类型不匹配时报错，避免静默忽略错误配置。
     """
     kwargs: dict[str, bool | int | None | tuple[str, ...]] = {}
@@ -401,7 +438,100 @@ def _parse_build_defaults(fspack_cfg: dict[str, Any]) -> BuildDefaults:
         if not isinstance(raw_pkgs, list) or not all(isinstance(x, str) for x in raw_pkgs):
             raise ProjectError(f"[tool.fspack] nuitka_packages 必须是字符串列表，得到 {raw_pkgs!r}")
         kwargs["nuitka_packages"] = tuple(raw_pkgs)
+    # extras 为字符串列表：默认启用的 optional-dependencies 分组名
+    kwargs["extras"] = _parse_string_list_cfg(fspack_cfg.get("extras"), "extras", reject_empty=True)
     return BuildDefaults(**cast(Any, kwargs))
+
+
+def expand_extras(
+    base_deps: tuple[str, ...],
+    optional_deps: dict[str, tuple[str, ...]],
+    enabled_extras: frozenset[str],
+    project_name: str,
+) -> tuple[str, ...]:
+    """合并 ``base_deps`` 与启用的 extras 依赖，展开自引用 ``"my-pkg[extra]"``.
+
+    处理三类依赖声明（PEP 631 + pip 行为）：
+
+    1. **自引用** ``"my-pkg[extra1,extra2]"``：当依赖名（归一化后）等于项目名时，
+       递归展开 ``optional_deps[extra1]`` + ``optional_deps[extra2]``。
+    2. **第三方 extras** ``"other-pkg[extra]"``：原样保留，由 pip 解析。
+    3. **普通依赖** ``"rich>=13"``：原样保留。
+
+    enabled_extras 中的分组直接展开其依赖列表，等价 ``pip install pkg[extra]`` 语义。
+    循环保护：已展开的 extra 名记入 ``visited``，重复出现跳过（PEP 631 未规定循环检测，
+    pip 自身也不检测，但 fspack 用 visited 避免无限递归）。
+
+    Args:
+        base_deps: ``[project] dependencies`` 依赖声明元组
+        optional_deps: ``[project.optional-dependencies]`` 全部分组
+        enabled_extras: 启用的分组名集合（来自 CLI --extra 或配置默认）
+        project_name: 项目名（用于识别自引用，按 ``lower().replace("-", "_")`` 归一化）
+
+    Returns:
+        合并去重后的依赖元组（保留首次出现顺序）：base_deps + enabled extras 展开 +
+        自引用展开；未知 enabled_extras 抛错
+
+    Raises:
+        ProjectError: ``enabled_extras`` 含 ``optional_deps`` 中不存在的分组名
+    """
+    unknown = enabled_extras - set(optional_deps)
+    if unknown:
+        raise ProjectError(f"未知的 extras 分组: {sorted(unknown)}，可选: {sorted(optional_deps)}")
+
+    proj_norm = project_name.lower().replace("-", "_")
+    merged: list[str] = []
+    seen: set[str] = set()
+
+    def _add_dep(dep: str) -> None:
+        """添加依赖到 merged（按原始字符串去重，保留首次出现顺序）."""
+        if dep not in seen:
+            seen.add(dep)
+            merged.append(dep)
+
+    def _expand_dep_list(deps: tuple[str, ...], visited: frozenset[str]) -> None:
+        """递归展开依赖列表，处理自引用 ``"my-pkg[extra1,extra2]"``.
+
+        ``visited`` 记录已展开的 extra 名，循环引用时跳过避免无限递归。
+        """
+        # 依赖规范正则：name[extras]后跟可选版本约束与环境标记
+        # 例："rich>=13; python_version<'3.11'" → name="rich", extras=None
+        #      "my-pkg[gui,web]>=1.0" → name="my-pkg", extras="gui,web"
+        #      "pandas[performance]" → name="pandas", extras="performance"
+        dep_re = re.compile(r"^\s*([A-Za-z0-9_.-]+)(?:\[([^\]]+)\])?")
+        for dep in deps:
+            m = dep_re.match(dep)
+            if not m:
+                _add_dep(dep)
+                continue
+            pkg_name = m.group(1)
+            extras_str = m.group(2)
+            if extras_str is None:
+                _add_dep(dep)
+                continue
+            extra_list = [e.strip() for e in extras_str.split(",") if e.strip()]
+            pkg_norm = pkg_name.lower().replace("-", "_")
+            if pkg_norm == proj_norm:
+                # 自引用：递归展开 optional_deps[extra] 的依赖
+                for extra in extra_list:
+                    if extra in visited:
+                        continue
+                    sub_deps = optional_deps.get(extra)
+                    if sub_deps is None:
+                        # 自引用了不存在的 extra：跳过（pip 行为，构建期报错更友好）
+                        continue
+                    _expand_dep_list(sub_deps, visited | {extra})
+            else:
+                # 第三方 extras：原样保留
+                _add_dep(dep)
+
+    # 先展开 base_deps（处理其中的自引用）
+    _expand_dep_list(base_deps, frozenset())
+    # 再展开 enabled extras 的依赖
+    for extra in enabled_extras:
+        # enabled_extras 已校验过存在性
+        _expand_dep_list(optional_deps[extra], frozenset({extra}))
+    return tuple(merged)
 
 
 def _resolve_icon(project_dir: Path, icon_rel: object) -> Path | None:

@@ -319,7 +319,7 @@ def clean_dist(project: Path) -> None:
     _logger.info("已清理: %s", dist)
 
 
-def _print_build_plan(ctx: BuildContext, report: DependencyReport) -> None:
+def _print_build_plan(ctx: BuildContext, report: DependencyReport) -> None:  # noqa: PLR0912
     """打印打包计划（``--dry-run`` 模式），不执行任何写操作.
 
     输出内容：
@@ -376,6 +376,17 @@ def _print_build_plan(ctx: BuildContext, report: DependencyReport) -> None:
     dep_table.add_column("数量", justify="right")
     dep_table.add_column("详情")
     dep_table.add_row("声明依赖", str(len(info.dependencies)), ", ".join(info.dependencies) or "(无)")
+    if ctx.opts.extras:
+        dep_table.add_row(
+            "启用 extras",
+            str(len(ctx.opts.extras)),
+            ", ".join(sorted(ctx.opts.extras)),
+        )
+        dep_table.add_row(
+            "扩展后依赖",
+            str(len(report.declared)),
+            ", ".join(report.declared) or "(无)",
+        )
     dep_table.add_row(
         "AST 第三方",
         str(len(report.ast_third_party)),

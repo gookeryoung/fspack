@@ -14,13 +14,17 @@ from fspack.config import (
     MIRRORS,
     AppType,
     BuildConfig,
+    BuildDefaults,
+    BuildOptions,
     DependencyReport,
     EntryPoint,
     MirrorConfig,
     ProjectInfo,
     _satisfies,
+    build_options_from_defaults,
     clear_project_cache,
     detect_entry,
+    expand_extras,
     get_mirror,
     infer_app_type,
     parse_project,
@@ -1692,3 +1696,265 @@ def test_parse_project_cache_error_not_cached(tmp_path: Path) -> None:
     pp.write_text('[project]\nname = "app"\nversion = "0.1"\n')
     info = parse_project(tmp_path)
     assert info.name == "app"
+
+
+# --- [project.optional-dependencies] 解析测试 ---
+#
+# 覆盖 PEP 621 可选依赖分组解析、[tool.fspack] extras 配置默认、
+# expand_extras 自引用展开与第三方 extras 透传等场景。
+
+
+def _make_project_with_optional_deps(
+    project_dir: Path,
+    *,
+    name: str = "myapp",
+    base_deps: str = "",
+    optional_block: str = "",
+    fspack_extras: str = "",
+) -> None:
+    """构造带 [project.optional-dependencies] 的项目.
+
+    Args:
+        base_deps: ``[project] dependencies`` 内容（多行字符串，含缩进）
+        optional_block: ``[project.optional-dependencies]`` 整段内容
+        fspack_extras: ``[tool.fspack] extras`` 行（如 ``extras = ["gui"]``）
+    """
+    parts = [f'[project]\nname = "{name}"\nversion = "0.1"\n']
+    if base_deps:
+        parts.append("dependencies = [\n")
+        parts.append(base_deps)
+        parts.append("]\n")
+    if optional_block:
+        parts.append("\n[project.optional-dependencies]\n")
+        parts.append(optional_block)
+    if fspack_extras:
+        parts.append("\n[tool.fspack]\n")
+        parts.append(fspack_extras)
+    (project_dir / "pyproject.toml").write_text("".join(parts))
+    (project_dir / f"{name}.py").write_text("def main():\n    pass\n")
+
+
+def test_parse_optional_dependencies_basic(tmp_path: Path) -> None:
+    """解析简单分组：gui/web 两个 extras."""
+    clear_project_cache()
+    _make_project_with_optional_deps(
+        tmp_path,
+        base_deps='    "rich>=13",\n',
+        optional_block='gui = ["PySide2"]\nweb = ["flask", "uvicorn"]\n',
+    )
+    info = parse_project(tmp_path)
+    assert info.dependencies == ("rich>=13",)
+    assert info.optional_dependencies == {
+        "gui": ("PySide2",),
+        "web": ("flask", "uvicorn"),
+    }
+
+
+def test_parse_optional_dependencies_none_when_absent(tmp_path: Path) -> None:
+    """无 [project.optional-dependencies] 时 optional_dependencies 为空字典."""
+    clear_project_cache()
+    _make_minimal_project(tmp_path, name="app")
+    info = parse_project(tmp_path)
+    assert info.optional_dependencies == {}
+
+
+def test_parse_optional_dependencies_invalid_type(tmp_path: Path) -> None:
+    """optional-dependencies 非 dict 报错."""
+    clear_project_cache()
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\noptional-dependencies = ["not", "a", "dict"]\n'
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    with pytest.raises(ProjectError, match=r"\[project\.optional-dependencies\] 必须是表"):
+        parse_project(tmp_path)
+
+
+def test_parse_optional_dependencies_invalid_dep_list(tmp_path: Path) -> None:
+    """分组值非字符串列表报错."""
+    clear_project_cache()
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[project.optional-dependencies]\ngui = "PySide2"\n'
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    with pytest.raises(ProjectError, match="必须是字符串列表"):
+        parse_project(tmp_path)
+
+
+def test_parse_optional_dependencies_empty_name(tmp_path: Path) -> None:
+    """分组名为空字符串报错."""
+    clear_project_cache()
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[project.optional-dependencies]\n"" = ["rich"]\n'
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    with pytest.raises(ProjectError, match="分组名无效"):
+        parse_project(tmp_path)
+
+
+def test_parse_fspack_extras_config_default(tmp_path: Path) -> None:
+    """[tool.fspack] extras 配置默认启用分组."""
+    clear_project_cache()
+    _make_project_with_optional_deps(
+        tmp_path,
+        optional_block='gui = ["PySide2"]\nweb = ["flask"]\n',
+        fspack_extras='extras = ["gui"]\n',
+    )
+    info = parse_project(tmp_path)
+    assert info.build_defaults.extras == ("gui",)
+    # build_options_from_defaults 透传到 BuildOptions.extras
+    opts = build_options_from_defaults(info.build_defaults)
+    assert opts.extras == frozenset({"gui"})
+
+
+def test_parse_fspack_extras_reject_empty_element(tmp_path: Path) -> None:
+    """[tool.fspack] extras 含空字符串元素报错（reject_empty=True）."""
+    clear_project_cache()
+    _make_project_with_optional_deps(
+        tmp_path,
+        optional_block='gui = ["PySide2"]\n',
+        fspack_extras='extras = ["gui", ""]\n',
+    )
+    with pytest.raises(ProjectError, match="必须是非空字符串"):
+        parse_project(tmp_path)
+
+
+def test_build_options_extras_defaults_to_empty() -> None:
+    """BuildOptions.extras 默认空 frozenset；BuildDefaults.extras 默认空 tuple."""
+    opts = BuildOptions()
+    assert opts.extras == frozenset()
+    defaults = BuildDefaults()
+    assert defaults.extras == ()
+
+
+def test_expand_extras_simple() -> None:
+    """单个 extra 展开：base + extra 依赖."""
+    result = expand_extras(
+        ("rich",),
+        {"gui": ("PySide2",)},
+        frozenset({"gui"}),
+        "myapp",
+    )
+    assert result == ("rich", "PySide2")
+
+
+def test_expand_extras_multiple_merge_dedup() -> None:
+    """多 extra 合并去重，保留首次出现顺序."""
+    result = expand_extras(
+        ("rich",),
+        {"gui": ("PySide2",), "web": ("flask", "rich")},  # rich 重复
+        frozenset({"gui", "web"}),
+        "myapp",
+    )
+    # rich 首次出现，web 中的 rich 去重
+    assert "rich" in result
+    assert result.count("rich") == 1
+    assert "PySide2" in result
+    assert "flask" in result
+
+
+def test_expand_extras_self_reference_recursion() -> None:
+    """自引用 my-pkg[extra] 递归展开对应 extras 依赖."""
+    optional: dict[str, tuple[str, ...]] = {
+        "gui": ("PySide2",),
+        "web": ("flask",),
+        "full": ("myapp[gui]", "myapp[web]", "numpy"),
+    }
+    result = expand_extras(
+        ("rich",),
+        optional,
+        frozenset({"full"}),
+        "myapp",
+    )
+    # rich + PySide2 + flask + numpy（自引用展开）
+    assert result == ("rich", "PySide2", "flask", "numpy")
+
+
+def test_expand_extras_self_reference_with_hyphen_normalized() -> None:
+    """项目名含连字符，自引用归一化匹配（my-app == my_app）."""
+    optional: dict[str, tuple[str, ...]] = {"gui": ("PySide2",)}
+    result = expand_extras(
+        ("my-app[gui]",),
+        optional,
+        frozenset(),
+        "my_app",  # 项目名用下划线，依赖名用连字符
+    )
+    assert result == ("PySide2",)
+
+
+def test_expand_extras_self_reference_cycle_safe() -> None:
+    """循环自引用安全终止（visited 去重避免无限递归）."""
+    optional: dict[str, tuple[str, ...]] = {
+        "a": ("myapp[b]",),
+        "b": ("myapp[a]", "rich"),
+    }
+    # 启用 a → 展开 myapp[b] → 展开 myapp[a]（已访问，跳过）+ rich
+    result = expand_extras(
+        (),
+        optional,
+        frozenset({"a"}),
+        "myapp",
+    )
+    assert "rich" in result
+    # 不会无限递归（测试通过即证明）
+
+
+def test_expand_extras_third_party_with_extra_preserved() -> None:
+    """第三方 extras（pandas[performance]）原样保留，不展开."""
+    result = expand_extras(
+        ("rich",),
+        {"sci": ("pandas[performance]", "numpy")},
+        frozenset({"sci"}),
+        "myapp",
+    )
+    assert "pandas[performance]" in result  # 原样保留
+    assert "numpy" in result
+
+
+def test_expand_extras_self_reference_unknown_extra_skipped() -> None:
+    """自引用不存在的 extra 跳过（pip 行为，构建期报错更友好）."""
+    optional: dict[str, tuple[str, ...]] = {"gui": ("PySide2",)}
+    result = expand_extras(
+        ("myapp[unknown]",),
+        optional,
+        frozenset(),
+        "myapp",
+    )
+    # unknown extra 不存在，跳过；无其他依赖，结果为空
+    assert result == ()
+
+
+def test_expand_extras_unknown_enabled_raises() -> None:
+    """enabled_extras 含未知分组名报错."""
+    with pytest.raises(ProjectError, match="未知的 extras 分组"):
+        expand_extras(
+            ("rich",),
+            {"gui": ("PySide2",)},
+            frozenset({"unknown"}),
+            "myapp",
+        )
+
+
+def test_expand_extras_empty_enabled_returns_base() -> None:
+    """enabled_extras 为空时返回 base_deps（去重）."""
+    result = expand_extras(
+        ("rich", "rich", "numpy"),
+        {"gui": ("PySide2",)},
+        frozenset(),
+        "myapp",
+    )
+    assert result == ("rich", "numpy")
+
+
+def test_expand_extras_preserves_version_constraints() -> None:
+    """依赖含版本约束与环境标记时原样保留."""
+    optional: dict[str, tuple[str, ...]] = {
+        "gui": ("PySide2>=5.15; platform_system=='Windows'",),
+    }
+    result = expand_extras(
+        ("rich>=13; python_version<'3.11'",),
+        optional,
+        frozenset({"gui"}),
+        "myapp",
+    )
+    assert "rich>=13; python_version<'3.11'" in result
+    assert "PySide2>=5.15; platform_system=='Windows'" in result

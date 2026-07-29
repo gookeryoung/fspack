@@ -4,6 +4,7 @@
 v0.2.7（未发布）
 ----------------
 
+- feat: 新增 ``[project.optional-dependencies]`` 可选依赖分组支持（PEP 621）。``fsp b``/``fsp p`` 新增 ``--extra <name>`` CLI 参数（可多次指定）启用分组，等价 ``pip install pkg[extra]`` 语义；``[tool.fspack] extras`` 配置默认启用分组；CLI ``--extra`` 完全覆盖配置默认（集合语义，非合并）；自引用 ``my-pkg[extra]`` 递归展开（含循环保护），第三方 ``pkg[extra]`` 原样透传 pip；扩展后依赖纳入依赖分析缓存键，extras 变化触发缓存失效；未知分组名报错并列出可选分组
 - feat: 新增 ``--recursive``/``-R`` 递归打包模式，``fsp b -R [project]``/``fsp p -R [project]`` 递归扫描 project 目录下所有含 ``pyproject.toml`` 的子项目依次构建/打包；跳过 ``.venv``/``dist``/``build``/``.git`` 等开发期目录；单项目失败不中断后续项目，最后汇总成功/失败列表并通过退出码（0=全部成功，1=有失败）传播结果，便于 CI 检测
 - perf: ``analyzer.source_fingerprint`` 哈希算法从 SHA-256 改为 BLAKE2b（digest_size=32，输出 64 hex 字符与原一致），CPython 实现略快 10-20%
 - perf: ``analyzer._local_packages`` 用 ``os.scandir`` 替代 ``Path.iterdir``，``DirEntry.is_file``/``is_dir`` 复用枚举时的 stat 缓存减少系统调用

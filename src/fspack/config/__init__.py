@@ -65,11 +65,13 @@ from fspack.config.parsing import (
     _parse_build_defaults,  # noqa: F401
     _parse_entries,  # noqa: F401
     _parse_exclude_dirs,  # noqa: F401
+    _parse_optional_dependencies,  # noqa: F401
     _parse_project_scripts,  # noqa: F401
     _resolve_icon,  # noqa: F401
     _resolve_module_script,  # noqa: F401
     clear_project_cache,
     detect_entry,
+    expand_extras,
     infer_app_type,
     parse_project,
 )
@@ -114,6 +116,7 @@ __all__ = [
     "clear_project_cache",
     "detect_entry",
     "embed_cache_dir",
+    "expand_extras",
     "get_mirror",
     "infer_app_type",
     "is_offline",

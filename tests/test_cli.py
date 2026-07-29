@@ -338,11 +338,13 @@ def test_package_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
         target: object = None,
         fmt: str = "auto",
         codesign: bool = False,
+        extras: object = None,
     ) -> list[Path]:
         called["project"] = project
         called["mirror"] = mirror
         called["no_build"] = no_build
         called["codesign"] = codesign
+        called["extras"] = extras
         return []
 
     monkeypatch.setattr("fspack.packaging.installer.build_release", fake_build_release)
@@ -352,6 +354,8 @@ def test_package_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     assert called["mirror"].name == "阿里云"
     assert called["no_build"] is True
     assert called["codesign"] is False
+    # 未指定 --extra 时透传 None（让 build_release 用配置默认）
+    assert called["extras"] is None
 
 
 def test_package_codesign_flag_passthrough(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -367,6 +371,7 @@ def test_package_codesign_flag_passthrough(tmp_path: Path, monkeypatch: pytest.M
         target: object = None,
         fmt: str = "auto",
         codesign: bool = False,
+        extras: object = None,
     ) -> list[Path]:
         called["codesign"] = codesign
         return []
@@ -389,6 +394,7 @@ def test_package_format_choices_include_pkg_dmg(tmp_path: Path, monkeypatch: pyt
         target: object = None,
         fmt: str = "auto",
         codesign: bool = False,
+        extras: object = None,
     ) -> list[Path]:
         called["fmt"] = fmt
         return []

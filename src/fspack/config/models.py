@@ -150,6 +150,9 @@ class BuildDefaults:
     nuitka_packages: tuple[str, ...] = ()
     no_size_report: bool | None = None
     analyze_deps: bool | None = None
+    # 默认启用的 optional-dependencies 分组名（来自 [tool.fspack] extras），
+    # CLI --extra 指定时完全覆盖此值（集合语义，非合并）
+    extras: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -214,6 +217,10 @@ class ProjectInfo:
     # wheel 精简用户规则：include 强制保留（覆盖 spec 剥离），
     # exclude 强制剥离（覆盖 spec 保留）。glob 模式匹配 wheel 内 POSIX 相对路径。
     slim_rules: SlimRules = field(default_factory=SlimRules)
+    # [project.optional-dependencies] 全部分组：extra_name → 依赖声明元组
+    # （含版本约束）。打包时由 --extra / [tool.fspack] extras 选择启用分组，
+    # 经 _expand_extras 合并到下载依赖集合
+    optional_dependencies: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     @classmethod
     def from_dir(cls, project_dir: Path, py_version: str | None = None) -> ProjectInfo:
@@ -321,6 +328,9 @@ class BuildOptions:
     # 启用二进制依赖分析：解析 .dll/.so/.dylib 依赖树，剥离无引用文件
     # （默认关闭，耗时；iter-101）
     analyze_deps: bool = False
+    # 启用的 [project.optional-dependencies] 分组名集合，
+    # 来自 CLI --extra（覆盖配置默认）或 [tool.fspack] extras（配置默认）
+    extras: frozenset[str] = frozenset()
 
 
 def build_options_from_defaults(defaults: BuildDefaults) -> BuildOptions:
@@ -348,6 +358,7 @@ def build_options_from_defaults(defaults: BuildDefaults) -> BuildOptions:
         nuitka_packages=defaults.nuitka_packages,
         no_size_report=defaults.no_size_report if defaults.no_size_report is not None else base.no_size_report,
         analyze_deps=defaults.analyze_deps if defaults.analyze_deps is not None else base.analyze_deps,
+        extras=frozenset(defaults.extras),
     )
 
 

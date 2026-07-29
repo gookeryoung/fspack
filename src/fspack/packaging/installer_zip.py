@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import shutil
 from pathlib import Path
+from typing import Sequence
 
 from fspack.config import MirrorConfig, ProjectInfo
 from fspack.console import console
@@ -43,6 +44,7 @@ def build_zip(  # noqa: PLR0913
     target: Platform = Platform.WINDOWS,
     *,
     tracker: BuildTracker | None = None,
+    extras: Sequence[str] | None = None,
 ) -> Path:
     """编排：可选 build → 校验可执行文件 → 打包 zip 便携包，返回 zip 路径。
 
@@ -51,7 +53,7 @@ def build_zip(  # noqa: PLR0913
     """
     own_tracker = tracker is None
     tk = tracker or BuildTracker(title="打包阶段汇总")
-    dist, info = _prepare_dist(project_dir, mirror, py_version, no_build, dist_dir, target)
+    dist, info = _prepare_dist(project_dir, mirror, py_version, no_build, dist_dir, target, extras=extras)
     _check_exe(dist, info, target)
     release = dist / "release"
     zip_name = f"{_release_base(info, 'windows' if target is Platform.WINDOWS else 'linux')}.zip"

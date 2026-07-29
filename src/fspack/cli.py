@@ -243,6 +243,19 @@ def _add_build_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser
             "默认关闭，分析耗时但典型项目体积减少 5-15%%"
         ),
     )
+    p.add_argument(
+        "--extra",
+        action="append",
+        default=[],
+        metavar="NAME",
+        dest="extras",
+        help=(
+            "启用的 [project.optional-dependencies] 分组（可多次指定，如 --extra gui --extra web）。"
+            "等价 pip install pkg[extra] 语义：分组的依赖合并到下载集合；"
+            "自引用 my-pkg[extra] 递归展开，第三方 pkg[extra] 原样透传 pip。"
+            "指定时完全覆盖 [tool.fspack] extras 配置默认（集合语义，非合并）"
+        ),
+    )
 
 
 def _add_run_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -302,6 +315,18 @@ def _add_package_subparser(sub: argparse._SubParsersAction[argparse.ArgumentPars
             "递归扫描 project 目录下所有含 pyproject.toml 的子项目，依次打包。"
             "跳过 .venv/dist/build/.git 等开发期目录；单项目失败不中断，"
             "最后汇总成功/失败列表"
+        ),
+    )
+    p.add_argument(
+        "--extra",
+        action="append",
+        default=[],
+        metavar="NAME",
+        dest="extras",
+        help=(
+            "启用的 [project.optional-dependencies] 分组（可多次指定，如 --extra gui --extra web）。"
+            "等价 pip install pkg[extra] 语义；仅在需要重新构建时生效（dist 不存在时），"
+            "dist 已就绪时复用构建结果。指定时完全覆盖 [tool.fspack] extras 配置默认"
         ),
     )
 
@@ -397,6 +422,7 @@ def _run_build(project: Path, ns: argparse.Namespace) -> None:
 
     from fspack.builder import build
     from fspack.config import ProjectInfo, build_options_from_defaults, get_mirror
+    from fspack.exceptions import ProjectError
     from fspack.packaging.log_file import LogFormat
 
     # 合并 [tool.fspack] 构建默认值与 CLI 标志：
@@ -405,6 +431,13 @@ def _run_build(project: Path, ns: argparse.Namespace) -> None:
     #   pyc_optimize 用 ``cli if cli is not None else base``（CLI 显式指定优先）
     info = ProjectInfo.from_dir(project, ns.py_version)
     base = build_options_from_defaults(info.build_defaults)
+    # extras 合并：CLI --extra 指定时完全覆盖配置默认（集合语义，非合并）；
+    # 未指定时用 [tool.fspack] extras 配置默认。校验未知分组名。
+    cli_extras = ns.extras if getattr(ns, "extras", None) else None
+    enabled_extras = frozenset(cli_extras) if cli_extras is not None else base.extras
+    unknown = enabled_extras - set(info.optional_dependencies)
+    if unknown:
+        raise ProjectError(f"未知的 extras 分组: {sorted(unknown)}，可选: {sorted(info.optional_dependencies)}")
     options = replace(
         base,
         keep_modules=set(ns.keep_modules) if ns.keep_modules else base.keep_modules,
@@ -420,6 +453,7 @@ def _run_build(project: Path, ns: argparse.Namespace) -> None:
         nuitka_packages=tuple(dict.fromkeys((*base.nuitka_packages, *(ns.nuitka_pkg or [])))),
         no_size_report=ns.no_size_report or base.no_size_report,
         analyze_deps=ns.analyze_deps or base.analyze_deps,
+        extras=enabled_extras,
     )
     log_file = Path(ns.log_file).resolve() if ns.log_file else None
     log_format = LogFormat.parse(ns.log_format)
@@ -440,9 +474,19 @@ def _run_build(project: Path, ns: argparse.Namespace) -> None:
 
 def _run_package(project: Path, ns: argparse.Namespace) -> None:
     """执行单项目 package 子命令."""
-    from fspack.config import get_mirror
+    from fspack.config import ProjectInfo, get_mirror
+    from fspack.exceptions import ProjectError
     from fspack.packaging.installer import build_release
 
+    # extras 校验：CLI --extra 指定时校验未知分组（与 build 子命令一致）
+    # 仅校验，不构造 BuildOptions——build_release 内部 _prepare_dist 用配置默认，
+    # CLI 指定时通过 extras 参数透传覆盖配置默认
+    cli_extras = ns.extras if getattr(ns, "extras", None) else None
+    if cli_extras:
+        info = ProjectInfo.from_dir(project, ns.py_version)
+        unknown = set(cli_extras) - set(info.optional_dependencies)
+        if unknown:
+            raise ProjectError(f"未知的 extras 分组: {sorted(unknown)}，可选: {sorted(info.optional_dependencies)}")
     outputs = build_release(
         project,
         get_mirror(ns.mirror),
@@ -451,6 +495,7 @@ def _run_package(project: Path, ns: argparse.Namespace) -> None:
         target=_parse_target(ns.target),
         fmt=ns.format,
         codesign=ns.codesign,
+        extras=cli_extras,
     )
     for out in outputs:
         _logger.info("发行包已生成: %s", out)

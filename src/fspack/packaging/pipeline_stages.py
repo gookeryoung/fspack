@@ -253,20 +253,34 @@ def _analyze_dependencies(ctx: BuildContext, *, save_cache: bool = True) -> Depe
 
     ``save_cache=False`` 时跳过缓存写入（用于 ``--dry-run`` 模式，避免创建
     ``dist/.dep_cache.json`` 触发 dist 目录创建）。
+
+    extras 依赖合并：``ctx.opts.extras`` 指定的 ``[project.optional-dependencies]``
+    分组经 :func:`fspack.config.expand_extras` 展开后与 ``ctx.info.dependencies``
+    合并，作为 ``declared`` 传入依赖分析。自引用 ``"my-pkg[extra]"`` 递归展开，
+    第三方 ``"pkg[extra]"`` 原样保留交给 pip。缓存键含 declared，extras 变化时
+    缓存自动失效。
     """
     project_dir = ctx.cfg.project_dir
     with ctx.tracker.stage("分析依赖") as st:
         # 源码指纹缓存：源码未变时跳过 AST 分析，重复构建加速 ~478ms
         from fspack.analyzer import source_fingerprint
+        from fspack.config import expand_extras
 
+        # 合并 base deps 与 enabled extras（展开自引用）
+        expanded_deps = expand_extras(
+            ctx.info.dependencies,
+            ctx.info.optional_dependencies,
+            ctx.opts.extras,
+            ctx.info.name,
+        )
         fingerprint = source_fingerprint(project_dir)
-        report = _dep_cache_load(ctx.cfg.dist_dir, fingerprint, ctx.info.dependencies)
+        report = _dep_cache_load(ctx.cfg.dist_dir, fingerprint, expanded_deps)
         if report is not None:
             st.hit_cache()
             ast_count = len(report.ast_third_party)
             st.set_detail(f"缓存命中，AST {ast_count} 个第三方")
         else:
-            report = DependencyReport.from_src(project_dir, ctx.info.name, ctx.info.dependencies)
+            report = DependencyReport.from_src(project_dir, ctx.info.name, expanded_deps)
             if save_cache:
                 _dep_cache_save(ctx.cfg.dist_dir, fingerprint, report)
             if report.missing:
