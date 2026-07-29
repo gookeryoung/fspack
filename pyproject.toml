@@ -82,7 +82,7 @@ exclude = [
 
 [tool.fspack]
 # 自身打包配置：排除开发期模板与 GitHub Actions 模板，启用 .pyc 剥离优化
-exclude = ["templates", ".trae"]
+exclude = [".trae"]
 pyc_strip = true
 no_site = true
 
