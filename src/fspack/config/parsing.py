@@ -8,6 +8,20 @@
 :mod:`fspack.config.versions` 提供默认 Python 版本，:mod:`fspack.analyzer`
 在 :func:`infer_app_type` 中延迟导入打破循环依赖。
 
+**入口来源与优先级**：
+
+1. ``[project.scripts]``（PEP 621 标准入口点）：``name = "module:function"``，
+   ``module`` 为 dotted 模块路径（如 ``fspack.cli``），``function`` 被忽略
+   （fspack 用 :func:`runpy.run_path`/``run_module`` 运行整个模块）。
+   自动识别 flat layout（``<project>/<pkg>/``）与 src layout
+   （``<project>/src/<pkg>/``），将 dotted module 解析为脚本文件路径。
+2. ``[tool.fspack.entries]``：``name = "script_rel"``，值为脚本相对项目目录
+   的路径（POSIX 风格）。优先级高于 ``[project.scripts]``，同名入口以
+   ``[tool.fspack.entries]`` 为准覆盖。
+3. ``detect_entry``：无任何入口声明时，按 ``<name>.py``/``<name>/__main__.py``
+   /顶层 ``*.py`` 兜底扫描，识别含 ``def main()`` 或
+   ``if __name__ == "__main__"`` 的脚本。
+
 **解析缓存**：:func:`parse_project` 按 ``(project_dir, py_version, pyproject_mtime_ns)``
 缓存解析结果（:func:`_parse_project_cached`），同一项目目录在 pyproject.toml
 未修改时复用缓存，避免 ``fsp b``/``fsp p`` 流程内多次调用（cli → pipeline →
@@ -76,12 +90,18 @@ _GUI_HINTS = frozenset({"tkinter", "PySide2", "PySide6", "PyQt5", "PyQt6", "matp
 
 
 def parse_project(project_dir: Path, py_version: str | None = None) -> ProjectInfo:
-    """解析 pyproject.toml 并识别入口，返回项目元信息。
+    """解析 pyproject.toml 并识别入口，返回项目元信息.
 
-    支持多入口声明 ``[tool.fspack.entries]``：键为入口名（用作 exe 名），
-    值为入口脚本相对项目目录的路径（POSIX 风格）。声明多入口时，
-    ``ProjectInfo.entries`` 非空，``entry_module``/``entry_file``/``app_type``
-    取首个入口（保持向后兼容）。
+    入口来源与优先级（详见模块 docstring）：
+
+    1. ``[project.scripts]``（PEP 621）：``name = "module:function"``，
+       自动识别 flat/src layout 解析 dotted module 为脚本路径。
+    2. ``[tool.fspack.entries]``：``name = "script_rel"``，相对项目目录的路径。
+       同名入口覆盖 ``[project.scripts]``。
+    3. ``detect_entry``：无任何入口声明时按文件名兜底扫描。
+
+    声明多入口时，``ProjectInfo.entries`` 非空，``entry_module``/
+    ``entry_file``/``app_type`` 取首个入口（保持向后兼容）。
 
     解析结果按 ``(project_dir, py_version, pyproject.toml mtime)`` 缓存（最多 64
     个条目），同一项目在 pyproject.toml 未修改时复用缓存，避免 ``fsp b``/
@@ -128,6 +148,8 @@ def _parse_project_cached(
     tool: dict[str, Any] = data.get("tool", {}) if isinstance(data.get("tool"), dict) else {}
     fspack_cfg: dict[str, Any] = tool.get("fspack", {}) if isinstance(tool.get("fspack"), dict) else {}
     entries_tbl: dict[str, Any] = fspack_cfg.get("entries", {}) if isinstance(fspack_cfg.get("entries"), dict) else {}
+    # [project.scripts] PEP 621 标准入口点：name = "module:function"
+    scripts_tbl: dict[str, Any] = proj.get("scripts", {}) if isinstance(proj.get("scripts"), dict) else {}
     icon_rel = fspack_cfg.get("icon")
     icon_path = _resolve_icon(project_dir, icon_rel)
 
@@ -141,27 +163,34 @@ def _parse_project_cached(
     # [tool.fspack] wheel 精简用户规则
     slim_rules = SlimRules.from_config(fspack_cfg)
 
-    if entries_tbl:
-        entries = _parse_entries(project_dir, entries_tbl)
-        first = entries[0]
-        return ProjectInfo(
-            name=name,
-            version=version,
-            src_dir=project_dir,
-            entry_module=first.module,
-            entry_file=first.file,
-            app_type=first.app_type,
-            dependencies=deps,
-            py_version=py_version or DEFAULT_PY_VERSION,
-            requires_python=requires_python,
-            entries=entries,
-            icon=icon_path,
-            exclude_dirs=exclude_dirs,
-            build_defaults=build_defaults,
-            extra_index_urls=extra_index_urls,
-            find_links=find_links,
-            slim_rules=slim_rules,
-        )
+    # 合并 [project.scripts] 与 [tool.fspack.entries]：
+    # 先解析 [project.scripts]（dotted module → 脚本路径），
+    # 再用 [tool.fspack.entries] 覆盖同名入口（fspack 优先级更高）。
+    # Python 3.7+ dict 保序，按 scripts → fspack entries 顺序去重保留首次出现位置。
+    if scripts_tbl or entries_tbl:
+        scripts_entries = _parse_project_scripts(project_dir, scripts_tbl) if scripts_tbl else ()
+        fspack_entries = _parse_entries(project_dir, entries_tbl) if entries_tbl else ()
+        merged = _merge_entries(scripts_entries, fspack_entries)
+        if merged:
+            first = merged[0]
+            return ProjectInfo(
+                name=name,
+                version=version,
+                src_dir=project_dir,
+                entry_module=first.module,
+                entry_file=first.file,
+                app_type=first.app_type,
+                dependencies=deps,
+                py_version=py_version or DEFAULT_PY_VERSION,
+                requires_python=requires_python,
+                entries=merged,
+                icon=icon_path,
+                exclude_dirs=exclude_dirs,
+                build_defaults=build_defaults,
+                extra_index_urls=extra_index_urls,
+                find_links=find_links,
+                slim_rules=slim_rules,
+            )
 
     entry_module, entry_file, app_type = detect_entry(project_dir, name, deps)
     return ProjectInfo(
@@ -223,6 +252,121 @@ def _parse_entries(
             raise ProjectError(f"[tool.fspack.entries] {entry_name} 的脚本不存在: {script_rel}")
         entries.append(EntryPoint.from_script(entry_name, script_path))
     return tuple(entries)
+
+
+def _parse_project_scripts(
+    project_dir: Path,
+    scripts_tbl: dict[str, Any],
+) -> tuple[EntryPoint, ...]:
+    """解析 ``[project.scripts]`` 表（PEP 621）为 EntryPoint 元组.
+
+    PEP 621 入口点格式：``name = "module:function"``，其中：
+
+    - ``name``：可执行文件名（用作 exe 名）。
+    - ``module``：dotted 模块路径（如 ``fspack.cli``、``cli``），fspack 将其
+      解析为脚本文件路径。``function`` 部分被忽略——fspack 用
+      :func:`runpy.run_path`/``run_module`` 运行整个模块而非调用特定函数。
+    - ``function``：入口函数名（如 ``main``），仅作元数据保留，运行时不使用。
+
+    项目 layout 自动识别（按优先级尝试，首个命中即用）：
+
+    - **flat layout**：``<project>/<pkg>/...`` 或 ``<project>/<name>.py``。
+    - **src layout**：``<project>/src/<pkg>/...`` 或 ``<project>/src/<name>.py``。
+
+    dotted module 到文件路径的映射规则：
+
+    - 多段（``fspack.cli``）：``<pkg>/cli.py``（flat）或 ``src/<pkg>/cli.py``（src）。
+    - 单段（``fspack``）：``fspack.py`` 或 ``fspack/__main__.py``
+      （flat），``src/fspack.py`` 或 ``src/fspack/__main__.py``（src）。
+
+    键为入口名（须为非空字符串），值须为 ``"module:function"`` 格式字符串。
+    缺少 ``:function`` 时视整段为 module（向后兼容纯模块名写法）。
+    Python 字典保持插入序，首个入口作为主入口（保持向后兼容）。
+    """
+    if not scripts_tbl:
+        raise ProjectError("[project.scripts] 为空，请删除该表或至少声明一个入口")
+    entries: list[EntryPoint] = []
+    for entry_name, spec in scripts_tbl.items():
+        if not isinstance(entry_name, str) or not entry_name:
+            raise ProjectError(f"[project.scripts] 入口名无效: {entry_name!r}")
+        if not isinstance(spec, str) or not spec.strip():
+            raise ProjectError(f"[project.scripts] {entry_name} 的入口规范为空")
+        # PEP 621: "module:function"，function 可省略（纯模块名也接受）
+        module_part = spec.split(":", 1)[0].strip()
+        if not module_part:
+            raise ProjectError(f"[project.scripts] {entry_name} 的模块名无效: {spec!r}")
+        script_path = _resolve_module_script(project_dir, module_part)
+        if script_path is None:
+            raise ProjectError(
+                f"[project.scripts] {entry_name} 的模块 {module_part!r} 未找到对应脚本（已尝试 flat 与 src layout）"
+            )
+        entries.append(EntryPoint.from_script(entry_name, script_path))
+    return tuple(entries)
+
+
+def _resolve_module_script(project_dir: Path, module_dotted: str) -> Path | None:
+    """将 dotted 模块名解析为脚本文件绝对路径，自动识别 flat/src layout.
+
+    查找规则（按优先级尝试，首个命中即返回）：
+
+    1. **flat layout**：在 ``project_dir`` 下查找
+       - 多段 ``a.b`` → ``<project>/a/b.py``
+       - 单段 ``a`` → ``<project>/a.py`` 或 ``<project>/a/__main__.py``
+    2. **src layout**：在 ``project_dir/src`` 下重复上述查找
+
+    所有候选路径都不存在时返回 ``None``，由调用方决定报错或回退。
+
+    单段 module 优先 ``a.py``（顶层脚本），再 ``a/__main__.py``（包入口），
+    与 :func:`detect_entry` 的优先级一致。
+    """
+    parts = module_dotted.split(".")
+    # 多段 → <...>/a/b.py；单段 → a.py 或 a/__main__.py
+    rel_candidates: list[Path] = []
+    if len(parts) >= 2:
+        rel_candidates.append(Path(*parts).with_suffix(".py"))
+    else:
+        first = parts[0]
+        rel_candidates.append(Path(f"{first}.py"))
+        rel_candidates.append(Path(first, "__main__.py"))
+
+    for base in (project_dir, project_dir / "src"):
+        for rel in rel_candidates:
+            candidate = (base / rel).resolve()
+            if candidate.is_file():
+                return candidate
+    return None
+
+
+def _merge_entries(
+    scripts_entries: tuple[EntryPoint, ...],
+    fspack_entries: tuple[EntryPoint, ...],
+) -> tuple[EntryPoint, ...]:
+    """合并两个入口元组，``fspack_entries`` 覆盖 ``scripts_entries`` 同名入口.
+
+    合并顺序：先 ``scripts_entries``（保持原序），再追加 ``fspack_entries``
+    中未在 scripts 出现的新入口。同名入口（按 ``name`` 比较）取 ``fspack_entries``
+    的版本（fspack 优先级更高，符合"重复定义以 fspack 为准"语义）。
+
+    返回合并后的 EntryPoint 元组，保留各来源的插入序。
+    """
+    if not scripts_entries:
+        return fspack_entries
+    if not fspack_entries:
+        return scripts_entries
+    fspack_by_name = {ep.name: ep for ep in fspack_entries}
+    fspack_only_names = set(fspack_by_name)
+    merged: list[EntryPoint] = []
+    for ep in scripts_entries:
+        if ep.name in fspack_by_name:
+            merged.append(fspack_by_name[ep.name])
+            fspack_only_names.discard(ep.name)
+        else:
+            merged.append(ep)
+    # 追加 fspack 独有的入口（保持 fspack entries 原序）
+    for ep in fspack_entries:
+        if ep.name in fspack_only_names:
+            merged.append(ep)
+    return tuple(merged)
 
 
 def _parse_exclude_dirs(value: object) -> tuple[str, ...]:

@@ -61,10 +61,13 @@ from fspack.config.parsing import (
     _GUI_HINTS,  # noqa: F401
     _has_entry,  # noqa: F401
     _is_main_check,  # noqa: F401
+    _merge_entries,  # noqa: F401
     _parse_build_defaults,  # noqa: F401
     _parse_entries,  # noqa: F401
     _parse_exclude_dirs,  # noqa: F401
+    _parse_project_scripts,  # noqa: F401
     _resolve_icon,  # noqa: F401
+    _resolve_module_script,  # noqa: F401
     clear_project_cache,
     detect_entry,
     infer_app_type,

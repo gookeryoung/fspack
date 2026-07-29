@@ -637,6 +637,361 @@ def test_parse_project_multi_entry_py310_empty_path(tmp_path: Path) -> None:
         parse_project(tmp_path)
 
 
+# --- [project.scripts] 入口点解析测试 ---
+#
+# PEP 621 标准入口点：name = "module:function"。
+# 自动识别 flat/src layout 将 dotted module 解析为脚本路径。
+# 与 [tool.fspack.entries] 同名时以 fspack 为准覆盖。
+
+
+def _write_script(path: Path, content: str = "def main():\n    pass\n") -> None:
+    """写入入口脚本（默认含 def main() 使 detect_entry 兜底可识别）."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content)
+
+
+def test_resolve_module_script_flat_multileg(tmp_path: Path) -> None:
+    """flat layout：多段 module（pkg.cli）解析为 <project>/pkg/cli.py."""
+    from fspack.config import _resolve_module_script
+
+    _write_script(tmp_path / "mypkg" / "cli.py")
+    result = _resolve_module_script(tmp_path, "mypkg.cli")
+    assert result is not None
+    assert result == (tmp_path / "mypkg" / "cli.py").resolve()
+
+
+def test_resolve_module_script_flat_single_seg_top_file(tmp_path: Path) -> None:
+    """flat layout：单段 module（app）优先解析为 <project>/app.py."""
+    from fspack.config import _resolve_module_script
+
+    _write_script(tmp_path / "app.py")
+    result = _resolve_module_script(tmp_path, "app")
+    assert result is not None
+    assert result == (tmp_path / "app.py").resolve()
+
+
+def test_resolve_module_script_flat_single_seg_pkg_main(tmp_path: Path) -> None:
+    """flat layout：单段 module 无 app.py 时回退到 app/__main__.py."""
+    from fspack.config import _resolve_module_script
+
+    _write_script(tmp_path / "app" / "__main__.py")
+    result = _resolve_module_script(tmp_path, "app")
+    assert result is not None
+    assert result == (tmp_path / "app" / "__main__.py").resolve()
+
+
+def test_resolve_module_script_src_layout_multileg(tmp_path: Path) -> None:
+    """src layout：多段 module（pkg.cli）解析为 <project>/src/pkg/cli.py."""
+    from fspack.config import _resolve_module_script
+
+    _write_script(tmp_path / "src" / "mypkg" / "cli.py")
+    result = _resolve_module_script(tmp_path, "mypkg.cli")
+    assert result is not None
+    assert result == (tmp_path / "src" / "mypkg" / "cli.py").resolve()
+
+
+def test_resolve_module_script_src_layout_single_seg(tmp_path: Path) -> None:
+    """src layout：单段 module（app）解析为 <project>/src/app.py."""
+    from fspack.config import _resolve_module_script
+
+    _write_script(tmp_path / "src" / "app.py")
+    result = _resolve_module_script(tmp_path, "app")
+    assert result is not None
+    assert result == (tmp_path / "src" / "app.py").resolve()
+
+
+def test_resolve_module_script_flat_preferred_over_src(tmp_path: Path) -> None:
+    """flat 与 src layout 同时存在时优先 flat（首个命中即返回）."""
+    from fspack.config import _resolve_module_script
+
+    _write_script(tmp_path / "pkg" / "cli.py")
+    _write_script(tmp_path / "src" / "pkg" / "cli.py")
+    result = _resolve_module_script(tmp_path, "pkg.cli")
+    assert result is not None
+    assert result == (tmp_path / "pkg" / "cli.py").resolve()
+
+
+def test_resolve_module_script_not_found_returns_none(tmp_path: Path) -> None:
+    """模块对应脚本不存在时返回 None."""
+    from fspack.config import _resolve_module_script
+
+    assert _resolve_module_script(tmp_path, "nonexistent.module") is None
+    assert _resolve_module_script(tmp_path, "nonexistent") is None
+
+
+def test_parse_project_scripts_single_entry_flat(tmp_path: Path) -> None:
+    """[project.scripts] 单入口 flat layout：name = "module:function"."""
+    from fspack.config import _parse_project_scripts
+
+    _write_script(tmp_path / "app.py")
+    tbl = {"app": "app:main"}
+    entries = _parse_project_scripts(tmp_path, tbl)
+    assert len(entries) == 1
+    assert entries[0].name == "app"
+    assert entries[0].module == "app"
+    assert entries[0].file == (tmp_path / "app.py").resolve()
+
+
+def test_parse_project_scripts_multileg_src_layout(tmp_path: Path) -> None:
+    """[project.scripts] src layout：dotted module 解析为 src/<pkg>/<mod>.py."""
+    from fspack.config import _parse_project_scripts
+
+    _write_script(tmp_path / "src" / "mypkg" / "cli.py")
+    _write_script(tmp_path / "src" / "mypkg" / "gui.py")
+    tbl = {"cli": "mypkg.cli:main", "gui": "mypkg.gui:main"}
+    entries = _parse_project_scripts(tmp_path, tbl)
+    assert [ep.name for ep in entries] == ["cli", "gui"]
+    assert entries[0].file == (tmp_path / "src" / "mypkg" / "cli.py").resolve()
+    assert entries[1].file == (tmp_path / "src" / "mypkg" / "gui.py").resolve()
+
+
+def test_parse_project_scripts_function_part_ignored(tmp_path: Path) -> None:
+    """[project.scripts] 的 :function 部分被忽略（fspack 用 runpy 运行整个模块）."""
+    from fspack.config import _parse_project_scripts
+
+    _write_script(tmp_path / "app.py")
+    # 不同 function 名（main vs run vs cli）应解析到同一脚本
+    entries = _parse_project_scripts(tmp_path, {"app": "app:run"})
+    assert len(entries) == 1
+    assert entries[0].file == (tmp_path / "app.py").resolve()
+
+
+def test_parse_project_scripts_pure_module_name_without_function(tmp_path: Path) -> None:
+    """缺少 :function 时整段作为 module 名（向后兼容纯模块名写法）."""
+    from fspack.config import _parse_project_scripts
+
+    _write_script(tmp_path / "app.py")
+    entries = _parse_project_scripts(tmp_path, {"app": "app"})
+    assert len(entries) == 1
+    assert entries[0].file == (tmp_path / "app.py").resolve()
+
+
+def test_parse_project_scripts_preserves_insertion_order(tmp_path: Path) -> None:
+    """[project.scripts] 按 dict 插入序返回 EntryPoint."""
+    from fspack.config import _parse_project_scripts
+
+    _write_script(tmp_path / "a.py")
+    _write_script(tmp_path / "b.py")
+    _write_script(tmp_path / "c.py")
+    tbl = {"c": "c:main", "a": "a:main", "b": "b:main"}
+    entries = _parse_project_scripts(tmp_path, tbl)
+    assert [ep.name for ep in entries] == ["c", "a", "b"]
+
+
+def test_parse_project_scripts_empty_name_raises(tmp_path: Path) -> None:
+    """[project.scripts] 入口名为空时报错."""
+    from fspack.config import _parse_project_scripts
+
+    _write_script(tmp_path / "app.py")
+    with pytest.raises(ProjectError, match="入口名无效"):
+        _parse_project_scripts(tmp_path, {"": "app:main"})
+
+
+def test_parse_project_scripts_empty_spec_raises(tmp_path: Path) -> None:
+    """[project.scripts] 入口规范为空时报错."""
+    from fspack.config import _parse_project_scripts
+
+    with pytest.raises(ProjectError, match="入口规范为空"):
+        _parse_project_scripts(tmp_path, {"app": ""})
+
+
+def test_parse_project_scripts_module_not_found_raises(tmp_path: Path) -> None:
+    """[project.scripts] 模块未找到对应脚本时报错."""
+    from fspack.config import _parse_project_scripts
+
+    with pytest.raises(ProjectError, match="未找到对应脚本"):
+        _parse_project_scripts(tmp_path, {"app": "nonexistent.module:main"})
+
+
+def test_parse_project_scripts_empty_table_raises(tmp_path: Path) -> None:
+    """[project.scripts] 空表报错."""
+    from fspack.config import _parse_project_scripts
+
+    with pytest.raises(ProjectError, match=r"\[project\.scripts\] 为空"):
+        _parse_project_scripts(tmp_path, {})
+
+
+def test_parse_project_scripts_invalid_name_type_raises(tmp_path: Path) -> None:
+    """[project.scripts] 入口名非字符串时报错."""
+    from fspack.config import _parse_project_scripts
+
+    _write_script(tmp_path / "app.py")
+    with pytest.raises(ProjectError, match="入口名无效"):
+        _parse_project_scripts(tmp_path, {123: "app:main"})  # type: ignore[dict-item]
+
+
+def test_parse_project_scripts_invalid_spec_type_raises(tmp_path: Path) -> None:
+    """[project.scripts] 入口规范非字符串时报错."""
+    from fspack.config import _parse_project_scripts
+
+    with pytest.raises(ProjectError, match="入口规范为空"):
+        _parse_project_scripts(tmp_path, {"app": 123})  # type: ignore[dict-item]
+
+
+def test_merge_entries_fspack_overrides_scripts_same_name(tmp_path: Path) -> None:
+    """fspack entries 覆盖 scripts 同名入口（fspack 优先级更高）."""
+    from fspack.config import _merge_entries
+
+    scripts = (
+        EntryPoint(name="cli", module="cli", file=Path("scripts_cli.py"), app_type=AppType.CLI),
+        EntryPoint(name="gui", module="gui", file=Path("scripts_gui.py"), app_type=AppType.GUI),
+    )
+    fspack = (EntryPoint(name="cli", module="cli", file=Path("fspack_cli.py"), app_type=AppType.CLI),)
+    merged = _merge_entries(scripts, fspack)
+    assert [ep.name for ep in merged] == ["cli", "gui"]
+    # cli 来自 fspack（覆盖）
+    assert merged[0].file == Path("fspack_cli.py")
+    # gui 来自 scripts（未覆盖）
+    assert merged[1].file == Path("scripts_gui.py")
+
+
+def test_merge_entries_preserves_order_and_appends_fspack_only(tmp_path: Path) -> None:
+    """合并保持 scripts 原序，fspack 独有入口追加在末尾."""
+    from fspack.config import _merge_entries
+
+    scripts = (
+        EntryPoint(name="cli", module="cli", file=Path("s_cli.py"), app_type=AppType.CLI),
+        EntryPoint(name="gui", module="gui", file=Path("s_gui.py"), app_type=AppType.GUI),
+    )
+    fspack = (
+        EntryPoint(name="cli", module="cli", file=Path("f_cli.py"), app_type=AppType.CLI),
+        EntryPoint(name="web", module="web", file=Path("f_web.py"), app_type=AppType.CLI),
+    )
+    merged = _merge_entries(scripts, fspack)
+    assert [ep.name for ep in merged] == ["cli", "gui", "web"]
+    assert merged[0].file == Path("f_cli.py")  # cli 覆盖
+    assert merged[1].file == Path("s_gui.py")  # gui 保留 scripts
+    assert merged[2].file == Path("f_web.py")  # web 新增
+
+
+def test_merge_entries_scripts_only(tmp_path: Path) -> None:
+    """仅 scripts 有入口时返回 scripts."""
+    from fspack.config import _merge_entries
+
+    scripts = (EntryPoint(name="cli", module="cli", file=Path("s.py"), app_type=AppType.CLI),)
+    merged = _merge_entries(scripts, ())
+    assert merged == scripts
+
+
+def test_merge_entries_fspack_only(tmp_path: Path) -> None:
+    """仅 fspack 有入口时返回 fspack."""
+    from fspack.config import _merge_entries
+
+    fspack = (EntryPoint(name="cli", module="cli", file=Path("f.py"), app_type=AppType.CLI),)
+    merged = _merge_entries((), fspack)
+    assert merged == fspack
+
+
+def test_merge_entries_both_empty(tmp_path: Path) -> None:
+    """两者都空时返回空元组."""
+    from fspack.config import _merge_entries
+
+    assert _merge_entries((), ()) == ()
+
+
+# --- parse_project 端到端：[project.scripts] 集成测试 ---
+
+
+def test_parse_project_scripts_only_flat(tmp_path: Path) -> None:
+    """仅 [project.scripts] flat layout：解析为多入口 entries."""
+    _write_script(tmp_path / "cli.py")
+    _write_script(tmp_path / "gui.py")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[project.scripts]\ncli = "cli:main"\ngui = "gui:main"\n'
+    )
+    clear_project_cache()
+    info = parse_project(tmp_path)
+    assert len(info.entries) == 2
+    assert [ep.name for ep in info.entries] == ["cli", "gui"]
+    # 首个入口作为主入口（向后兼容）
+    assert info.entry_module == "cli"
+    assert info.entry_file == (tmp_path / "cli.py").resolve()
+
+
+def test_parse_project_scripts_src_layout(tmp_path: Path) -> None:
+    """[project.scripts] src layout：dotted module 解析到 src/<pkg>/."""
+    _write_script(tmp_path / "src" / "mypkg" / "cli.py")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "mypkg"\nversion = "0.1"\n\n[project.scripts]\nmycli = "mypkg.cli:main"\n'
+    )
+    clear_project_cache()
+    info = parse_project(tmp_path)
+    assert len(info.entries) == 1
+    assert info.entries[0].name == "mycli"
+    assert info.entries[0].file == (tmp_path / "src" / "mypkg" / "cli.py").resolve()
+
+
+def test_parse_project_scripts_and_fspack_entries_merge(tmp_path: Path) -> None:
+    """[project.scripts] + [tool.fspack.entries] 混合：fspack 覆盖同名入口."""
+    _write_script(tmp_path / "scripts_cli.py")
+    _write_script(tmp_path / "fspack_cli.py")
+    _write_script(tmp_path / "scripts_gui.py")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n'
+        '[project.scripts]\ncli = "scripts_cli:main"\ngui = "scripts_gui:main"\n\n'
+        '[tool.fspack.entries]\ncli = "fspack_cli.py"\n'
+    )
+    clear_project_cache()
+    info = parse_project(tmp_path)
+    assert len(info.entries) == 2
+    assert [ep.name for ep in info.entries] == ["cli", "gui"]
+    # cli 被 fspack 覆盖
+    assert info.entries[0].file == (tmp_path / "fspack_cli.py").resolve()
+    # gui 保留 scripts
+    assert info.entries[1].file == (tmp_path / "scripts_gui.py").resolve()
+
+
+def test_parse_project_scripts_and_fspack_entries_no_overlap(tmp_path: Path) -> None:
+    """[project.scripts] 与 [tool.fspack.entries] 无重叠时合并所有入口."""
+    _write_script(tmp_path / "cli.py")
+    _write_script(tmp_path / "gui.py")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n'
+        '[project.scripts]\ncli = "cli:main"\n\n'
+        '[tool.fspack.entries]\ngui = "gui.py"\n'
+    )
+    clear_project_cache()
+    info = parse_project(tmp_path)
+    assert len(info.entries) == 2
+    assert [ep.name for ep in info.entries] == ["cli", "gui"]
+    assert info.entries[0].file == (tmp_path / "cli.py").resolve()
+    assert info.entries[1].file == (tmp_path / "gui.py").resolve()
+
+
+def test_parse_project_fspack_entries_only_still_works(tmp_path: Path) -> None:
+    """仅有 [tool.fspack.entries] 时走原路径（向后兼容）."""
+    _write_script(tmp_path / "cli.py")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack.entries]\ncli = "cli.py"\n'
+    )
+    clear_project_cache()
+    info = parse_project(tmp_path)
+    assert len(info.entries) == 1
+    assert info.entries[0].name == "cli"
+    assert info.entries[0].file == (tmp_path / "cli.py").resolve()
+
+
+def test_parse_project_no_scripts_no_entries_falls_back_to_detect(tmp_path: Path) -> None:
+    """无 [project.scripts] 与 [tool.fspack.entries] 时走 detect_entry 兜底."""
+    _write_script(tmp_path / "app.py")
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    clear_project_cache()
+    info = parse_project(tmp_path)
+    assert info.entries == ()
+    assert info.entry_module == "app"
+    assert info.entry_file == (tmp_path / "app.py").resolve()
+
+
+def test_parse_project_empty_scripts_table_falls_back_to_detect(tmp_path: Path) -> None:
+    """[project.scripts] 为空表时走 detect_entry 兜底."""
+    _write_script(tmp_path / "app.py")
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n\n[project.scripts]\n')
+    clear_project_cache()
+    info = parse_project(tmp_path)
+    assert info.entries == ()
+    assert info.entry_module == "app"
+
+
 # --- 应用类型推断（infer_app_type / EntryPoint）测试 ---
 
 
