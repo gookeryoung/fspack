@@ -416,7 +416,7 @@ def _parse_build_defaults(fspack_cfg: dict[str, Any]) -> BuildDefaults:
 
     识别 ``nuitka``/``pyc_strip``/``pyc_optimize``/``no_site``/``no_pyc``/
     ``no_stdlib_trim``/``no_slim_runtime``/``ccache``/``no_size_report``/``analyze_deps``/
-    ``nuitka_packages``/``extras`` 键，其余键忽略（如 ``icon``/``entries``/``exclude``）。
+    ``nuitka_packages``/``extras``/``lazy_imports`` 键，其余键忽略（如 ``icon``/``entries``/``exclude``）。
     类型不匹配时报错，避免静默忽略错误配置。
     """
     kwargs: dict[str, bool | int | None | tuple[str, ...]] = {}
@@ -440,6 +440,8 @@ def _parse_build_defaults(fspack_cfg: dict[str, Any]) -> BuildDefaults:
         kwargs["nuitka_packages"] = tuple(raw_pkgs)
     # extras 为字符串列表：默认启用的 optional-dependencies 分组名
     kwargs["extras"] = _parse_string_list_cfg(fspack_cfg.get("extras"), "extras", reject_empty=True)
+    # lazy_imports 为字符串列表：延迟导入的顶层模块名（iter-102）
+    kwargs["lazy_imports"] = _parse_string_list_cfg(fspack_cfg.get("lazy_imports"), "lazy_imports", reject_empty=True)
     return BuildDefaults(**cast(Any, kwargs))
 
 

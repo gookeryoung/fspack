@@ -153,6 +153,9 @@ class BuildDefaults:
     # 默认启用的 optional-dependencies 分组名（来自 [tool.fspack] extras），
     # CLI --extra 指定时完全覆盖此值（集合语义，非合并）
     extras: tuple[str, ...] = ()
+    # 延迟导入的顶层模块名（来自 [tool.fspack] lazy-imports，iter-102）：
+    # wrapper 注入 _LazyImportFinder meta path finder，首次属性访问时才加载
+    lazy_imports: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -331,6 +334,9 @@ class BuildOptions:
     # 启用的 [project.optional-dependencies] 分组名集合，
     # 来自 CLI --extra（覆盖配置默认）或 [tool.fspack] extras（配置默认）
     extras: frozenset[str] = frozenset()
+    # 延迟导入的顶层模块名元组（iter-102）：wrapper 注入 _LazyImportFinder，
+    # 首次属性访问时才加载模块，降低启动时间
+    lazy_imports: tuple[str, ...] = ()
 
 
 def build_options_from_defaults(defaults: BuildDefaults) -> BuildOptions:
@@ -359,6 +365,7 @@ def build_options_from_defaults(defaults: BuildDefaults) -> BuildOptions:
         no_size_report=defaults.no_size_report if defaults.no_size_report is not None else base.no_size_report,
         analyze_deps=defaults.analyze_deps if defaults.analyze_deps is not None else base.analyze_deps,
         extras=frozenset(defaults.extras),
+        lazy_imports=defaults.lazy_imports,
     )
 
 

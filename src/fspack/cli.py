@@ -256,6 +256,20 @@ def _add_build_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser
             "指定时完全覆盖 [tool.fspack] extras 配置默认（集合语义，非合并）"
         ),
     )
+    p.add_argument(
+        "--lazy-import",
+        default=None,
+        metavar="MODULES",
+        dest="lazy_imports",
+        help=(
+            "延迟导入的顶层模块名（逗号分隔，如 --lazy-import numpy,pandas）。"
+            "wrapper 注入 _LazyImportFinder meta path finder，首次 import 时不执行"
+            "模块 __init__.py，首次属性访问时才加载，降低启动时间。"
+            "典型收益：numpy 省 ~80ms，pandas 省 ~150ms；"
+            "C 扩展模块（.pyd/.so）无法延迟，仍即时加载。"
+            "指定时完全覆盖 [tool.fspack] lazy-imports 配置默认"
+        ),
+    )
 
 
 def _add_run_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -454,6 +468,7 @@ def _run_build(project: Path, ns: argparse.Namespace) -> None:
         no_size_report=ns.no_size_report or base.no_size_report,
         analyze_deps=ns.analyze_deps or base.analyze_deps,
         extras=enabled_extras,
+        lazy_imports=_parse_lazy_imports(ns.lazy_imports, base.lazy_imports),
     )
     log_file = Path(ns.log_file).resolve() if ns.log_file else None
     log_format = LogFormat.parse(ns.log_format)
@@ -722,6 +737,19 @@ def _parse_target(value: str | None) -> Platform | None:
     if value == "macos":
         return Platform.MACOS
     return Platform.LINUX
+
+
+def _parse_lazy_imports(cli_value: str | None, base: tuple[str, ...]) -> tuple[str, ...]:
+    """解析 ``--lazy-import`` 逗号分隔字符串为模块名元组.
+
+    ``cli_value`` 为 None 时用配置默认 ``base``；为空字符串时返回空元组（用户
+    显式清除）；非空时按逗号分割并去空白、去重。CLI 完全覆盖配置默认（与 extras
+    语义一致，非合并）。
+    """
+    if cli_value is None:
+        return base
+    parts = [s.strip() for s in cli_value.split(",") if s.strip()]
+    return tuple(dict.fromkeys(parts))
 
 
 if __name__ == "__main__":

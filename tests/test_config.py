@@ -1424,6 +1424,37 @@ def test_parse_project_with_build_defaults(tmp_path: Path) -> None:
     assert info.build_defaults.no_stdlib_trim is None
 
 
+def test_parse_project_lazy_imports_config(tmp_path: Path) -> None:
+    """[tool.fspack] lazy_imports 解析为模块名元组（iter-102）."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nlazy_imports = ["numpy", "pandas"]\n'
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    info = parse_project(tmp_path)
+    assert info.build_defaults.lazy_imports == ("numpy", "pandas")
+    # build_options_from_defaults 透传到 BuildOptions.lazy_imports
+    opts = build_options_from_defaults(info.build_defaults)
+    assert opts.lazy_imports == ("numpy", "pandas")
+
+
+def test_parse_project_lazy_imports_default_empty(tmp_path: Path) -> None:
+    """未配置 lazy_imports 时默认空元组."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    info = parse_project(tmp_path)
+    assert info.build_defaults.lazy_imports == ()
+
+
+def test_parse_project_lazy_imports_invalid_type_raises(tmp_path: Path) -> None:
+    """lazy_imports 非字符串列表时报错."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nlazy_imports = "numpy"\n'
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    with pytest.raises(ProjectError, match="lazy_imports"):
+        parse_project(tmp_path)
+
+
 def test_parse_project_build_defaults_invalid_bool_raises(tmp_path: Path) -> None:
     """构建默认值布尔字段传非布尔值时报错."""
     (tmp_path / "pyproject.toml").write_text(

@@ -273,3 +273,56 @@ def test_generate_wrapper_source_gui_subsystem_null_streams() -> None:
     assert "if sys.stderr is None:" in source
     assert "if sys.stdin is None:" in source
     assert "os.devnull" in source
+
+
+def test_generate_wrapper_source_path_importer_cache_prepopulated() -> None:
+    """wrapper 预填充 sys.path_importer_cache 避免 lazy FileFinder 创建开销（iter-102）.
+
+    site-packages 是最高频搜索路径，预创建 FileFinder 注入 path_importer_cache
+    使首次 import 直接命中缓存，跳过 path_hooks 迭代。
+    """
+    source = EntryWrapper.generate_wrapper_source("app", None, "app.py")
+    assert "sys.path_importer_cache" in source
+    assert "importlib.machinery.FileFinder" in source
+    assert "ExtensionFileLoader" in source
+    assert "SourceFileLoader" in source
+    assert "SourcelessFileLoader" in source
+
+
+def test_generate_wrapper_source_lazy_imports_disabled_by_default() -> None:
+    """lazy_imports 默认空元组：wrapper 注入 ``_LAZY_MODULES = ()``，if 块不执行."""
+    source = EntryWrapper.generate_wrapper_source("app", None, "app.py")
+    assert "_LAZY_MODULES = ()" in source
+    # _LazyImportFinder 类定义在 if 块内，空元组时不执行 if 块
+    assert "if _LAZY_MODULES and _SITE_PACKAGES" in source
+
+
+def test_generate_wrapper_source_lazy_imports_enabled() -> None:
+    """lazy_imports 非空：wrapper 注入 _LazyImportFinder meta path finder（iter-102）.
+
+    --lazy-import numpy,pandas 指定的模块由 LazyLoader 包装，首次属性访问时
+    才执行 __init__.py，降低启动时间。
+    """
+    source = EntryWrapper.generate_wrapper_source("app", None, "app.py", lazy_imports=("numpy", "pandas"))
+    # 模块名以元组字面量注入
+    assert "_LAZY_MODULES = ('numpy', 'pandas')" in source
+    # _LazyImportFinder 类定义存在
+    assert "class _LazyImportFinder:" in source
+    assert "importlib.util.LazyLoader" in source
+    # 注册到 sys.meta_path 前端
+    assert "sys.meta_path.insert(0, _LazyImportFinder" in source
+
+
+def test_generate_wrapper_source_lazy_imports_single_module() -> None:
+    """单个 lazy-import 模块：元组字面量含一个元素."""
+    source = EntryWrapper.generate_wrapper_source("app", None, "app.py", lazy_imports=("numpy",))
+    assert "_LAZY_MODULES = ('numpy',)" in source
+    assert "importlib.util.LazyLoader" in source
+
+
+def test_generate_wrapper_source_lazy_imports_empty_tuple() -> None:
+    """显式传空元组：与默认行为一致，if 块不执行."""
+    source = EntryWrapper.generate_wrapper_source("app", None, "app.py", lazy_imports=())
+    assert "_LAZY_MODULES = ()" in source
+    # 类定义仍在源码中（模板静态包含），但 if 块不执行
+    assert "_LazyImportFinder" in source

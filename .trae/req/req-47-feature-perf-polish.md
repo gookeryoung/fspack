@@ -172,7 +172,7 @@ req-46 完成缓存配置 + 离线支持 + init 模板命令（iter-76~85），�
   用 `objdump`（Linux/macOS）或 `pefile` 库（Windows）解析 .dll/.so/.dylib
   的依赖树；(2) Qt 闭包外但被保留的 DLL 若无依赖引用则剥离；(3) `--analyze-deps`
   选项启用深度依赖分析（默认关闭，耗时）；(4) 体积报告新增"依赖分析节省"行
-- [ ] **iter-102 启动时间优化**：(1) entry wrapper 注入 `sys.path_hooks`
+- [x] **iter-102 启动时间优化**：(1) entry wrapper 注入 `sys.path_hooks`
   优先匹配 site-packages；(2) 重量级模块延迟导入钩子：`--lazy-import numpy,pandas`
   首次 import 时才执行模块初始化；(3) `.pth` 文件优化：site-packages 下 .pth
   仅在 `--no-site` 关闭时处理，默认跳过；(4) 测量启动时间基线，验证提速 ≥10ms

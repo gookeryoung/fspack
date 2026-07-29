@@ -249,10 +249,18 @@ def _execute_build(  # noqa: PLR0913
     has_tkinter = _download_dependencies(ctx, site_packages, report)
 
     if target is Platform.WINDOWS:
-        # tkinter 补充到 runtime/Lib/tkinter/，需将 Lib 加入 _pth 使其可被 import
+        # tkinter 补充到 runtime/Lib/tkinter/，需将 Lib 加入 _pth 使其可 import
         # （_pth 默认只含 Lib\site-packages，不含 Lib 本身）
         extra_pth_paths = ("Lib",) if has_tkinter else ()
         write_pth(cfg.dist_dir, info.py_version, extra_paths=extra_pth_paths, enable_site=not opts.no_site)
+
+    # .pth 文件优化（iter-102）：no_site=True 时 site.py 不加载，.pth 文件不会被
+    # 处理，保留它们仅占空间且可能误导。剥离 site-packages 下所有 .pth 文件，
+    # 典型节省数 KB 到数十 KB（pywin32_postinstall.pth、distutils-precedence.pth 等）。
+    # no_site=False 时保留 .pth 文件，site.py 启动时处理（如设置 sys.path）。
+    if opts.no_site and site_packages.is_dir():
+        for _pth_file in site_packages.glob("*.pth"):
+            _pth_file.unlink()
 
     with tracker.stage("复制源码") as st:
         src_dst = cfg.dist_dir / "src"

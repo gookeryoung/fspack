@@ -428,7 +428,12 @@ def _build_entry_loaders(ctx: BuildContext, resolved_icon: Path | None, has_tkin
                 wrapper_path = ctx.cfg.dist_dir / wrapper_name
                 wrapper_path.write_text(
                     EntryWrapper.generate_wrapper_source(
-                        ep.name, module_dotted, entry_rel, pkg_root_rel, has_tkinter=has_tkinter
+                        ep.name,
+                        module_dotted,
+                        entry_rel,
+                        pkg_root_rel,
+                        has_tkinter=has_tkinter,
+                        lazy_imports=ctx.opts.lazy_imports,
                     ),
                     encoding="utf-8",
                 )

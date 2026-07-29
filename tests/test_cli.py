@@ -128,6 +128,24 @@ def test_build_keep_module_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert called["options"].keep_modules == {"PySide2.QtGui", "PySide2.QtNetwork"}
 
 
+def test_build_lazy_import_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`--lazy-import numpy,pandas` 解析为元组封装到 BuildOptions.lazy_imports."""
+    _make_minimal_project(tmp_path)
+    called, fake_build = _capture_build()
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    cli.main(["b", str(tmp_path), "--lazy-import", "numpy,pandas"])
+    assert called["options"].lazy_imports == ("numpy", "pandas")
+
+
+def test_build_lazy_import_default_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """未指定 --lazy-import 时 lazy_imports 为空元组."""
+    _make_minimal_project(tmp_path)
+    called, fake_build = _capture_build()
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    cli.main(["b", str(tmp_path)])
+    assert called["options"].lazy_imports == ()
+
+
 def test_build_icon_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`fspack b <project> --icon <path>` 解析为绝对路径并封装到 BuildOptions.icon."""
     _make_minimal_project(tmp_path)
@@ -408,6 +426,41 @@ def test_drop_separator() -> None:
     assert cli._drop_separator(["--", "a", "b"]) == ["a", "b"]
     assert cli._drop_separator(["a", "b"]) == ["a", "b"]
     assert cli._drop_separator([]) == []
+
+
+def test_parse_lazy_imports_none_uses_base() -> None:
+    """CLI 未指定 --lazy-import 时用配置默认 base."""
+    assert cli._parse_lazy_imports(None, ("numpy",)) == ("numpy",)
+
+
+def test_parse_lazy_imports_empty_string_clears() -> None:
+    """--lazy-import '' 显式清除：返回空元组."""
+    assert cli._parse_lazy_imports("", ("numpy",)) == ()
+
+
+def test_parse_lazy_imports_single() -> None:
+    """--lazy-import numpy 解析为单元素元组."""
+    assert cli._parse_lazy_imports("numpy", ()) == ("numpy",)
+
+
+def test_parse_lazy_imports_multiple() -> None:
+    """--lazy-import numpy,pandas 解析为多元素元组."""
+    assert cli._parse_lazy_imports("numpy,pandas", ()) == ("numpy", "pandas")
+
+
+def test_parse_lazy_imports_strips_whitespace() -> None:
+    """--lazy-import 值含空白：strip 后去空元素."""
+    assert cli._parse_lazy_imports(" numpy , pandas , ", ()) == ("numpy", "pandas")
+
+
+def test_parse_lazy_imports_dedupes() -> None:
+    """--lazy-import numpy,numpy 去重保留首次出现."""
+    assert cli._parse_lazy_imports("numpy,numpy,pandas", ()) == ("numpy", "pandas")
+
+
+def test_parse_lazy_imports_overrides_base() -> None:
+    """CLI 完全覆盖配置默认（与 extras 语义一致，非合并）."""
+    assert cli._parse_lazy_imports("pandas", ("numpy",)) == ("pandas",)
 
 
 def test_invalid_mirror_rejected(tmp_path: Path) -> None:

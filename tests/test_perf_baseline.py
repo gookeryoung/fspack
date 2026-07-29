@@ -322,3 +322,37 @@ class TestProjectInfoBaseline:
         ProjectInfo.from_dir(sample_pyproject_project)
         result = benchmark(ProjectInfo.from_dir, sample_pyproject_project)
         assert result.name == "myproj"
+
+
+@pytest.mark.slow
+class TestEntryWrapperBaseline:
+    """入口包装器生成性能基线（iter-102 启动时间优化）.
+
+    测量 wrapper 源码生成耗时，作为启动时间优化的参考点。wrapper 在每次构建时
+    为每个入口生成，包含 sys.path 设置、Qt 插件路径、path_importer_cache 预填充
+    与 lazy-import 钩子注入。生成耗时影响构建阶段，运行时启动时间由 wrapper
+    注入的优化代码（LazyLoader、path_importer_cache）决定。
+    """
+
+    def test_generate_wrapper_source_baseline(self, benchmark: Any) -> None:
+        """wrapper 源码生成基线：含 lazy-import 钩子的完整模板格式化耗时.
+
+        优化目标（iter-102）：模板格式化应保持 < 1ms，lazy-import 钩子注入
+        不引入显著开销。此基线作为后续 wrapper 扩展的回归参考。
+        """
+        from fspack.packaging.entry import EntryWrapper
+
+        result = benchmark(
+            EntryWrapper.generate_wrapper_source,
+            "app",
+            "src.app",
+            "app.py",
+            ".",
+            False,  # has_tkinter
+            ("numpy", "pandas"),  # lazy_imports
+        )
+        # 功能正确性验证
+        assert "_LAZY_MODULES = ('numpy', 'pandas')" in result
+        assert "class _LazyImportFinder:" in result
+        assert "sys.path_importer_cache" in result
+        assert "importlib.util.LazyLoader" in result
