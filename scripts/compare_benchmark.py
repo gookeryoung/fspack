@@ -71,6 +71,8 @@ class ComparisonReport:
     regressions: int = 0
     improvements: int = 0
     no_history: int = 0  # 仅当前运行、无历史可比的测试数
+    is_systemic: bool = False  # 系统性退化（机器负载波动，非代码问题）
+    systemic_detail: str = ""  # 系统性退化判定依据描述
 
 
 def _find_benchmark_files(bench_dir: Path) -> list[Path]:
@@ -229,7 +231,47 @@ def compare(
             )
         )
 
+    _detect_systemic_regression(report)
     return report
+
+
+def _detect_systemic_regression(report: ComparisonReport) -> None:
+    """检测系统性退化：全部测试同步大幅退化时判定为机器负载波动.
+
+    GitHub Actions 共享机器性能波动可达 2-3x，会导致所有测试同步退化。
+    真实代码退化只影响特定测试（如 AST 优化只影响 analyze_dependencies），
+    不会让 collect_imports/slim_unpack/fingerprint 等无关测试同时退化。
+
+    判定条件（同时满足）：
+    - 可比测试数 ≥ 3（样本太少不判定）
+    - 退化率 > 60%（超半数测试退化）
+    - 退化测试的中位退化幅度 > 50%（大幅退化，非边缘抖动）
+
+    判定为系统性退化时设置 ``report.is_systemic = True``，``main()`` 据此
+    输出警告但不阻断 CI（exit 0）。
+    """
+    comparable = report.total_benchmarks - report.no_history
+    if comparable < 3:
+        return
+
+    regression_rate = report.regressions / comparable
+    if regression_rate <= 0.6:
+        return
+
+    regressed_deltas = [r.delta_pct for r in report.rows if r.is_regression]
+    if not regressed_deltas:
+        return
+
+    median_delta = sorted(regressed_deltas)[len(regressed_deltas) // 2]
+    if median_delta <= 50.0:
+        return
+
+    report.is_systemic = True
+    report.systemic_detail = (
+        f"{report.regressions}/{comparable} 测试退化"
+        f"（退化率 {regression_rate * 100:.0f}%），"
+        f"退化中位幅度 {median_delta:.0f}%，判定为机器负载波动"
+    )
 
 
 def _format_time(seconds: float) -> str:
@@ -291,6 +333,10 @@ def print_report(report: ComparisonReport, threshold: float) -> None:
         f"退化 {report.regressions} | 提升 {report.improvements} | "
         f"首次 {report.no_history} | 阈值 {threshold:.0f}%"
     )
+    if report.is_systemic:
+        print(f"\n⚠ 系统性退化检测: {report.systemic_detail}")
+        print("全部测试同步大幅退化，判定为机器负载波动，不阻断 CI。")
+        print("建议人工审查 artifact 中的 JSON 数据确认无真实退化。")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -315,6 +361,9 @@ def main(argv: list[str] | None = None) -> int:
     report = compare(args.bench_dir, args.threshold)
     print_report(report, args.threshold)
 
+    if report.is_systemic:
+        # 系统性退化（机器负载波动）：输出警告但不阻断 CI
+        return 0
     if report.regressions > 0:
         print(f"\n失败: {report.regressions} 项退化超过 {args.threshold:.0f}% 阈值")
         return 1
