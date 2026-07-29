@@ -2138,6 +2138,20 @@ def test_clean_dist_no_dist(tmp_path: Path) -> None:
 # --- _trim_standalone_runtime 测试 ---
 
 
+def _symlink_or_skip(target: str, link: Path) -> None:
+    """尝试创建符号链接，Windows 无权限时跳过测试.
+
+    这些测试验证 Linux standalone runtime 的符号链接处理
+    （``_trim_standalone_runtime`` 对 Windows 平台直接 return），
+    Windows 非管理员环境无法创建符号链接时跳过而非失败。
+    启用 Windows 开发者模式或以管理员运行可解除限制。
+    """
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError) as e:
+        pytest.skip(f"无法创建符号链接（Windows 需开发者模式或管理员权限）: {e}")
+
+
 def _make_standalone_runtime(tmp_path: Path, py_version: str = "3.11.9") -> Path:
     """构造最小 standalone runtime 目录树供 _trim_standalone_runtime 测试."""
     runtime = tmp_path / "runtime"
@@ -2148,8 +2162,8 @@ def _make_standalone_runtime(tmp_path: Path, py_version: str = "3.11.9") -> Path
     bin_dir.mkdir(parents=True)
     py_bin = bin_dir / py_tag
     py_bin.write_bytes(b"\x7fELF" + b"x" * 1024)
-    (bin_dir / "python3").symlink_to(py_tag)
-    (bin_dir / "python").symlink_to(py_tag)
+    _symlink_or_skip(py_tag, bin_dir / "python3")
+    _symlink_or_skip(py_tag, bin_dir / "python")
     (bin_dir / f"{py_tag}-config").write_text("#!/bin/sh\n")
     for name in ("2to3", "idle3", "pydoc3", "pip", "pip3"):
         (bin_dir / name).write_text("#!/bin/sh\n")
@@ -2158,7 +2172,7 @@ def _make_standalone_runtime(tmp_path: Path, py_version: str = "3.11.9") -> Path
     lib_dir = runtime / "python" / "lib"
     lib_dir.mkdir(parents=True)
     (lib_dir / f"libpython{major}.{minor}.so.1.0").write_bytes(b"\x7fELF" + b"y" * 2048)
-    (lib_dir / f"libpython{major}.{minor}.so").symlink_to(f"libpython{major}.{minor}.so.1.0")
+    _symlink_or_skip(f"libpython{major}.{minor}.so.1.0", lib_dir / f"libpython{major}.{minor}.so")
     (lib_dir / "libtcl9.0.so").write_bytes(b"tcl" + b"t" * 512)
     (lib_dir / "libtk9.0.so").write_bytes(b"tk" + b"k" * 512)
     (lib_dir / "tcl9.0").mkdir()
@@ -2428,7 +2442,7 @@ def test_strip_tcl_tk_counted_handles_symlinks(tmp_path: Path) -> None:
     lib_dir = python_dir / "lib"
     lib_dir.mkdir(parents=True)
     (lib_dir / "libtcl9.0.so").write_bytes(b"tcl" * 10)
-    (lib_dir / "libtcl9.0.so.1").symlink_to("libtcl9.0.so")
+    _symlink_or_skip("libtcl9.0.so", lib_dir / "libtcl9.0.so.1")
 
     saved, dirs, files = _strip_tcl_tk_counted(python_dir)
 
