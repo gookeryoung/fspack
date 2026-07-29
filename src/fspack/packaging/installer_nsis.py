@@ -63,8 +63,9 @@ Unicode True
 # 安装前检测已安装版本：版本不同时询问是否先卸载旧版再安装新版
 Function .onInit
   ReadRegStr $R0 HKLM "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{name}" "DisplayVersion"
-  ReadRegStr $R1 HKLM "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{name}" "UninstallString"
-  ${{If}} $R1 != ""
+  ReadRegStr $R2 HKLM "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{name}" "InstallLocation"
+  ${{If}} $R2 != ""
+  ${{AndIf}} ${{FileExists}} "$R2\\uninstall.exe"
     ${{If}} $R0 == "{version}"
       # 已安装相同版本，直接覆盖不打扰
       Return
@@ -72,8 +73,9 @@ Function .onInit
     # 已安装不同版本，询问是否先卸载
     MessageBox MB_YESNO|MB_ICONQUESTION "检测到已安装 $R0 版本，是否先卸载再安装 {version}？" IDYES uninstall_old IDNO skip_uninstall
     uninstall_old:
-      # 静默卸载旧版并等待完成，确保文件不被占用
-      ExecWait '$R1 /S'
+      # _?= 让卸载器在原位置运行不自我复制到 temp，ExecWait 才能等待真正完成
+      # 否则卸载器会复制自身到 %TEMP% 并立即退出原进程，ExecWait 不等待
+      ExecWait '"$R2\\uninstall.exe" /S _?=$R2' $R3
       Goto done
     skip_uninstall:
       # 用户选择直接覆盖安装
