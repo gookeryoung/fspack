@@ -22,6 +22,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -32,6 +33,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -1079,6 +1081,36 @@ def _print_performance_analysis(results: list[TemplateBuildResult]) -> None:
 # ---- 基准历史持久化与横向对比 ----
 
 
+def _machine_id() -> str:
+    """生成匿名机器代号，基于机器名哈希前 8 位，不可逆推真实机器名.
+
+    用 ``platform.node()`` 的 MD5 前缀作为确定性编码，同一机器每次运行
+    返回相同值，便于历史对比时确认同一机器。``platform.node()`` 为空时
+    回退到 ``uuid.getnode()``（MAC 地址哈希化），避免空值导致碰撞。
+    """
+    raw = platform.node() or str(uuid.getnode())
+    return hashlib.md5(raw.encode()).hexdigest()[:8]
+
+
+def _collect_machine_info() -> dict[str, Any]:
+    """收集机器性能配置信息（匿名化），便于分析性能基线.
+
+    :return: 含 ``node_id``（匿名编码）、``system``、``python_version``、
+        ``cpu``（brand/count/arch/bits）的字典，不含个人隐私信息。
+    """
+    return {
+        "node_id": _machine_id(),
+        "system": platform.system(),
+        "python_version": sys.version.split()[0],
+        "cpu": {
+            "brand": platform.processor(),
+            "count": os.cpu_count() or 0,
+            "arch": platform.machine(),
+            "bits": struct.calcsize("P") * 8,
+        },
+    }
+
+
 def _bench_history_group_dir(base: Path) -> Path:
     """返回当前机器与 Python 版本对应的基准历史分组目录.
 
@@ -1104,11 +1136,7 @@ def _serialize_bench_results(results: list[TemplateBuildResult]) -> dict[str, An
     """
     return {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
-        "machine": {
-            "node": platform.node(),
-            "system": platform.system(),
-            "python_version": sys.version.split()[0],
-        },
+        "machine": _collect_machine_info(),
         "results": [
             {
                 "template_id": r.template_id,

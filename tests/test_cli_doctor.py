@@ -34,6 +34,7 @@ from fspack.cli_doctor import (
     _check_pillow,
     _check_pip,
     _check_tool_version,
+    _collect_machine_info,
     _deserialize_bench_results,
     _dir_size,
     _find_debug_python,
@@ -44,6 +45,7 @@ from fspack.cli_doctor import (
     _format_size,
     _format_status,
     _load_previous_bench_history,
+    _machine_id,
     _print_bench_comparison,
     _print_performance_analysis,
     _print_template_build_summary,
@@ -1289,13 +1291,55 @@ def test_serialize_deserialize_roundtrip() -> None:
 
 
 def test_serialize_includes_machine_info() -> None:
-    """序列化结果含 machine 信息（node/system/python_version）."""
+    """序列化结果含匿名化 machine 信息（node_id/system/python_version/cpu）."""
     results = [TemplateBuildResult(template_id="x", success=True, duration_sec=1.0, dist_size=100)]
     data = _serialize_bench_results(results)
     assert "machine" in data
-    assert "node" in data["machine"]
-    assert "system" in data["machine"]
-    assert "python_version" in data["machine"]
+    machine = data["machine"]
+    # node_id 是匿名编码（8 位 hex），不含真实机器名
+    assert "node_id" in machine
+    assert len(machine["node_id"]) == 8
+    assert "node" not in machine  # 不含真实机器名（隐私）
+    assert "system" in machine
+    assert "python_version" in machine
+    # cpu 性能配置
+    assert "cpu" in machine
+    assert "brand" in machine["cpu"]
+    assert "count" in machine["cpu"]
+    assert "arch" in machine["cpu"]
+    assert "bits" in machine["cpu"]
+
+
+def test_machine_id_is_deterministic_and_anonymous() -> None:
+    """_machine_id 返回 8 位 hex 编码，同一进程内确定性，不含真实机器名."""
+    id1 = _machine_id()
+    id2 = _machine_id()
+    assert id1 == id2  # 确定性
+    assert len(id1) == 8  # 8 位
+    # 仅含 hex 字符
+    import re
+
+    assert re.match(r"^[0-9a-f]{8}$", id1)
+    # 不含真实机器名
+    import platform
+
+    assert platform.node() not in id1
+
+
+def test_collect_machine_info_no_privacy() -> None:
+    """_collect_machine_info 不含真实机器名（隐私），含 CPU 性能配置."""
+    info = _collect_machine_info()
+    import platform
+
+    # 不含真实机器名
+    assert "node" not in info
+    if platform.node():
+        assert platform.node() not in str(info)
+    # 含匿名编码
+    assert "node_id" in info
+    # 含 CPU 性能配置
+    assert info["cpu"]["count"] > 0
+    assert info["cpu"]["bits"] in (32, 64)
 
 
 def test_save_bench_history_creates_file(tmp_path: Path) -> None:
