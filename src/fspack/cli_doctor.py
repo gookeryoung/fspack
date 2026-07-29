@@ -22,17 +22,22 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import platform
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
 
 from fspack import __version__
 from fspack.console import console
@@ -879,6 +884,7 @@ def run_doctor_bench() -> None:  # pragma: no cover
                 console.rich.print(f"  [red]×[/red] 失败: {result.error}")
 
     _print_template_build_summary(results, bench=True)
+    _save_and_compare_bench(results)
 
 
 def _print_template_build_summary(results: list[TemplateBuildResult], *, bench: bool) -> None:
@@ -1045,3 +1051,231 @@ def _print_performance_analysis(results: list[TemplateBuildResult]) -> None:
             f"\n最慢模板 [cyan]{slowest.template_id}[/cyan] ({slowest.duration_sec:.1f}s) "
             f"是最快 [cyan]{fastest.template_id}[/cyan] ({fastest.duration_sec:.1f}s) 的 {ratio:.1f} 倍"
         )
+
+
+# ---- 基准历史持久化与横向对比 ----
+
+
+def _bench_history_group_dir(base: Path) -> Path:
+    """返回当前机器与 Python 版本对应的基准历史分组目录.
+
+    按 ``{System}-CPython-{major}.{minor}-{bits}bit`` 分组，与 pytest-benchmark
+    目录命名一致。``base`` 下用 ``doctor/`` 子目录隔离 doctor 基准与
+    pytest-benchmark 数据，避免互相干扰。
+
+    :param base: 基准根目录（如 ``<project>/.benchmarks``）
+    :return: 分组目录路径（如 ``<base>/doctor/Windows-CPython-3.11-64bit``）
+    """
+    py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
+    bits = struct.calcsize("P") * 8
+    return base / "doctor" / f"{platform.system()}-CPython-{py_ver}-{bits}bit"
+
+
+def _serialize_bench_results(results: list[TemplateBuildResult]) -> dict[str, Any]:
+    """序列化构建结果为可 JSON 持久化的字典.
+
+    :return: 含 ``timestamp``/``machine``/``results`` 三段的字典，
+        ``results`` 每项含 ``template_id``/``success``/``duration_sec``/
+        ``dist_size``/``entry_count``/``error``/``run_success``/``run_exit_code``。
+    """
+    return {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "machine": {
+            "node": platform.node(),
+            "system": platform.system(),
+            "python_version": sys.version.split()[0],
+        },
+        "results": [
+            {
+                "template_id": r.template_id,
+                "success": r.success,
+                "duration_sec": r.duration_sec,
+                "dist_size": r.dist_size,
+                "entry_count": r.entry_count,
+                "error": r.error,
+                "run_success": r.run_result.success if r.run_result else None,
+                "run_exit_code": r.run_result.exit_code if r.run_result else None,
+            }
+            for r in results
+        ],
+    }
+
+
+def _deserialize_bench_results(data: dict[str, Any]) -> tuple[list[TemplateBuildResult], str]:
+    """从 JSON 字典反序列化构建结果.
+
+    :param data: :func:`_serialize_bench_results` 产出的字典
+    :return: ``(results, timestamp)``，``timestamp`` 为 ISO 格式时间字符串
+    """
+    results: list[TemplateBuildResult] = []
+    for item in data.get("results", []):
+        run_result: TemplateRunResult | None = None
+        if item.get("run_success") is not None:
+            run_result = TemplateRunResult(
+                success=item["run_success"],
+                timed_out=False,
+                exit_code=item.get("run_exit_code", -1),
+                duration_sec=0.0,
+            )
+        results.append(
+            TemplateBuildResult(
+                template_id=item["template_id"],
+                success=item["success"],
+                duration_sec=item["duration_sec"],
+                dist_size=item.get("dist_size", 0),
+                entry_count=item.get("entry_count", 0),
+                error=item.get("error", ""),
+                run_result=run_result,
+            )
+        )
+    return results, data.get("timestamp", "")
+
+
+def _save_bench_history(results: list[TemplateBuildResult], dir: Path) -> Path:
+    """保存基准结果到历史目录，返回保存的文件路径.
+
+    文件名 ``{YYYYMMDDTHHMMSS}.json``，按时间戳排序。``dir`` 不存在时自动创建。
+    """
+    dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+    data = _serialize_bench_results(results)
+    path = dir / f"{timestamp}.json"
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
+def _load_previous_bench_history(
+    dir: Path, *, exclude: Path | None = None
+) -> tuple[list[TemplateBuildResult], str] | None:
+    """加载上一次基准结果.
+
+    按文件名降序扫描 ``dir`` 下 ``*.json``，返回第一个有效的历史文件。
+    ``exclude`` 指定的文件跳过（用于排除刚保存的当前结果）。
+
+    :return: ``(results, timestamp)`` 或 ``None``（无历史或全部损坏）
+    """
+    if not dir.is_dir():
+        return None
+    for f in sorted(dir.glob("*.json"), reverse=True):
+        if exclude and f.samefile(exclude):
+            continue
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue  # pragma: no cover - 跳过损坏文件
+        try:
+            return _deserialize_bench_results(data)
+        except (KeyError, TypeError, ValueError):
+            continue  # pragma: no cover - 跳过格式错误文件
+    return None
+
+
+def _format_bench_delta(
+    current: float,
+    previous: float,
+    fmt_abs: Callable[[float], str],
+) -> str:
+    """格式化基准变化值为 rich 标记字符串.
+
+    :param current: 当前值
+    :param previous: 上次值
+    :param fmt_abs: 绝对值格式化函数（如 ``lambda v: f"{v:.1f}s"`` 或 ``_format_size``）
+    :return: rich 标记字符串——变慢红色、变快绿色、持平灰色、无历史灰色 ``--``
+
+    持平阈值：耗时 ``0.05s`` 以内、大小 ``10B`` 以内视为 ``=``（由调用方确保
+    ``fmt_abs`` 的精度隐含的阈值合理，本函数统一用 ``abs(delta) < 0.01`` 数值阈值
+    避免浮点噪声，大小类调用方传入字节值时 ``0.01`` 远小于 10B 仍有效）。
+    """
+    if previous <= 0:
+        return "[dim]--[/dim]"
+    delta = current - previous
+    if abs(delta) < 0.01:
+        return "[dim]=[/dim]"
+    pct = delta / previous * 100
+    sign = "+" if delta > 0 else "-"
+    color = "red" if delta > 0 else "green"
+    return f"[{color}]{sign}{fmt_abs(abs(delta))} ({sign}{abs(pct):.1f}%)[/{color}]"
+
+
+def _print_bench_comparison(
+    current: list[TemplateBuildResult],
+    previous: list[TemplateBuildResult],
+    prev_label: str,
+) -> None:
+    """打印当前基准与历史基准的横向对比表.
+
+    仅对比构建成功的模板，按 ``template_id`` 匹配。耗时变化与产物大小变化
+    以 rich 标记着色：变慢/变大红色、变快/变小绿色、持平灰色、无历史灰色 ``--``。
+
+    :param current: 当前基准结果
+    :param previous: 上次基准结果
+    :param prev_label: 上次基准的时间标签（用于标题显示）
+    """
+    from rich.table import Table
+
+    prev_by_id = {r.template_id: r for r in previous if r.success}
+    ok_current = [r for r in current if r.success]
+    if not ok_current:
+        return
+
+    console.rich.print()
+    console.step(f"性能对比（与 {prev_label} 基准）")
+
+    table = Table(title="横向对比", show_lines=False)
+    table.add_column("#", justify="right", style="dim")
+    table.add_column("模板", style="cyan")
+    table.add_column("本次耗时", justify="right")
+    table.add_column("上次耗时", justify="right")
+    table.add_column("耗时变化", justify="right")
+    table.add_column("本次大小", justify="right")
+    table.add_column("大小变化", justify="right")
+
+    for i, r in enumerate(ok_current, 1):
+        prev = prev_by_id.get(r.template_id)
+        if prev:
+            prev_time_str = f"{prev.duration_sec:.1f}s"
+            time_delta = _format_bench_delta(r.duration_sec, prev.duration_sec, lambda v: f"{v:.1f}s")
+            size_delta = _format_bench_delta(r.dist_size, prev.dist_size, lambda v: _format_size(int(v)))
+        else:
+            prev_time_str = "-"
+            time_delta = "[dim]--[/dim]"
+            size_delta = "[dim]--[/dim]"
+
+        table.add_row(
+            str(i),
+            r.template_id,
+            f"{r.duration_sec:.1f}s",
+            prev_time_str,
+            time_delta,
+            _format_size(r.dist_size) if r.dist_size else "-",
+            size_delta,
+        )
+
+    console.rich.print(table)
+
+
+def _save_and_compare_bench(results: list[TemplateBuildResult]) -> None:
+    """保存当前基准并与历史横向对比.
+
+    1. 加载上一次历史基准（保存当前结果之前加载，避免把当前当作历史）。
+    2. 保存当前结果到 ``.benchmarks/doctor/{group}/{timestamp}.json``。
+    3. 如有历史，打印横向对比表；无历史则提示本次为首次基准。
+
+    :param results: 本次基准构建结果
+    """
+    base = Path.cwd() / ".benchmarks"
+    group_dir = _bench_history_group_dir(base)
+
+    # 先加载历史（保存当前结果之前），避免把当前结果当作历史
+    previous = _load_previous_bench_history(group_dir)
+
+    # 保存当前结果
+    saved_path = _save_bench_history(results, group_dir)
+    console.rich.print(f"\n[dim]基准已保存: {saved_path.name}[/dim]")
+
+    # 打印对比
+    if previous:
+        prev_results, prev_ts = previous
+        _print_bench_comparison(results, prev_results, prev_ts)
+    else:
+        console.rich.print("\n[dim]无历史基准，本次结果将作为首次基准[/dim]")

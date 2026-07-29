@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
@@ -26,22 +27,30 @@ from fspack.cli_doctor import (
     DoctorReport,
     TemplateBuildResult,
     TemplateRunResult,
+    _bench_history_group_dir,
     _build_debug_cmd,
     _build_run_cmd,
     _check_cache_dir,
     _check_pillow,
     _check_pip,
     _check_tool_version,
+    _deserialize_bench_results,
     _dir_size,
     _find_debug_python,
     _find_dist_exe,
     _find_wrapper,
+    _format_bench_delta,
     _format_run_status,
     _format_size,
     _format_status,
+    _load_previous_bench_history,
+    _print_bench_comparison,
     _print_performance_analysis,
     _print_template_build_summary,
     _run_template,
+    _save_and_compare_bench,
+    _save_bench_history,
+    _serialize_bench_results,
     print_doctor_report,
     run_doctor,
 )
@@ -1218,3 +1227,287 @@ def test_print_summary_bench_shows_run_error(capsys: pytest.CaptureFixture[str])
     assert "ModuleNotFoundError" in out
     assert "运行验证" in out
     assert "1 失败" in out
+
+
+# ---- 基准历史持久化与横向对比 ----
+
+
+def test_bench_history_group_dir_format(tmp_path: Path) -> None:
+    """分组目录格式：{base}/doctor/{System}-CPython-{major}.{minor}-{bits}bit."""
+    result = _bench_history_group_dir(tmp_path)
+    # 子目录在 doctor/ 下，与 pytest-benchmark 数据隔离
+    assert "doctor" in result.parts
+    # 目录名含 CPython 和 bit 标识
+    group_name = result.name
+    assert "CPython" in group_name
+    assert "bit" in group_name
+    # 父目录是 doctor
+    assert result.parent.name == "doctor"
+    assert result.parent.parent == tmp_path
+
+
+def test_serialize_deserialize_roundtrip() -> None:
+    """序列化/反序列化往返测试：数据完整保留."""
+    rr = TemplateRunResult(success=True, timed_out=False, exit_code=0, duration_sec=0.5)
+    results = [
+        TemplateBuildResult(
+            template_id="tpl_a",
+            success=True,
+            duration_sec=12.5,
+            dist_size=102400,
+            entry_count=1,
+            run_result=rr,
+        ),
+        TemplateBuildResult(
+            template_id="tpl_b",
+            success=False,
+            duration_sec=0.1,
+            error="构建失败",
+        ),
+    ]
+    data = _serialize_bench_results(results)
+    restored, ts = _deserialize_bench_results(data)
+
+    assert isinstance(ts, str)
+    assert len(restored) == 2
+    assert restored[0].template_id == "tpl_a"
+    assert restored[0].success is True
+    assert restored[0].duration_sec == 12.5
+    assert restored[0].dist_size == 102400
+    assert restored[0].entry_count == 1
+    assert restored[0].run_result is not None
+    assert restored[0].run_result.success is True
+    assert restored[0].run_result.exit_code == 0
+
+    assert restored[1].template_id == "tpl_b"
+    assert restored[1].success is False
+    assert restored[1].error == "构建失败"
+    assert restored[1].run_result is None
+
+
+def test_serialize_includes_machine_info() -> None:
+    """序列化结果含 machine 信息（node/system/python_version）."""
+    results = [TemplateBuildResult(template_id="x", success=True, duration_sec=1.0, dist_size=100)]
+    data = _serialize_bench_results(results)
+    assert "machine" in data
+    assert "node" in data["machine"]
+    assert "system" in data["machine"]
+    assert "python_version" in data["machine"]
+
+
+def test_save_bench_history_creates_file(tmp_path: Path) -> None:
+    """保存基准结果创建 JSON 文件到分组目录."""
+    results = [TemplateBuildResult(template_id="x", success=True, duration_sec=1.0, dist_size=100)]
+    group_dir = tmp_path / "doctor" / "Test-CPython-3.11-64bit"
+    path = _save_bench_history(results, group_dir)
+
+    assert path.is_file()
+    assert path.suffix == ".json"
+    assert path.parent == group_dir
+    # 文件名含时间戳（YYYYMMDDTHHMMSS 格式）
+    import re
+
+    assert re.match(r"\d{8}T\d{6}\.json", path.name)
+
+
+def test_save_bench_history_creates_dir(tmp_path: Path) -> None:
+    """保存时目录不存在则自动创建."""
+    group_dir = tmp_path / "deeply" / "nested" / "group"
+    results = [TemplateBuildResult(template_id="x", success=True, duration_sec=1.0, dist_size=100)]
+    path = _save_bench_history(results, group_dir)
+    assert path.is_file()
+    assert group_dir.is_dir()
+
+
+def test_load_previous_bench_history_no_dir_returns_none(tmp_path: Path) -> None:
+    """目录不存在时返回 None."""
+    assert _load_previous_bench_history(tmp_path / "nonexistent") is None
+
+
+def test_load_previous_bench_history_empty_dir_returns_none(tmp_path: Path) -> None:
+    """空目录返回 None."""
+    assert _load_previous_bench_history(tmp_path) is None
+
+
+def test_load_previous_bench_history_returns_latest(tmp_path: Path) -> None:
+    """加载最近一次历史（按文件名降序第一个有效文件）."""
+    results1 = [TemplateBuildResult(template_id="old", success=True, duration_sec=1.0, dist_size=100)]
+    results2 = [TemplateBuildResult(template_id="new", success=True, duration_sec=2.0, dist_size=200)]
+
+    # 手动创建两个不同时间戳的文件
+    (tmp_path / "20260101T000000.json").write_text(
+        json.dumps(_serialize_bench_results(results1), ensure_ascii=False), encoding="utf-8"
+    )
+    (tmp_path / "20260201T000000.json").write_text(
+        json.dumps(_serialize_bench_results(results2), ensure_ascii=False), encoding="utf-8"
+    )
+
+    previous = _load_previous_bench_history(tmp_path)
+    assert previous is not None
+    prev_results, _ts = previous
+    assert prev_results[0].template_id == "new"  # 返回最新的
+
+
+def test_load_previous_bench_history_exclude_current(tmp_path: Path) -> None:
+    """exclude 参数跳过指定文件，返回上一个历史."""
+    results1 = [TemplateBuildResult(template_id="old", success=True, duration_sec=1.0, dist_size=100)]
+    results2 = [TemplateBuildResult(template_id="new", success=True, duration_sec=2.0, dist_size=200)]
+
+    old_path = tmp_path / "20260101T000000.json"
+    new_path = tmp_path / "20260201T000000.json"
+    old_path.write_text(json.dumps(_serialize_bench_results(results1), ensure_ascii=False), encoding="utf-8")
+    new_path.write_text(json.dumps(_serialize_bench_results(results2), ensure_ascii=False), encoding="utf-8")
+
+    # 排除 new_path，应返回 old
+    previous = _load_previous_bench_history(tmp_path, exclude=new_path)
+    assert previous is not None
+    prev_results, _ = previous
+    assert prev_results[0].template_id == "old"
+
+
+def test_load_previous_bench_history_skips_corrupt(tmp_path: Path) -> None:
+    """损坏的 JSON 文件被跳过，返回下一个有效文件."""
+    results = [TemplateBuildResult(template_id="ok", success=True, duration_sec=1.0, dist_size=100)]
+    (tmp_path / "20260101T000000.json").write_text("not valid json", encoding="utf-8")
+    (tmp_path / "20260201T000000.json").write_text(
+        json.dumps(_serialize_bench_results(results), ensure_ascii=False), encoding="utf-8"
+    )
+
+    previous = _load_previous_bench_history(tmp_path)
+    assert previous is not None
+    prev_results, _ = previous
+    assert prev_results[0].template_id == "ok"
+
+
+def test_format_bench_delta_slower() -> None:
+    """变慢（current > previous）返回红色标记."""
+    result = _format_bench_delta(12.0, 10.0, lambda v: f"{v:.1f}s")
+    assert "[red]" in result
+    assert "+2.0s" in result
+    assert "+20.0%" in result
+
+
+def test_format_bench_delta_faster() -> None:
+    """变快（current < previous）返回绿色标记."""
+    result = _format_bench_delta(8.0, 10.0, lambda v: f"{v:.1f}s")
+    assert "[green]" in result
+    assert "-2.0s" in result
+    assert "-20.0%" in result
+    assert "+20.0%" not in result  # 确保不是 +- 混合
+
+
+def test_format_bench_delta_equal() -> None:
+    """持平（delta < 0.01）返回灰色 =."""
+    result = _format_bench_delta(10.001, 10.0, lambda v: f"{v:.1f}s")
+    assert result == "[dim]=[/dim]"
+
+
+def test_format_bench_delta_no_history() -> None:
+    """previous <= 0 返回灰色 --."""
+    result = _format_bench_delta(10.0, 0.0, lambda v: f"{v:.1f}s")
+    assert result == "[dim]--[/dim]"
+
+
+def test_format_bench_delta_size_uses_format_size() -> None:
+    """大小变化用 _format_size 格式化."""
+    result = _format_bench_delta(2048, 1024, lambda v: _format_size(int(v)))
+    assert "[red]" in result
+    assert "1.0 KiB" in result  # delta=1024 → 1.0 KiB（_format_size 用 1024 进制）
+    assert "+100.0%" in result
+
+
+def test_print_bench_comparison_renders_table(capsys: pytest.CaptureFixture[str]) -> None:
+    """对比表渲染含模板名、耗时变化、大小变化."""
+    current = [
+        TemplateBuildResult(template_id="a", success=True, duration_sec=12.0, dist_size=102400),
+        TemplateBuildResult(template_id="b", success=True, duration_sec=8.0, dist_size=51200),
+    ]
+    previous = [
+        TemplateBuildResult(template_id="a", success=True, duration_sec=10.0, dist_size=102400),
+        TemplateBuildResult(template_id="b", success=True, duration_sec=10.0, dist_size=51200),
+    ]
+    _print_bench_comparison(current, previous, "2026-07-28T14:30")
+    out = capsys.readouterr().out
+    assert "性能对比" in out
+    assert "横向对比" in out
+    assert "a" in out
+    assert "b" in out
+    # a 变慢（12 vs 10），b 变快（8 vs 10）
+    assert "+2.0s" in out
+    assert "-2.0s" in out
+
+
+def test_print_bench_comparison_skips_failed_current(capsys: pytest.CaptureFixture[str]) -> None:
+    """对比表跳过构建失败的当前模板."""
+    current = [
+        TemplateBuildResult(template_id="ok", success=True, duration_sec=10.0, dist_size=100),
+        TemplateBuildResult(template_id="fail", success=False, duration_sec=0.1, error="err"),
+    ]
+    previous: list[TemplateBuildResult] = []
+    _print_bench_comparison(current, previous, "2026-07-28T14:30")
+    out = capsys.readouterr().out
+    assert "ok" in out
+    assert "fail" not in out
+
+
+def test_print_bench_comparison_no_match_shows_dash(capsys: pytest.CaptureFixture[str]) -> None:
+    """当前模板在上次历史中不存在时显示 --."""
+    current = [TemplateBuildResult(template_id="new_tpl", success=True, duration_sec=10.0, dist_size=100)]
+    previous = [TemplateBuildResult(template_id="old_tpl", success=True, duration_sec=10.0, dist_size=100)]
+    _print_bench_comparison(current, previous, "2026-07-28T14:30")
+    out = capsys.readouterr().out
+    assert "new_tpl" in out
+    assert "--" in out  # 无历史对比
+
+
+def test_print_bench_comparison_empty_current_no_output(capsys: pytest.CaptureFixture[str]) -> None:
+    """当前结果全部失败时不输出对比表."""
+    current = [TemplateBuildResult(template_id="x", success=False, duration_sec=0.1, error="err")]
+    previous = [TemplateBuildResult(template_id="x", success=True, duration_sec=10.0, dist_size=100)]
+    _print_bench_comparison(current, previous, "2026-07-28T14:30")
+    out = capsys.readouterr().out
+    assert "性能对比" not in out
+
+
+def test_save_and_compare_bench_first_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """首次运行无历史，保存结果并提示首次基准."""
+    monkeypatch.chdir(tmp_path)
+    results = [TemplateBuildResult(template_id="x", success=True, duration_sec=10.0, dist_size=100)]
+
+    _save_and_compare_bench(results)
+    out = capsys.readouterr().out
+
+    assert "基准已保存" in out
+    assert "首次基准" in out
+    # 确认文件已保存
+    group_dir = _bench_history_group_dir(tmp_path / ".benchmarks")
+    assert group_dir.is_dir()
+    assert len(list(group_dir.glob("*.json"))) == 1
+
+
+def test_save_and_compare_bench_with_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """有历史时保存当前结果并打印对比表."""
+    monkeypatch.chdir(tmp_path)
+    group_dir = _bench_history_group_dir(tmp_path / ".benchmarks")
+    group_dir.mkdir(parents=True)
+
+    # 保存历史基准
+    prev_results = [TemplateBuildResult(template_id="x", success=True, duration_sec=10.0, dist_size=100)]
+    (group_dir / "20260101T000000.json").write_text(
+        json.dumps(_serialize_bench_results(prev_results), ensure_ascii=False), encoding="utf-8"
+    )
+
+    # 当前结果（耗时变慢）
+    current_results = [TemplateBuildResult(template_id="x", success=True, duration_sec=12.0, dist_size=100)]
+    _save_and_compare_bench(current_results)
+    out = capsys.readouterr().out
+
+    assert "基准已保存" in out
+    assert "性能对比" in out
+    assert "+2.0s" in out  # 12 vs 10，变慢
+    # 确认两个文件存在（历史 + 当前）
+    assert len(list(group_dir.glob("*.json"))) == 2
