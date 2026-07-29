@@ -92,12 +92,12 @@ def _format_dependencies_block(dependencies: tuple[str, ...]) -> str:
     return "\n".join(f'    "{dep}",' for dep in dependencies)
 
 
-def _pyproject(dependencies: tuple[str, ...] = (), requires_python: str = ">=3.8") -> str:
+def _pyproject(dependencies: tuple[str, ...] = (), requires_python: str = ">=3.8,<3.12") -> str:
     """根据依赖列表与 Python 版本约束返回 pyproject.toml 内容模板.
 
     Args:
         dependencies: 依赖包名列表（含版本约束），空元组省略 dependencies 字段。
-        requires_python: ``requires-python`` 约束字符串，默认 ``">=3.8"``。
+        requires_python: ``requires-python`` 约束字符串，默认 ``">=3.8,<3.12"``。
             PySide2 不支持 Python 3.11+，其模板应传 ``">=3.8,<3.11"``。
     """
     if not dependencies:
@@ -692,7 +692,7 @@ _PYINSTALLER_PYPROJECT = """[project]
 name = "$project_name"
 version = "0.1.0"
 description = "$description"
-requires-python = ">=3.8"
+requires-python = ">=3.8,<3.12"
 
 [tool.fspack]
 # 构建默认值（CLI 标志可覆盖）
@@ -770,7 +770,7 @@ _MULTI_ENTRY_PYPROJECT = """[project]
 name = "$project_name"
 version = "0.1.0"
 description = "$description"
-requires-python = ">=3.8"
+requires-python = ">=3.8,<3.12"
 
 [tool.fspack.entries]
 cli = "src/cli.py"
@@ -851,7 +851,7 @@ _FULL_CONFIG_PYPROJECT = """[project]
 name = "$project_name"
 version = "0.1.0"
 description = "$description"
-requires-python = ">=3.8"
+requires-python = ">=3.8,<3.12"
 
 [tool.fspack]
 pyc_strip = true
