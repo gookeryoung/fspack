@@ -292,9 +292,17 @@ def test_init_project_snake(tmp_path: Path) -> None:
 
 
 def test_init_project_matplotlib(tmp_path: Path) -> None:
-    """init_project 用 matplotlib 模板创建项目."""
+    """init_project 用 matplotlib 模板创建项目.
+
+    模板显式 ``import tkinter`` 触发 fspack 打包 Tcl/Tk 运行时，并
+    ``matplotlib.use("TkAgg")`` 强制交互后端，避免 embed python 下
+    ``plt.show`` 抛 ``FigureCanvasAgg is non-interactive`` 错误。
+    """
     target = init_project("chart-app", template_id="matplotlib", directory=tmp_path)
     entry = (target / "chart_app.py").read_text(encoding="utf-8")
+    assert "import tkinter" in entry
+    assert "matplotlib.use" in entry
+    assert "TkAgg" in entry
     assert "import matplotlib.pyplot" in entry
     assert "plt.show" in entry
 
