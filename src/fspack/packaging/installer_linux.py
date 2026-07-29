@@ -174,7 +174,9 @@ def build_tarball_release(  # noqa: PLR0913
     """编排：可选 build → 校验可执行文件 → 生成 tar.gz 便携包，返回包路径。"""
     own_tracker = tracker is None
     tk = tracker or BuildTracker(title="打包阶段汇总")
-    dist, info = _prepare_dist(project_dir, mirror, py_version, no_build, dist_dir, Platform.LINUX, extras=extras)
+    dist, info = _prepare_dist(
+        project_dir, mirror, py_version, no_build, dist_dir, Platform.LINUX, extras=extras, tracker=tk
+    )
     _check_exe(dist, info, Platform.LINUX)
     release = dist / "release"
     tar_name = f"{_release_base(info, 'linux')}.tar.gz"
@@ -203,7 +205,9 @@ def build_deb_release(  # noqa: PLR0913
     """编排：可选 build → 校验可执行文件 → 构造 .deb 安装包，返回 .deb 路径。"""
     own_tracker = tracker is None
     tk = tracker or BuildTracker(title="打包阶段汇总")
-    dist, info = _prepare_dist(project_dir, mirror, py_version, no_build, dist_dir, Platform.LINUX, extras=extras)
+    dist, info = _prepare_dist(
+        project_dir, mirror, py_version, no_build, dist_dir, Platform.LINUX, extras=extras, tracker=tk
+    )
     _check_exe(dist, info, Platform.LINUX)
     release = dist / "release"
     deb_name = f"{info.name}_{info.version}-{_py_tag(info)}-slim_amd64.deb"

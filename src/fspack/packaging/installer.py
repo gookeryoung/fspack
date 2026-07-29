@@ -145,7 +145,7 @@ class Installer(abc.ABC):
         own_tracker = tracker is None
         tk = tracker or BuildTracker(title="打包阶段汇总")
         dist, info = _prepare_dist(
-            project_dir, mirror, py_version, no_build, dist_dir, cls.target_platform(), extras=extras
+            project_dir, mirror, py_version, no_build, dist_dir, cls.target_platform(), extras=extras, tracker=tk
         )
         exe = dist / cls.exe_filename(info)
         if not exe.is_file():
@@ -166,6 +166,7 @@ def _prepare_dist(  # noqa: PLR0913
     target: Platform,
     *,
     extras: Sequence[str] | None = None,
+    tracker: BuildTracker | None = None,
 ) -> tuple[Path, ProjectInfo]:
     """通用编排：可选 ``build()`` 构建项目到 dist，返回 ``(dist_dir, info)``。
 
@@ -179,24 +180,42 @@ def _prepare_dist(  # noqa: PLR0913
     ``extras`` 为 CLI ``--extra`` 透传的分组名，``None`` 时用配置默认；
     非 ``None`` 时覆盖 ``BuildOptions.extras``，仅在重新构建时生效。
 
+    ``tracker`` 提供时将项目解析与 extras 信息作为「准备项目」阶段记入打包汇总表，
+    便于在 ``fsp p`` 汇总中看到启用的 extras 分组。
+
     不校验可执行文件存在（由调用方按平台 ``exe_filename`` 自行校验）。
     """
     project_dir = Path(project_dir).resolve()
     dist = dist_dir or project_dir / "dist"
-    if no_build:
-        if not dist.is_dir():
-            raise InstallerError(f"未找到 dist 目录: {dist}（请先执行 fsp b）")
+
+    def _resolve_and_maybe_build() -> tuple[Path, ProjectInfo]:
+        if no_build:
+            if not dist.is_dir():
+                raise InstallerError(f"未找到 dist 目录: {dist}（请先执行 fsp b）")
+            info = resolve_project_info(project_dir, py_version, target)
+            return dist, info
+        # no_build=False：dist+exe 已就绪则复用，避免 fsp b 后 fsp p 重复构建
         info = resolve_project_info(project_dir, py_version, target)
+        if dist.is_dir() and _exe_exists(dist, info, target):
+            return dist, info
+        options = build_options_from_defaults(info.build_defaults)
+        if extras is not None:
+            options = replace(options, extras=frozenset(extras))
+        info = build(project_dir, mirror, py_version, dist_dir=dist, target=target, options=options)
         return dist, info
-    # no_build=False：dist+exe 已就绪则复用，避免 fsp b 后 fsp p 重复构建
-    info = resolve_project_info(project_dir, py_version, target)
-    if dist.is_dir() and _exe_exists(dist, info, target):
-        return dist, info
-    options = build_options_from_defaults(info.build_defaults)
-    if extras is not None:
-        options = replace(options, extras=frozenset(extras))
-    info = build(project_dir, mirror, py_version, dist_dir=dist, target=target, options=options)
-    return dist, info
+
+    if tracker is None:
+        return _resolve_and_maybe_build()
+
+    # tracker 提供时记入「准备项目」阶段，detail 含 extras 信息
+    with tracker.stage("准备项目") as st:
+        dist_ret, info_ret = _resolve_and_maybe_build()
+        detail = f"{info_ret.name} {info_ret.version} ({info_ret.app_type.value})"
+        resolved_extras = frozenset(extras) if extras is not None else info_ret.build_defaults.extras
+        if resolved_extras:
+            detail += f" | extras: {', '.join(sorted(resolved_extras))}"
+        st.set_detail(detail)
+    return dist_ret, info_ret
 
 
 def _exe_path(info: ProjectInfo, target: Platform) -> str:

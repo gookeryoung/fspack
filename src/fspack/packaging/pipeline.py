@@ -228,7 +228,12 @@ def _execute_build(  # noqa: PLR0913
         if merged_extra != info.extra_index_urls or merged_links != info.find_links:
             info = replace(info, extra_index_urls=merged_extra, find_links=merged_links)
         _logger.info("项目: %s %s (%s) 目标: %s", info.name, info.version, info.app_type.value, target.value)
-        st.set_detail(f"{info.name} {info.version} ({info.app_type.value})")
+        detail = f"{info.name} {info.version} ({info.app_type.value})"
+        if opts.extras:
+            extras_str = ", ".join(sorted(opts.extras))
+            detail += f" | extras: {extras_str}"
+            _logger.info("启用 extras: %s", extras_str)
+        st.set_detail(detail)
 
     runtime_dir = cfg.dist_dir / "runtime"
     ctx = BuildContext(tracker=tracker, info=info, cfg=cfg, opts=opts, runtime_dir=runtime_dir)

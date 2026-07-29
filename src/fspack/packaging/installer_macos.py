@@ -169,7 +169,7 @@ class MacInstaller(Installer):
         own_tracker = tracker is None
         tk = tracker or BuildTracker(title="打包阶段汇总")
         dist, info = _prepare_dist(
-            project_dir, mirror, py_version, no_build, dist_dir, cls.target_platform(), extras=extras
+            project_dir, mirror, py_version, no_build, dist_dir, cls.target_platform(), extras=extras, tracker=tk
         )
         exe = dist / cls.exe_filename(info)
         if not exe.is_file():
@@ -307,7 +307,9 @@ def build_pkg_release(  # noqa: PLR0913
     """编排：可选 build → 校验可执行文件 → 构造 .pkg 安装包，返回 .pkg 路径。"""
     own_tracker = tracker is None
     tk = tracker or BuildTracker(title="打包阶段汇总")
-    dist, info = _prepare_dist(project_dir, mirror, py_version, no_build, dist_dir, Platform.MACOS, extras=extras)
+    dist, info = _prepare_dist(
+        project_dir, mirror, py_version, no_build, dist_dir, Platform.MACOS, extras=extras, tracker=tk
+    )
     _check_exe(dist, info, Platform.MACOS)
     release = dist / "release"
     pkg_name = f"{_release_base(info, 'macos')}.pkg"
@@ -337,7 +339,9 @@ def build_dmg_release(  # noqa: PLR0913
     """编排：可选 build → 校验可执行文件 → 构造 .dmg 磁盘镜像，返回 .dmg 路径。"""
     own_tracker = tracker is None
     tk = tracker or BuildTracker(title="打包阶段汇总")
-    dist, info = _prepare_dist(project_dir, mirror, py_version, no_build, dist_dir, Platform.MACOS, extras=extras)
+    dist, info = _prepare_dist(
+        project_dir, mirror, py_version, no_build, dist_dir, Platform.MACOS, extras=extras, tracker=tk
+    )
     _check_exe(dist, info, Platform.MACOS)
     release = dist / "release"
     dmg_name = f"{_release_base(info, 'macos')}.dmg"
