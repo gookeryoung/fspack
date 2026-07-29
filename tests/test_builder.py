@@ -1098,7 +1098,9 @@ def test_dir_size_nested_files(tmp_path: Path) -> None:
 def test_dir_size_handles_concurrent_deletion(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """_dir_size 遇到 OSError（stat 失败）时跳过，不阻断计算.
 
-    模拟 rglob 返回的条目中，is_file() 通过但 stat() 抛 OSError（并发删除/权限问题）。
+    模拟 _scandir_tree 返回的条目中，stat(follow_symlinks=False) 抛 OSError
+    （并发删除/权限问题）。_dir_size 用 os.scandir 替代 rglob 后，DirEntry.stat
+    复用枚举时缓存，但仍可能因文件被并发删除而抛 OSError。
     """
 
     class _StatResult:
@@ -1109,25 +1111,20 @@ def test_dir_size_handles_concurrent_deletion(tmp_path: Path, monkeypatch: pytes
         def __init__(self, size: int) -> None:
             self._size = size
 
-        def is_file(self) -> bool:
-            return True
-
-        def stat(self) -> _StatResult:
+        def stat(self, *, follow_symlinks: bool = True) -> _StatResult:
             return _StatResult(self._size)
 
     class _BrokenEntry:
-        def is_file(self) -> bool:
-            return True
-
-        def stat(self) -> _StatResult:
+        def stat(self, *, follow_symlinks: bool = True) -> _StatResult:
             raise OSError("file removed by another process")
 
     d = tmp_path / "tree"
     d.mkdir()
+    # _dir_size 用 _scandir_tree（os.scandir）替代 Path.rglob，mock _scandir_tree
+    # 直接返回自定义条目列表，验证 stat 异常被跳过。
     monkeypatch.setattr(
-        Path,
-        "rglob",
-        lambda self, pattern: [_GoodEntry(100), _BrokenEntry(), _GoodEntry(200)] if self == d else [],
+        "fspack.packaging.sync._scandir_tree",
+        lambda root: [_GoodEntry(100), _BrokenEntry(), _GoodEntry(200)] if root == d else [],
     )
     # BrokenEntry 的 OSError 被跳过，仅累加两个 GoodEntry 的 100 + 200 = 300
     assert _dir_size(d) == 300

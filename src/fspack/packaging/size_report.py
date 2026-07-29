@@ -75,6 +75,9 @@ class SizeReport:
     top_packages: tuple[PackageSize, ...]
     total_size: int
     total_files: int
+    # 未进入 top_packages 的剩余包合计（仅当 packages 数 > top_n 时非零）
+    other_packages_size: int = 0
+    other_packages_count: int = 0
 
     @property
     def total_size_formatted(self) -> str:
@@ -134,11 +137,21 @@ def _parse_dist_info_name(dist_info_dir: Path) -> tuple[str, str]:
     return stem, ""
 
 
-def _package_dir_size(site_packages: Path, dist_info_dir: Path) -> tuple[int, int]:
+def _package_dir_size(
+    site_packages: Path,
+    dist_info_dir: Path,
+    *,
+    name_index: dict[str, list[Path]] | None = None,
+) -> tuple[int, int]:
     """估算单个包在 site-packages 中的体积.
 
     通过 ``RECORD`` 文件（wheel 安装时生成）记录的文件列表累加大小，
     无 RECORD 时回退到按包名前缀匹配顶层目录/文件（best effort）。
+
+    ``name_index`` 为预构建的 ``normalized_name → [paths]`` 映射，避免对每个
+    dist-info 都扫描整个 site-packages（O(N*M) → O(N+M)）。由调用方
+    :func:`collect_size_report` 一次性构建后传入；None 时回退到现场扫描
+    （向后兼容单次调用场景）。
 
     返回 ``(total_bytes, file_count)``。
     """
@@ -154,6 +167,26 @@ def _package_dir_size(site_packages: Path, dist_info_dir: Path) -> tuple[int, in
     top_name = normalized.split("-")[0].replace("-", "_")
     total = 0
     count = 0
+    if name_index is not None:
+        # 用预构建索引：O(1) 查找而非 O(M) 扫描
+        candidates = name_index.get(normalized, []) + name_index.get(top_name, [])
+        seen: set[Path] = set()
+        for entry in candidates:
+            if entry in seen:
+                continue
+            seen.add(entry)
+            if entry.is_dir():
+                sz, n = _dir_size(entry)
+                total += sz
+                count += n
+            elif entry.is_file():
+                try:
+                    total += entry.stat().st_size
+                    count += 1
+                except OSError:
+                    continue
+        return total, count
+
     for entry in site_packages.iterdir():
         # 跳过 .dist-info/.egg-info 元数据目录（按包名前缀会误匹配）
         if entry.name.endswith((".dist-info", ".egg-info")):
@@ -211,6 +244,30 @@ def _size_from_record(site_packages: Path, record: Path) -> tuple[int, int]:
     return total, count
 
 
+def _build_name_index(site_packages: Path) -> dict[str, list[Path]]:
+    """构建 normalized_name → [paths] 索引，加速无 RECORD 时的包体积估算.
+
+    一次性扫描 site-packages 顶层（O(M)），按 PEP 503 规范化名分组。
+    后续 :func:`_package_dir_size` 用 O(1) 字典查找替代 O(M) 遍历，
+    将 N 个 dist-info 的总体积估算从 O(N*M) 降到 O(N+M)。
+
+    包含两种键：完整 normalized 名（如 ``numpy.libs`` → ``numpy-libs``）
+    与首段名（如 ``numpy``），覆盖 :func:`_package_dir_size` 的两种匹配路径。
+    """
+    index: dict[str, list[Path]] = {}
+    for entry in site_packages.iterdir():
+        # 跳过 .dist-info/.egg-info 元数据目录，避免与同名的源码目录混淆
+        if entry.name.endswith((".dist-info", ".egg-info")):
+            continue
+        full_norm = _normalize_pkg_name(entry.name)
+        index.setdefault(full_norm, []).append(entry)
+        # 首段名（处理 package.name 形态）
+        first_segment = full_norm.split("-")[0]
+        if first_segment != full_norm:
+            index.setdefault(first_segment, []).append(entry)
+    return index
+
+
 def collect_size_report(dist_dir: Path, *, top_n: int = _TOP_N_PACKAGES) -> SizeReport:
     """扫描 dist 目录，返回结构化体积报告.
 
@@ -243,11 +300,14 @@ def collect_size_report(dist_dir: Path, *, top_n: int = _TOP_N_PACKAGES) -> Size
     packages: list[PackageSize] = []
     if site_packages is not None:
         sp_size, sp_files = _dir_size(site_packages)
+        # 预构建 normalized_name → [paths] 索引：O(M) 一次性扫描，避免
+        # 每个无 RECORD 的 dist-info 都扫描整个 site-packages（O(N*M)）
+        name_index = _build_name_index(site_packages)
         for d in site_packages.glob("*.dist-info"):
             if not d.is_dir():
                 continue
             pkg_name, pkg_ver = _parse_dist_info_name(d)
-            pkg_size, pkg_files = _package_dir_size(site_packages, d)
+            pkg_size, pkg_files = _package_dir_size(site_packages, d, name_index=name_index)
             if pkg_size > 0:
                 packages.append(PackageSize(name=pkg_name, version=pkg_ver, size=pkg_size, file_count=pkg_files))
         packages.sort(key=lambda p: p.size, reverse=True)
@@ -274,11 +334,18 @@ def collect_size_report(dist_dir: Path, *, top_n: int = _TOP_N_PACKAGES) -> Size
 
     total_size = sum(c.size for c in categories)
     total_files = sum(c.file_count for c in categories)
+    # 计算 Top N 之外剩余包的合计体积与数量（用于"其他"汇总行）
+    top = packages[:top_n]
+    rest = packages[top_n:]
+    other_size = sum(p.size for p in rest)
+    other_count = len(rest)
     return SizeReport(
         categories=tuple(categories),
-        top_packages=tuple(packages[:top_n]),
+        top_packages=tuple(top),
         total_size=total_size,
         total_files=total_files,
+        other_packages_size=other_size,
+        other_packages_count=other_count,
     )
 
 
@@ -336,6 +403,18 @@ def print_size_report(dist_dir: Path, *, top_n: int = _TOP_N_PACKAGES) -> SizeRe
                 pkg.size_formatted,
                 pct,
                 str(pkg.file_count),
+            )
+        # 当剩余包数量 > 0 时追加"其他"汇总行，显示未进入 Top N 的包合计体积与占比
+        if report.other_packages_count > 0:
+            other_pct = f"{report.other_packages_size / sp_total * 100:.1f}%" if sp_total else "-"
+            pkg_table.add_row(
+                "-",
+                f"其他（{report.other_packages_count} 个包）",
+                "",
+                fmt_bytes(report.other_packages_size),
+                other_pct,
+                "",
+                style="dim",
             )
         console.rich.print(pkg_table)
 

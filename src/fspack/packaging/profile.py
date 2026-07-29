@@ -159,7 +159,15 @@ def print_profile_report(report: ProfileReport) -> None:
 
     for stage in report.stages:
         ratio = stage.elapsed / report.wall_time if report.wall_time > 0 else 0.0
-        cache_str = f"命中 {stage.cache_hit}" if stage.cache_hit else "-"
+        # 缓存命中率 = cache_hit / (cache_hit + items) * 100%。
+        # cache_hit=0 时显示 "-"，避免 "0.0%" 干扰阅读。
+        # 命中率反映阶段缓存利用效率，帮助用户识别哪些阶段缓存未命中导致重复计算。
+        total_attempts = stage.cache_hit + stage.items
+        if stage.cache_hit and total_attempts > 0:
+            hit_rate = stage.cache_hit / total_attempts
+            cache_str = f"{hit_rate * 100:.0f}%（{stage.cache_hit}/{total_attempts}）"
+        else:
+            cache_str = "-"
         bytes_str = fmt_bytes(stage.bytes_downloaded) if stage.bytes_downloaded else "-"
         saved_str = fmt_bytes(stage.bytes_saved) if stage.bytes_saved else "-"
         items_str = str(stage.items) if stage.items else "-"
@@ -220,6 +228,9 @@ def profile_report_to_json(report: ProfileReport) -> str:
                 "bytes_saved": s.bytes_saved,
                 "cache_hit": s.cache_hit,
                 "items": s.items,
+                "cache_hit_rate": round(s.cache_hit / (s.cache_hit + s.items), 4)
+                if s.cache_hit and (s.cache_hit + s.items) > 0
+                else 0.0,
                 "skipped": s.skipped,
                 "detail": s.detail,
             }

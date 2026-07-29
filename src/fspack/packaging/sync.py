@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import shutil
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterator
 
 _logger = logging.getLogger(__name__)
 
@@ -124,8 +125,20 @@ def _sync_tree(src: Path, dst: Path, ignore_fn: Callable[..., set[str]]) -> None
     1. 删除 dst 中 src 没有的文件/目录（``__pycache__`` 除外）；
     2. 复制 src 中的文件——mtime_ns + size 相同时跳过 ``copy2``（避免重复磁盘写），
        否则用 ``copy2`` 覆盖（保留 mtime 供 compileall 增量判断）。
+
+    用 :func:`os.scandir` 替代 :meth:`Path.iterdir`：``DirEntry.stat`` 复用
+    目录枚举时的 stat 缓存，避免对每个文件单独 stat 系统调用。增量同步场景
+    下需对比 src 与 dst 的 mtime_ns/size，DirEntry 缓存可减半 stat 调用次数。
     """
-    src_names = [p.name for p in src.iterdir()]
+    src_names: list[str] = []
+    src_entries: dict[str, os.DirEntry[str]] = {}
+    try:
+        with os.scandir(src) as it:
+            for entry in it:
+                src_names.append(entry.name)
+                src_entries[entry.name] = entry
+    except OSError:
+        return
     ignored = ignore_fn(str(src), src_names) if ignore_fn else set()
     keep = set(src_names) - ignored
 
@@ -139,15 +152,28 @@ def _sync_tree(src: Path, dst: Path, ignore_fn: Callable[..., set[str]]) -> None
                 item.unlink()
 
     for name in keep:
+        src_entry = src_entries[name]
         src_item = src / name
         dst_item = dst / name
-        if src_item.is_dir():
+        try:
+            is_dir = src_entry.is_dir(follow_symlinks=False)
+        except OSError:
+            continue
+        if is_dir:
             dst_item.mkdir(exist_ok=True)
             _sync_tree(src_item, dst_item, ignore_fn)
         elif dst_item.is_file():
             # mtime_ns + size 相同视为未改动，跳过 copy2 避免不必要的磁盘写
-            src_st = src_item.stat()
-            dst_st = dst_item.stat()
+            # 用 DirEntry 缓存的 stat 避免独立 stat 调用
+            try:
+                src_st = src_entry.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            try:
+                dst_st = dst_item.stat()
+            except OSError:
+                shutil.copy2(src_item, dst_item)
+                continue
             if src_st.st_mtime_ns == dst_st.st_mtime_ns and src_st.st_size == dst_st.st_size:
                 continue
             shutil.copy2(src_item, dst_item)
@@ -156,16 +182,43 @@ def _sync_tree(src: Path, dst: Path, ignore_fn: Callable[..., set[str]]) -> None
 
 
 def _dir_size(path: Path) -> int:
-    """递归计算目录总字节数（文件大小累加，不含目录元数据）."""
+    """递归计算目录总字节数（文件大小累加，不含目录元数据）.
+
+    用 :func:`os.scandir` 替代 :meth:`Path.rglob`：``DirEntry.stat`` 复用
+    枚举时的 stat 缓存（Windows ``WIN32_FIND_DATA`` / Linux ``d_ino``），
+    避免对每个文件单独 stat 系统调用。大目录（PySide6 site-packages 数千文件）
+    下显著减少系统调用次数。
+    """
     total = 0
-    for entry in path.rglob("*"):
-        if entry.is_file():
-            try:
-                total += entry.stat().st_size
-            except OSError:
-                # 文件被并发删除或权限问题：跳过，不阻断精简流程
-                continue
+    for entry in _scandir_tree(path):
+        try:
+            total += entry.stat(follow_symlinks=False).st_size
+        except OSError:
+            # 文件被并发删除或权限问题：跳过，不阻断精简流程
+            continue
     return total
+
+
+def _scandir_tree(root: Path) -> "Iterator[os.DirEntry[str]]":
+    """递归遍历 ``root``，yield 所有文件 ``DirEntry``（不含目录自身）.
+
+    用 ``os.scandir`` 替代 ``Path.rglob("*")``：DirEntry 缓存 stat 信息，
+    ``is_file(follow_symlinks=False)`` 复用缓存避免独立 stat 调用。
+    遇到权限/不存在等 OSError 静默跳过（与 rglob 行为一致）。
+    """
+    try:
+        with os.scandir(root) as it:
+            entries = sorted(it, key=lambda e: e.name)
+    except OSError:
+        return
+    for entry in entries:
+        try:
+            if entry.is_dir(follow_symlinks=False):
+                yield from _scandir_tree(Path(entry.path))
+            elif entry.is_file(follow_symlinks=False):
+                yield entry
+        except OSError:
+            continue
 
 
 def _site_packages_fingerprint(sp: Path) -> str:

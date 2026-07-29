@@ -66,6 +66,11 @@ _PIP_PYTHON_NAMES: tuple[str, ...] = ("python.exe", "python3.exe") if sys.platfo
 # 匹配 pip download stdout 中的 "Saved <path>.whl" 和 "File was already downloaded <path>.whl"
 _PIP_WHEEL_LINE_RE = re.compile(r"(?:Saved|File was already downloaded)\s+(.+\.whl)", re.IGNORECASE)
 
+# stderr 累积上限：pip/uv 正常输出 < 1MB，sdist 构建输出 1-3MB，4MB 足以容纳
+# 正常输出用于错误诊断。超过上限后停止累积（继续写 sys.stderr 实时显示），
+# 避免长输出场景（如失控的 sdist 构建日志）导致内存膨胀。
+_STDERR_ACCUM_LIMIT = 4 * 1024 * 1024
+
 
 def download_wheels(  # noqa: PLR0913
     packages: tuple[str, ...] | list[str],
@@ -272,6 +277,10 @@ def _stream_subprocess(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     使用 ``os.read`` 而非 ``BufferedReader.read1``：前者直接读 fd，不依赖
     ``Popen`` 的缓冲层（``bufsize=0`` 时 stderr 是 ``FileIO`` 无 ``read1`` 方法）。
 
+    **内存保护**：stderr 累积上限 :data:`_STDERR_ACCUM_LIMIT`（4MB），超过后
+    停止累积（继续写 ``sys.stderr`` 实时显示），避免失控的 sdist 构建日志
+    （可达数十 MB）导致内存膨胀。错误诊断只需末尾数 KB 即可定位根因。
+
     调用方应在调用前停止 spinner（避免 ``\\r`` 与 pip 进度条冲突），并在调用后
     恢复 spinner 或继续后续日志输出。
     """
@@ -281,15 +290,21 @@ def _stream_subprocess(cmd: list[str]) -> subprocess.CompletedProcess[str]:
         stderr=subprocess.PIPE,
     )
     stderr_chunks: list[bytes] = []
+    stderr_total = 0
 
     def _drain_stderr() -> None:
+        nonlocal stderr_total
         assert process.stderr is not None
         fd = process.stderr.fileno()
         while True:
             chunk = os.read(fd, 4096)
             if not chunk:
                 break
-            stderr_chunks.append(chunk)
+            # 累积上限保护：超过 _STDERR_ACCUM_LIMIT 后仅写终端不再累积，
+            # 避免长输出场景内存膨胀。错误诊断只需末尾片段即可定位根因。
+            if stderr_total < _STDERR_ACCUM_LIMIT:
+                stderr_chunks.append(chunk)
+                stderr_total += len(chunk)
             sys.stderr.buffer.write(chunk)
             sys.stderr.buffer.flush()
 

@@ -231,7 +231,9 @@ def test_print_profile_report_shows_cache_and_bytes() -> None:
         print_profile_report(report)
 
     out = capture.get()
-    assert "命中 2" in out
+    # cache_hit=2, items=0 → 命中率 100%（2/2）
+    assert "100%" in out
+    assert "2/2" in out
     assert "1.0KB" in out
     assert "512B" in out
 
@@ -266,6 +268,7 @@ def test_profile_report_to_json_outputs_valid_json() -> None:
     assert parsed["stages"][0]["bytes_downloaded"] == 1024
     assert parsed["stages"][0]["cache_hit"] == 1
     assert parsed["stages"][0]["items"] == 5
+    assert parsed["stages"][0]["cache_hit_rate"] == round(1 / 6, 4)
     assert parsed["stages"][0]["detail"] == "备注"
     assert parsed["stages"][1]["name"] == "阶段B"
     assert parsed["stages"][1]["bytes_saved"] == 2048

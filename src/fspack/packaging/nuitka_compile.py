@@ -41,6 +41,11 @@ _logger = logging.getLogger("fspack.packaging.nuitka")
 # 心跳间隔：nuitka reExecute 机制导致子进程输出不可靠，每 N 秒输出编译耗时让用户看到进度
 _HEARTBEAT_INTERVAL = 10.0
 
+# stdout/stderr 累积上限：Nuitka 编译输出（gcc 调用、reExecute 日志）可达 10MB+，
+# 16MB 上限足以容纳正常输出供失败诊断。超过后停止累积（继续写终端实时显示），
+# 避免大型项目（数百 .py 文件）累积输出导致内存膨胀。
+_STREAM_ACCUM_LIMIT = 16 * 1024 * 1024
+
 
 class NuitkaCompile:
     """Nuitka 编译流程 mixin：单文件编译、stamp 缓存.
@@ -158,26 +163,42 @@ class NuitkaCompile:
 
         同时累积 stdout/stderr 内容供失败时诊断（当前仅返回未使用，保留以备扩展）。
 
+        **内存保护**：stdout/stderr 累积上限 :data:`_STREAM_ACCUM_LIMIT`（16MB），
+        超过后停止累积（继续写终端实时显示），避免大型项目（数百 .py 文件）
+        累积 Nuitka 编译输出（gcc 调用、reExecute 日志可达 10MB+/文件）导致内存膨胀。
+
         参考 :func:`fspack.packaging.wheels._stream_subprocess` 的实现模式，区别在于
         nuitka 的 INFO 输出可能走 stdout 或 stderr，需同时流式两者。
         """
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
         stdout_chunks: list[bytes] = []
         stderr_chunks: list[bytes] = []
+        # 用 list[int] 容器而非 nonlocal：两个 drain 线程分别追踪各自累计量，
+        # nonlocal 需为每个流写独立闭包，list 容器更简洁且线程安全（GIL 保护单元素赋值）。
+        stdout_total: list[int] = [0]
+        stderr_total: list[int] = [0]
 
-        def _drain(stream: IO[bytes] | None, chunks: list[bytes], out: TextIO) -> None:
+        def _drain(stream: IO[bytes] | None, chunks: list[bytes], out: TextIO, total_ref: list[int]) -> None:
             assert stream is not None
             fd = stream.fileno()
             while True:
                 chunk = os.read(fd, 4096)
                 if not chunk:
                     break
-                chunks.append(chunk)
+                # 累积上限保护：超过 _STREAM_ACCUM_LIMIT 后仅写终端不再累积，
+                # 避免 Nuitka 编译输出（gcc 调用日志）累积导致内存膨胀。
+                if total_ref[0] < _STREAM_ACCUM_LIMIT:
+                    chunks.append(chunk)
+                    total_ref[0] += len(chunk)
                 out.buffer.write(chunk)
                 out.buffer.flush()
 
-        t_out = threading.Thread(target=_drain, args=(process.stdout, stdout_chunks, sys.stdout), daemon=True)
-        t_err = threading.Thread(target=_drain, args=(process.stderr, stderr_chunks, sys.stderr), daemon=True)
+        t_out = threading.Thread(
+            target=_drain, args=(process.stdout, stdout_chunks, sys.stdout, stdout_total), daemon=True
+        )
+        t_err = threading.Thread(
+            target=_drain, args=(process.stderr, stderr_chunks, sys.stderr, stderr_total), daemon=True
+        )
         t_out.start()
         t_err.start()
         returncode = process.wait()
@@ -520,15 +541,19 @@ class NuitkaCompile:
         # 失败的 .py 保留，让运行时回退到 .pyc 加载，避免编译失败导致 dist/src 无可用代码。
         for idx, py_file in enumerate(py_files, 1):
             _logger.info("编译 [%d/%d] %s", idx, total, py_file.name)
-            # 心跳线程：每 10 秒输出编译耗时，避免单文件编译数十秒无输出被误认为卡死。
-            # nuitka reExecute 的子进程 B 输出可能不到 PIPE，心跳是唯一的进度反馈。
+            # 心跳线程：每 10 秒输出编译耗时与当前文件名，避免单文件编译数十秒
+            # 无输出被误认为卡死。nuitka reExecute 的子进程 B 输出可能不到 PIPE，
+            # 心跳是唯一的进度反馈。显示文件名让用户知道哪个文件正在编译。
             stop_heartbeat = threading.Event()
             start_ts = time.monotonic()
+            file_label = py_file.name
 
-            def _heartbeat(_stop: threading.Event = stop_heartbeat, _start: float = start_ts) -> None:
+            def _heartbeat(
+                _stop: threading.Event = stop_heartbeat, _start: float = start_ts, _label: str = file_label
+            ) -> None:
                 while not _stop.wait(_HEARTBEAT_INTERVAL):
                     elapsed = int(time.monotonic() - _start)
-                    _logger.info("Nuitka 编译中... 已耗时 %ds", elapsed)
+                    _logger.info("Nuitka 编译中 %s... 已耗时 %ds", _label, elapsed)
 
             hb_thread = threading.Thread(target=_heartbeat, daemon=True)
             hb_thread.start()
