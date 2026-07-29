@@ -1,0 +1,181 @@
+{
+  "timestamp": "2026-07-29T10:00:55",
+  "machine": {
+    "node_id": "08f6a2d6",
+    "system": "Windows",
+    "python_version": "3.11.15",
+    "cpu": {
+      "brand": "Intel64 Family 6 Model 198 Stepping 2, GenuineIntel",
+      "count": 24,
+      "arch": "AMD64",
+      "bits": 64
+    }
+  },
+  "results": [
+    {
+      "template_id": "cli_complex_py314",
+      "success": true,
+      "duration_sec": 0.75605589999941,
+      "dist_size": 33146241,
+      "entry_count": 1,
+      "error": "",
+      "run_success": true,
+      "run_exit_code": 0,
+      "run_duration_sec": 0.052649399998699664
+    },
+    {
+      "template_id": "cli_helloworld_pyall",
+      "success": true,
+      "duration_sec": 0.3252933000003395,
+      "dist_size": 21920272,
+      "entry_count": 1,
+      "error": "",
+      "run_success": true,
+      "run_exit_code": 0,
+      "run_duration_sec": 0.035889499999029795
+    },
+    {
+      "template_id": "cli_office_py38",
+      "success": true,
+      "duration_sec": 0.7015700000010838,
+      "dist_size": 28068042,
+      "entry_count": 1,
+      "error": "",
+      "run_success": true,
+      "run_exit_code": 0,
+      "run_duration_sec": 0.4196427000006224
+    },
+    {
+      "template_id": "multi_entry_py310",
+      "success": true,
+      "duration_sec": 0.9804301000003761,
+      "dist_size": 80052089,
+      "entry_count": 3,
+      "error": "",
+      "run_success": true,
+      "run_exit_code": 0,
+      "run_duration_sec": 0.032691000000340864
+    },
+    {
+      "template_id": "pygame_cli_pyall",
+      "success": true,
+      "duration_sec": 0.6126291000000492,
+      "dist_size": 32863277,
+      "entry_count": 1,
+      "error": "",
+      "run_success": true,
+      "run_exit_code": 0,
+      "run_duration_sec": 0.8931363000010606
+    },
+    {
+      "template_id": "pygame_conway_py313",
+      "success": true,
+      "duration_sec": 1.0699780999984796,
+      "dist_size": 67558358,
+      "entry_count": 1,
+      "error": "",
+      "run_success": true,
+      "run_exit_code": null,
+      "run_duration_sec": 5.016643700000714
+    },
+    {
+      "template_id": "pygame_gktetris_py38",
+      "success": true,
+      "duration_sec": 0.47446519999903103,
+      "dist_size": 26982559,
+      "entry_count": 1,
+      "error": "",
+      "run_success": true,
+      "run_exit_code": null,
+      "run_duration_sec": 5.018835800001398
+    },
+    {
+      "template_id": "pygame_snake_pyall",
+      "success": true,
+      "duration_sec": 0.6318238000003475,
+      "dist_size": 32870340,
+      "entry_count": 1,
+      "error": "",
+      "run_success": true,
+      "run_exit_code": 0,
+      "run_duration_sec": 2.328339600000618
+    },
+    {
+      "template_id": "pyside2_app_py310",
+      "success": true,
+      "duration_sec": 0.8119299999998475,
+      "dist_size": 76360130,
+      "entry_count": 1,
+      "error": "",
+      "run_success": true,
+      "run_exit_code": null,
+      "run_duration_sec": 5.012606400001459
+    },
+    {
+      "template_id": "pyside2_qml_dashboard_py38",
+      "success": true,
+      "duration_sec": 0.05835610000031011,
+      "dist_size": 166318493,
+      "entry_count": 1,
+      "error": "",
+      "run_success": true,
+      "run_exit_code": null,
+      "run_duration_sec": 5.05321929999991
+    },
+    {
+      "template_id": "sci_matplotlib_py38",
+      "success": true,
+      "duration_sec": 1.559750400001576,
+      "dist_size": 115665881,
+      "entry_count": 1,
+      "error": "",
+      "run_success": true,
+      "run_exit_code": 0,
+      "run_duration_sec": 2.208423000000039
+    },
+    {
+      "template_id": "sci_numpy_py38",
+      "success": true,
+      "duration_sec": 1.0046428000005108,
+      "dist_size": 59642317,
+      "entry_count": 1,
+      "error": "",
+      "run_success": true,
+      "run_exit_code": 0,
+      "run_duration_sec": 0.7534785000007105
+    },
+    {
+      "template_id": "sci_scipy_py38",
+      "success": true,
+      "duration_sec": 1.9206674000015482,
+      "dist_size": 158327039,
+      "entry_count": 1,
+      "error": "",
+      "run_success": true,
+      "run_exit_code": 0,
+      "run_duration_sec": 4.07059720000143
+    },
+    {
+      "template_id": "tk_app_pyall",
+      "success": true,
+      "duration_sec": 0.8481623999996373,
+      "dist_size": 32451338,
+      "entry_count": 1,
+      "error": "",
+      "run_success": true,
+      "run_exit_code": 0,
+      "run_duration_sec": 1.4523573000005854
+    },
+    {
+      "template_id": "web_app_pyall",
+      "success": true,
+      "duration_sec": 0.6950832000002265,
+      "dist_size": 26259011,
+      "entry_count": 1,
+      "error": "",
+      "run_success": true,
+      "run_exit_code": 0,
+      "run_duration_sec": 0.4227604000006977
+    }
+  ]
+}
