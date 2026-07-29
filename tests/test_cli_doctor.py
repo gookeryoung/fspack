@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import patch
 
@@ -44,7 +45,23 @@ from fspack.cli_doctor import (
     print_doctor_report,
     run_doctor,
 )
+from fspack.console import console
 from fspack.platform import Platform
+
+
+@pytest.fixture(autouse=True)
+def _fixed_rich_width() -> Iterator[None]:
+    """固定 Rich Console 宽度，避免窄终端环境下 word wrap 导致断言失败.
+
+    多个测试渲染含 8 列的 Rich Table（bench 模式汇总表），窄终端（width<80）下
+    Rich 会截断长文本（如 ``ModuleNotFoundError`` → ``ModuleNot…``）或丢弃列，
+    导致断言偶发失败。固定 width=200 确保所有环境渲染一致。
+    """
+    original = console.rich.width
+    console.rich.width = 200
+    yield
+    console.rich.width = original
+
 
 # ---- 数据结构 ----
 
