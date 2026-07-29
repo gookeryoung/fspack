@@ -73,11 +73,11 @@ jobs:
         run: uv run pytest -m "not slow" --cov=fspack --cov-fail-under=95 --cov-report=term-missing
 
   # ===== 性能基准监控：仅 push to main 触发，PR 不触发 =====
-  # 运行 pytest-benchmark 基线测试，保存结果并输出与上次基线的对比表。
-  # 不设退化门禁（--benchmark-compare-fail）：GitHub Actions 共享机器性能
-  # 波动可达 12-29%，跨运行绝对对比不可靠，调阈值是打地鼠游戏。
-  # gate 仅因测试崩溃/import error/fixture 失败而失败，性能退化由人工
-  # 审查 artifact 中的对比表与 JSON 数据发现。
+  # 运行 pytest-benchmark 基线测试，保存结果并与历史最佳基准对比。
+  # 对比逻辑见 scripts/compare_benchmark.py：扫描所有历史 JSON，按测试名
+  # 找最小 median 作为最佳基准，当前运行与最佳对比，median 超过最佳 25%
+  # 视为退化（exit 1）。与上一次基线对比相比，最佳基准过滤了机器抖动导致的
+  # 慢运行，减少误报。
   benchmark:
     name: Benchmark gate
     runs-on: ubuntu-latest
@@ -110,19 +110,17 @@ jobs:
 
       - name: Run benchmark tests
         run: |
-          # --benchmark-compare 输出与上次基线的对比表（供人工审查），
-          # 不加 --benchmark-compare-fail：不因性能退化失败，仅因测试崩溃失败。
-          COMPARE_OPTS=""
-          if find .benchmarks -name '*.json' -type f 2>/dev/null | grep -q .; then
-            COMPARE_OPTS="--benchmark-compare"
-          fi
           uv run pytest tests/test_perf_baseline.py -m slow \
             --benchmark-only \
             --benchmark-save=main \
-            $COMPARE_OPTS \
             --benchmark-min-rounds=20 \
             --benchmark-warmup=on \
             --benchmark-columns=median,min,mean,stddev
+
+      # 与历史最佳基准对比（非上一次基线），median 超过最佳 25% 视为退化
+      # 首次运行无历史基线时脚本输出"无 benchmark 结果可对比"并 exit 0
+      - name: Compare against best baseline
+        run: uv run python scripts/compare_benchmark.py --threshold 25
 
       # if-no-files-found=ignore：首次运行（v2 缓存未命中）无历史基线时
       # .benchmarks/ 可能为空，此为正常情况，不报 warning
