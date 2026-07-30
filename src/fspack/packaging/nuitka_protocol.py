@@ -1,0 +1,256 @@
+"""NuitkaCompiler mixin 跨类调用接口契约.
+
+定义 :class:`fspack.packaging.nuitka.NuitkaCompiler` 各 mixin 间跨类调用的
+方法签名。各 mixin 的 classmethod 用 ``cls: type[NuitkaCompilerProtocol]``
+注解替代裸 ``cls``，让 pyrefly 能解析跨 mixin 的 ``cls.<method>()`` 调用，
+消除 ``# type: ignore[attr-defined]`` 抑制与 NuitkaCompile 顶部的 stub 方法占位。
+
+设计要点：
+
+- Protocol 仅在类型检查期生效，运行时无开销（``runtime_checkable`` 仅用于
+  ``isinstance`` 检查，此处不用）
+- Protocol 声明 NuitkaCompiler facade 的所有方法（含各 mixin 提供的 +
+  NuitkaCompile 自身的），按"提供者"分组注释
+- 各 mixin 的 classmethod 第一个参数注解为 ``type[NuitkaCompilerProtocol]``，
+  pyrefly 据此解析 ``cls.<method>()`` 调用（含跨 mixin 与同 mixin 内调用）
+- ``NuitkaCompiler`` facade 多继承组合各 mixin，运行时 MRO 派发真实实现，
+  Protocol 不参与运行时
+
+为何不用 stub 方法占位：
+
+NuitkaCompile 顶部原有 10 个 stub 方法（``raise NotImplementedError``），
+但 NuitkaStrip 调 ``cls._verify_compiled_modules``（NuitkaVerify 提供）不能
+stub——NuitkaStrip 在 MRO 中位于 NuitkaVerify 前面，stub 会覆盖 NuitkaVerify
+的真实实现破坏运行时。Protocol 方案统一所有 mixin 的类型声明，无需 stub。
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Protocol
+
+from fspack.config import MirrorConfig
+from fspack.platform import Platform
+from fspack.progress import StageRecorder
+
+
+class NuitkaCompilerProtocol(Protocol):
+    """NuitkaCompiler facade 与各 mixin 间跨类调用的接口契约.
+
+    各 mixin 的 classmethod 用 ``cls: type[NuitkaCompilerProtocol]`` 注解，
+    pyrefly 据此解析 ``cls.<method>()`` 跨 mixin 与同 mixin 内调用。Protocol
+    声明的方法按"提供者 mixin"分组，签名与真实实现一致（含默认参数与关键字参数）。
+
+    运行时由 :class:`fspack.packaging.nuitka.NuitkaCompiler` 多继承 MRO 派发
+    到对应 mixin 的真实实现，Protocol 不参与运行时。
+    """
+
+    # ==== NuitkaEnv 提供（环境就绪）====
+
+    @staticmethod
+    def _nuitka_cache_dir(cache_root: Path, py_version: str) -> Path:
+        """nuitka 缓存目录：``cache_root / py_version / site-packages``."""
+        ...
+
+    @staticmethod
+    def _is_nuitka_cached(cache_dir: Path) -> bool:
+        """检查缓存目录是否有 nuitka 包."""
+        ...
+
+    @staticmethod
+    def _runtime_python(runtime_dir: Path, py_version: str, target: Platform) -> Path:
+        """解析 runtime python 可执行文件路径."""
+        ...
+
+    @staticmethod
+    def _build_compile_env(target: Platform, ccache_exe: Path | None) -> dict[str, str]:
+        """构建编译环境变量（CC/CFLAGS）."""
+        ...
+
+    @staticmethod
+    def _resolve_jobs() -> int:
+        """解析 C 编译并行度（CPU 核心数）."""
+        ...
+
+    @classmethod
+    def ensure_env(
+        cls,
+        cache_root: Path,
+        py_version: str,
+        target: Platform,
+        mirror: MirrorConfig,
+        *,
+        stage: StageRecorder,
+    ) -> str:
+        """检查 C 编译器并安装锁定版 nuitka 到本地缓存."""
+        ...
+
+    # ==== NuitkaStandalone 提供（standalone python 准备）====
+
+    @classmethod
+    def _ensure_build_python(
+        cls,
+        cache_root: Path,
+        py_version: str,
+        target: Platform,
+        *,
+        stage: StageRecorder,
+    ) -> Path:
+        """准备 standalone python（Windows 专用）."""
+        ...
+
+    # ==== NuitkaCcache 提供（ccache 管理）====
+
+    @classmethod
+    def _ensure_ccache(cls, cache_root: Path, target: Platform, stage: StageRecorder) -> Path | None:
+        """下载或查找 ccache 可执行文件."""
+        ...
+
+    # ==== NuitkaStrip 提供（产物剥离与构建目录清理）====
+
+    @classmethod
+    def _strip_compiled_sources(
+        cls,
+        compiled_files: set[Path],
+        stage: StageRecorder,
+        *,
+        verify_py_exe: Path | None = None,
+        verify_search_root: Path | None = None,
+    ) -> int:
+        """删除成功编译的 .py 源码，返回删除数."""
+        ...
+
+    @staticmethod
+    def _cleanup_build_dirs(base_dir: Path) -> int:
+        """清理 Nuitka 残留 .build/ 目录."""
+        ...
+
+    # ==== NuitkaVerify 提供（编译产物验证）====
+
+    @classmethod
+    def _verify_compiled_modules(
+        cls,
+        py_exe: Path,
+        compiled_files: set[Path],
+    ) -> tuple[set[Path], list[Path]]:
+        """批量验证 .pyd 可加载，返回 (可加载 .py 集合, 损坏 .pyd 路径列表)."""
+        ...
+
+    # ==== NuitkaCompile 提供（编译流程）====
+
+    @staticmethod
+    def _stream_compile(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int, str, str]:
+        """运行 nuitka 编译命令，实时流式输出."""
+        ...
+
+    @classmethod
+    def compile_src(  # noqa: PLR0913
+        cls,
+        src_dir: Path,
+        runtime_dir: Path,
+        py_version: str,
+        target: Platform,
+        nuitka_cache: Path,
+        *,
+        stage: StageRecorder,
+        build_python_exe: Path | None = None,
+        entry_rels: frozenset[str] | None = None,
+        ccache: bool = False,
+        cache_root: Path | None = None,
+    ) -> None:
+        """编译 src_dir 下所有 .py 为 .pyd/.so."""
+        ...
+
+    @classmethod
+    def compile_packages(  # noqa: PLR0913
+        cls,
+        site_packages: Path,
+        packages: tuple[str, ...],
+        runtime_dir: Path,
+        py_version: str,
+        target: Platform,
+        nuitka_cache: Path,
+        *,
+        stage: StageRecorder,
+        build_python_exe: Path | None = None,
+        ccache: bool = False,
+        cache_root: Path | None = None,
+    ) -> None:
+        """编译 site-packages 中指定的第三方包."""
+        ...
+
+    @classmethod
+    def _resolve_compile_python(
+        cls,
+        build_python_exe: Path | None,
+        runtime_dir: Path,
+        py_version: str,
+        target: Platform,
+        stage: StageRecorder,
+    ) -> Path | None:
+        """解析编译用 python 路径."""
+        ...
+
+    @staticmethod
+    def _collect_py_files(src_dir: Path, entry_rels: frozenset[str] | None) -> list[Path]:
+        """收集待编译的 .py 文件."""
+        ...
+
+    @staticmethod
+    def _create_bootstrap_script(nuitka_cache: Path) -> Path:
+        """创建临时 bootstrap 脚本注入 sys.path 调用 nuitka."""
+        ...
+
+    @classmethod
+    def _compile_files(  # noqa: PLR0913
+        cls,
+        py_exe: Path,
+        bootstrap_script: Path,
+        py_files: list[Path],
+        stage: StageRecorder,
+        *,
+        target: Platform,
+        ccache_exe: Path | None = None,
+    ) -> tuple[set[Path], int]:
+        """逐个编译 .py 文件，返回 (成功编译的文件集合, 失败数)."""
+        ...
+
+    @staticmethod
+    def _stamp_path(dist_dir: Path) -> Path:
+        """返回 Nuitka 编译 stamp 文件路径."""
+        ...
+
+    @staticmethod
+    def _stamp_key(
+        src_dir: Path,
+        nuitka_version: str,
+        py_version: str,
+        entry_rels: frozenset[str] | None = None,
+        nuitka_packages: tuple[str, ...] = (),
+    ) -> str:
+        """计算 Nuitka 编译 stamp 键."""
+        ...
+
+    @staticmethod
+    def _site_packages_dir(runtime_dir: Path, py_version: str, target: Platform) -> Path:
+        """推导 runtime 的 site-packages 路径."""
+        ...
+
+    @classmethod
+    def compile_with_stamp(  # noqa: PLR0913
+        cls,
+        src_dir: Path,
+        dist_dir: Path,
+        runtime_dir: Path,
+        py_version: str,
+        target: Platform,
+        mirror: MirrorConfig,
+        cache_root: Path,
+        *,
+        stage: StageRecorder,
+        entry_rels: frozenset[str] | None = None,
+        ccache: bool = False,
+        nuitka_packages: tuple[str, ...] = (),
+    ) -> None:
+        """整合 ensure_env + standalone python + stamp 缓存 + compile_src 的入口."""
+        ...

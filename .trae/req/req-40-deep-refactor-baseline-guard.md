@@ -81,7 +81,7 @@ req-37 完成性能基线建立与 5 大文件拆分（iter-51~60），req-38 �
 
 ### 类型安全深化（iter-85）
 
-- [ ] **iter-85 mixin Protocol 类型声明**：NuitkaCompiler 三 mixin
+- [x] **iter-85 mixin Protocol 类型声明**：NuitkaCompiler 三 mixin
   （NuitkaEnv/NuitkaCompile/NuitkaVerify）跨类调用改用 `typing.Protocol`
   声明接口契约，替代 `# type: ignore[attr-defined]` 抑制。定义
   `NuitkaCompilerProtocol` 描述 mixin 间依赖的方法签名，各 mixin 用

@@ -28,12 +28,15 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import IO, TextIO
+from typing import IO, TYPE_CHECKING, TextIO
 
 from fspack.config import MirrorConfig, nuitka_version_for
 from fspack.exceptions import NuitkaError
 from fspack.platform import Platform
 from fspack.progress import StageRecorder
+
+if TYPE_CHECKING:
+    from fspack.packaging.nuitka_protocol import NuitkaCompilerProtocol
 
 # 共享 logger 名：测试用 caplog.at_level(..., logger="fspack.packaging.nuitka") 锁定
 _logger = logging.getLogger("fspack.packaging.nuitka")
@@ -53,6 +56,10 @@ class NuitkaCompile:
     所有方法为 staticmethod/classmethod，无实例状态。
     通过 :class:`fspack.packaging.nuitka.NuitkaCompiler` 多继承组合使用。
 
+    跨 mixin 调用（``cls.<method>()``）通过 :class:`NuitkaCompilerProtocol`
+    类型契约声明，pyrefly 据此解析方法签名，无需 stub 方法占位。运行时由
+    :class:`NuitkaCompiler` MRO 链派发到对应 mixin 的真实实现。
+
     依赖 :class:`fspack.packaging.nuitka_env.NuitkaEnv` 提供：
     ``_runtime_python`` / ``_is_nuitka_cached`` /
     ``_build_compile_env`` / ``_resolve_jobs`` / ``ensure_env`` /
@@ -66,89 +73,7 @@ class NuitkaCompile:
 
     依赖 :class:`fspack.packaging.nuitka_strip.NuitkaStrip` 提供：
     ``_strip_compiled_sources`` / ``_cleanup_build_dirs``（经 MRO 派发）。
-
-    依赖 :class:`fspack.packaging.nuitka_verify.NuitkaVerify` 提供：
-    ``_verify_compiled_modules``（NuitkaVerify 在 MRO 后置，无法 stub 占位，
-    调用处用 ``# type: ignore[attr-defined]`` 标注）。
-
-    下方 stub 方法仅为类型检查占位（``# pragma: no cover`` 标注），运行时
-    被 :class:`NuitkaCompiler` MRO 链中对应 mixin 的真实实现覆盖，
-    永远不会执行。
     """
-
-    # ---- Mixin 依赖 stub（仅供类型检查，运行时被 MRO 覆盖）----
-
-    @classmethod
-    def _runtime_python(cls, runtime_dir: Path, py_version: str, target: Platform) -> Path:
-        """stub: 由 :class:`NuitkaEnv` 提供."""
-        raise NotImplementedError  # pragma: no cover
-
-    @staticmethod
-    def _is_nuitka_cached(cache_dir: Path) -> bool:
-        """stub: 由 :class:`NuitkaEnv` 提供."""
-        raise NotImplementedError  # pragma: no cover
-
-    @classmethod
-    def _ensure_ccache(cls, cache_root: Path, target: Platform, stage: StageRecorder) -> Path | None:
-        """stub: 由 :class:`NuitkaCcache` 提供."""
-        raise NotImplementedError  # pragma: no cover
-
-    @staticmethod
-    def _build_compile_env(target: Platform, ccache_exe: Path | None) -> dict[str, str]:
-        """stub: 由 :class:`NuitkaEnv` 提供."""
-        raise NotImplementedError  # pragma: no cover
-
-    @staticmethod
-    def _resolve_jobs() -> int:
-        """stub: 由 :class:`NuitkaEnv` 提供."""
-        raise NotImplementedError  # pragma: no cover
-
-    @classmethod
-    def ensure_env(
-        cls,
-        cache_root: Path,
-        py_version: str,
-        target: Platform,
-        mirror: MirrorConfig,
-        *,
-        stage: StageRecorder,
-    ) -> str:
-        """stub: 由 :class:`NuitkaEnv` 提供."""
-        raise NotImplementedError  # pragma: no cover
-
-    @classmethod
-    def _ensure_build_python(
-        cls,
-        cache_root: Path,
-        py_version: str,
-        target: Platform,
-        *,
-        stage: StageRecorder,
-    ) -> Path:
-        """stub: 由 :class:`NuitkaStandalone` 提供."""
-        raise NotImplementedError  # pragma: no cover
-
-    @staticmethod
-    def _nuitka_cache_dir(cache_root: Path, py_version: str) -> Path:
-        """stub: 由 :class:`NuitkaEnv` 提供."""
-        raise NotImplementedError  # pragma: no cover
-
-    @classmethod
-    def _strip_compiled_sources(
-        cls,
-        compiled_files: set[Path],
-        stage: StageRecorder,
-        *,
-        verify_py_exe: Path | None = None,
-        verify_search_root: Path | None = None,
-    ) -> int:
-        """stub: 由 :class:`NuitkaStrip` 提供."""
-        raise NotImplementedError  # pragma: no cover
-
-    @staticmethod
-    def _cleanup_build_dirs(base_dir: Path) -> int:
-        """stub: 由 :class:`NuitkaStrip` 提供."""
-        raise NotImplementedError  # pragma: no cover
 
     @staticmethod
     def _stream_compile(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int, str, str]:
@@ -210,7 +135,7 @@ class NuitkaCompile:
 
     @classmethod
     def compile_src(  # noqa: PLR0913
-        cls,
+        cls: type[NuitkaCompilerProtocol],
         src_dir: Path,
         runtime_dir: Path,
         py_version: str,
@@ -323,7 +248,7 @@ class NuitkaCompile:
 
     @classmethod
     def compile_packages(  # noqa: PLR0913, PLR0912
-        cls,
+        cls: type[NuitkaCompilerProtocol],
         site_packages: Path,
         packages: tuple[str, ...],
         runtime_dir: Path,
@@ -437,7 +362,7 @@ class NuitkaCompile:
 
     @classmethod
     def _resolve_compile_python(
-        cls,
+        cls: type[NuitkaCompilerProtocol],
         build_python_exe: Path | None,
         runtime_dir: Path,
         py_version: str,
@@ -500,7 +425,7 @@ class NuitkaCompile:
 
     @classmethod
     def _compile_files(  # noqa: PLR0913
-        cls,
+        cls: type[NuitkaCompilerProtocol],
         py_exe: Path,
         bootstrap_script: Path,
         py_files: list[Path],
@@ -639,7 +564,7 @@ class NuitkaCompile:
 
     @classmethod
     def compile_with_stamp(  # noqa: PLR0913
-        cls,
+        cls: type[NuitkaCompilerProtocol],
         src_dir: Path,
         dist_dir: Path,
         runtime_dir: Path,

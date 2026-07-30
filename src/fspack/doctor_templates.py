@@ -542,17 +542,22 @@ def _print_performance_analysis(results: list[TemplateBuildResult]) -> None:
     console.rich.print(time_table)
 
     # 启动耗时排名（应用调用响应速度）
-    run_results = [r for r in ok_results if r.run_result and r.run_result.duration_sec > 0]
-    if len(run_results) >= 2:
-        by_run = sorted(run_results, key=lambda r: r.run_result.duration_sec, reverse=True)  # type: ignore[union-attr]
+    # 用 (build_result, run_result) 元组解构收窄类型：列表推导过滤 None 后，
+    # pyrefly 仍认为 r.run_result 可能为 None，元组解构让 run_result 成为
+    # 非 None 的 TemplateRunResult，消除 union-attr 抑制。
+    run_pairs: list[tuple[TemplateBuildResult, TemplateRunResult]] = [
+        (r, rr) for r in ok_results if (rr := r.run_result) is not None and rr.duration_sec > 0
+    ]
+    if len(run_pairs) >= 2:
+        by_run = sorted(run_pairs, key=lambda pair: pair[1].duration_sec, reverse=True)
         run_table = Table(title="启动耗时排名（降序，应用调用响应速度）", show_lines=False)
         run_table.add_column("#", justify="right", style="dim")
         run_table.add_column("模板", style="cyan")
         run_table.add_column("启动耗时", justify="right")
         run_table.add_column("占比", justify="right")
-        total_run = sum(r.run_result.duration_sec for r in run_results)  # type: ignore[union-attr]
-        for i, r in enumerate(by_run, 1):
-            dur = r.run_result.duration_sec  # type: ignore[union-attr]
+        total_run = sum(rr.duration_sec for _, rr in run_pairs)
+        for i, (r, rr) in enumerate(by_run, 1):
+            dur = rr.duration_sec
             ratio = dur / total_run * 100 if total_run > 0 else 0
             marker = " [red](最慢)[/red]" if i == 1 else ""
             run_table.add_row(str(i), r.template_id, f"{dur:.2f}s", f"{ratio:.1f}%{marker}")

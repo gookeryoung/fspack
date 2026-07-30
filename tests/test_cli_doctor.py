@@ -995,7 +995,7 @@ class _FakeProc:
         self.communicate_calls = 0
         self._raise_timeout = False
 
-    def communicate(self, timeout: float | None = None):  # type: ignore[no-untyped-def]
+    def communicate(self, timeout: float | None = None) -> tuple[str, str]:
         self.communicate_calls += 1
         if timeout is not None and self._raise_timeout:
             raise subprocess.TimeoutExpired(cmd=[], timeout=timeout)

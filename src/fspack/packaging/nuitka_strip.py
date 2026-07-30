@@ -23,8 +23,12 @@ from __future__ import annotations
 import logging
 import shutil
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from fspack.progress import StageRecorder
+
+if TYPE_CHECKING:
+    from fspack.packaging.nuitka_protocol import NuitkaCompilerProtocol
 
 # 共享 logger 名：测试用 caplog.at_level(..., logger="fspack.packaging.nuitka") 锁定
 _logger = logging.getLogger("fspack.packaging.nuitka")
@@ -38,12 +42,12 @@ class NuitkaStrip:
 
     依赖 :class:`fspack.packaging.nuitka_verify.NuitkaVerify` 提供：
     ``_verify_compiled_modules``（NuitkaVerify 在 MRO 后置，无法 stub 占位，
-    调用处用 ``# type: ignore[attr-defined]`` 标注）。
+    用 :class:`NuitkaCompilerProtocol` 类型契约声明跨 mixin 调用签名）。
     """
 
     @classmethod
     def _strip_compiled_sources(
-        cls,
+        cls: type[NuitkaCompilerProtocol],
         compiled_files: set[Path],
         stage: StageRecorder,
         *,
@@ -77,8 +81,10 @@ class NuitkaStrip:
             verified_files: set[Path] = set(compiled_files)
             unverified_artifacts: list[Path] = []
             try:
-                verified_files, unverified_artifacts = cls._verify_compiled_modules(  # type: ignore[attr-defined]  # NuitkaVerify mixin（MRO 后置无法 stub）
-                    verify_py_exe, compiled_files
+                verified_files, unverified_artifacts = (
+                    cls._verify_compiled_modules(  # NuitkaVerify mixin（Protocol 类型契约，运行时 MRO 派发）
+                        verify_py_exe, compiled_files
+                    )
                 )
             except OSError as e:
                 # runtime python 不可执行（如测试桩空文件）或 subprocess 启动失败，
