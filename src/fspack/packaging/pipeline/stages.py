@@ -53,6 +53,7 @@ from fspack.packaging.runtime import (
     extract_embed,
     extract_standalone,
 )
+from fspack.packaging.site_packages import normalize_pkg_name as _normalize_pkg_name
 from fspack.packaging.wheels import download_wheels
 from fspack.platform import Platform, detect_platform, wheel_platform_tags
 from fspack.progress import BuildTracker, StageRecorder
@@ -67,7 +68,6 @@ __all__ = [
     "_dep_cache_path",
     "_dep_cache_save",
     "_download_dependencies",
-    "_normalize_pkg_name",
     "_prepare_runtime",
     "_prepare_standalone_runtime",
     "_prepare_windows_runtime",
@@ -609,15 +609,6 @@ def _strip_version_specifier(pkg: str) -> str:
     ``pygame>=2.5.0`` → ``pygame``；``requests`` → ``requests``。
     """
     return re.split(r"[<>=!~;\[]", pkg, maxsplit=1)[0].strip()
-
-
-def _normalize_pkg_name(name: str) -> str:
-    """按 PEP 503 规范化包名：连续的 ``-_.`` 替换为单 ``-``，转小写。
-
-    使 ``ordered_set``/``ordered-set``/``Ordered.Set`` 均映射到 ``ordered-set``，
-    便于跨命名风格匹配 dist-info 目录。
-    """
-    return re.sub(r"[-_.]+", "-", name).lower()
 
 
 def unpack_wheels(  # noqa: PLR0913

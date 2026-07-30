@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Any
 
 from fspack.config import ProjectInfo
+from fspack.packaging.site_packages import find_site_packages
 
 __all__ = [
     "SbomPackage",
@@ -53,9 +54,6 @@ __all__ = [
 ]
 
 _logger = logging.getLogger(__name__)
-
-# site-packages 目录的 glob 模式（与 size_report.py 一致）
-_SITE_PACKAGES_GLOBS = ("runtime/Lib/site-packages", "runtime/python/lib/python*/site-packages")
 
 # SPDX 规范常量
 _SPDX_VERSION = "SPDX-2.3"
@@ -104,7 +102,7 @@ def collect_sbom(dist_dir: Path, info: ProjectInfo) -> dict[str, Any]:
     Returns:
         SPDX 2.3 兼容字典，可直接 ``json.dumps`` 为 SBOM 文件
     """
-    site_packages = _find_site_packages(dist_dir)
+    site_packages = find_site_packages(dist_dir)
     packages: list[SbomPackage] = []
     if site_packages is not None:
         for dist_info in sorted(site_packages.glob("*.dist-info")):
@@ -154,20 +152,6 @@ def generate_sbom(dist_dir: Path, info: ProjectInfo) -> Path:
     )
     _logger.info("SBOM 已生成: %s（%d 个包）", sbom_path, len(sbom_data["packages"]))
     return sbom_path
-
-
-def _find_site_packages(dist_dir: Path) -> Path | None:
-    """查找 dist 下的 site-packages 目录，找不到返回 None.
-
-    与 :mod:`fspack.packaging.size_report` 共享 glob 模式：
-    Windows embed 为 ``runtime/Lib/site-packages``，
-    Linux/macOS standalone 为 ``runtime/python/lib/python*/site-packages``。
-    """
-    for pattern in _SITE_PACKAGES_GLOBS:
-        matches = sorted(dist_dir.glob(pattern))
-        if matches:
-            return matches[0]
-    return None
 
 
 def _parse_dist_info(dist_info: Path) -> SbomPackage | None:

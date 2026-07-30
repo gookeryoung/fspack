@@ -22,8 +22,6 @@ from fspack.packaging.size_report import (
     SizeCategory,
     SizeReport,
     _dir_size,
-    _find_site_packages,
-    _normalize_pkg_name,
     _package_dir_size,
     _parse_dist_info_name,
     _size_from_record,
@@ -107,45 +105,6 @@ def test_dir_size_accumulates_files(tmp_path: Path) -> None:
     assert count == 2
 
 
-# ---- _find_site_packages ----
-
-
-def test_find_site_packages_windows_embed(tmp_path: Path) -> None:
-    """Windows embed python: dist/runtime/Lib/site-packages."""
-    dist = _make_dist_with_runtime(tmp_path)
-    sp = _find_site_packages(dist)
-    assert sp is not None
-    assert sp.name == "site-packages"
-    assert sp.parent.name == "Lib"
-
-
-def test_find_site_packages_linux_standalone(tmp_path: Path) -> None:
-    """Linux standalone: dist/runtime/python/lib/python<X.Y>/site-packages."""
-    dist = _make_dist_with_linux_runtime(tmp_path)
-    sp = _find_site_packages(dist)
-    assert sp is not None
-    assert sp.name == "site-packages"
-    assert "python3.11" in sp.parent.name
-
-
-def test_find_site_packages_not_found(tmp_path: Path) -> None:
-    """无 site-packages 时返回 None."""
-    dist = tmp_path / "dist"
-    dist.mkdir()
-    (dist / "runtime").mkdir()
-    assert _find_site_packages(dist) is None
-
-
-# ---- _normalize_pkg_name ----
-
-
-def test_normalize_pkg_name_replaces_separators() -> None:
-    """连续的 -_. 替换为单 -，转小写."""
-    assert _normalize_pkg_name("Ordered.Set") == "ordered-set"
-    assert _normalize_pkg_name("foo_bar") == "foo-bar"
-    assert _normalize_pkg_name("FOO__BAR") == "foo-bar"
-
-
 # ---- _parse_dist_info_name ----
 
 
@@ -201,6 +160,31 @@ def test_size_from_record_missing_file(tmp_path: Path) -> None:
     size, count = _size_from_record(site_packages, record)
     assert size == 0
     assert count == 0
+
+
+def test_size_from_record_path_with_comma(tmp_path: Path) -> None:
+    """RECORD 路径含逗号时用 CSV 引号包裹，csv.reader 正确解析.
+
+    旧实现 ``line.split(",")`` 在路径含逗号时会错位（把逗号后的部分当 hash），
+    导致文件被错误跳过。CSV 规范要求含逗号的字段用双引号包裹，``csv.reader``
+    能正确还原。本测试构造 ``"pkg/sub,dir/file.py"`` 路径验证修复。
+    """
+    site_packages = tmp_path / "sp"
+    site_packages.mkdir()
+    # 创建含逗号的子目录与文件
+    comma_dir = site_packages / "pkg" / "sub,dir"
+    comma_dir.mkdir(parents=True)
+    (comma_dir / "file.py").write_bytes(b"y = 2\n")  # 6 字节
+    record = site_packages / "pkg-1.0.0.dist-info" / "RECORD"
+    record.parent.mkdir()
+    # CSV 引号包裹含逗号的路径
+    record.write_text(
+        '"pkg/sub,dir/file.py",sha256=abc,6\npkg-1.0.0.dist-info/RECORD,,\n',
+        encoding="utf-8",
+    )
+    size, count = _size_from_record(site_packages, record)
+    assert size == 6
+    assert count == 1
 
 
 # ---- _package_dir_size ----

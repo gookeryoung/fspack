@@ -13,11 +13,14 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 from fspack.console import console
+from fspack.packaging.site_packages import find_site_packages, normalize_pkg_name
 from fspack.progress import fmt_bytes
 
 __all__ = [
@@ -35,7 +38,6 @@ _TOP_N_PACKAGES = 10
 # 三大类别名称（与 dist 目录下子目录对应）
 _RUNTIME_DIR = "runtime"
 _SRC_DIR = "src"
-_SITE_PACKAGES_GLOBS = ("runtime/Lib/site-packages", "runtime/python/lib/python*/site-packages")
 
 
 @dataclass(frozen=True)
@@ -105,26 +107,6 @@ def _dir_size(path: Path) -> tuple[int, int]:
     return total, count
 
 
-def _find_site_packages(dist_dir: Path) -> Path | None:
-    """在 dist 目录下定位 site-packages 目录.
-
-    Windows embed python：``dist/runtime/Lib/site-packages``
-    Linux standalone：``dist/runtime/python/lib/python<X.Y>/site-packages``
-    """
-    for pattern in _SITE_PACKAGES_GLOBS:
-        for sp in dist_dir.glob(pattern):
-            if sp.is_dir():
-                return sp
-    return None
-
-
-def _normalize_pkg_name(name: str) -> str:
-    """按 PEP 503 规范化包名：连续的 ``-_.`` 替换为单 ``-``，转小写."""
-    import re
-
-    return re.sub(r"[-_.]+", "-", name).lower()
-
-
 def _parse_dist_info_name(dist_info_dir: Path) -> tuple[str, str]:
     """从 ``<name>-<version>.dist-info`` 目录名解析包名与版本.
 
@@ -162,7 +144,7 @@ def _package_dir_size(
 
     # 回退：按 normalized 包名匹配顶层目录
     pkg_name, _ = _parse_dist_info_name(dist_info_dir)
-    normalized = _normalize_pkg_name(pkg_name)
+    normalized = normalize_pkg_name(pkg_name)
     # 包名含命名空间时只取首段（如 "package.name" → "package"）
     top_name = normalized.split("-")[0].replace("-", "_")
     if name_index is not None:
@@ -212,7 +194,7 @@ def _size_from_scan(site_packages: Path, normalized: str, top_name: str) -> tupl
         # 跳过 .dist-info/.egg-info 元数据目录（按包名前缀会误匹配）
         if entry.name.endswith((".dist-info", ".egg-info")):
             continue
-        entry_norm = _normalize_pkg_name(entry.name).split("-")[0]
+        entry_norm = normalize_pkg_name(entry.name).split("-")[0]
         if entry_norm == normalized or entry.name.startswith(top_name + ".") or entry.name == top_name:
             if entry.is_dir():
                 sz, n = _dir_size(entry)
@@ -231,6 +213,9 @@ def _size_from_record(site_packages: Path, record: Path) -> tuple[int, int]:
     """从 dist-info/RECORD 文件累加包体积.
 
     RECORD 格式每行：``<path>,<hash>,<size>``，path 相对 site-packages。
+    用 :mod:`csv` 解析以正确处理路径含逗号的边界情况（与
+    :func:`fspack.packaging.sbom._compute_package_checksum` 对齐，
+    ``line.split(",")`` 在路径含逗号时会错位）。
     """
     total = 0
     count = 0
@@ -238,15 +223,13 @@ def _size_from_record(site_packages: Path, record: Path) -> tuple[int, int]:
         text = record.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return 0, 0
-    for line in text.splitlines():
-        if not line:
+    reader = csv.reader(io.StringIO(text))
+    for row in reader:
+        if len(row) < 3:
             continue
-        parts = line.split(",")
-        if len(parts) < 3:
-            continue
-        rel_path = parts[0]
+        rel_path = row[0]
         # 跳过 RECORD 自身（size 字段为空）与目录条目
-        size_str = parts[2].strip()
+        size_str = row[2].strip()
         if not size_str:
             continue
         try:
@@ -280,7 +263,7 @@ def _build_name_index(site_packages: Path) -> dict[str, list[Path]]:
         # 跳过 .dist-info/.egg-info 元数据目录，避免与同名的源码目录混淆
         if entry.name.endswith((".dist-info", ".egg-info")):
             continue
-        full_norm = _normalize_pkg_name(entry.name)
+        full_norm = normalize_pkg_name(entry.name)
         index.setdefault(full_norm, []).append(entry)
         # 首段名（处理 package.name 形态）
         first_segment = full_norm.split("-")[0]
@@ -316,7 +299,7 @@ def collect_size_report(dist_dir: Path, *, top_n: int = _TOP_N_PACKAGES) -> Size
     categories.append(SizeCategory(name="src", size=src_size, file_count=src_files))
 
     # site-packages 类别（在 runtime 内，单独统计 Top N 包）
-    site_packages = _find_site_packages(dist_dir)
+    site_packages = find_site_packages(dist_dir)
     sp_size, sp_files = (0, 0)
     packages: list[PackageSize] = []
     if site_packages is not None:
