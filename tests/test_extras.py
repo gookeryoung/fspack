@@ -246,6 +246,11 @@ def test_cli_package_extra_flag_propagates_to_build_release(tmp_path: Path, monk
         fmt: str = "auto",
         codesign: bool = False,
         extras: object = None,
+        sign_exe: bool = False,
+        sign_exe_certificate: Path | None = None,
+        sign_exe_password: str | None = None,
+        sign_deb: bool = False,
+        sign_deb_key: str | None = None,
     ) -> list[Path]:
         captured["extras"] = extras
         return []

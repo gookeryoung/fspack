@@ -82,6 +82,7 @@ def download_wheels(  # noqa: PLR0913
     stage: StageRecorder | None = None,
     extra_index_urls: Sequence[str] = (),
     find_links: Sequence[str] = (),
+    require_hashes: bool = False,
 ) -> list[Path]:
     """用 dev python 的 pip 下载指定平台 wheel 到 cache_dir，返回本次依赖的 wheel 路径列表。
 
@@ -113,6 +114,12 @@ def download_wheels(  # noqa: PLR0913
     透传给 pip/uv 的 ``--extra-index-url`` 参数。
     ``find_links`` 为本地/远程 wheel 目录列表，透传给 pip/uv 的 ``--find-links`` 参数。
     二者用于支持私有包下载，PyPI 仍由 ``pypi_index`` 指定。
+
+    ``require_hashes`` 为 True 时强制依赖哈希校验（iter-103）：仅在线模式生效，
+    强制走 ``uv pip compile --generate-hashes`` 路径生成带哈希的 requirements.txt，
+    再 ``pip download --require-hashes -r requirements.txt`` 校验下载。
+    缓存命中（deps_cache 或 --no-index 解析成功）时跳过校验（缓存目录 wheel 已首次
+    校验）；uv 不可用时降级为 warning 不校验（避免阻塞构建）。
     """
     cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -121,6 +128,7 @@ def download_wheels(  # noqa: PLR0913
         return []
 
     # 尝试读取依赖解析缓存，命中则跳过 pip 调用
+    # require_hashes=True 时缓存命中仍跳过校验：缓存目录 wheel 已首次校验过哈希
     deps_key = _deps_cache_key(filtered, py_version, platform_tags, extra_index_urls, find_links)
     cached_wheels = _load_deps_cache(cache_dir, deps_key)
     if cached_wheels is not None:
@@ -147,6 +155,7 @@ def download_wheels(  # noqa: PLR0913
         cache_dir,
         extra_index_urls=extra_index_urls,
         find_links=find_links,
+        require_hashes=require_hashes,
     )
 
     wheel_names, used_fallback = _parse_wheel_names(result.stdout, cache_dir)

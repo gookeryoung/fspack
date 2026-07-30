@@ -101,6 +101,11 @@ def _capture_package_call(*, with_outputs: bool = False) -> tuple[list[Path], An
         fmt: str = "auto",
         codesign: bool = False,
         extras: object = None,
+        sign_exe: bool = False,
+        sign_exe_certificate: Path | None = None,
+        sign_exe_password: str | None = None,
+        sign_deb: bool = False,
+        sign_deb_key: str | None = None,
     ) -> list[Path]:
         called_projects.append(project)
         if with_outputs:

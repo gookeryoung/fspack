@@ -13,6 +13,7 @@ import pytest
 from fspack.config import AppType, BuildOptions, ProjectInfo, get_mirror
 from fspack.exceptions import InstallerError
 from fspack.packaging.installer import build_deb, build_linux_installer, build_tarball
+from fspack.packaging.installer_linux import build_deb_release, sign_deb_file
 from tests._stubs import CompletedStub
 
 
@@ -239,3 +240,190 @@ def test_build_linux_installer_with_build(tmp_path: Path, monkeypatch: pytest.Mo
     result = build_linux_installer(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=False)
     assert result == dist / "release" / "app_1.0-py3.11.10-slim_amd64.deb"
     assert (dist / "app").is_file()
+
+
+# ---- sign_deb_file 测试 ----
+
+
+def test_sign_deb_file_calls_gpg_with_correct_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """sign_deb_file 调用 ``gpg --detach-sign --armor <deb>``，命令含 .deb 路径."""
+    deb_path = tmp_path / "app_1.0_amd64.deb"
+    deb_path.write_bytes(b"fake deb")
+
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
+        captured["cmd"] = cmd
+        # gpg 签名成功后会产出 <deb>.asc 文件
+        deb_path.with_suffix(".deb.asc").write_text("-----BEGIN PGP SIGNATURE-----\n", encoding="utf-8")
+        return CompletedStub()
+
+    monkeypatch.setattr("fspack.packaging.installer_linux.subprocess.run", fake_run)
+
+    asc_path = sign_deb_file(deb_path)
+
+    cmd = captured["cmd"]
+    assert cmd[:3] == ["gpg", "--detach-sign", "--armor"]
+    assert str(deb_path) in cmd
+    # 未指定 key_id 时不含 --local-user
+    assert "--local-user" not in cmd
+    # 返回 .asc 路径
+    assert asc_path.suffix == ".asc"
+    assert asc_path.is_file()
+
+
+def test_sign_deb_file_with_key_id_includes_local_user(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """传入 key_id 时命令含 ``--local-user <key_id>``."""
+    deb_path = tmp_path / "app.deb"
+    deb_path.write_bytes(b"deb")
+
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
+        captured["cmd"] = cmd
+        Path(str(deb_path) + ".asc").write_text("signature", encoding="utf-8")
+        return CompletedStub()
+
+    monkeypatch.setattr("fspack.packaging.installer_linux.subprocess.run", fake_run)
+
+    asc_path = sign_deb_file(deb_path, key_id="0x12345678")
+
+    cmd = captured["cmd"]
+    assert "--local-user" in cmd
+    local_user_idx = cmd.index("--local-user")
+    assert cmd[local_user_idx + 1] == "0x12345678"
+    assert asc_path.is_file()
+
+
+def test_sign_deb_file_gpg_missing_raises_installer_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """gpg 不可用（FileNotFoundError）时抛 InstallerError."""
+    deb_path = tmp_path / "app.deb"
+    deb_path.write_bytes(b"deb")
+
+    def fake_run(cmd: list[str], **kw: Any) -> object:
+        raise FileNotFoundError()
+
+    monkeypatch.setattr("fspack.packaging.installer_linux.subprocess.run", fake_run)
+
+    with pytest.raises(InstallerError, match="未找到 gpg"):
+        sign_deb_file(deb_path)
+
+
+def test_sign_deb_file_gpg_failure_raises_installer_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """gpg 签名失败（CalledProcessError）时抛 InstallerError."""
+    deb_path = tmp_path / "app.deb"
+    deb_path.write_bytes(b"deb")
+    err = subprocess.CalledProcessError(2, "gpg", stderr="secret key not found")
+
+    def fake_run(cmd: list[str], **kw: Any) -> object:
+        raise err
+
+    monkeypatch.setattr("fspack.packaging.installer_linux.subprocess.run", fake_run)
+
+    with pytest.raises(InstallerError, match="gpg 签名失败"):
+        sign_deb_file(deb_path)
+
+
+# ---- build_deb_release 透传 sign_deb 参数测试 ----
+
+
+def test_build_deb_release_passes_sign_deb_to_sign_deb_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """build_deb_release(sign_deb=True, sign_deb_key=...) 透传到 sign_deb_file."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0"\n')
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "app").write_bytes(b"")
+    deb_path = dist / "release" / "app_1.0-py3.11.10-slim_amd64.deb"
+
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
+        # dpkg-deb --build <staging> <deb_path>
+        if cmd[0] == "dpkg-deb":
+            deb_path.parent.mkdir(parents=True, exist_ok=True)
+            deb_path.write_bytes(b"deb-content")
+        else:
+            # gpg 签名
+            captured["cmd"] = cmd
+            Path(str(deb_path) + ".asc").write_text("sig", encoding="utf-8")
+        return CompletedStub()
+
+    monkeypatch.setattr("fspack.packaging.installer_linux.subprocess.run", fake_run)
+
+    result = build_deb_release(
+        tmp_path,
+        get_mirror("huawei"),
+        "3.11.10",
+        no_build=True,
+        sign_deb=True,
+        sign_deb_key="0xABCD1234",
+    )
+
+    assert result == deb_path
+    # 验证 sign_deb_file 被调用（cmd 是 gpg 命令）
+    assert "cmd" in captured
+    assert captured["cmd"][:3] == ["gpg", "--detach-sign", "--armor"]
+    assert "--local-user" in captured["cmd"]
+    local_user_idx = captured["cmd"].index("--local-user")
+    assert captured["cmd"][local_user_idx + 1] == "0xABCD1234"
+    # .asc 签名文件已生成
+    assert (dist / "release" / "app_1.0-py3.11.10-slim_amd64.deb.asc").is_file()
+
+
+def test_build_deb_release_sign_deb_failure_does_not_block_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """签名失败降级为 warning 不阻断构建（仅 .deb 仍生成）."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0"\n')
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "app").write_bytes(b"")
+
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
+        if cmd[0] == "dpkg-deb":
+            deb_path = Path(cmd[-1])
+            deb_path.parent.mkdir(parents=True, exist_ok=True)
+            deb_path.write_bytes(b"deb-content")
+            return CompletedStub()
+        # gpg 失败
+        raise FileNotFoundError()
+
+    monkeypatch.setattr("fspack.packaging.installer_linux.subprocess.run", fake_run)
+
+    with caplog.at_level("WARNING", logger="fspack.packaging.installer"):
+        result = build_deb_release(tmp_path, get_mirror("huawei"), "3.11.10", no_build=True, sign_deb=True)
+
+    # .deb 仍生成
+    assert result.is_file()
+    assert result.name == "app_1.0-py3.11.10-slim_amd64.deb"
+    # 签名失败仅 warning
+    assert any("签名 .deb 失败" in r.message for r in caplog.records)
+
+
+def test_build_deb_release_without_sign_deb_does_not_call_gpg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """未启用 sign_deb 时不调用 gpg（仅 dpkg-deb 一次）."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0"\n')
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "app").write_bytes(b"")
+    deb_path = dist / "release" / "app_1.0-py3.11.10-slim_amd64.deb"
+
+    gpg_called: list[bool] = []
+
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
+        if cmd[0] == "gpg":
+            gpg_called.append(True)
+            Path(str(deb_path) + ".asc").write_text("sig", encoding="utf-8")
+        else:
+            deb_path.parent.mkdir(parents=True, exist_ok=True)
+            deb_path.write_bytes(b"deb-content")
+        return CompletedStub()
+
+    monkeypatch.setattr("fspack.packaging.installer_linux.subprocess.run", fake_run)
+
+    build_deb_release(tmp_path, get_mirror("huawei"), "3.11.10", no_build=True)
+
+    assert not gpg_called, "未启用 sign_deb 不应调用 gpg"

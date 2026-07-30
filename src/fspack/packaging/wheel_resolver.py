@@ -67,16 +67,27 @@ def _resolve_with_uv(  # noqa: PLR0913
     pypi_index: str,
     extra_index_urls: Sequence[str] = (),
     find_links: Sequence[str] = (),
-) -> list[str]:
-    """用 ``uv pip compile`` 解析依赖图，返回精确版本需求列表。
+    generate_hashes: bool = False,
+) -> str:
+    """用 ``uv pip compile`` 解析依赖图，返回带哈希的 requirements 文本.
 
     uv 用 PubGrub 算法（SAT solver 系），能解析 pip backtracking resolver
-    无法处理的复杂依赖图（避免 ``resolution-too-deep``）。解析结果为
-    ``name==version`` 列表，供 ``pip download --no-deps`` 逐个下载。
+    无法处理的复杂依赖图（避免 ``resolution-too-deep``）。
 
     ``--python-version``/``--python-platform`` 让 uv 按目标环境解析；
-    ``--no-header`` 去除注释头部，便于解析。输出经 stdout 捕获后逐行提取
-    ``name==version`` 对。
+    ``--no-header`` 去除注释头部。
+
+    ``generate_hashes=True`` 时附加 ``--generate-hashes``，uv 输出形如::
+
+        rich==13.7.0 \\
+            --hash=sha256:xxx \\
+            --hash=sha256:yyy
+
+    供 ``pip download --require-hashes -r`` 校验。返回原始 stdout 文本，
+    由调用方写入临时 requirements.txt。
+
+    无 ``generate_hashes`` 时调用方仍可用正则提取 ``name==version`` 列表
+    做并行下载（不校验哈希）。
     """
     uv = _find_uv()
     if uv is None:
@@ -96,6 +107,8 @@ def _resolve_with_uv(  # noqa: PLR0913
         "--index-url",
         pypi_index,
     ]
+    if generate_hashes:
+        cmd.append("--generate-hashes")
     # 私有包源：额外索引与 wheel 目录
     for url in extra_index_urls:
         cmd.extend(["--extra-index-url", url])
@@ -104,17 +117,12 @@ def _resolve_with_uv(  # noqa: PLR0913
     cmd.append("-")
     # uv pip compile 从 stdin 读取需求列表
     stdin_data = "\n".join(packages) + "\n"
-    _logger.info("uv pip compile 解析依赖图: %s", " ".join(packages))
+    _logger.info("uv pip compile 解析依赖图（generate_hashes=%s）: %s", generate_hashes, " ".join(packages))
     result = subprocess.run(cmd, input=stdin_data, check=True, capture_output=True, encoding="utf-8", errors="replace")
-    resolved: list[str] = []
-    for line in result.stdout.splitlines():
-        m = _UV_RESOLVED_LINE_RE.match(line.strip())
-        if m:
-            resolved.append(f"{m.group(1)}=={m.group(2)}")
-    if not resolved:
+    if not result.stdout.strip():
         raise DependencyError(f"uv pip compile 未解析出任何依赖:\n{result.stderr}")
-    _logger.info("uv 解析出 %d 个依赖（含传递依赖）", len(resolved))
-    return resolved
+    _logger.info("uv 解析完成，输出 %d 字节", len(result.stdout))
+    return result.stdout
 
 
 def _run_pip_download(  # noqa: PLR0913
@@ -127,6 +135,7 @@ def _run_pip_download(  # noqa: PLR0913
     cache_dir: Path,
     extra_index_urls: Sequence[str] = (),
     find_links: Sequence[str] = (),
+    require_hashes: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     """执行 pip download：先用 ``--no-index`` 离线解析，失败回退到在线解析下载.
 
@@ -138,6 +147,9 @@ def _run_pip_download(  # noqa: PLR0913
     :class:`DependencyError`，不回退到在线下载避免超时卡死。错误信息列出
     缺失的依赖名、本地缓存路径与已搜索的 find-links 路径，便于用户预下载
     wheel 放入缓存或新增 find-links 路径。
+
+    ``require_hashes=True`` 时离线解析成功仍跳过哈希校验（缓存目录 wheel 已首次
+    校验）；离线失败回退到在线时强制走 uv --generate-hashes 路径校验哈希。
     """
     # 惰性导入打破循环依赖：wheel_pip 顶层导入本模块，本模块不能顶层导入 wheel_pip
     from fspack.packaging.wheel_pip import _run_pip
@@ -173,6 +185,7 @@ def _run_pip_download(  # noqa: PLR0913
             cache_dir,
             extra_index_urls=extra_index_urls,
             find_links=find_links,
+            require_hashes=require_hashes,
         )
     _logger.info("缓存解析成功，跳过网络查询")
     return result
@@ -189,6 +202,7 @@ def _download_online(  # noqa: PLR0913
     *,
     extra_index_urls: Sequence[str] = (),
     find_links: Sequence[str] = (),
+    require_hashes: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     """在线解析并下载依赖 wheel。
 
@@ -200,6 +214,11 @@ def _download_online(  # noqa: PLR0913
 
     uv 不可用或解析失败时回退到 ``pip download`` 完整解析+下载（stream=True），
     保留 sdist 回退（``pip wheel --no-deps`` 从 sdist 构建纯 Python wheel）。
+
+    ``require_hashes=True``（iter-103）时强制走 uv 路径并启用 ``--generate-hashes``，
+    生成带哈希的 requirements.txt 后用单次 ``pip download --require-hashes -r``
+    下载（无法并行，因 ``--require-hashes`` 要求所有包同 requirements 文件）。
+    uv 不可用时 warning 降级为不校验哈希（避免阻塞构建）。
     """
     # 惰性导入打破循环依赖：wheel_pip 顶层导入本模块，本模块不能顶层导入 wheel_pip
     from fspack.packaging.wheel_pip import _run_pip
@@ -211,11 +230,28 @@ def _download_online(  # noqa: PLR0913
     for link in find_links:
         extra_args.extend(["--find-links", link])
 
-    # 尝试用 uv 解析依赖图
+    # require_hashes=True：强制走 uv --generate-hashes 路径
+    if require_hashes:
+        if _find_uv() is None:
+            _logger.warning("require_hashes=True 但 uv 不可用，降级为不校验哈希")
+        else:
+            return _download_with_hashes(
+                filtered,
+                base_args,
+                extra_args,
+                pypi_index,
+                py_version,
+                platform_tags,
+                cache_dir,
+                extra_index_urls=extra_index_urls,
+                find_links=find_links,
+            )
+
+    # 尝试用 uv 解析依赖图（不带哈希）
     resolved: list[str] | None = None
     if _find_uv() is not None:
         try:
-            resolved = _resolve_with_uv(
+            uv_output = _resolve_with_uv(
                 filtered,
                 py_version,
                 platform_tags,
@@ -223,6 +259,7 @@ def _download_online(  # noqa: PLR0913
                 extra_index_urls=extra_index_urls,
                 find_links=find_links,
             )
+            resolved = _extract_resolved_lines(uv_output)
         except (DependencyError, subprocess.CalledProcessError) as e:
             _logger.warning("uv 解析失败，回退到 pip 完整解析: %s", e)
 
@@ -260,6 +297,84 @@ def _download_online(  # noqa: PLR0913
         )
         assert result is not None  # suppress_error=False，不会返回 None
         return result
+
+
+def _download_with_hashes(  # noqa: PLR0913
+    filtered: list[str],
+    base_args: list[str],
+    extra_args: list[str],
+    pypi_index: str,
+    py_version: str,
+    platform_tags: Sequence[str],
+    cache_dir: Path,
+    *,
+    extra_index_urls: Sequence[str] = (),
+    find_links: Sequence[str] = (),
+) -> subprocess.CompletedProcess[str]:
+    """``require_hashes=True`` 路径：uv 生成带哈希 requirements + pip download 校验.
+
+    用 ``uv pip compile --generate-hashes`` 生成包含所有依赖哈希的 requirements.txt，
+    写入临时文件后用 ``pip download --require-hashes -r <tmp>`` 一次性下载校验。
+    无法并行（pip ``--require-hashes`` 要求所有包在同一 requirements 文件中）。
+
+    临时 requirements.txt 在 ``cache_dir`` 下（避免 tempfile 目录权限问题），
+    下载完成后删除。
+    """
+    import contextlib
+    import tempfile
+
+    from fspack.packaging.wheel_pip import _run_pip
+
+    # uv pip compile --generate-hashes 输出带哈希的 requirements 文本
+    requirements_text = _resolve_with_uv(
+        filtered,
+        py_version,
+        platform_tags,
+        pypi_index,
+        extra_index_urls=extra_index_urls,
+        find_links=find_links,
+        generate_hashes=True,
+    )
+
+    # 写入临时 requirements.txt（cache_dir 下，便于 pip --find-links <cache_dir> 复用）
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix="-requirements.txt", dir=str(cache_dir), delete=False, encoding="utf-8"
+    ) as f:
+        f.write(requirements_text)
+        req_path = f.name
+    try:
+        cmd = [
+            *base_args,
+            *extra_args,
+            "--require-hashes",
+            "-r",
+            req_path,
+        ]
+        _logger.info("pip download --require-hashes -r %s（%d 个依赖）", req_path, len(filtered))
+        result = _run_pip(cmd, f"pip download --require-hashes {len(filtered)} 个依赖", stream=True)
+        assert result is not None  # suppress_error=False
+        return result
+    finally:
+        with contextlib.suppress(OSError):
+            Path(req_path).unlink()
+
+
+def _extract_resolved_lines(uv_output: str) -> list[str]:
+    """从 ``uv pip compile`` 输出（不带 --generate-hashes）提取 ``name==version`` 列表.
+
+    uv 输出形如::
+
+        rich==13.7.0
+        requests==2.31.0
+
+    正则匹配每行首个 ``name==version`` 对，跳过注释/空行/--hash 续行。
+    """
+    resolved: list[str] = []
+    for line in uv_output.splitlines():
+        m = _UV_RESOLVED_LINE_RE.match(line.strip())
+        if m:
+            resolved.append(f"{m.group(1)}=={m.group(2)}")
+    return resolved
 
 
 def _download_resolved_parallel(  # noqa: PLR0913

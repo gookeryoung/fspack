@@ -204,7 +204,7 @@ def build(  # noqa: PLR0913
     return info
 
 
-def _execute_build(  # noqa: PLR0913
+def _execute_build(  # noqa: PLR0912, PLR0913
     tracker: BuildTracker,
     project_dir: Path,
     py_version: str | None,
@@ -288,6 +288,22 @@ def _execute_build(  # noqa: PLR0913
     # 仅当 --analyze-deps 启用时执行，节省字节数写入 tracker 的"依赖分析"stage。
     if opts.analyze_deps:
         _analyze_binary_dependencies(ctx)
+
+    # SBOM 生成（默认启用，--no-sbom 关闭）：扫描 dist 下 site-packages 的
+    # *.dist-info 提取依赖元信息，生成 SPDX 2.3 兼容 JSON 到 dist/release/。
+    # 放在所有构建阶段之后、summary 之前，使 SBOM stage 出现在汇总表中。
+    # 扫描失败不阻断构建（warning 后继续），SBOM 仅为审计辅助产物。
+    if not opts.no_sbom:
+        from fspack.packaging.sbom import generate_sbom
+
+        with tracker.stage("生成 SBOM") as st:
+            try:
+                sbom_path = generate_sbom(cfg.dist_dir, info)
+                st.processed(1)
+                st.set_detail(sbom_path.name)
+            except OSError as e:
+                _logger.warning("SBOM 生成失败，跳过: %s", e)
+                st.set_detail("生成失败")
 
     console.rich.print(tracker.summary())
     if not opts.no_size_report:

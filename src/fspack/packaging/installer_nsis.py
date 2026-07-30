@@ -12,14 +12,17 @@ from __future__ import annotations
 import logging
 import subprocess
 from pathlib import Path
+from typing import Sequence
 
 from fspack._compat import override
-from fspack.config import ProjectInfo
+from fspack.config import MirrorConfig, ProjectInfo
 from fspack.console import console
 from fspack.exceptions import InstallerError
 from fspack.packaging.installer import (
     _DIST_INTERMEDIATE_EXCLUDES,
     Installer,
+    _check_exe,
+    _prepare_dist,
     _release_base,
     _run_stage,
 )
@@ -30,6 +33,8 @@ __all__ = [
     "NsisInstaller",
     "compile_installer",
     "generate_nsis_script",
+    "sign_exe_file",
+    "sign_exe_files",
 ]
 
 # 共享 logger 名：保持与原 installer.py 一致，测试 caplog 按 logger 名过滤
@@ -143,6 +148,60 @@ class NsisInstaller(Installer):
         console.success(f"安装包已生成: {result}")
         return result
 
+    @classmethod
+    @override
+    def build_installer(  # noqa: PLR0913
+        cls,
+        project_dir: Path,
+        mirror: MirrorConfig,
+        py_version: str | None = None,
+        no_build: bool = False,
+        dist_dir: Path | None = None,
+        *,
+        tracker: BuildTracker | None = None,
+        extras: Sequence[str] | None = None,
+        sign_exe: bool = False,
+        sign_exe_certificate: Path | None = None,
+        sign_exe_password: str | None = None,
+    ) -> Path:
+        """编排：可选 build → 签名 dist exe → 生成 NSIS → 签名 setup.exe.
+
+        ``sign_exe=True`` 且 ``sign_exe_certificate`` 非空时：
+        1. 在 NSIS 编译前签名 dist 下所有入口 exe（使安装包内打包签名 exe）
+        2. 在 NSIS 编译后签名 setup.exe（使安装包自身携带签名）
+
+        签名失败降级为 warning 不阻断构建（签名仅为分发增强）。
+        """
+        own_tracker = tracker is None
+        tk = tracker or BuildTracker(title="打包阶段汇总")
+        dist, info = _prepare_dist(
+            project_dir, mirror, py_version, no_build, dist_dir, Platform.WINDOWS, extras=extras, tracker=tk
+        )
+        _check_exe(dist, info, Platform.WINDOWS)
+
+        # 签名 dist exe（NSIS 编译前，使安装包内打包签名 exe）
+        if sign_exe and sign_exe_certificate is not None:
+            sign_exe_files(dist, info, sign_exe_certificate, sign_exe_password, tracker=tk)
+
+        release = dist / "release"
+        result = cls.build_package(dist, info, release, tracker=tk)
+
+        # 签名 setup.exe（NSIS 编译后，使安装包自身携带签名）
+        if sign_exe and sign_exe_certificate is not None:
+            with tk.stage("签名安装包") as st:
+                try:
+                    sign_exe_file(result, sign_exe_certificate, sign_exe_password)
+                    st.processed(1)
+                    st.set_detail(result.name)
+                except InstallerError as e:
+                    _logger.warning("签名安装包失败，跳过: %s", e)
+                    st.set_detail("签名失败")
+
+        console.success(f"安装包已生成: {result}")
+        if own_tracker:
+            console.rich.print(tk.summary())
+        return result
+
 
 def generate_nsis_script(project: ProjectInfo, dist_dir: Path, release_dir: Path) -> Path:
     """生成 NSIS 安装脚本到 dist_dir/installer.nsi，返回脚本路径。
@@ -230,3 +289,71 @@ def compile_installer(nsi_path: Path, out_setup: Path) -> Path:
     if not out_setup.is_file():
         raise InstallerError(f"makensis 未产出安装包: {out_setup}")
     return out_setup
+
+
+def sign_exe_file(
+    exe_path: Path,
+    certificate: Path,
+    password: str | None,
+    *,
+    timestamp_url: str = "http://timestamp.digicert.com",
+) -> None:
+    """用 signtool 对单个 exe 做代码签名.
+
+    调用 ``signtool sign /f <pfx> /p <password> /t <timestamp> <exe>``，
+    需 Windows SDK 自带 signtool.exe（在 PATH 中或通过 Windows SDK 安装）。
+
+    Args:
+        exe_path: 待签名的 exe 文件路径
+        certificate: PFX 证书文件路径
+        password: PFX 证书密码，None 时省略 /p 参数（空密码证书）
+        timestamp_url: RFC 3161 时间戳服务器 URL，默认 DigiCert
+
+    Raises:
+        InstallerError: signtool 未找到或签名失败
+    """
+    cmd: list[str] = ["signtool", "sign", "/f", str(certificate)]
+    if password:
+        cmd.extend(["/p", password])
+    cmd.extend(["/t", timestamp_url, str(exe_path)])
+    _logger.info("签名 exe: %s", exe_path.name)
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8", errors="replace")
+    except FileNotFoundError as e:
+        raise InstallerError("未找到 signtool，请安装 Windows SDK 并将 signtool 加入 PATH") from e
+    except subprocess.CalledProcessError as e:
+        raise InstallerError(f"signtool 签名失败 {exe_path.name}:\n{e.stderr}") from e
+
+
+def sign_exe_files(
+    dist_dir: Path,
+    info: ProjectInfo,
+    certificate: Path,
+    password: str | None,
+    *,
+    tracker: BuildTracker,
+) -> int:
+    """签名 dist 下所有入口 exe（主 exe + 多入口 exe），返回签名文件数.
+
+    在 NSIS 编译前调用，使安装包内打包的 exe 已携带签名。签名单入口项目的
+    ``<name>.exe`` 与多入口项目的所有 ``<entry_name>.exe``。
+
+    签名失败不阻断构建（warning 后继续），签名仅为分发增强，非必需。
+    """
+    signed = 0
+    for ep in info.all_entries:
+        exe_name = f"{ep.name}.exe"
+        exe_path = dist_dir / exe_name
+        if not exe_path.is_file():
+            _logger.warning("签名跳过：exe 不存在 %s", exe_path)
+            continue
+        try:
+            sign_exe_file(exe_path, certificate, password)
+            signed += 1
+        except InstallerError as e:
+            _logger.warning("签名 %s 失败，跳过: %s", exe_name, e)
+    if signed:
+        with tracker.stage("签名 exe") as st:
+            st.processed(signed)
+            st.set_detail(f"{signed} 个 exe")
+    return signed

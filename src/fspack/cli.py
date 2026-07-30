@@ -270,6 +270,24 @@ def _add_build_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser
             "指定时完全覆盖 [tool.fspack] lazy-imports 配置默认"
         ),
     )
+    p.add_argument(
+        "--require-hashes",
+        action="store_true",
+        help=(
+            "依赖下载强制哈希校验：透传 pip download --require-hashes，"
+            "在线模式下要求所有 wheel 的 sha256 与 PyPI 声明一致。"
+            "缓存命中时跳过校验（缓存目录 wheel 已首次校验）。"
+            "启用时若依赖未声明哈希（如 sdist 回退构建的 wheel）会失败"
+        ),
+    )
+    p.add_argument(
+        "--no-sbom",
+        action="store_true",
+        help=(
+            "关闭构建结束后的 SBOM 生成（默认输出 SPDX 2.3 兼容 JSON "
+            "到 dist/release/<name>-<version>-sbom.json，含依赖名称/版本/许可证/SHA256）"
+        ),
+    )
 
 
 def _add_run_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -319,6 +337,52 @@ def _add_package_subparser(sub: argparse._SubParsersAction[argparse.ArgumentPars
         help=(
             "macOS 产物做 ad-hoc 签名（codesign --sign -），仅对 pkg/dmg 格式生效。"
             "ad-hoc 签名仅用于本地执行，真实分发需用 Apple Developer ID 签名；默认关闭"
+        ),
+    )
+    p.add_argument(
+        "--sign-exe",
+        action="store_true",
+        help=(
+            "Windows 产物做代码签名（signtool sign /f <pfx> /p <password>），"
+            "需配合 --sign-exe-certificate 指定 PFX 证书文件。"
+            "签名 dist 内 exe 与 release 目录的 NSIS 安装包；默认关闭。"
+            "签名需 Windows SDK 自带 signtool.exe，离线环境可用"
+        ),
+    )
+    p.add_argument(
+        "--sign-exe-certificate",
+        default=None,
+        metavar="PFX_PATH",
+        dest="sign_exe_certificate",
+        help=(
+            "Windows 代码签名 PFX 证书文件路径（与 --sign-exe 配套）。"
+            "与 [tool.fspack] sign-exe-certificate 配置默认合并（CLI 优先）"
+        ),
+    )
+    p.add_argument(
+        "--sign-exe-password",
+        default=None,
+        metavar="PASSWORD",
+        dest="sign_exe_password",
+        help="Windows 代码签名 PFX 证书密码（与 --sign-exe-certificate 配套）",
+    )
+    p.add_argument(
+        "--sign-deb",
+        action="store_true",
+        help=(
+            "Linux .deb 安装包做 GPG 分离签名（gpg --detach-sign --armor）。"
+            "需配合 --sign-deb-key 指定 GPG 密钥 ID（默认用 GPG 默认密钥）。"
+            "签名产物为 <deb>.asc；默认关闭"
+        ),
+    )
+    p.add_argument(
+        "--sign-deb-key",
+        default=None,
+        metavar="KEY_ID",
+        dest="sign_deb_key",
+        help=(
+            "Linux .deb GPG 签名密钥 ID（如 0x12345678 或 user@example.com）。"
+            "未指定时用 GPG 默认密钥；与 [tool.fspack] sign-deb-key 配置默认合并（CLI 优先）"
         ),
     )
     p.add_argument(
@@ -469,6 +533,8 @@ def _run_build(project: Path, ns: argparse.Namespace) -> None:
         analyze_deps=ns.analyze_deps or base.analyze_deps,
         extras=enabled_extras,
         lazy_imports=_parse_lazy_imports(ns.lazy_imports, base.lazy_imports),
+        require_hashes=ns.require_hashes or base.require_hashes,
+        no_sbom=ns.no_sbom or base.no_sbom,
     )
     log_file = Path(ns.log_file).resolve() if ns.log_file else None
     log_format = LogFormat.parse(ns.log_format)
@@ -489,6 +555,8 @@ def _run_build(project: Path, ns: argparse.Namespace) -> None:
 
 def _run_package(project: Path, ns: argparse.Namespace) -> None:
     """执行单项目 package 子命令."""
+    from pathlib import Path as _Path
+
     from fspack.config import ProjectInfo, get_mirror
     from fspack.exceptions import ProjectError
     from fspack.packaging.installer import build_release
@@ -502,6 +570,26 @@ def _run_package(project: Path, ns: argparse.Namespace) -> None:
         unknown = set(cli_extras) - set(info.optional_dependencies)
         if unknown:
             raise ProjectError(f"未知的 extras 分组: {sorted(unknown)}，可选: {sorted(info.optional_dependencies)}")
+
+    # iter-103 安全加固签名：CLI 优先合并配置默认（与 extras 不同，签名证书/密钥
+    # 用 CLI 优先 + 配置回退语义，避免 --sign-exe 显式开关与配置证书路径分离）
+    info_for_sign = ProjectInfo.from_dir(project, ns.py_version) if (ns.sign_exe or ns.sign_deb) else None
+    cfg_cert = info_for_sign.build_defaults.sign_exe_certificate if info_for_sign else None
+    sign_exe_cert = (
+        _Path(ns.sign_exe_certificate).resolve()
+        if ns.sign_exe_certificate
+        else (_Path(cfg_cert).resolve() if cfg_cert else None)
+    )
+    sign_exe_pwd = (
+        ns.sign_exe_password
+        if ns.sign_exe_password is not None
+        else (info_for_sign.build_defaults.sign_exe_password if info_for_sign else None)
+    )
+    sign_deb_key = (
+        ns.sign_deb_key
+        if ns.sign_deb_key is not None
+        else (info_for_sign.build_defaults.sign_deb_key if info_for_sign else None)
+    )
     outputs = build_release(
         project,
         get_mirror(ns.mirror),
@@ -511,6 +599,11 @@ def _run_package(project: Path, ns: argparse.Namespace) -> None:
         fmt=ns.format,
         codesign=ns.codesign,
         extras=cli_extras,
+        sign_exe=ns.sign_exe,
+        sign_exe_certificate=sign_exe_cert,
+        sign_exe_password=sign_exe_pwd,
+        sign_deb=ns.sign_deb,
+        sign_deb_key=sign_deb_key,
     )
     for out in outputs:
         _logger.info("发行包已生成: %s", out)

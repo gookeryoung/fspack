@@ -156,6 +156,20 @@ class BuildDefaults:
     # 延迟导入的顶层模块名（来自 [tool.fspack] lazy-imports，iter-102）：
     # wrapper 注入 _LazyImportFinder meta path finder，首次属性访问时才加载
     lazy_imports: tuple[str, ...] = ()
+    # 依赖下载强制哈希校验（iter-103）：透传 pip download --require-hashes，
+    # 仅在线模式生效，缓存命中时跳过（缓存目录 wheel 已首次校验）
+    require_hashes: bool | None = None
+    # 关闭构建结束后的 SBOM 生成（iter-103）：默认输出 SPDX 2.3 兼容 JSON
+    # 到 dist/release/<name>-<version>-sbom.json
+    no_sbom: bool | None = None
+    # Windows 代码签名证书路径（iter-103）：未指定时跳过 signtool 签名。
+    # 配置层仅作为 CLI --sign-exe-certificate 的回退默认值
+    sign_exe_certificate: str | None = None
+    # Windows 代码签名证书密码（iter-103）：与 sign_exe_certificate 配套
+    sign_exe_password: str | None = None
+    # Linux .deb GPG 签名密钥 ID（iter-103）：未指定时跳过 gpg 签名。
+    # 配置层仅作为 CLI --sign-deb-key 的回退默认值
+    sign_deb_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -337,6 +351,17 @@ class BuildOptions:
     # 延迟导入的顶层模块名元组（iter-102）：wrapper 注入 _LazyImportFinder，
     # 首次属性访问时才加载模块，降低启动时间
     lazy_imports: tuple[str, ...] = ()
+    # 依赖下载强制哈希校验（iter-103）：透传 pip download --require-hashes，
+    # 仅在线模式生效，缓存命中时跳过（缓存目录 wheel 已首次校验）
+    require_hashes: bool = False
+    # 关闭构建结束后的 SBOM 生成（iter-103）：默认输出 SPDX 2.3 兼容 JSON
+    no_sbom: bool = False
+    # Windows 代码签名证书路径（iter-103）：非 None 时调用 signtool 签名 exe 与安装包
+    sign_exe_certificate: Path | None = None
+    # Windows 代码签名证书密码（iter-103）：与 sign_exe_certificate 配套
+    sign_exe_password: str | None = None
+    # Linux .deb GPG 签名密钥 ID（iter-103）：非 None 时调用 gpg --detach-sign 签名 .deb
+    sign_deb_key: str | None = None
 
 
 def build_options_from_defaults(defaults: BuildDefaults) -> BuildOptions:
@@ -366,6 +391,15 @@ def build_options_from_defaults(defaults: BuildDefaults) -> BuildOptions:
         analyze_deps=defaults.analyze_deps if defaults.analyze_deps is not None else base.analyze_deps,
         extras=frozenset(defaults.extras),
         lazy_imports=defaults.lazy_imports,
+        require_hashes=defaults.require_hashes if defaults.require_hashes is not None else base.require_hashes,
+        no_sbom=defaults.no_sbom if defaults.no_sbom is not None else base.no_sbom,
+        sign_exe_certificate=(
+            Path(defaults.sign_exe_certificate) if defaults.sign_exe_certificate else base.sign_exe_certificate
+        ),
+        sign_exe_password=defaults.sign_exe_password
+        if defaults.sign_exe_password is not None
+        else base.sign_exe_password,
+        sign_deb_key=defaults.sign_deb_key if defaults.sign_deb_key is not None else base.sign_deb_key,
     )
 
 

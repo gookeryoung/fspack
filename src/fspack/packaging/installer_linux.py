@@ -39,6 +39,7 @@ __all__ = [
     "build_deb_release",
     "build_tarball",
     "build_tarball_release",
+    "sign_deb_file",
 ]
 
 _logger = logging.getLogger("fspack.packaging.installer")
@@ -201,8 +202,15 @@ def build_deb_release(  # noqa: PLR0913
     *,
     tracker: BuildTracker | None = None,
     extras: Sequence[str] | None = None,
+    sign_deb: bool = False,
+    sign_deb_key: str | None = None,
 ) -> Path:
-    """编排：可选 build → 校验可执行文件 → 构造 .deb 安装包，返回 .deb 路径。"""
+    """编排：可选 build → 校验可执行文件 → 构造 .deb → 可选 GPG 签名.
+
+    ``sign_deb=True`` 时用 ``gpg --detach-sign --armor`` 对 .deb 做分离签名，
+    产出 ``<deb>.asc`` 签名文件。``sign_deb_key`` 指定密钥 ID，未指定时用
+    GPG 默认密钥。签名失败降级为 warning 不阻断构建。
+    """
     own_tracker = tracker is None
     tk = tracker or BuildTracker(title="打包阶段汇总")
     dist, info = _prepare_dist(
@@ -217,7 +225,50 @@ def build_deb_release(  # noqa: PLR0913
         lambda: build_deb(dist, info, release),
         detail=deb_name,
     )
+    if sign_deb:
+        with tk.stage("签名 .deb") as st:
+            try:
+                sign_deb_file(result, sign_deb_key)
+                st.processed(1)
+                st.set_detail(f"{result.name}.asc")
+            except InstallerError as e:
+                _logger.warning("签名 .deb 失败，跳过: %s", e)
+                st.set_detail("签名失败")
     console.success(f".deb 安装包已生成: {result}")
     if own_tracker:
         console.rich.print(tk.summary())
     return result
+
+
+def sign_deb_file(deb_path: Path, key_id: str | None = None) -> Path:
+    """用 GPG 对 .deb 做分离签名，返回 .asc 签名文件路径.
+
+    调用 ``gpg --detach-sign --armor [--local-user <key_id>] <deb>``，
+    产出 ``<deb>.asc`` ASCII 签名文件。
+
+    Args:
+        deb_path: 待签名的 .deb 文件路径
+        key_id: GPG 密钥 ID（如 ``0x12345678`` 或 ``user@example.com``），
+            None 时用 GPG 默认密钥
+
+    Returns:
+        签名文件路径（``<deb>.asc``）
+
+    Raises:
+        InstallerError: gpg 未找到或签名失败
+    """
+    cmd: list[str] = ["gpg", "--detach-sign", "--armor"]
+    if key_id:
+        cmd.extend(["--local-user", key_id])
+    cmd.append(str(deb_path))
+    _logger.info("签名 .deb: %s", deb_path.name)
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8", errors="replace")
+    except FileNotFoundError as e:
+        raise InstallerError("未找到 gpg，请安装 GnuPG（如 sudo apt install -y gnupg）") from e
+    except subprocess.CalledProcessError as e:
+        raise InstallerError(f"gpg 签名失败 {deb_path.name}:\n{e.stderr}") from e
+    asc_path = deb_path.with_suffix(".deb.asc")
+    if not asc_path.is_file():
+        asc_path = Path(str(deb_path) + ".asc")
+    return asc_path

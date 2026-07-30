@@ -342,6 +342,11 @@ def build_release(  # noqa: PLR0913
     fmt: str = "auto",
     codesign: bool = False,
     extras: Sequence[str] | None = None,
+    sign_exe: bool = False,
+    sign_exe_certificate: Path | None = None,
+    sign_exe_password: str | None = None,
+    sign_deb: bool = False,
+    sign_deb_key: str | None = None,
 ) -> list[Path]:
     """按 ``--format`` 调度生成发行包，返回产物路径列表。
 
@@ -357,6 +362,11 @@ def build_release(  # noqa: PLR0913
         extras: 启用的 ``[project.optional-dependencies]`` 分组名，``None`` 时用
             ``[tool.fspack] extras`` 配置默认；非 ``None`` 时覆盖配置默认。
             仅在需要重新构建时生效（dist 不存在或 ``no_build=False`` 且 dist 未就绪）
+        sign_exe: Windows 产物是否做代码签名（signtool），需配合 ``sign_exe_certificate``
+        sign_exe_certificate: Windows 代码签名 PFX 证书路径
+        sign_exe_password: Windows 代码签名 PFX 证书密码
+        sign_deb: Linux .deb 是否做 GPG 分离签名
+        sign_deb_key: Linux .deb GPG 签名密钥 ID
     """
     resolved_target = target or detect_platform()
     formats = _resolve_formats(fmt, resolved_target)
@@ -390,6 +400,9 @@ def build_release(  # noqa: PLR0913
                     dist_dir=dist_dir,
                     tracker=tracker,
                     extras=format_extras,
+                    sign_exe=sign_exe,
+                    sign_exe_certificate=sign_exe_certificate,
+                    sign_exe_password=sign_exe_password,
                 )
             )
         elif f == "tar.gz":
@@ -414,6 +427,8 @@ def build_release(  # noqa: PLR0913
                     dist_dir=dist_dir,
                     tracker=tracker,
                     extras=format_extras,
+                    sign_deb=sign_deb,
+                    sign_deb_key=sign_deb_key,
                 )
             )
         elif f == "pkg":

@@ -1989,3 +1989,264 @@ def test_expand_extras_preserves_version_constraints() -> None:
     )
     assert "rich>=13; python_version<'3.11'" in result
     assert "PySide2>=5.15; platform_system=='Windows'" in result
+
+
+# ---------- iter-108 安全加固：require_hashes / no_sbom 配置 ----------
+
+
+def test_parse_project_require_hashes_config(tmp_path: Path) -> None:
+    """[tool.fspack] require_hashes = true 解析为布尔值并透传到 BuildOptions."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nrequire_hashes = true\n', encoding="utf-8"
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
+    info = parse_project(tmp_path)
+    assert info.build_defaults.require_hashes is True
+    # build_options_from_defaults 透传到 BuildOptions.require_hashes
+    opts = build_options_from_defaults(info.build_defaults)
+    assert opts.require_hashes is True
+
+
+def test_parse_project_require_hashes_default_none(tmp_path: Path) -> None:
+    """未配置 require_hashes 时默认 None."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n', encoding="utf-8")
+    (tmp_path / "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
+    info = parse_project(tmp_path)
+    assert info.build_defaults.require_hashes is None
+    opts = build_options_from_defaults(info.build_defaults)
+    assert opts.require_hashes is False
+
+
+def test_parse_project_require_hashes_false(tmp_path: Path) -> None:
+    """[tool.fspack] require_hashes = false 显式关闭."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nrequire_hashes = false\n', encoding="utf-8"
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
+    info = parse_project(tmp_path)
+    assert info.build_defaults.require_hashes is False
+    opts = build_options_from_defaults(info.build_defaults)
+    assert opts.require_hashes is False
+
+
+def test_parse_project_require_hashes_invalid_type_raises(tmp_path: Path) -> None:
+    """require_hashes 非布尔值时报错."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nrequire_hashes = "yes"\n', encoding="utf-8"
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
+    with pytest.raises(ProjectError, match="require_hashes 必须是布尔值"):
+        parse_project(tmp_path)
+
+
+def test_parse_project_no_sbom_config(tmp_path: Path) -> None:
+    """[tool.fspack] no_sbom = true 解析为布尔值并透传到 BuildOptions."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nno_sbom = true\n', encoding="utf-8"
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
+    info = parse_project(tmp_path)
+    assert info.build_defaults.no_sbom is True
+    opts = build_options_from_defaults(info.build_defaults)
+    assert opts.no_sbom is True
+
+
+def test_parse_project_no_sbom_default_none(tmp_path: Path) -> None:
+    """未配置 no_sbom 时默认 None."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n', encoding="utf-8")
+    (tmp_path / "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
+    info = parse_project(tmp_path)
+    assert info.build_defaults.no_sbom is None
+    opts = build_options_from_defaults(info.build_defaults)
+    assert opts.no_sbom is False
+
+
+def test_parse_project_no_sbom_invalid_type_raises(tmp_path: Path) -> None:
+    """no_sbom 非布尔值时报错."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nno_sbom = 1\n', encoding="utf-8"
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
+    with pytest.raises(ProjectError, match="no_sbom 必须是布尔值"):
+        parse_project(tmp_path)
+
+
+# ---------- iter-108 安全加固：sign-exe-certificate / sign-exe-password / sign-deb-key 配置 ----------
+
+
+def test_parse_project_sign_exe_certificate_config(tmp_path: Path) -> None:
+    """[tool.fspack] sign-exe-certificate 解析为字符串并透传到 BuildOptions（Path 类型）."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nsign-exe-certificate = "cert.pfx"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
+    info = parse_project(tmp_path)
+    assert info.build_defaults.sign_exe_certificate == "cert.pfx"
+    # build_options_from_defaults 转为 Path 类型
+    opts = build_options_from_defaults(info.build_defaults)
+    assert opts.sign_exe_certificate == Path("cert.pfx")
+
+
+def test_parse_project_sign_exe_certificate_default_none(tmp_path: Path) -> None:
+    """未配置 sign-exe-certificate 时默认 None."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n', encoding="utf-8")
+    (tmp_path / "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
+    info = parse_project(tmp_path)
+    assert info.build_defaults.sign_exe_certificate is None
+    opts = build_options_from_defaults(info.build_defaults)
+    assert opts.sign_exe_certificate is None
+
+
+def test_parse_project_sign_exe_certificate_strips_whitespace(tmp_path: Path) -> None:
+    """sign-exe-certificate 前后空白被 strip."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nsign-exe-certificate = "  cert.pfx  "\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
+    info = parse_project(tmp_path)
+    assert info.build_defaults.sign_exe_certificate == "cert.pfx"
+
+
+def test_parse_project_sign_exe_certificate_empty_raises(tmp_path: Path) -> None:
+    """sign-exe-certificate 为空字符串报错."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nsign-exe-certificate = ""\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
+    with pytest.raises(ProjectError, match="sign-exe-certificate 必须是非空字符串"):
+        parse_project(tmp_path)
+
+
+def test_parse_project_sign_exe_certificate_non_string_raises(tmp_path: Path) -> None:
+    """sign-exe-certificate 非字符串报错."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nsign-exe-certificate = 123\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
+    with pytest.raises(ProjectError, match="sign-exe-certificate 必须是非空字符串"):
+        parse_project(tmp_path)
+
+
+def test_parse_project_sign_exe_password_config(tmp_path: Path) -> None:
+    """[tool.fspack] sign-exe-password 解析为字符串并透传到 BuildOptions."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nsign-exe-password = "s3cret"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
+    info = parse_project(tmp_path)
+    assert info.build_defaults.sign_exe_password == "s3cret"
+    opts = build_options_from_defaults(info.build_defaults)
+    assert opts.sign_exe_password == "s3cret"
+
+
+def test_parse_project_sign_exe_password_default_none(tmp_path: Path) -> None:
+    """未配置 sign-exe-password 时默认 None."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n', encoding="utf-8")
+    (tmp_path / "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
+    info = parse_project(tmp_path)
+    assert info.build_defaults.sign_exe_password is None
+    opts = build_options_from_defaults(info.build_defaults)
+    assert opts.sign_exe_password is None
+
+
+def test_parse_project_sign_exe_password_empty_string_allowed(tmp_path: Path) -> None:
+    """sign-exe-password 允许空字符串（与 sign-exe-certificate 不同，不要求非空）."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nsign-exe-password = ""\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
+    info = parse_project(tmp_path)
+    assert info.build_defaults.sign_exe_password == ""
+    opts = build_options_from_defaults(info.build_defaults)
+    assert opts.sign_exe_password == ""
+
+
+def test_parse_project_sign_exe_password_non_string_raises(tmp_path: Path) -> None:
+    """sign-exe-password 非字符串报错."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nsign-exe-password = 123\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
+    with pytest.raises(ProjectError, match="sign-exe-password 必须是字符串"):
+        parse_project(tmp_path)
+
+
+def test_parse_project_sign_deb_key_config(tmp_path: Path) -> None:
+    """[tool.fspack] sign-deb-key 解析为字符串并透传到 BuildOptions."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nsign-deb-key = "0x12345678"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
+    info = parse_project(tmp_path)
+    assert info.build_defaults.sign_deb_key == "0x12345678"
+    opts = build_options_from_defaults(info.build_defaults)
+    assert opts.sign_deb_key == "0x12345678"
+
+
+def test_parse_project_sign_deb_key_default_none(tmp_path: Path) -> None:
+    """未配置 sign-deb-key 时默认 None."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n', encoding="utf-8")
+    (tmp_path / "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
+    info = parse_project(tmp_path)
+    assert info.build_defaults.sign_deb_key is None
+    opts = build_options_from_defaults(info.build_defaults)
+    assert opts.sign_deb_key is None
+
+
+def test_parse_project_sign_deb_key_strips_whitespace(tmp_path: Path) -> None:
+    """sign-deb-key 前后空白被 strip."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nsign-deb-key = "  0xABCD1234  "\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
+    info = parse_project(tmp_path)
+    assert info.build_defaults.sign_deb_key == "0xABCD1234"
+
+
+def test_parse_project_sign_deb_key_empty_raises(tmp_path: Path) -> None:
+    """sign-deb-key 为空字符串报错."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nsign-deb-key = ""\n', encoding="utf-8"
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
+    with pytest.raises(ProjectError, match="sign-deb-key 必须是非空字符串"):
+        parse_project(tmp_path)
+
+
+def test_parse_project_sign_deb_key_non_string_raises(tmp_path: Path) -> None:
+    """sign-deb-key 非字符串报错."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nsign-deb-key = 123\n', encoding="utf-8"
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
+    with pytest.raises(ProjectError, match="sign-deb-key 必须是非空字符串"):
+        parse_project(tmp_path)
+
+
+def test_build_options_security_defaults() -> None:
+    """BuildOptions 安全加固字段默认值：require_hashes/no_sbom=False，签名相关=None."""
+    opts = BuildOptions()
+    assert opts.require_hashes is False
+    assert opts.no_sbom is False
+    assert opts.sign_exe_certificate is None
+    assert opts.sign_exe_password is None
+    assert opts.sign_deb_key is None
+
+
+def test_build_defaults_security_defaults_all_none() -> None:
+    """BuildDefaults 安全加固字段默认全为 None（未配置时回退到 BuildOptions 默认值）."""
+    defaults = BuildDefaults()
+    assert defaults.require_hashes is None
+    assert defaults.no_sbom is None
+    assert defaults.sign_exe_certificate is None
+    assert defaults.sign_exe_password is None
+    assert defaults.sign_deb_key is None

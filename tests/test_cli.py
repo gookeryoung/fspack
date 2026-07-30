@@ -343,8 +343,8 @@ def test_clean_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
     assert called["p"] == tmp_path.resolve()
 
 
-def test_package_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """package 子命令直接调用 installer.build_release，校验参数透传."""
+def _capture_build_release() -> tuple[dict[str, Any], Any]:
+    """构造 fake_build_release 与 captured dict，签名匹配 installer.build_release()."""
     called: dict[str, Any] = {}
 
     def fake_build_release(  # noqa: PLR0913
@@ -357,14 +357,34 @@ def test_package_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
         fmt: str = "auto",
         codesign: bool = False,
         extras: object = None,
+        sign_exe: bool = False,
+        sign_exe_certificate: Path | None = None,
+        sign_exe_password: str | None = None,
+        sign_deb: bool = False,
+        sign_deb_key: str | None = None,
     ) -> list[Path]:
         called["project"] = project
         called["mirror"] = mirror
+        called["py_version"] = py_version
         called["no_build"] = no_build
+        called["target"] = target
+        called["fmt"] = fmt
         called["codesign"] = codesign
         called["extras"] = extras
+        called["sign_exe"] = sign_exe
+        called["sign_exe_certificate"] = sign_exe_certificate
+        called["sign_exe_password"] = sign_exe_password
+        called["sign_deb"] = sign_deb
+        called["sign_deb_key"] = sign_deb_key
         return []
 
+    return called, fake_build_release
+
+
+def test_package_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """package 子命令直接调用 installer.build_release，校验参数透传."""
+    _make_minimal_project(tmp_path)
+    called, fake_build_release = _capture_build_release()
     monkeypatch.setattr("fspack.packaging.installer.build_release", fake_build_release)
     cli.main(["p", str(tmp_path), "--mirror", "aliyun", "--no-build"])
     assert called["project"] == tmp_path.resolve()
@@ -374,26 +394,18 @@ def test_package_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     assert called["codesign"] is False
     # 未指定 --extra 时透传 None（让 build_release 用配置默认）
     assert called["extras"] is None
+    # 签名默认关闭
+    assert called["sign_exe"] is False
+    assert called["sign_deb"] is False
+    assert called["sign_exe_certificate"] is None
+    assert called["sign_exe_password"] is None
+    assert called["sign_deb_key"] is None
 
 
 def test_package_codesign_flag_passthrough(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`fsp p <project> --codesign` 透传到 build_release(codesign=True)."""
-    called: dict[str, Any] = {}
-
-    def fake_build_release(  # noqa: PLR0913
-        project: Path,
-        mirror: object = None,
-        py_version: str | None = None,
-        no_build: bool = False,
-        dist_dir: Path | None = None,
-        target: object = None,
-        fmt: str = "auto",
-        codesign: bool = False,
-        extras: object = None,
-    ) -> list[Path]:
-        called["codesign"] = codesign
-        return []
-
+    _make_minimal_project(tmp_path)
+    called, fake_build_release = _capture_build_release()
     monkeypatch.setattr("fspack.packaging.installer.build_release", fake_build_release)
     cli.main(["p", str(tmp_path), "--codesign"])
     assert called["codesign"] is True
@@ -401,22 +413,8 @@ def test_package_codesign_flag_passthrough(tmp_path: Path, monkeypatch: pytest.M
 
 def test_package_format_choices_include_pkg_dmg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`--format` choices 含 pkg/dmg，解析后透传到 build_release."""
-    called: dict[str, Any] = {}
-
-    def fake_build_release(  # noqa: PLR0913
-        project: Path,
-        mirror: object = None,
-        py_version: str | None = None,
-        no_build: bool = False,
-        dist_dir: Path | None = None,
-        target: object = None,
-        fmt: str = "auto",
-        codesign: bool = False,
-        extras: object = None,
-    ) -> list[Path]:
-        called["fmt"] = fmt
-        return []
-
+    _make_minimal_project(tmp_path)
+    called, fake_build_release = _capture_build_release()
     monkeypatch.setattr("fspack.packaging.installer.build_release", fake_build_release)
     cli.main(["p", str(tmp_path), "--format", "pkg"])
     assert called["fmt"] == "pkg"
@@ -569,3 +567,215 @@ def test_cli_module_no_top_level_platform_import() -> None:
     assert "from fspack.platform import Platform" not in top_section.replace(
         "if TYPE_CHECKING:\n    from fspack.platform import Platform", ""
     )
+
+
+# ---------- iter-108 安全加固：哈希校验与 SBOM 开关 ----------
+
+
+def test_build_require_hashes_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`fsp b <project> --require-hashes` 解析 ns.require_hashes 为 True，封装到 BuildOptions."""
+    _make_minimal_project(tmp_path)
+    called, fake_build = _capture_build()
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    cli.main(["b", str(tmp_path), "--require-hashes"])
+    assert called["options"].require_hashes is True
+
+
+def test_build_require_hashes_default_false(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """未指定 --require-hashes 时 BuildOptions.require_hashes 为 False."""
+    _make_minimal_project(tmp_path)
+    called, fake_build = _capture_build()
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    cli.main(["b", str(tmp_path)])
+    assert called["options"].require_hashes is False
+
+
+def test_build_require_hashes_config_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """[tool.fspack] require_hashes = true 在 CLI 未指定时作为回退默认值."""
+    _make_project_with_fspack_config(tmp_path, "[tool.fspack]\nrequire_hashes = true\n")
+    called, fake_build = _capture_build()
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    cli.main(["b", str(tmp_path)])
+    assert called["options"].require_hashes is True
+
+
+def test_build_no_sbom_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`fsp b <project> --no-sbom` 解析 ns.no_sbom 为 True，封装到 BuildOptions."""
+    _make_minimal_project(tmp_path)
+    called, fake_build = _capture_build()
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    cli.main(["b", str(tmp_path), "--no-sbom"])
+    assert called["options"].no_sbom is True
+
+
+def test_build_no_sbom_default_false(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """未指定 --no-sbom 时 BuildOptions.no_sbom 为 False."""
+    _make_minimal_project(tmp_path)
+    called, fake_build = _capture_build()
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    cli.main(["b", str(tmp_path)])
+    assert called["options"].no_sbom is False
+
+
+def test_build_no_sbom_config_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """[tool.fspack] no_sbom = true 在 CLI 未指定时作为回退默认值."""
+    _make_project_with_fspack_config(tmp_path, "[tool.fspack]\nno_sbom = true\n")
+    called, fake_build = _capture_build()
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    cli.main(["b", str(tmp_path)])
+    assert called["options"].no_sbom is True
+
+
+# ---------- iter-108 安全加固：Windows exe 代码签名 ----------
+
+
+def test_package_sign_exe_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`fsp p <project> --sign-exe` 解析 ns.sign_exe 为 True，透传到 build_release."""
+    _make_minimal_project(tmp_path)
+    called, fake_build_release = _capture_build_release()
+    monkeypatch.setattr("fspack.packaging.installer.build_release", fake_build_release)
+    cli.main(["p", str(tmp_path), "--sign-exe", "--sign-exe-certificate", str(tmp_path / "cert.pfx")])
+    assert called["sign_exe"] is True
+
+
+def test_package_sign_exe_certificate_resolved_to_absolute(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`--sign-exe-certificate <path>` 解析为绝对路径透传."""
+    _make_minimal_project(tmp_path)
+    cert = tmp_path / "cert.pfx"
+    cert.write_bytes(b"fake cert")
+    called, fake_build_release = _capture_build_release()
+    monkeypatch.setattr("fspack.packaging.installer.build_release", fake_build_release)
+    cli.main(["p", str(tmp_path), "--sign-exe", "--sign-exe-certificate", str(cert)])
+    assert called["sign_exe_certificate"] == cert.resolve()
+
+
+def test_package_sign_exe_password_passthrough(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`--sign-exe-password <pwd>` 原样透传到 build_release."""
+    _make_minimal_project(tmp_path)
+    called, fake_build_release = _capture_build_release()
+    monkeypatch.setattr("fspack.packaging.installer.build_release", fake_build_release)
+    cli.main(
+        [
+            "p",
+            str(tmp_path),
+            "--sign-exe",
+            "--sign-exe-certificate",
+            str(tmp_path / "cert.pfx"),
+            "--sign-exe-password",
+            "s3cret",
+        ]
+    )
+    assert called["sign_exe"] is True
+    assert called["sign_exe_password"] == "s3cret"
+
+
+def test_package_sign_exe_certificate_config_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """[tool.fspack] sign-exe-certificate 在 CLI 未指定时作为回退（相对 cwd 解析为绝对路径）."""
+    _make_project_with_fspack_config(tmp_path, '[tool.fspack]\nsign-exe-certificate = "cert.pfx"\n')
+    called, fake_build_release = _capture_build_release()
+    monkeypatch.setattr("fspack.packaging.installer.build_release", fake_build_release)
+    cli.main(["p", str(tmp_path), "--sign-exe"])
+    # 配置层证书字符串原样透传，cli._run_package 用 Path(cfg).resolve() 解析为绝对路径
+    assert called["sign_exe_certificate"] == Path("cert.pfx").resolve()
+    assert called["sign_exe"] is True
+
+
+def test_package_sign_exe_password_config_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """[tool.fspack] sign-exe-password 在 CLI 未指定时作为回退."""
+    _make_project_with_fspack_config(tmp_path, '[tool.fspack]\nsign-exe-password = "cfg-pwd"\n')
+    called, fake_build_release = _capture_build_release()
+    monkeypatch.setattr("fspack.packaging.installer.build_release", fake_build_release)
+    cli.main(["p", str(tmp_path), "--sign-exe", "--sign-exe-certificate", str(tmp_path / "cert.pfx")])
+    assert called["sign_exe_password"] == "cfg-pwd"
+
+
+def test_package_sign_exe_cli_overrides_config_certificate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """CLI --sign-exe-certificate 优先于 [tool.fspack] sign-exe-certificate."""
+    _make_project_with_fspack_config(tmp_path, '[tool.fspack]\nsign-exe-certificate = "cfg-cert.pfx"\n')
+    cli_cert = tmp_path / "cli-cert.pfx"
+    cli_cert.write_bytes(b"cli cert")
+    called, fake_build_release = _capture_build_release()
+    monkeypatch.setattr("fspack.packaging.installer.build_release", fake_build_release)
+    cli.main(["p", str(tmp_path), "--sign-exe", "--sign-exe-certificate", str(cli_cert)])
+    assert called["sign_exe_certificate"] == cli_cert.resolve()
+
+
+def test_package_sign_exe_password_cli_overrides_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """CLI --sign-exe-password 优先于 [tool.fspack] sign-exe-password."""
+    _make_project_with_fspack_config(tmp_path, '[tool.fspack]\nsign-exe-password = "cfg-pwd"\n')
+    called, fake_build_release = _capture_build_release()
+    monkeypatch.setattr("fspack.packaging.installer.build_release", fake_build_release)
+    cli.main(
+        [
+            "p",
+            str(tmp_path),
+            "--sign-exe",
+            "--sign-exe-certificate",
+            str(tmp_path / "cert.pfx"),
+            "--sign-exe-password",
+            "cli-pwd",
+        ]
+    )
+    assert called["sign_exe_password"] == "cli-pwd"
+
+
+# ---------- iter-108 安全加固：Linux .deb GPG 签名 ----------
+
+
+def test_package_sign_deb_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`fsp p <project> --sign-deb` 解析 ns.sign_deb 为 True，透传到 build_release."""
+    _make_minimal_project(tmp_path)
+    called, fake_build_release = _capture_build_release()
+    monkeypatch.setattr("fspack.packaging.installer.build_release", fake_build_release)
+    cli.main(["p", str(tmp_path), "--sign-deb", "--sign-deb-key", "0x12345678"])
+    assert called["sign_deb"] is True
+    assert called["sign_deb_key"] == "0x12345678"
+
+
+def test_package_sign_deb_key_passthrough(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`--sign-deb-key <key>` 原样透传到 build_release."""
+    _make_minimal_project(tmp_path)
+    called, fake_build_release = _capture_build_release()
+    monkeypatch.setattr("fspack.packaging.installer.build_release", fake_build_release)
+    cli.main(["p", str(tmp_path), "--sign-deb", "--sign-deb-key", "user@example.com"])
+    assert called["sign_deb"] is True
+    assert called["sign_deb_key"] == "user@example.com"
+
+
+def test_package_sign_deb_key_config_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """[tool.fspack] sign-deb-key 在 CLI 未指定时作为回退."""
+    _make_project_with_fspack_config(tmp_path, '[tool.fspack]\nsign-deb-key = "0xABCD1234"\n')
+    called, fake_build_release = _capture_build_release()
+    monkeypatch.setattr("fspack.packaging.installer.build_release", fake_build_release)
+    cli.main(["p", str(tmp_path), "--sign-deb"])
+    assert called["sign_deb"] is True
+    assert called["sign_deb_key"] == "0xABCD1234"
+
+
+def test_package_sign_deb_key_cli_overrides_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """CLI --sign-deb-key 优先于 [tool.fspack] sign-deb-key."""
+    _make_project_with_fspack_config(tmp_path, '[tool.fspack]\nsign-deb-key = "cfg-key"\n')
+    called, fake_build_release = _capture_build_release()
+    monkeypatch.setattr("fspack.packaging.installer.build_release", fake_build_release)
+    cli.main(["p", str(tmp_path), "--sign-deb", "--sign-deb-key", "cli-key"])
+    assert called["sign_deb_key"] == "cli-key"
+
+
+def test_package_sign_deb_without_key_uses_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`--sign-deb` 未指定 key 且无配置时 sign_deb_key 为 None（用 GPG 默认密钥）."""
+    _make_minimal_project(tmp_path)
+    called, fake_build_release = _capture_build_release()
+    monkeypatch.setattr("fspack.packaging.installer.build_release", fake_build_release)
+    cli.main(["p", str(tmp_path), "--sign-deb"])
+    assert called["sign_deb"] is True
+    assert called["sign_deb_key"] is None
+
+
+def test_package_no_sign_flags_defaults_off(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """未指定任何签名标志时 sign_exe/sign_deb 均为 False."""
+    _make_minimal_project(tmp_path)
+    called, fake_build_release = _capture_build_release()
+    monkeypatch.setattr("fspack.packaging.installer.build_release", fake_build_release)
+    cli.main(["p", str(tmp_path)])
+    assert called["sign_exe"] is False
+    assert called["sign_deb"] is False

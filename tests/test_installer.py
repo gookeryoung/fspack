@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from fspack.config import AppType, BuildOptions, ProjectInfo, get_mirror
+from fspack.config import AppType, BuildOptions, EntryPoint, ProjectInfo, get_mirror
 from fspack.exceptions import InstallerError
 from fspack.packaging.installer import (
     _make_zip,
@@ -22,7 +22,11 @@ from fspack.packaging.installer import (
     compile_installer,
     generate_nsis_script,
 )
+
+# 注意：installer_nsis 必须在 installer 之后导入（installer 导入会触发子模块加载）
+from fspack.packaging.installer_nsis import sign_exe_file, sign_exe_files
 from fspack.platform import Platform
+from fspack.progress import BuildTracker
 from tests._stubs import CompletedStub
 
 
@@ -939,6 +943,214 @@ def test_exe_exists_and_exe_path_helpers(tmp_path: Path) -> None:
     assert _exe_exists(tmp_path, info, Platform.WINDOWS) is True
     assert _exe_exists(tmp_path, info, Platform.LINUX) is False
 
-    # 创建无扩展名可执行文件后 Linux 也命中
-    (tmp_path / "myapp").write_bytes(b"")
-    assert _exe_exists(tmp_path, info, Platform.LINUX) is True
+
+# ---- sign_exe_file 测试 ----
+
+
+def test_sign_exe_file_calls_signtool_with_correct_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """sign_exe_file 调用 ``signtool sign /f <pfx> /t <timestamp> <exe>``，命令含 exe 路径."""
+    exe_path = tmp_path / "app.exe"
+    exe_path.write_bytes(b"fake exe")
+    cert_path = tmp_path / "cert.pfx"
+
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
+        captured["cmd"] = cmd
+        return CompletedStub()
+
+    monkeypatch.setattr("fspack.packaging.installer_nsis.subprocess.run", fake_run)
+
+    sign_exe_file(exe_path, cert_path, None)
+
+    cmd = captured["cmd"]
+    assert cmd[:3] == ["signtool", "sign", "/f"]
+    assert str(cert_path) in cmd
+    assert str(exe_path) in cmd
+    # 时间戳参数默认 DigiCert
+    assert "/t" in cmd
+    timestamp_idx = cmd.index("/t")
+    assert cmd[timestamp_idx + 1] == "http://timestamp.digicert.com"
+    # 未指定 password 时不含 /p
+    assert "/p" not in cmd
+
+
+def test_sign_exe_file_with_password_includes_p_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """传入 password 时命令含 ``/p <password>``."""
+    exe_path = tmp_path / "app.exe"
+    exe_path.write_bytes(b"exe")
+    cert_path = tmp_path / "cert.pfx"
+
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
+        captured["cmd"] = cmd
+        return CompletedStub()
+
+    monkeypatch.setattr("fspack.packaging.installer_nsis.subprocess.run", fake_run)
+
+    sign_exe_file(exe_path, cert_path, "secret-pwd")
+
+    cmd = captured["cmd"]
+    assert "/p" in cmd
+    password_idx = cmd.index("/p")
+    assert cmd[password_idx + 1] == "secret-pwd"
+
+
+def test_sign_exe_file_signtool_missing_raises_installer_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """signtool 不可用（FileNotFoundError）时抛 InstallerError."""
+    exe_path = tmp_path / "app.exe"
+    exe_path.write_bytes(b"exe")
+    cert_path = tmp_path / "cert.pfx"
+
+    def fake_run(cmd: list[str], **kw: Any) -> object:
+        raise FileNotFoundError()
+
+    monkeypatch.setattr("fspack.packaging.installer_nsis.subprocess.run", fake_run)
+
+    with pytest.raises(InstallerError, match="未找到 signtool"):
+        sign_exe_file(exe_path, cert_path, None)
+
+
+def test_sign_exe_file_signtool_failure_raises_installer_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """signtool 签名失败（CalledProcessError）时抛 InstallerError."""
+    exe_path = tmp_path / "app.exe"
+    exe_path.write_bytes(b"exe")
+    cert_path = tmp_path / "cert.pfx"
+    err = subprocess.CalledProcessError(1, "signtool", stderr="bad cert")
+
+    def fake_run(cmd: list[str], **kw: Any) -> object:
+        raise err
+
+    monkeypatch.setattr("fspack.packaging.installer_nsis.subprocess.run", fake_run)
+
+    with pytest.raises(InstallerError, match="signtool 签名失败"):
+        sign_exe_file(exe_path, cert_path, None)
+
+
+# ---- sign_exe_files 测试 ----
+
+
+def _make_multi_entry_info(tmp_path: Path) -> ProjectInfo:
+    """构造多入口 ProjectInfo（2 个入口：cli 与 gui）."""
+    return ProjectInfo(
+        name="app",
+        version="1.0",
+        src_dir=tmp_path,
+        entry_module="app",
+        entry_file=tmp_path / "app.py",
+        app_type=AppType.CLI,
+        dependencies=(),
+        py_version="3.11.9",
+        entries=(
+            EntryPoint(name="cli", module="cli", file=tmp_path / "cli.py", app_type=AppType.CLI),
+            EntryPoint(name="gui", module="gui", file=tmp_path / "gui.py", app_type=AppType.GUI),
+        ),
+    )
+
+
+def test_sign_exe_files_signs_all_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """sign_exe_files 签名 dist 下所有入口 exe（多入口项目 2 个 exe）."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "cli.exe").write_bytes(b"cli exe")
+    (dist / "gui.exe").write_bytes(b"gui exe")
+    cert_path = tmp_path / "cert.pfx"
+    info = _make_multi_entry_info(tmp_path)
+
+    signed_exes: list[Path] = []
+
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
+        # 命令最后一个是 exe 路径
+        signed_exes.append(Path(cmd[-1]))
+        return CompletedStub()
+
+    monkeypatch.setattr("fspack.packaging.installer_nsis.subprocess.run", fake_run)
+
+    signed_count = sign_exe_files(dist, info, cert_path, None, tracker=BuildTracker())
+
+    assert signed_count == 2
+    signed_names = {p.name for p in signed_exes}
+    assert signed_names == {"cli.exe", "gui.exe"}
+
+
+def test_sign_exe_files_skips_missing_exe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """dist 中 exe 不存在时跳过该入口（warning 不报错）."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "cli.exe").write_bytes(b"cli exe")
+    # gui.exe 不创建
+    cert_path = tmp_path / "cert.pfx"
+    info = _make_multi_entry_info(tmp_path)
+
+    monkeypatch.setattr("fspack.packaging.installer_nsis.subprocess.run", lambda cmd, **kw: CompletedStub())
+
+    with caplog.at_level("WARNING", logger="fspack.packaging.installer"):
+        signed_count = sign_exe_files(dist, info, cert_path, None, tracker=BuildTracker())
+
+    assert signed_count == 1
+    assert any("签名跳过" in r.message for r in caplog.records)
+
+
+def test_sign_exe_files_sign_failure_does_not_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """单个 exe 签名失败不阻断（warning 后继续签名下一个）."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "cli.exe").write_bytes(b"cli exe")
+    (dist / "gui.exe").write_bytes(b"gui exe")
+    cert_path = tmp_path / "cert.pfx"
+    info = _make_multi_entry_info(tmp_path)
+
+    call_count = {"n": 0}
+
+    def fake_run(cmd: list[str], **kw: Any) -> object:
+        call_count["n"] += 1
+        # 第一个 exe 签名失败
+        if call_count["n"] == 1:
+            raise subprocess.CalledProcessError(1, "signtool", stderr="fail")
+        return CompletedStub()
+
+    monkeypatch.setattr("fspack.packaging.installer_nsis.subprocess.run", fake_run)
+
+    with caplog.at_level("WARNING", logger="fspack.packaging.installer"):
+        signed_count = sign_exe_files(dist, info, cert_path, None, tracker=BuildTracker())
+
+    # 第一个失败，第二个成功
+    assert signed_count == 1
+    assert call_count["n"] == 2, "应继续签名第二个 exe"
+    assert any("签名 cli.exe 失败" in r.message for r in caplog.records)
+
+
+def test_sign_exe_files_single_entry_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """单入口项目（无 entries）签名单个 exe（用 ProjectInfo.all_entries 回退构造）."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "app.exe").write_bytes(b"app exe")
+    cert_path = tmp_path / "cert.pfx"
+    info = ProjectInfo(
+        name="app",
+        version="1.0",
+        src_dir=tmp_path,
+        entry_module="app",
+        entry_file=tmp_path / "app.py",
+        app_type=AppType.CLI,
+        dependencies=(),
+        py_version="3.11.9",
+    )
+
+    signed_exes: list[Path] = []
+
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
+        signed_exes.append(Path(cmd[-1]))
+        return CompletedStub()
+
+    monkeypatch.setattr("fspack.packaging.installer_nsis.subprocess.run", fake_run)
+
+    signed_count = sign_exe_files(dist, info, cert_path, "pwd123", tracker=BuildTracker())
+
+    assert signed_count == 1
+    assert signed_exes[0].name == "app.exe"

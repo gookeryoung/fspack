@@ -84,6 +84,8 @@ _BUILD_DEFAULT_KEYS: dict[str, str] = {
     "ccache": "ccache",
     "no_size_report": "no_size_report",
     "analyze_deps": "analyze_deps",
+    "require_hashes": "require_hashes",
+    "no_sbom": "no_sbom",
 }
 
 # GUI 框架导入名集合：用于按入口脚本 import 推断 AppType
@@ -411,7 +413,7 @@ def _parse_optional_dependencies(value: object) -> dict[str, tuple[str, ...]]:
     return result
 
 
-def _parse_build_defaults(fspack_cfg: dict[str, Any]) -> BuildDefaults:
+def _parse_build_defaults(fspack_cfg: dict[str, Any]) -> BuildDefaults:  # noqa: PLR0912
     """从 ``[tool.fspack]`` 解析构建默认值.
 
     识别 ``nuitka``/``pyc_strip``/``pyc_optimize``/``no_site``/``no_pyc``/
@@ -419,7 +421,7 @@ def _parse_build_defaults(fspack_cfg: dict[str, Any]) -> BuildDefaults:
     ``nuitka_packages``/``extras``/``lazy_imports`` 键，其余键忽略（如 ``icon``/``entries``/``exclude``）。
     类型不匹配时报错，避免静默忽略错误配置。
     """
-    kwargs: dict[str, bool | int | None | tuple[str, ...]] = {}
+    kwargs: dict[str, bool | int | str | None | tuple[str, ...]] = {}
     for cfg_key, field_name in _BUILD_DEFAULT_KEYS.items():
         raw = fspack_cfg.get(cfg_key)
         if raw is None:
@@ -442,6 +444,22 @@ def _parse_build_defaults(fspack_cfg: dict[str, Any]) -> BuildDefaults:
     kwargs["extras"] = _parse_string_list_cfg(fspack_cfg.get("extras"), "extras", reject_empty=True)
     # lazy_imports 为字符串列表：延迟导入的顶层模块名（iter-102）
     kwargs["lazy_imports"] = _parse_string_list_cfg(fspack_cfg.get("lazy_imports"), "lazy_imports", reject_empty=True)
+    # iter-103 安全加固：签名证书/密码/密钥 ID 为字符串配置（非布尔开关）
+    sign_exe_cert = fspack_cfg.get("sign-exe-certificate")
+    if sign_exe_cert is not None:
+        if not isinstance(sign_exe_cert, str) or not sign_exe_cert.strip():
+            raise ProjectError(f"[tool.fspack] sign-exe-certificate 必须是非空字符串，得到 {sign_exe_cert!r}")
+        kwargs["sign_exe_certificate"] = sign_exe_cert.strip()
+    sign_exe_pwd = fspack_cfg.get("sign-exe-password")
+    if sign_exe_pwd is not None:
+        if not isinstance(sign_exe_pwd, str):
+            raise ProjectError(f"[tool.fspack] sign-exe-password 必须是字符串，得到 {sign_exe_pwd!r}")
+        kwargs["sign_exe_password"] = sign_exe_pwd
+    sign_deb_key = fspack_cfg.get("sign-deb-key")
+    if sign_deb_key is not None:
+        if not isinstance(sign_deb_key, str) or not sign_deb_key.strip():
+            raise ProjectError(f"[tool.fspack] sign-deb-key 必须是非空字符串，得到 {sign_deb_key!r}")
+        kwargs["sign_deb_key"] = sign_deb_key.strip()
     return BuildDefaults(**cast(Any, kwargs))
 
 
