@@ -2,8 +2,8 @@
 
 本模块为 facade，从子模块 re-export 全部公开 API：
 
-- :mod:`fspack.packaging.loader_source`：C 源码模板（Windows/Linux/macOS）
-- :mod:`fspack.packaging.loader_compile`：编译器基类、平台子类、编译流程、
+- :mod:`fspack.packaging.loader.source`：C 源码模板（Windows/Linux/macOS）
+- :mod:`fspack.packaging.loader.compile`：编译器基类、平台子类、编译流程、
   icon 资源处理
 
 保留 ``import subprocess``/``import shutil`` 供测试 monkeypatch 通过
@@ -33,7 +33,7 @@ from __future__ import annotations
 import shutil  # noqa: F401 # 测试 monkeypatch 通过 fspack.packaging.loader.shutil.which 访问
 import subprocess  # noqa: F401 # 测试 monkeypatch 通过 fspack.packaging.loader.subprocess.run 访问
 
-from fspack.packaging.loader_compile import (
+from fspack.packaging.loader.compile import (
     LINUX_GCC,
     MACOS_CLANG,
     MINGW_GCC,

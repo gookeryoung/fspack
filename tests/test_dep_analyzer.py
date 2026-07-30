@@ -40,7 +40,7 @@ from fspack.packaging.dep_analyzer import (
     find_unused_binaries,
     strip_unused_binaries,
 )
-from fspack.packaging.pipeline_stages import BuildContext, _analyze_binary_dependencies
+from fspack.packaging.pipeline.stages import BuildContext, _analyze_binary_dependencies
 from fspack.platform import Platform
 from fspack.progress import BuildTracker
 

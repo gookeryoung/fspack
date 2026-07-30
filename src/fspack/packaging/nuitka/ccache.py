@@ -10,11 +10,11 @@ facade，所有 ``cls.`` 调用经 MRO 自动派发到对应 mixin。
 - ccache 预编译二进制下载与解压（``_download_and_extract_ccache``，仅 Linux/Windows x86_64）
 - 旧版子目录结构自动迁移到根目录（兼容历史缓存）
 
-不涉及：环境就绪主流程（见 :mod:`fspack.packaging.nuitka_env`）、
-编译流程（见 :mod:`fspack.packaging.nuitka_compile`）、
-standalone python 准备（见 :mod:`fspack.packaging.nuitka_standalone`）。
+不涉及：环境就绪主流程（见 :mod:`fspack.packaging.nuitka.env`）、
+编译流程（见 :mod:`fspack.packaging.nuitka.compile`）、
+standalone python 准备（见 :mod:`fspack.packaging.nuitka.standalone`）。
 
-从 :mod:`fspack.packaging.nuitka_env` 拆分而来，降低 ``nuitka_env.py`` 行数。
+从 :mod:`fspack.packaging.nuitka.env` 拆分而来，降低 ``env.py`` 行数。
 ccache 管理是独立的"获取 C 编译缓存加速工具"职责，独立成 mixin 便于复用与测试。
 """
 

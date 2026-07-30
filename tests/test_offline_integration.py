@@ -92,8 +92,8 @@ def test_build_offline_wheel_cache_miss_raises_dependency_error(
 
     # mock _run_pip 返回 None（模拟 --no-index 失败，缓存未命中）
     # 不 mock subprocess.run，避免影响 inject_mingw_runtime_dlls 的 gcc 查询
-    monkeypatch.setattr("fspack.packaging.wheel_pip._run_pip", lambda *a, **kw: None)
-    monkeypatch.setattr("fspack.packaging.wheel_pip._find_pip_python", lambda: "/py/python")
+    monkeypatch.setattr("fspack.packaging.wheels.downloader._run_pip", lambda *a, **kw: None)
+    monkeypatch.setattr("fspack.packaging.wheels.downloader._find_pip_python", lambda: "/py/python")
 
     from fspack.builder import build
 
@@ -122,7 +122,7 @@ def test_build_offline_uses_cache_dir_env_var(tmp_path: Path, monkeypatch: pytes
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(cache_dir))
     monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", fail_urlopen)
     # mock extract_embed 跳过实际解压（假 zip 无法解压）
-    monkeypatch.setattr("fspack.packaging.pipeline_stages.extract_embed", lambda zip_path, runtime_dir: None)
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.extract_embed", lambda zip_path, runtime_dir: None)
 
     proj = _copy_example("cli_helloworld_pyall", tmp_path)
     from fspack.builder import build
@@ -177,7 +177,7 @@ def test_build_non_offline_falls_back_to_network(tmp_path: Path, monkeypatch: py
 
     monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", fake_urlopen)
     # mock extract_embed 跳过实际解压（假数据无法解压）
-    monkeypatch.setattr("fspack.packaging.pipeline_stages.extract_embed", lambda zip_path, runtime_dir: None)
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.extract_embed", lambda zip_path, runtime_dir: None)
 
     proj = _copy_example("cli_helloworld_pyall", tmp_path)
     from fspack.builder import build
@@ -267,8 +267,8 @@ def test_build_offline_wheel_cache_miss_raises_dependency_error_linux(
     site_packages = runtime_dir / "lib" / "python3.11" / "site-packages"
     site_packages.mkdir(parents=True)
 
-    monkeypatch.setattr("fspack.packaging.wheel_pip._run_pip", lambda *a, **kw: None)
-    monkeypatch.setattr("fspack.packaging.wheel_pip._find_pip_python", lambda: "/py/python")
+    monkeypatch.setattr("fspack.packaging.wheels.downloader._run_pip", lambda *a, **kw: None)
+    monkeypatch.setattr("fspack.packaging.wheels.downloader._find_pip_python", lambda: "/py/python")
 
     from fspack.builder import build
 
@@ -294,7 +294,7 @@ def test_build_offline_uses_cache_dir_env_var_linux(tmp_path: Path, monkeypatch:
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(cache_dir))
     monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", fail_urlopen)
     # mock extract_standalone 跳过实际解压
-    monkeypatch.setattr("fspack.packaging.pipeline_stages.extract_standalone", lambda tar, runtime_dir: None)
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.extract_standalone", lambda tar, runtime_dir: None)
 
     proj = _copy_example("cli_helloworld_pyall", tmp_path)
     from fspack.builder import build
@@ -340,7 +340,7 @@ def test_build_non_offline_falls_back_to_network_linux(tmp_path: Path, monkeypat
         return _FakeResp()
 
     monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", fake_urlopen)
-    monkeypatch.setattr("fspack.packaging.pipeline_stages.extract_standalone", lambda tar, runtime_dir: None)
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.extract_standalone", lambda tar, runtime_dir: None)
 
     proj = _copy_example("cli_helloworld_pyall", tmp_path)
     from fspack.builder import build

@@ -23,8 +23,8 @@ from fspack.packaging.installer import (
     generate_nsis_script,
 )
 
-# 注意：installer_nsis 必须在 installer 之后导入（installer 导入会触发子模块加载）
-from fspack.packaging.installer_nsis import sign_exe_file, sign_exe_files
+# 注意：installer.nsis 必须在 installer 之后导入（installer 导入会触发子模块加载）
+from fspack.packaging.installer.nsis import sign_exe_file, sign_exe_files
 from fspack.platform import Platform
 from fspack.progress import BuildTracker
 from tests._stubs import CompletedStub
@@ -959,7 +959,7 @@ def test_sign_exe_file_calls_signtool_with_correct_command(tmp_path: Path, monke
         captured["cmd"] = cmd
         return CompletedStub()
 
-    monkeypatch.setattr("fspack.packaging.installer_nsis.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.installer.nsis.subprocess.run", fake_run)
 
     sign_exe_file(exe_path, cert_path, None)
 
@@ -987,7 +987,7 @@ def test_sign_exe_file_with_password_includes_p_flag(tmp_path: Path, monkeypatch
         captured["cmd"] = cmd
         return CompletedStub()
 
-    monkeypatch.setattr("fspack.packaging.installer_nsis.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.installer.nsis.subprocess.run", fake_run)
 
     sign_exe_file(exe_path, cert_path, "secret-pwd")
 
@@ -1006,7 +1006,7 @@ def test_sign_exe_file_signtool_missing_raises_installer_error(tmp_path: Path, m
     def fake_run(cmd: list[str], **kw: Any) -> object:
         raise FileNotFoundError()
 
-    monkeypatch.setattr("fspack.packaging.installer_nsis.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.installer.nsis.subprocess.run", fake_run)
 
     with pytest.raises(InstallerError, match="未找到 signtool"):
         sign_exe_file(exe_path, cert_path, None)
@@ -1022,7 +1022,7 @@ def test_sign_exe_file_signtool_failure_raises_installer_error(tmp_path: Path, m
     def fake_run(cmd: list[str], **kw: Any) -> object:
         raise err
 
-    monkeypatch.setattr("fspack.packaging.installer_nsis.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.installer.nsis.subprocess.run", fake_run)
 
     with pytest.raises(InstallerError, match="signtool 签名失败"):
         sign_exe_file(exe_path, cert_path, None)
@@ -1065,7 +1065,7 @@ def test_sign_exe_files_signs_all_entries(tmp_path: Path, monkeypatch: pytest.Mo
         signed_exes.append(Path(cmd[-1]))
         return CompletedStub()
 
-    monkeypatch.setattr("fspack.packaging.installer_nsis.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.installer.nsis.subprocess.run", fake_run)
 
     signed_count = sign_exe_files(dist, info, cert_path, None, tracker=BuildTracker())
 
@@ -1085,7 +1085,7 @@ def test_sign_exe_files_skips_missing_exe(
     cert_path = tmp_path / "cert.pfx"
     info = _make_multi_entry_info(tmp_path)
 
-    monkeypatch.setattr("fspack.packaging.installer_nsis.subprocess.run", lambda cmd, **kw: CompletedStub())
+    monkeypatch.setattr("fspack.packaging.installer.nsis.subprocess.run", lambda cmd, **kw: CompletedStub())
 
     with caplog.at_level("WARNING", logger="fspack.packaging.installer"):
         signed_count = sign_exe_files(dist, info, cert_path, None, tracker=BuildTracker())
@@ -1114,7 +1114,7 @@ def test_sign_exe_files_sign_failure_does_not_block(
             raise subprocess.CalledProcessError(1, "signtool", stderr="fail")
         return CompletedStub()
 
-    monkeypatch.setattr("fspack.packaging.installer_nsis.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.installer.nsis.subprocess.run", fake_run)
 
     with caplog.at_level("WARNING", logger="fspack.packaging.installer"):
         signed_count = sign_exe_files(dist, info, cert_path, None, tracker=BuildTracker())
@@ -1148,7 +1148,7 @@ def test_sign_exe_files_single_entry_project(tmp_path: Path, monkeypatch: pytest
         signed_exes.append(Path(cmd[-1]))
         return CompletedStub()
 
-    monkeypatch.setattr("fspack.packaging.installer_nsis.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.installer.nsis.subprocess.run", fake_run)
 
     signed_count = sign_exe_files(dist, info, cert_path, "pwd123", tracker=BuildTracker())
 

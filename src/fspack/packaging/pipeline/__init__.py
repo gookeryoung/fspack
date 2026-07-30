@@ -5,7 +5,7 @@
 
 - :mod:`fspack.packaging.pipeline`（本模块）：``build``/``_execute_build``/``resolve_project_info``
   /``clean_dist``/``_print_build_plan`` 入口与编排，``_KEEP_NSI`` 常量
-- :mod:`fspack.packaging.pipeline_stages`：阶段函数实现（``_prepare_runtime``/
+- :mod:`fspack.packaging.pipeline.stages`：阶段函数实现（``_prepare_runtime``/
   ``_analyze_dependencies``/``_download_dependencies``/``_compile_user_sources``/
   ``_build_entry_loaders``）+ ``BuildContext`` + 依赖缓存 + icon 解析 + wheel 解压
 
@@ -15,7 +15,7 @@
 路径解析：patch 设置的是模块对象的属性，``_execute_build`` 内的调用通过模块全局
 名字解析取到 patch 后的值。
 
-从 :mod:`fspack.packaging.pipeline_stages` re-export 阶段函数与 ``BuildContext``，
+从 :mod:`fspack.packaging.pipeline.stages` re-export 阶段函数与 ``BuildContext``，
 保持 ``fspack.packaging.pipeline.<fn>`` patch 路径兼容（测试通过本模块 patch 阶段函数）。
 """
 
@@ -42,7 +42,7 @@ from fspack.packaging.loader import compile_loader  # noqa: F401
 from fspack.packaging.log_file import LogFormat, setup_log_file, teardown_log_file
 
 # re-export 阶段函数与 BuildContext：保持 fspack.packaging.pipeline.<fn> patch 路径兼容
-from fspack.packaging.pipeline_stages import (
+from fspack.packaging.pipeline.stages import (
     _DEFAULT_ICON,  # noqa: F401
     BuildContext,
     _analyze_binary_dependencies,

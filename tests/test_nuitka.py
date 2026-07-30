@@ -1277,7 +1277,7 @@ def test_cleanup_build_dirs_handles_rmtree_oserror(
     def fail_rmtree(path: Path, **kwargs: Any) -> None:
         raise OSError("permission denied")
 
-    monkeypatch.setattr("fspack.packaging.nuitka_compile.shutil.rmtree", fail_rmtree)
+    monkeypatch.setattr("fspack.packaging.nuitka.compile.shutil.rmtree", fail_rmtree)
 
     with caplog.at_level("WARNING", logger="fspack.packaging.nuitka"):
         cleaned = NuitkaCompiler._cleanup_build_dirs(tmp_path)
@@ -2479,7 +2479,7 @@ def test_compile_src_heartbeat_logs_progress(
     from fspack.progress import StageRecorder
 
     # 缩短心跳间隔到 0.05 秒，避免测试等待 10 秒
-    monkeypatch.setattr("fspack.packaging.nuitka_compile._HEARTBEAT_INTERVAL", 0.05)
+    monkeypatch.setattr("fspack.packaging.nuitka.compile._HEARTBEAT_INTERVAL", 0.05)
 
     src = tmp_path / "src"
     src.mkdir()
@@ -2519,7 +2519,7 @@ def test_compile_src_heartbeat_stops_after_compile(
     from fspack.progress import StageRecorder
 
     # 心跳间隔设为较长值，确保编译期间不触发心跳
-    monkeypatch.setattr("fspack.packaging.nuitka_compile._HEARTBEAT_INTERVAL", 10.0)
+    monkeypatch.setattr("fspack.packaging.nuitka.compile._HEARTBEAT_INTERVAL", 10.0)
 
     src = tmp_path / "src"
     src.mkdir()
@@ -2759,7 +2759,7 @@ def test_ensure_ccache_unsupported_platform_returns_none(tmp_path: Path, monkeyp
     from fspack.progress import StageRecorder
 
     # 清空 URL 映射模拟不支持的平台
-    monkeypatch.setattr("fspack.packaging.nuitka_ccache.CCACHE_URLS", {})
+    monkeypatch.setattr("fspack.packaging.nuitka.ccache.CCACHE_URLS", {})
     monkeypatch.setattr("fspack.packaging.nuitka.shutil.which", lambda name: None)
     st = StageRecorder("Nuitka 编译")
     result = NuitkaCompiler._ensure_ccache(tmp_path, Platform.LINUX, st)

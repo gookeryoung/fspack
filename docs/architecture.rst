@@ -132,7 +132,7 @@ fspack 支持通过环境变量启用的离线模式，适用于无网络环境�
 工作原理
 ~~~~~~~~
 
-离线模式在所有下载入口（``runtime.py``/``wheel_pip.py``/``nuitka_env.py``/
+离线模式在所有下载入口（``runtime.py``/``wheels/downloader.py``/``nuitka/env.py``/
 ``builtin.py``）检查 ``is_offline()``，缓存命中时正常返回，缓存未命中时立即抛出
 包含"离线模式"关键字的明确异常，不尝试网络请求。错误信息包含：
 
@@ -156,7 +156,7 @@ fspack 支持通过环境变量启用的离线模式，适用于无网络环境�
 离线 wheel 本地搜索
 ~~~~~~~~~~~~~~~~~~~
 
-``wheel_pip.py`` 的 ``_run_pip_download`` 在离线模式下用 ``--no-index`` 参数
+``wheels/downloader.py`` 的 ``_run_pip_download`` 在离线模式下用 ``--no-index`` 参数
 调用 ``pip download``，仅从本地目录解析依赖。除默认的 ``wheel_cache_dir()``
 外，**用户通过 ``--find-links`` 提供的本地 wheel 目录也参与 ``--no-index`` 解析**，
 扩大本地搜索范围：
@@ -197,10 +197,10 @@ fspack 支持通过环境变量启用的离线模式，适用于无网络环境�
    * - ``runtime.py``
      - ``EmbedError``
      - embed python / standalone tarball 缓存未命中
-   * - ``wheel_pip.py``
+   * - ``wheels/downloader.py``
      - ``DependencyError``
      - ``--no-index`` 解析失败（缓存 + find-links 均未命中）
-   * - ``nuitka_env.py``
+   * - ``nuitka/env.py``
      - ``NuitkaError``
      - standalone python / Nuitka 包缓存未命中
    * - ``builtin.py``
@@ -269,18 +269,18 @@ packaging/ 子包
 
    * - 子模块
      - 职责
-   * - ``pipeline.py``
+   * - ``pipeline/``（``__init__.py`` / ``stages.py``）
      - 构建流水线编排（``build()`` 入口，10+ 阶段调度）
    * - ``runtime.py``
      - ``RuntimeDownloader``：embed python / python-build-standalone 下载解压
-   * - ``loader.py`` / ``loader_source.py`` / ``loader_compile.py``
+   * - ``loader/``（``__init__.py`` / ``source.py`` / ``compile.py``）
      - C loader facade：源码模板 + 编译流程 + icon 资源 + MinGW 运行时 DLL 注入
-   * - ``installer.py`` / ``installer_nsis.py`` / ``installer_linux.py`` / ``installer_zip.py``
-     - 安装包 facade：NSIS / .deb + tar.gz / 跨平台 zip
-   * - ``wheels.py`` / ``wheel_pip.py`` / ``wheel_cache.py`` / ``wheel_markers.py``
+   * - ``installer/``（``__init__.py`` / ``base.py`` / ``linux.py`` / ``macos.py`` / ``nsis.py`` / ``zip.py``）
+     - 安装包 facade：NSIS / .deb + tar.gz / .pkg + .dmg / 跨平台 zip
+   * - ``wheels/``（``__init__.py`` / ``downloader.py`` / ``resolver.py`` / ``sdist.py`` / ``cache.py`` / ``markers.py``）
      - wheel 下载 facade：pip/uv 调用 + sdist 回退 + 并行下载 + 依赖解析缓存 + python_version 标记预过滤
-   * - ``nuitka.py`` / ``nuitka_env.py`` / ``nuitka_compile.py`` / ``nuitka_verify.py``
-     - Nuitka 编译 facade：环境就绪 + 编译流程 + 产物验证
+   * - ``nuitka/``（``__init__.py`` / ``compiler.py`` / ``env.py`` / ``standalone.py`` / ``ccache.py`` / ``compile.py`` / ``strip.py`` / ``verify.py`` / ``protocol.py``）
+     - Nuitka 编译 facade：环境就绪 + standalone python + ccache + 编译流程 + 产物剥离 + 验证
    * - ``pyc.py``
      - 字节码预编译（``compileall`` + stamp 缓存）
    * - ``sync.py``

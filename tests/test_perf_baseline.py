@@ -37,7 +37,7 @@ from fspack.analyzer import (
     source_fingerprint,
 )
 from fspack.config import ProjectInfo, clear_project_cache
-from fspack.packaging.wheel_cache import _deps_cache_key, _load_deps_cache, _save_deps_cache
+from fspack.packaging.wheels.cache import _deps_cache_key, _load_deps_cache, _save_deps_cache
 from fspack.slim import classify_entry, slim_unpack
 
 # ---- 测试样本 ----

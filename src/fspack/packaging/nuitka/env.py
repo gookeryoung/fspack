@@ -12,10 +12,10 @@ facade，所有 ``cls.`` 调用经 MRO 自动派发到对应 mixin。
 - 构建机编译环境变量构建（``_build_compile_env`` 设置 ``CC`` / ``CFLAGS``）
 - nuitka 缓存目录推导与缓存命中检查
 
-不涉及：standalone python 准备（见 :mod:`fspack.packaging.nuitka_standalone`）、
-ccache 管理（见 :mod:`fspack.packaging.nuitka_ccache`）、
-编译流程（见 :mod:`fspack.packaging.nuitka_compile`）、
-验证逻辑（见 :mod:`fspack.packaging.nuitka_verify`）。
+不涉及：standalone python 准备（见 :mod:`fspack.packaging.nuitka.standalone`）、
+ccache 管理（见 :mod:`fspack.packaging.nuitka.ccache`）、
+编译流程（见 :mod:`fspack.packaging.nuitka.compile`）、
+验证逻辑（见 :mod:`fspack.packaging.nuitka.verify`）。
 """
 
 from __future__ import annotations

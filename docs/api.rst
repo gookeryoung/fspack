@@ -85,12 +85,12 @@ packaging 子包
    :undoc-members:
    :show-inheritance:
 
-.. automodule:: fspack.packaging.loader_source
+.. automodule:: fspack.packaging.loader.source
    :members:
    :undoc-members:
    :show-inheritance:
 
-.. automodule:: fspack.packaging.loader_compile
+.. automodule:: fspack.packaging.loader.compile
    :members:
    :undoc-members:
    :show-inheritance:
@@ -100,17 +100,17 @@ packaging 子包
    :undoc-members:
    :show-inheritance:
 
-.. automodule:: fspack.packaging.installer_nsis
+.. automodule:: fspack.packaging.installer.nsis
    :members:
    :undoc-members:
    :show-inheritance:
 
-.. automodule:: fspack.packaging.installer_linux
+.. automodule:: fspack.packaging.installer.linux
    :members:
    :undoc-members:
    :show-inheritance:
 
-.. automodule:: fspack.packaging.installer_zip
+.. automodule:: fspack.packaging.installer.zip
    :members:
    :undoc-members:
    :show-inheritance:
@@ -120,17 +120,17 @@ packaging 子包
    :undoc-members:
    :show-inheritance:
 
-.. automodule:: fspack.packaging.wheel_pip
+.. automodule:: fspack.packaging.wheels.downloader
    :members:
    :undoc-members:
    :show-inheritance:
 
-.. automodule:: fspack.packaging.wheel_cache
+.. automodule:: fspack.packaging.wheels.cache
    :members:
    :undoc-members:
    :show-inheritance:
 
-.. automodule:: fspack.packaging.wheel_markers
+.. automodule:: fspack.packaging.wheels.markers
    :members:
    :undoc-members:
    :show-inheritance:
@@ -140,17 +140,17 @@ packaging 子包
    :undoc-members:
    :show-inheritance:
 
-.. automodule:: fspack.packaging.nuitka_env
+.. automodule:: fspack.packaging.nuitka.env
    :members:
    :undoc-members:
    :show-inheritance:
 
-.. automodule:: fspack.packaging.nuitka_compile
+.. automodule:: fspack.packaging.nuitka.compile
    :members:
    :undoc-members:
    :show-inheritance:
 
-.. automodule:: fspack.packaging.nuitka_verify
+.. automodule:: fspack.packaging.nuitka.verify
    :members:
    :undoc-members:
    :show-inheritance:

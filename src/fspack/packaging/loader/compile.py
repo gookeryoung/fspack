@@ -7,7 +7,7 @@
 - :class:`WindowsLoader`：mingw 交叉编译，GUI 加 -mwindows，icon 用 windres 嵌入
 - :class:`LinuxLoader`：gcc 链接 libdl
 
-C 源码模板从 :mod:`fspack.packaging.loader_source` 导入。
+C 源码模板从 :mod:`fspack.packaging.loader.source` 导入。
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from pathlib import Path
 from fspack._compat import override
 from fspack.config import AppType
 from fspack.exceptions import LoaderError
-from fspack.packaging.loader_source import _LOADER_C_LINUX, _LOADER_C_MACOS, _LOADER_C_WINDOWS
+from fspack.packaging.loader.source import _LOADER_C_LINUX, _LOADER_C_MACOS, _LOADER_C_WINDOWS
 from fspack.platform import Platform
 from fspack.progress import StageRecorder, spinner
 

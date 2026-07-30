@@ -1,10 +1,10 @@
 """Wheel 下载入口与缓存调度：pip 解释器查找、subprocess 包装、wheel 文件名解析.
 
-从 :mod:`fspack.packaging.wheels` 拆分而来，封装 wheel 下载入口与 pip 调用
-基础设施。依赖 :mod:`fspack.packaging.wheel_markers` 做 ``python_version`` 标记
-预过滤，依赖 :mod:`fspack.packaging.wheel_cache` 做依赖解析缓存，
-:mod:`fspack.packaging.wheel_resolver` 做在线依赖解析与下载，
-:mod:`fspack.packaging.wheel_sdist` 做 sdist 回退构建。
+从 :mod:`fspack.packaging.wheels` facade 拆分而来，封装 wheel 下载入口与 pip 调用
+基础设施。依赖 :mod:`fspack.packaging.wheels.markers` 做 ``python_version`` 标记
+预过滤，依赖 :mod:`fspack.packaging.wheels.cache` 做依赖解析缓存，
+:mod:`fspack.packaging.wheels.resolver` 做在线依赖解析与下载，
+:mod:`fspack.packaging.wheels.sdist` 做 sdist 回退构建。
 
 核心流程：
 
@@ -15,11 +15,11 @@
 显式 ``import`` 标准库模块（``os``/``re``/``subprocess``/``sys``）
 是为了兼容测试中的 ``monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", ...)``
 等 patch 路径——patch 设置的是模块对象的属性，因标准库模块为单例，全局生效，
-对 :mod:`fspack.packaging.wheel_resolver` 与 :mod:`fspack.packaging.wheel_sdist`
+对 :mod:`fspack.packaging.wheels.resolver` 与 :mod:`fspack.packaging.wheels.sdist`
 内的调用同样有效。
 
-从 :mod:`fspack.packaging.wheel_resolver` 与 :mod:`fspack.packaging.wheel_sdist`
-re-export 函数，保持 ``from fspack.packaging.wheel_pip import X`` 路径兼容
+从 :mod:`fspack.packaging.wheels.resolver` 与 :mod:`fspack.packaging.wheels.sdist`
+re-export 函数，保持 ``from fspack.packaging.wheels.downloader import X`` 路径兼容
 （``wheels.py`` facade 与部分测试仍通过本模块访问这些函数）。
 """
 
@@ -35,9 +35,9 @@ from pathlib import Path
 from typing import Sequence
 
 from fspack.exceptions import DependencyError
-from fspack.packaging.wheel_cache import _deps_cache_key, _load_deps_cache, _save_deps_cache
-from fspack.packaging.wheel_markers import _filter_by_python_version
-from fspack.packaging.wheel_resolver import (
+from fspack.packaging.wheels.cache import _deps_cache_key, _load_deps_cache, _save_deps_cache
+from fspack.packaging.wheels.markers import _filter_by_python_version
+from fspack.packaging.wheels.resolver import (
     _UV_RESOLVED_LINE_RE,  # noqa: F401
     _download_one_resolved,  # noqa: F401
     _download_online,  # noqa: F401
@@ -47,7 +47,7 @@ from fspack.packaging.wheel_resolver import (
     _resolve_with_uv,  # noqa: F401
     _run_pip_download,
 )
-from fspack.packaging.wheel_sdist import (
+from fspack.packaging.wheels.sdist import (
     _MISSING_PKG_RE,  # noqa: F401
     _build_sdist_wheels,  # noqa: F401
     _handle_sdist_fallback,  # noqa: F401

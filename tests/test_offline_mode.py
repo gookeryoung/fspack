@@ -6,8 +6,8 @@
 
 覆盖下载层：
 - :mod:`fspack.packaging.runtime`：embed python / python-build-standalone
-- :mod:`fspack.packaging.wheel_pip`：wheel 依赖下载
-- :mod:`fspack.packaging.nuitka_env`：standalone python / nuitka / ccache
+- :mod:`fspack.packaging.wheels.downloader`：wheel 依赖下载
+- :mod:`fspack.packaging.nuitka.env`：standalone python / nuitka / ccache
 - :mod:`fspack.packaging.builtin`：tkinter 补充包
 """
 
@@ -133,7 +133,7 @@ def test_download_wheels_offline_cache_hit(tmp_path: Path, monkeypatch: pytest.M
         return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
-    monkeypatch.setattr("fspack.packaging.wheel_pip._find_pip_python", lambda: "/py/python")
+    monkeypatch.setattr("fspack.packaging.wheels.downloader._find_pip_python", lambda: "/py/python")
     download_wheels(("numpy",), "3.11.9", "https://idx/simple", cache)
     cmd = captured["cmd"]
     assert "--no-index" in cmd
@@ -148,7 +148,7 @@ def test_download_wheels_offline_cache_miss(tmp_path: Path, monkeypatch: pytest.
         raise subprocess.CalledProcessError(1, "pip", stderr="not in cache")
 
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
-    monkeypatch.setattr("fspack.packaging.wheel_pip._find_pip_python", lambda: "/py/python")
+    monkeypatch.setattr("fspack.packaging.wheels.downloader._find_pip_python", lambda: "/py/python")
     with pytest.raises(DependencyError, match=r"离线模式下依赖缓存未命中"):
         download_wheels(("numpy",), "3.11.9", "https://idx/simple", tmp_path / "cache")
 
@@ -167,9 +167,9 @@ def test_download_wheels_offline_disabled_falls_back(tmp_path: Path, monkeypatch
         return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
-    monkeypatch.setattr("fspack.packaging.wheel_pip._stream_subprocess", fake_stream)
-    monkeypatch.setattr("fspack.packaging.wheel_pip._find_pip_python", lambda: "/py/python")
-    monkeypatch.setattr("fspack.packaging.wheel_resolver._find_uv", lambda: None)
+    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    monkeypatch.setattr("fspack.packaging.wheels.downloader._find_pip_python", lambda: "/py/python")
+    monkeypatch.setattr("fspack.packaging.wheels.resolver._find_uv", lambda: None)
     # 不抛异常即通过：成功回退到在线下载
     download_wheels(("numpy",), "3.11.9", "https://idx/simple", tmp_path / "cache")
     assert len(calls) == 2
@@ -184,7 +184,7 @@ def test_run_pip_download_offline_cache_miss_direct(tmp_path: Path, monkeypatch:
     def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         raise subprocess.CalledProcessError(1, "pip", stderr="not in cache")
 
-    monkeypatch.setattr("fspack.packaging.wheel_pip._run_pip", lambda *a, **kw: None)
+    monkeypatch.setattr("fspack.packaging.wheels.downloader._run_pip", lambda *a, **kw: None)
     with pytest.raises(DependencyError, match=r"离线模式下"):
         _run_pip_download(
             ["numpy"],
@@ -206,7 +206,7 @@ def test_run_pip_download_offline_includes_user_find_links(tmp_path: Path, monke
         captured["cmd"] = cmd
         return CompletedStub()
 
-    monkeypatch.setattr("fspack.packaging.wheel_pip._run_pip", fake_run_pip)
+    monkeypatch.setattr("fspack.packaging.wheels.downloader._run_pip", fake_run_pip)
     user_find_links = ["/custom/wheels", "/shared/wheels"]
     _run_pip_download(
         ["numpy"],
@@ -230,7 +230,7 @@ def test_run_pip_download_offline_includes_user_find_links(tmp_path: Path, monke
 def test_run_pip_download_offline_error_lists_searched_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """离线模式报错信息应列出已搜索的所有路径（cache_dir + 用户 find-links）."""
     monkeypatch.setenv("FSPACK_OFFLINE", "1")
-    monkeypatch.setattr("fspack.packaging.wheel_pip._run_pip", lambda *a, **kw: None)
+    monkeypatch.setattr("fspack.packaging.wheels.downloader._run_pip", lambda *a, **kw: None)
     user_find_links = ["/custom/wheels"]
     with pytest.raises(DependencyError) as exc_info:
         _run_pip_download(
@@ -259,7 +259,7 @@ def test_download_wheels_offline_with_user_find_links(tmp_path: Path, monkeypatc
         return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
-    monkeypatch.setattr("fspack.packaging.wheel_pip._find_pip_python", lambda: "/py/python")
+    monkeypatch.setattr("fspack.packaging.wheels.downloader._find_pip_python", lambda: "/py/python")
     cache = tmp_path / "cache"
     download_wheels(
         ("numpy",),
@@ -284,7 +284,7 @@ def test_download_wheels_offline_no_user_find_links(tmp_path: Path, monkeypatch:
         return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
-    monkeypatch.setattr("fspack.packaging.wheel_pip._find_pip_python", lambda: "/py/python")
+    monkeypatch.setattr("fspack.packaging.wheels.downloader._find_pip_python", lambda: "/py/python")
     cache = tmp_path / "cache"
     download_wheels(("numpy",), "3.11.9", "https://idx/simple", cache)
     cmd = captured["cmd"]
@@ -315,7 +315,7 @@ def test_nuitka_ensure_ccache_offline_skips_download(tmp_path: Path, monkeypatch
     """离线模式下 ccache 无系统级且无缓存 → 跳过下载返回 None（不抛异常）."""
     monkeypatch.setenv("FSPACK_OFFLINE", "1")
     # 模拟无系统 ccache、无本地缓存
-    monkeypatch.setattr("fspack.packaging.nuitka_ccache.shutil.which", lambda _: None)
+    monkeypatch.setattr("fspack.packaging.nuitka.ccache.shutil.which", lambda _: None)
     stage = StageRecorder("test")
     cache_root = tmp_path / "nuitka"
 
@@ -343,7 +343,7 @@ def test_nuitka_ensure_env_offline_cache_miss(
     def fail_run(*a: object, **kw: object) -> None:
         raise AssertionError("离线模式不应触发 pip install")
 
-    monkeypatch.setattr("fspack.packaging.nuitka_env.subprocess.run", fail_run)
+    monkeypatch.setattr("fspack.packaging.nuitka.env.subprocess.run", fail_run)
     with pytest.raises(NuitkaError, match=r"离线模式下.*nuitka 缓存未命中"):
         NuitkaCompiler.ensure_env(cache_root, "3.11.9", Platform.LINUX, mirror, stage=stage)
 
@@ -366,7 +366,7 @@ def test_nuitka_ensure_env_offline_cache_hit(
     def fail_run(*a: object, **kw: object) -> None:
         raise AssertionError("离线模式缓存命中不应触发 pip install")
 
-    monkeypatch.setattr("fspack.packaging.nuitka_env.subprocess.run", fail_run)
+    monkeypatch.setattr("fspack.packaging.nuitka.env.subprocess.run", fail_run)
     version = NuitkaCompiler.ensure_env(cache_root, "3.11.9", Platform.LINUX, mirror, stage=stage)
     assert version  # 返回非空版本号
 

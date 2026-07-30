@@ -1,9 +1,9 @@
 """跨平台 zip 便携包生成.
 
-从 :mod:`fspack.packaging.installer` 拆分而来，封装 zip 便携包逻辑：
+从 :mod:`fspack.packaging.installer.base` 拆分而来，封装 zip 便携包逻辑：
 可选 build → 校验可执行文件 → 打包 zip（staging 目录 + make_archive）。
 
-zip 跨平台解压即用，无需安装。依赖 :mod:`fspack.packaging.installer` 提供：
+zip 跨平台解压即用，无需安装。依赖 :mod:`fspack.packaging.installer.base` 提供：
 ``_run_stage``/``_prepare_dist``/``_check_exe``/``_release_base``/
 ``_DIST_INTERMEDIATE_EXCLUDES``。
 """
@@ -17,7 +17,7 @@ from typing import Sequence
 
 from fspack.config import MirrorConfig, ProjectInfo
 from fspack.console import console
-from fspack.packaging.installer import (
+from fspack.packaging.installer.base import (
     _DIST_INTERMEDIATE_EXCLUDES,
     _check_exe,
     _prepare_dist,

@@ -18,7 +18,7 @@ from fspack.packaging.installer import (
     build_pkg,
     build_pkg_release,
 )
-from fspack.packaging.installer_macos import _bundle_identifier
+from fspack.packaging.installer.macos import _bundle_identifier
 from fspack.platform import Platform
 from tests._stubs import CompletedStub
 
@@ -93,7 +93,7 @@ def test_build_pkg_creates_pkg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
         pkg_path.write_bytes(b"fake pkg")
         return CompletedStub()
 
-    monkeypatch.setattr("fspack.packaging.installer_macos.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.installer.macos.subprocess.run", fake_run)
 
     out = build_pkg(dist, info, release)
     assert out == release / "app-1.0-py3.11.10-macos-slim.pkg"
@@ -111,7 +111,7 @@ def test_build_pkg_pkgbuild_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     def fake_run(cmd: list[str], **kw: Any) -> object:
         raise FileNotFoundError()
 
-    monkeypatch.setattr("fspack.packaging.installer_macos.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.installer.macos.subprocess.run", fake_run)
     with pytest.raises(InstallerError, match="未找到 pkgbuild"):
         build_pkg(dist, info, release)
 
@@ -127,7 +127,7 @@ def test_build_pkg_pkgbuild_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     def fake_run(cmd: list[str], **kw: Any) -> object:
         raise err
 
-    monkeypatch.setattr("fspack.packaging.installer_macos.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.installer.macos.subprocess.run", fake_run)
     with pytest.raises(InstallerError, match="pkgbuild 执行失败"):
         build_pkg(dist, info, release)
 
@@ -148,7 +148,7 @@ def test_build_pkg_with_codesign(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
             pkg_path.write_bytes(b"fake pkg")
         return CompletedStub()
 
-    monkeypatch.setattr("fspack.packaging.installer_macos.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.installer.macos.subprocess.run", fake_run)
 
     build_pkg(dist, info, release, codesign=True)
     assert len(calls) == 2
@@ -191,7 +191,7 @@ def test_build_dmg_creates_dmg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
         dmg_path.write_bytes(b"fake dmg")
         return CompletedStub()
 
-    monkeypatch.setattr("fspack.packaging.installer_macos.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.installer.macos.subprocess.run", fake_run)
 
     out = build_dmg(dist, info, release)
     assert out == release / "app-1.0-py3.11.10-macos-slim.dmg"
@@ -210,7 +210,7 @@ def test_build_dmg_hdiutil_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     def fake_run(cmd: list[str], **kw: Any) -> object:
         raise FileNotFoundError()
 
-    monkeypatch.setattr("fspack.packaging.installer_macos.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.installer.macos.subprocess.run", fake_run)
     with pytest.raises(InstallerError, match="未找到 hdiutil"):
         build_dmg(dist, info, release)
 
@@ -231,7 +231,7 @@ def test_build_dmg_with_codesign(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
             dmg_path.write_bytes(b"fake dmg")
         return CompletedStub()
 
-    monkeypatch.setattr("fspack.packaging.installer_macos.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.installer.macos.subprocess.run", fake_run)
 
     build_dmg(dist, info, release, codesign=True)
     assert len(calls) == 2
@@ -286,8 +286,8 @@ def test_build_mac_installer_no_build_success(tmp_path: Path, monkeypatch: pytes
         captured["dmg"] = info
         return release_dir / "app-1.0-py3.11.10-macos-slim.dmg"
 
-    monkeypatch.setattr("fspack.packaging.installer_macos.build_pkg", fake_build_pkg)
-    monkeypatch.setattr("fspack.packaging.installer_macos.build_dmg", fake_build_dmg)
+    monkeypatch.setattr("fspack.packaging.installer.macos.build_pkg", fake_build_pkg)
+    monkeypatch.setattr("fspack.packaging.installer.macos.build_dmg", fake_build_dmg)
 
     result = build_mac_installer(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=True)
     assert result == dist / "release" / "app-1.0-py3.11.10-macos-slim.dmg"
@@ -313,8 +313,8 @@ def test_build_mac_installer_with_codesign_passthrough(tmp_path: Path, monkeypat
         codesign_calls.append(codesign)
         return release_dir / "app-1.0-py3.11.10-macos-slim.dmg"
 
-    monkeypatch.setattr("fspack.packaging.installer_macos.build_pkg", fake_build_pkg)
-    monkeypatch.setattr("fspack.packaging.installer_macos.build_dmg", fake_build_dmg)
+    monkeypatch.setattr("fspack.packaging.installer.macos.build_pkg", fake_build_pkg)
+    monkeypatch.setattr("fspack.packaging.installer.macos.build_dmg", fake_build_dmg)
 
     build_mac_installer(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=True, codesign=True)
     assert codesign_calls == [True, True]
@@ -350,7 +350,7 @@ def test_build_pkg_release_success(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     def fake_build_pkg(dist_dir: Path, info: object, rel: Path, *, codesign: bool = False) -> Path:
         return rel / "app-1.0-py3.11.10-macos-slim.pkg"
 
-    monkeypatch.setattr("fspack.packaging.installer_macos.build_pkg", fake_build_pkg)
+    monkeypatch.setattr("fspack.packaging.installer.macos.build_pkg", fake_build_pkg)
 
     result = build_pkg_release(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=True)
     assert result == release / "app-1.0-py3.11.10-macos-slim.pkg"
@@ -368,7 +368,7 @@ def test_build_dmg_release_success(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     def fake_build_dmg(dist_dir: Path, info: object, rel: Path, *, codesign: bool = False) -> Path:
         return rel / "app-1.0-py3.11.10-macos-slim.dmg"
 
-    monkeypatch.setattr("fspack.packaging.installer_macos.build_dmg", fake_build_dmg)
+    monkeypatch.setattr("fspack.packaging.installer.macos.build_dmg", fake_build_dmg)
 
     result = build_dmg_release(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=True)
     assert result == release / "app-1.0-py3.11.10-macos-slim.dmg"
@@ -405,9 +405,9 @@ def test_build_mac_installer_with_build(tmp_path: Path, monkeypatch: pytest.Monk
         )
 
     monkeypatch.setattr("fspack.packaging.installer.build", fake_build)
-    monkeypatch.setattr("fspack.packaging.installer_macos.build_pkg", lambda *a, **kw: tmp_path / "x.pkg")
+    monkeypatch.setattr("fspack.packaging.installer.macos.build_pkg", lambda *a, **kw: tmp_path / "x.pkg")
     monkeypatch.setattr(
-        "fspack.packaging.installer_macos.build_dmg",
+        "fspack.packaging.installer.macos.build_dmg",
         lambda *a, **kw: dist / "release" / "app-1.0-py3.11.10-macos-slim.dmg",
     )
 

@@ -1,10 +1,10 @@
 """macOS 安装包生成：.pkg 安装包与 .dmg 磁盘镜像.
 
-从 :mod:`fspack.packaging.installer` 拆分而来，封装 macOS 安装包全部逻辑：
+从 :mod:`fspack.packaging.installer.base` 拆分而来，封装 macOS 安装包全部逻辑：
 .pkg 通过 ``pkgbuild`` 生成、.dmg 通过 ``hdiutil`` 生成、可选 ``codesign``
 ad-hoc 签名。单格式编排（build_pkg_release / build_dmg_release）。
 
-依赖 :mod:`fspack.packaging.installer` 提供：
+依赖 :mod:`fspack.packaging.installer.base` 提供：
 ``Installer`` 基类、``_run_stage``/``_prepare_dist``/``_check_exe``/
 ``_py_tag``/``_release_base``/``_DIST_INTERMEDIATE_EXCLUDES``。
 
@@ -34,7 +34,7 @@ from fspack._compat import override
 from fspack.config import MirrorConfig, ProjectInfo
 from fspack.console import console
 from fspack.exceptions import InstallerError
-from fspack.packaging.installer import (
+from fspack.packaging.installer.base import (
     _DIST_INTERMEDIATE_EXCLUDES,
     Installer,
     _check_exe,

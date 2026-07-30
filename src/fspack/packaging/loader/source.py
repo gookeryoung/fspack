@@ -2,7 +2,7 @@
 
 从 :mod:`fspack.packaging.loader` 拆分而来，集中存放 Windows、Linux 与 macOS 的
 C loader 源码模板。模板用 ``str.format`` 填充平台特定常量（DLL 名、
-libpython 路径），由 :mod:`fspack.packaging.loader_compile` 的
+libpython 路径），由 :mod:`fspack.packaging.loader.compile` 的
 ``WindowsLoader.generate_source``/``LinuxLoader.generate_source``/
 ``MacLoader.generate_source`` 调用。
 

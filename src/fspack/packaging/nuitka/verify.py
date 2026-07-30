@@ -10,8 +10,8 @@ facade，所有 ``cls.`` 调用经 MRO 自动派发到对应 mixin。
 - 批量 import 验证（一次 subprocess 测试所有模块，避免 N 次 subprocess 启动开销）
 - 单模块 import 验证（批量测试崩溃时定位损坏的 .pyd）
 
-不涉及：环境就绪（见 :mod:`fspack.packaging.nuitka_env`）、
-编译流程（见 :mod:`fspack.packaging.nuitka_compile`）。
+不涉及：环境就绪（见 :mod:`fspack.packaging.nuitka.env`）、
+编译流程（见 :mod:`fspack.packaging.nuitka.compile`）。
 
 **为何需要验证**：Nuitka 4.x 在 Python 3.13+ Windows 上忽略 ``CC`` 环境变量自动
 回退到 zig 编译器，zig 编译的 .pyd 可能损坏（returncode==0、文件已生成，但运行时

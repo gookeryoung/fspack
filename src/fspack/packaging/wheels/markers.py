@@ -2,7 +2,7 @@
 
 ``pip download --python-version`` 不评估命令行参数中的环境标记（marker），
 需在调用前按目标 Python 版本预过滤。本模块封装标记解析与评估逻辑，
-供 :mod:`fspack.packaging.wheel_pip` 在下载前剔除不匹配目标版本的依赖。
+供 :mod:`fspack.packaging.wheels.downloader` 在下载前剔除不匹配目标版本的依赖。
 
 仅处理 ``python_version`` 标记；其他标记（如 ``platform_system``）视为 True
 （保守保留，让 pip 自行处理）。

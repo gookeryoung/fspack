@@ -1,16 +1,17 @@
-"""安装包生成 facade：Windows NSIS / Linux tar.gz + .deb / macOS .pkg + .dmg / 跨平台 zip 便携包。
+"""安装包生成基类与通用编排：Windows NSIS / Linux tar.gz + .deb / macOS .pkg + .dmg / 跨平台 zip 便携包.
 
-本模块为 facade，保留：
+本模块原为 ``installer.py`` facade，子包化后保留：
 - :class:`Installer` 抽象基类与通用编排流程（``build()`` → 校验 → ``build_package``）
 - 公共辅助：``_run_stage``/``_prepare_dist``/``_check_exe``/``_release_base`` 等
 - 发行包调度：``_resolve_formats``/``build_release``（按 ``--format`` 调度多格式生成）
-- 函数式 API：``build_installer``/``build_linux_installer``/``build_mac_installer``（委托子类）
+- 函数式 API：``build_installer``/``build_linux_installer``（委托子类）
 
+facade 在 :mod:`fspack.packaging.installer` 包 ``__init__.py``，re-export 本模块与平台子类。
 平台专属实现拆分到子模块：
-- :mod:`fspack.packaging.installer_nsis`：NSIS 脚本生成与编译
-- :mod:`fspack.packaging.installer_linux`：tar.gz 便携包与 .deb 安装包
-- :mod:`fspack.packaging.installer_macos`：.pkg 安装包与 .dmg 磁盘镜像
-- :mod:`fspack.packaging.installer_zip`：跨平台 zip 便携包
+- :mod:`fspack.packaging.installer.nsis`：NSIS 脚本生成与编译
+- :mod:`fspack.packaging.installer.linux`：tar.gz 便携包与 .deb 安装包
+- :mod:`fspack.packaging.installer.macos`：.pkg 安装包与 .dmg 磁盘镜像
+- :mod:`fspack.packaging.installer.zip`：跨平台 zip 便携包
 
 ``build_release`` 按 ``--format`` 调度生成一种或多种格式产物：
 ``auto``（平台默认）/``zip``（跨平台便携包）/``nsis``（Windows 安装包）/
@@ -27,7 +28,10 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Sequence, TypeVar
 
-from fspack.builder import build, resolve_project_info
+from fspack.builder import (  # noqa: F401  # build 供 __init__.py re-export，base.py 内部经 _facade.build 调用
+    build,
+    resolve_project_info,
+)
 from fspack.config import MirrorConfig, ProjectInfo, build_options_from_defaults
 from fspack.console import console
 from fspack.exceptions import InstallerError
@@ -201,7 +205,8 @@ def _prepare_dist(  # noqa: PLR0913
         options = build_options_from_defaults(info.build_defaults)
         if extras is not None:
             options = replace(options, extras=frozenset(extras))
-        info = build(project_dir, mirror, py_version, dist_dir=dist, target=target, options=options)
+        # 经 _facade 查找 build：兼容测试 monkeypatch "fspack.packaging.installer.build"
+        info = _facade.build(project_dir, mirror, py_version, dist_dir=dist, target=target, options=options)
         return dist, info
 
     if tracker is None:
@@ -379,7 +384,7 @@ def build_release(  # noqa: PLR0913
         format_extras = extras if index == 0 else None
         if f == "zip":
             outputs.append(
-                build_zip(
+                _facade.build_zip(
                     project_dir,
                     mirror,
                     py_version,
@@ -407,7 +412,7 @@ def build_release(  # noqa: PLR0913
             )
         elif f == "tar.gz":
             outputs.append(
-                build_tarball_release(
+                _facade.build_tarball_release(
                     project_dir,
                     mirror,
                     py_version,
@@ -419,7 +424,7 @@ def build_release(  # noqa: PLR0913
             )
         elif f == "deb":
             outputs.append(
-                build_deb_release(
+                _facade.build_deb_release(
                     project_dir,
                     mirror,
                     py_version,
@@ -433,7 +438,7 @@ def build_release(  # noqa: PLR0913
             )
         elif f == "pkg":
             outputs.append(
-                build_pkg_release(
+                _facade.build_pkg_release(
                     project_dir,
                     mirror,
                     py_version,
@@ -446,7 +451,7 @@ def build_release(  # noqa: PLR0913
             )
         elif f == "dmg":
             outputs.append(
-                build_dmg_release(
+                _facade.build_dmg_release(
                     project_dir,
                     mirror,
                     py_version,
@@ -464,14 +469,19 @@ def build_release(  # noqa: PLR0913
 # ---- 子模块 re-export（末尾导入避免循环依赖）----
 # 子模块从本模块导入 Installer 基类与公共辅助，故须在所有定义之后导入
 
-from fspack.packaging.installer_linux import (  # noqa: E402
+# 通过 facade 解析可 patch 函数：兼容测试 monkeypatch "fspack.packaging.installer.build"
+# 等函数路径。base.py 顶层 import 的 build/build_zip 等为原始引用，测试 patch 指向
+# :mod:`fspack.packaging.installer`（__init__.py），故 ``_prepare_dist``/``build_release``
+# 内部调用经 ``_facade.<fn>`` 在运行时动态查找，使 patch 生效。
+import fspack.packaging.installer as _facade  # noqa: E402
+from fspack.packaging.installer.linux import (  # noqa: E402
     LinuxInstaller,
     build_deb,
     build_deb_release,
     build_tarball,
     build_tarball_release,
 )
-from fspack.packaging.installer_macos import (  # noqa: E402
+from fspack.packaging.installer.macos import (  # noqa: E402
     MacInstaller,
     build_dmg,
     build_dmg_release,
@@ -479,12 +489,12 @@ from fspack.packaging.installer_macos import (  # noqa: E402
     build_pkg,
     build_pkg_release,
 )
-from fspack.packaging.installer_nsis import (  # noqa: E402
+from fspack.packaging.installer.nsis import (  # noqa: E402
     NsisInstaller,
     compile_installer,
     generate_nsis_script,
 )
-from fspack.packaging.installer_zip import (  # noqa: E402,F401 # 测试通过 fspack.packaging.installer._make_zip 访问
+from fspack.packaging.installer.zip import (  # noqa: E402,F401 # 测试通过 fspack.packaging.installer._make_zip 访问
     _make_zip,
     build_zip,
 )

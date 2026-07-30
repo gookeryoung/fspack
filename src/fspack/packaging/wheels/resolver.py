@@ -1,6 +1,6 @@
 """Wheel 依赖解析与在线下载：uv pip compile 解析 + pip download 并行下载.
 
-从 :mod:`fspack.packaging.wheel_pip` 拆分而来，封装在线依赖解析与下载逻辑。
+从 :mod:`fspack.packaging.wheels.downloader` 拆分而来，封装在线依赖解析与下载逻辑。
 
 核心流程：
 
@@ -10,9 +10,9 @@
 3. ``_download_resolved_parallel``：用 ``ThreadPoolExecutor`` 并行下载 uv 解析出的
    精确版本 wheel，失败时通过 sdist 回退重试
 
-依赖 :mod:`fspack.packaging.wheel_sdist` 提供 ``_handle_sdist_fallback``（顶层导入）。
-依赖 :mod:`fspack.packaging.wheel_pip` 提供 ``_run_pip``（惰性导入避免循环依赖：
-``wheel_pip`` 顶层导入本模块，本模块不能顶层导入 ``wheel_pip``）。
+依赖 :mod:`fspack.packaging.wheels.sdist` 提供 ``_handle_sdist_fallback``（顶层导入）。
+依赖 :mod:`fspack.packaging.wheels.downloader` 提供 ``_run_pip``（惰性导入避免循环依赖：
+``downloader`` 顶层导入本模块，本模块不能顶层导入 ``downloader``）。
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from typing import Sequence
 
 from fspack.config import is_offline
 from fspack.exceptions import DependencyError
-from fspack.packaging.wheel_sdist import _handle_sdist_fallback
+from fspack.packaging.wheels.sdist import _handle_sdist_fallback
 
 __all__ = [
     "_UV_RESOLVED_LINE_RE",
@@ -151,8 +151,8 @@ def _run_pip_download(  # noqa: PLR0913
     ``require_hashes=True`` 时离线解析成功仍跳过哈希校验（缓存目录 wheel 已首次
     校验）；离线失败回退到在线时强制走 uv --generate-hashes 路径校验哈希。
     """
-    # 惰性导入打破循环依赖：wheel_pip 顶层导入本模块，本模块不能顶层导入 wheel_pip
-    from fspack.packaging.wheel_pip import _run_pip
+    # 惰性导入打破循环依赖：downloader 顶层导入本模块，本模块不能顶层导入 downloader
+    from fspack.packaging.wheels.downloader import _run_pip
 
     # 构造用户提供的 find-links 参数：附加到 base_args 已有的 --find-links <cache_dir> 之后
     user_find_links_args: list[str] = []
@@ -220,8 +220,8 @@ def _download_online(  # noqa: PLR0913
     下载（无法并行，因 ``--require-hashes`` 要求所有包同 requirements 文件）。
     uv 不可用时 warning 降级为不校验哈希（避免阻塞构建）。
     """
-    # 惰性导入打破循环依赖：wheel_pip 顶层导入本模块，本模块不能顶层导入 wheel_pip
-    from fspack.packaging.wheel_pip import _run_pip
+    # 惰性导入打破循环依赖：downloader 顶层导入本模块，本模块不能顶层导入 downloader
+    from fspack.packaging.wheels.downloader import _run_pip
 
     # 构造私有包源参数：透传给 pip download 与 pip wheel
     extra_args: list[str] = []
@@ -323,7 +323,7 @@ def _download_with_hashes(  # noqa: PLR0913
     import contextlib
     import tempfile
 
-    from fspack.packaging.wheel_pip import _run_pip
+    from fspack.packaging.wheels.downloader import _run_pip
 
     # uv pip compile --generate-hashes 输出带哈希的 requirements 文本
     requirements_text = _resolve_with_uv(

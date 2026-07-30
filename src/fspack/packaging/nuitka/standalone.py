@@ -11,11 +11,11 @@ facade，所有 ``cls.`` 调用经 MRO 自动派发到对应 mixin。
   ``_download_standalone_python`` / ``_extract_standalone_python``）
 - Win7 兼容 DLL 注入（解压或缓存命中时调用 :func:`fspack.builder._inject_win7_compat_dll`）
 
-不涉及：环境就绪主流程（见 :mod:`fspack.packaging.nuitka_env`）、
-编译流程（见 :mod:`fspack.packaging.nuitka_compile`）、
-ccache 管理（见 :mod:`fspack.packaging.nuitka_ccache`）。
+不涉及：环境就绪主流程（见 :mod:`fspack.packaging.nuitka.env`）、
+编译流程（见 :mod:`fspack.packaging.nuitka.compile`）、
+ccache 管理（见 :mod:`fspack.packaging.nuitka.ccache`）。
 
-从 :mod:`fspack.packaging.nuitka_env` 拆分而来，降低 ``nuitka_env.py`` 行数。
+从 :mod:`fspack.packaging.nuitka.env` 拆分而来，降低 ``env.py`` 行数。
 standalone python 准备是独立的"获取编译用 Python 解释器"职责，独立成 mixin 便于
 复用与测试。Linux runtime 已是完整 standalone，本 mixin 仅 Windows 路径有实际下载行为。
 """
@@ -44,7 +44,7 @@ class NuitkaStandalone:
     通过 :class:`fspack.packaging.nuitka.NuitkaCompiler` 多继承组合使用。
 
     Linux runtime 已是 standalone python（完整发行版），本 mixin 返回空 Path 占位，
-    由 :meth:`fspack.packaging.nuitka_compile.NuitkaCompile.compile_src` 回退到
+    由 :meth:`fspack.packaging.nuitka.compile.NuitkaCompile.compile_src` 回退到
     runtime python。仅 Windows 路径实际下载 python-build-standalone 完整发行版。
     """
 

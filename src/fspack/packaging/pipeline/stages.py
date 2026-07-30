@@ -82,8 +82,8 @@ __all__ = [
 _logger = logging.getLogger(__name__)
 
 # 默认 icon：打包在 fspack 包内，随 wheel 分发
-# pipeline_stages.py 在 src/fspack/packaging/ 下，parent.parent 即 src/fspack/
-_DEFAULT_ICON = Path(__file__).parent.parent / "assets" / "icons" / "app.ico"
+# stages.py 在 src/fspack/packaging/pipeline/ 下，parent.parent.parent 即 src/fspack/
+_DEFAULT_ICON = Path(__file__).parent.parent.parent / "assets" / "icons" / "app.ico"
 
 
 @dataclass(frozen=True)

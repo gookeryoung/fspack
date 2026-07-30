@@ -1,20 +1,8 @@
-"""Nuitka 编译器 facade：将用户源码 ``.py`` 编译为 ``.pyd`` 本机执行.
+""":class:`NuitkaCompiler` facade 类定义：多继承组合六个 mixin.
 
-本模块是 facade，通过多继承组合四个职责单一的 mixin：
-
-- :class:`fspack.packaging.nuitka_env.NuitkaEnv` — 环境就绪
-  （C 编译器检查、nuitka 安装、pip 可用性、构建机编译环境变量）
-- :class:`fspack.packaging.nuitka_standalone.NuitkaStandalone` — standalone python 准备
-  （Windows python-build-standalone 下载与缓存）
-- :class:`fspack.packaging.nuitka_ccache.NuitkaCcache` — ccache 管理
-  （PATH 查找、本地缓存、预编译二进制下载）
-- :class:`fspack.packaging.nuitka_compile.NuitkaCompile` — 编译流程
-  （单文件 ``--module`` 编译、stamp 缓存、第三方包编译）
-- :class:`fspack.packaging.nuitka_strip.NuitkaStrip` — 产物剥离与构建目录清理
-  （验证 .pyd 可加载后删 .py、清理 ``.build/`` 残留）
-- :class:`fspack.packaging.nuitka_verify.NuitkaVerify` — 编译产物验证
-  （.pyd/.so 可加载性测试、批量/单模块 import 验证）
-
+本模块仅承载 :class:`NuitkaCompiler` 类定义，facade 文档与 monkeypatch 兼容
+import 在 :mod:`fspack.packaging.nuitka` 包 ``__init__.py``。本模块通过多继承
+组合六个职责单一的 mixin（env/standalone/ccache/strip/compile/verify），
 所有方法为 staticmethod/classmethod，无实例状态。``cls.`` 调用经 MRO 自动派发
 到对应 mixin，对外暴露统一的 :class:`NuitkaCompiler` API。
 
@@ -41,19 +29,12 @@ stamp 缓存（:meth:`NuitkaCompiler.compile_with_stamp`）：重复构建时若
 
 from __future__ import annotations
 
-# 为兼容测试中 monkeypatch.setattr("fspack.packaging.nuitka.<module>.<attr>", ...) 路径解析，
-# facade 显式 import 这些模块（patch 设置的是模块对象的属性，全局生效，对 env/standalone/ccache/
-# compile/strip/verify 六个 mixin 模块同样有效）。详见 rule-01 公开 API 不变约束。
-import shutil  # noqa: F401
-import subprocess  # noqa: F401
-import sys  # noqa: F401
-
-from fspack.packaging.nuitka_ccache import NuitkaCcache
-from fspack.packaging.nuitka_compile import NuitkaCompile
-from fspack.packaging.nuitka_env import NuitkaEnv
-from fspack.packaging.nuitka_standalone import NuitkaStandalone
-from fspack.packaging.nuitka_strip import NuitkaStrip
-from fspack.packaging.nuitka_verify import NuitkaVerify
+from fspack.packaging.nuitka.ccache import NuitkaCcache
+from fspack.packaging.nuitka.compile import NuitkaCompile
+from fspack.packaging.nuitka.env import NuitkaEnv
+from fspack.packaging.nuitka.standalone import NuitkaStandalone
+from fspack.packaging.nuitka.strip import NuitkaStrip
+from fspack.packaging.nuitka.verify import NuitkaVerify
 
 __all__ = ["NuitkaCompiler"]
 

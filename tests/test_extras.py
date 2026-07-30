@@ -23,7 +23,7 @@ from fspack.config import BuildOptions, get_mirror
 from fspack.console import console
 from fspack.exceptions import ProjectError
 from fspack.packaging.pipeline import build
-from fspack.packaging.pipeline_stages import _dep_cache_load, _dep_cache_save
+from fspack.packaging.pipeline.stages import _dep_cache_load, _dep_cache_save
 from fspack.platform import Platform
 
 
@@ -67,12 +67,12 @@ def _make_project_with_extras(
 def _stub_write_operations(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """桩掉所有写盘操作（download/extract/copy/compile），仅保留依赖分析."""
     for fn in ("download_embed", "download_standalone", "download_wheels"):
-        monkeypatch.setattr(f"fspack.packaging.pipeline_stages.{fn}", lambda *a, **k: tmp_path / "fake")
+        monkeypatch.setattr(f"fspack.packaging.pipeline.stages.{fn}", lambda *a, **k: tmp_path / "fake")
     for fn in ("extract_embed", "extract_standalone", "unpack_wheels"):
-        monkeypatch.setattr(f"fspack.packaging.pipeline_stages.{fn}", lambda *a, **k: None)
+        monkeypatch.setattr(f"fspack.packaging.pipeline.stages.{fn}", lambda *a, **k: None)
     monkeypatch.setattr("fspack.packaging.pipeline.copy_source", lambda *a, **k: None)
     monkeypatch.setattr(
-        "fspack.packaging.pipeline_stages.compile_loader",
+        "fspack.packaging.pipeline.stages.compile_loader",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("不应编译 loader")),
     )
 

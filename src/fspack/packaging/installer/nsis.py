@@ -1,9 +1,9 @@
 """Windows NSIS 安装包生成：脚本生成、编译、快捷方式与注册表.
 
-从 :mod:`fspack.packaging.installer` 拆分而来，封装 NSIS 安装包全部逻辑：
+从 :mod:`fspack.packaging.installer.base` 拆分而来，封装 NSIS 安装包全部逻辑：
 NSIS 模板、快捷方式块、注册表块、脚本生成与 makensis 编译。
 
-依赖 :mod:`fspack.packaging.installer` 提供：
+依赖 :mod:`fspack.packaging.installer.base` 提供：
 ``Installer`` 基类、``_run_stage``/``_release_base``/``_DIST_INTERMEDIATE_EXCLUDES``。
 """
 
@@ -18,7 +18,7 @@ from fspack._compat import override
 from fspack.config import MirrorConfig, ProjectInfo
 from fspack.console import console
 from fspack.exceptions import InstallerError
-from fspack.packaging.installer import (
+from fspack.packaging.installer.base import (
     _DIST_INTERMEDIATE_EXCLUDES,
     Installer,
     _check_exe,

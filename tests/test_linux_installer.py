@@ -13,7 +13,7 @@ import pytest
 from fspack.config import AppType, BuildOptions, ProjectInfo, get_mirror
 from fspack.exceptions import InstallerError
 from fspack.packaging.installer import build_deb, build_linux_installer, build_tarball
-from fspack.packaging.installer_linux import build_deb_release, sign_deb_file
+from fspack.packaging.installer.linux import build_deb_release, sign_deb_file
 from tests._stubs import CompletedStub
 
 
@@ -193,8 +193,8 @@ def test_build_linux_installer_no_build_success(tmp_path: Path, monkeypatch: pyt
         captured["deb"] = info
         return release_dir / "app_1.0-py3.11.10-slim_amd64.deb"
 
-    monkeypatch.setattr("fspack.packaging.installer_linux.build_tarball", fake_build_tarball)
-    monkeypatch.setattr("fspack.packaging.installer_linux.build_deb", fake_build_deb)
+    monkeypatch.setattr("fspack.packaging.installer.linux.build_tarball", fake_build_tarball)
+    monkeypatch.setattr("fspack.packaging.installer.linux.build_deb", fake_build_deb)
 
     result = build_linux_installer(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=True)
     assert result == dist / "release" / "app_1.0-py3.11.10-slim_amd64.deb"
@@ -231,9 +231,9 @@ def test_build_linux_installer_with_build(tmp_path: Path, monkeypatch: pytest.Mo
         )
 
     monkeypatch.setattr("fspack.packaging.installer.build", fake_build)
-    monkeypatch.setattr("fspack.packaging.installer_linux.build_tarball", lambda *a, **kw: tmp_path / "x.tar.gz")
+    monkeypatch.setattr("fspack.packaging.installer.linux.build_tarball", lambda *a, **kw: tmp_path / "x.tar.gz")
     monkeypatch.setattr(
-        "fspack.packaging.installer_linux.build_deb",
+        "fspack.packaging.installer.linux.build_deb",
         lambda *a, **kw: dist / "release" / "app_1.0-py3.11.10-slim_amd64.deb",
     )
 
@@ -258,7 +258,7 @@ def test_sign_deb_file_calls_gpg_with_correct_command(tmp_path: Path, monkeypatc
         deb_path.with_suffix(".deb.asc").write_text("-----BEGIN PGP SIGNATURE-----\n", encoding="utf-8")
         return CompletedStub()
 
-    monkeypatch.setattr("fspack.packaging.installer_linux.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.installer.linux.subprocess.run", fake_run)
 
     asc_path = sign_deb_file(deb_path)
 
@@ -284,7 +284,7 @@ def test_sign_deb_file_with_key_id_includes_local_user(tmp_path: Path, monkeypat
         Path(str(deb_path) + ".asc").write_text("signature", encoding="utf-8")
         return CompletedStub()
 
-    monkeypatch.setattr("fspack.packaging.installer_linux.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.installer.linux.subprocess.run", fake_run)
 
     asc_path = sign_deb_file(deb_path, key_id="0x12345678")
 
@@ -303,7 +303,7 @@ def test_sign_deb_file_gpg_missing_raises_installer_error(tmp_path: Path, monkey
     def fake_run(cmd: list[str], **kw: Any) -> object:
         raise FileNotFoundError()
 
-    monkeypatch.setattr("fspack.packaging.installer_linux.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.installer.linux.subprocess.run", fake_run)
 
     with pytest.raises(InstallerError, match="未找到 gpg"):
         sign_deb_file(deb_path)
@@ -318,7 +318,7 @@ def test_sign_deb_file_gpg_failure_raises_installer_error(tmp_path: Path, monkey
     def fake_run(cmd: list[str], **kw: Any) -> object:
         raise err
 
-    monkeypatch.setattr("fspack.packaging.installer_linux.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.installer.linux.subprocess.run", fake_run)
 
     with pytest.raises(InstallerError, match="gpg 签名失败"):
         sign_deb_file(deb_path)
@@ -349,7 +349,7 @@ def test_build_deb_release_passes_sign_deb_to_sign_deb_file(tmp_path: Path, monk
             Path(str(deb_path) + ".asc").write_text("sig", encoding="utf-8")
         return CompletedStub()
 
-    monkeypatch.setattr("fspack.packaging.installer_linux.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.installer.linux.subprocess.run", fake_run)
 
     result = build_deb_release(
         tmp_path,
@@ -390,7 +390,7 @@ def test_build_deb_release_sign_deb_failure_does_not_block_build(
         # gpg 失败
         raise FileNotFoundError()
 
-    monkeypatch.setattr("fspack.packaging.installer_linux.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.installer.linux.subprocess.run", fake_run)
 
     with caplog.at_level("WARNING", logger="fspack.packaging.installer"):
         result = build_deb_release(tmp_path, get_mirror("huawei"), "3.11.10", no_build=True, sign_deb=True)
@@ -422,7 +422,7 @@ def test_build_deb_release_without_sign_deb_does_not_call_gpg(tmp_path: Path, mo
             deb_path.write_bytes(b"deb-content")
         return CompletedStub()
 
-    monkeypatch.setattr("fspack.packaging.installer_linux.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.installer.linux.subprocess.run", fake_run)
 
     build_deb_release(tmp_path, get_mirror("huawei"), "3.11.10", no_build=True)
 

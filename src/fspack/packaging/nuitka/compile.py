@@ -11,9 +11,9 @@ facade，所有 ``cls.`` 调用经 MRO 自动派发到对应 mixin。
 - stamp 缓存（``compile_with_stamp`` 整合 env + compile_src + stamp 比对）
 - 第三方包编译（``compile_packages`` 编译 site-packages 中指定包）
 
-不涉及：环境就绪（见 :mod:`fspack.packaging.nuitka_env`）、
-产物剥离与构建目录清理（见 :mod:`fspack.packaging.nuitka_strip`）、
-验证逻辑（见 :mod:`fspack.packaging.nuitka_verify`，通过 ``cls._verify_compiled_modules``
+不涉及：环境就绪（见 :mod:`fspack.packaging.nuitka.env`）、
+产物剥离与构建目录清理（见 :mod:`fspack.packaging.nuitka.strip`）、
+验证逻辑（见 :mod:`fspack.packaging.nuitka.verify`，通过 ``cls._verify_compiled_modules``
 经 MRO 调用）。
 """
 
@@ -36,7 +36,7 @@ from fspack.platform import Platform
 from fspack.progress import StageRecorder
 
 if TYPE_CHECKING:
-    from fspack.packaging.nuitka_protocol import NuitkaCompilerProtocol
+    from fspack.packaging.nuitka.protocol import NuitkaCompilerProtocol
 
 # 共享 logger 名：测试用 caplog.at_level(..., logger="fspack.packaging.nuitka") 锁定
 _logger = logging.getLogger("fspack.packaging.nuitka")
@@ -60,18 +60,18 @@ class NuitkaCompile:
     类型契约声明，pyrefly 据此解析方法签名，无需 stub 方法占位。运行时由
     :class:`NuitkaCompiler` MRO 链派发到对应 mixin 的真实实现。
 
-    依赖 :class:`fspack.packaging.nuitka_env.NuitkaEnv` 提供：
+    依赖 :class:`fspack.packaging.nuitka.env.NuitkaEnv` 提供：
     ``_runtime_python`` / ``_is_nuitka_cached`` /
     ``_build_compile_env`` / ``_resolve_jobs`` / ``ensure_env`` /
     ``_nuitka_cache_dir``。
 
-    依赖 :class:`fspack.packaging.nuitka_standalone.NuitkaStandalone` 提供：
+    依赖 :class:`fspack.packaging.nuitka.standalone.NuitkaStandalone` 提供：
     ``_ensure_build_python``。
 
-    依赖 :class:`fspack.packaging.nuitka_ccache.NuitkaCcache` 提供：
+    依赖 :class:`fspack.packaging.nuitka.ccache.NuitkaCcache` 提供：
     ``_ensure_ccache``。
 
-    依赖 :class:`fspack.packaging.nuitka_strip.NuitkaStrip` 提供：
+    依赖 :class:`fspack.packaging.nuitka.strip.NuitkaStrip` 提供：
     ``_strip_compiled_sources`` / ``_cleanup_build_dirs``（经 MRO 派发）。
     """
 

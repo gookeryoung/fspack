@@ -1,12 +1,12 @@
 """Wheel sdist 回退构建：``pip wheel --no-deps`` 从 sdist 构建纯 Python wheel.
 
-从 :mod:`fspack.packaging.wheel_pip` 拆分而来，封装 sdist 回退逻辑。
+从 :mod:`fspack.packaging.wheels.downloader` 拆分而来，封装 sdist 回退逻辑。
 ``--only-binary=:all:`` 无法下载无 wheel 的包（如 odfpy 仅有 sdist）时，
 用 ``pip wheel --no-deps`` 从 sdist 构建纯 Python wheel（``py3-none-any``），
 构建产物放入 cache_dir 供后续 ``pip download --find-links`` 使用。
 
-依赖 :mod:`fspack.packaging.wheel_pip` 提供 ``_stream_subprocess``（惰性导入
-避免循环依赖：``wheel_pip`` 顶层导入本模块，本模块不能顶层导入 ``wheel_pip``）。
+依赖 :mod:`fspack.packaging.wheels.downloader` 提供 ``_stream_subprocess``（惰性导入
+避免循环依赖：``downloader`` 顶层导入本模块，本模块不能顶层导入 ``downloader``）。
 """
 
 from __future__ import annotations
@@ -87,8 +87,8 @@ def _build_sdist_wheels(  # noqa: PLR0913
     ``extra_index_urls``/``find_links`` 透传给 ``pip wheel``，确保私有包源中的
     sdist 也能被构建。
     """
-    # 惰性导入打破循环依赖：wheel_pip 顶层导入本模块，本模块不能顶层导入 wheel_pip
-    from fspack.packaging.wheel_pip import _stream_subprocess
+    # 惰性导入打破循环依赖：downloader 顶层导入本模块，本模块不能顶层导入 downloader
+    from fspack.packaging.wheels.downloader import _stream_subprocess
 
     extra_args: list[str] = []
     for url in extra_index_urls:

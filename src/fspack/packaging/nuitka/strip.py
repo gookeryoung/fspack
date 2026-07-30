@@ -9,12 +9,12 @@ facade，所有 ``cls.`` 调用经 MRO 自动派发到对应 mixin。
 - 产物剥离（``_strip_compiled_sources`` 验证 .pyd 可加载后删 .py）
 - 构建目录清理（``_cleanup_build_dirs`` 清理 Nuitka 残留 ``.build/`` 目录）
 
-不涉及：编译流程（见 :mod:`fspack.packaging.nuitka_compile`）、
-环境就绪（见 :mod:`fspack.packaging.nuitka_env`）、
-验证逻辑（见 :mod:`fspack.packaging.nuitka_verify`，通过 ``cls._verify_compiled_modules``
+不涉及：编译流程（见 :mod:`fspack.packaging.nuitka.compile`）、
+环境就绪（见 :mod:`fspack.packaging.nuitka.env`）、
+验证逻辑（见 :mod:`fspack.packaging.nuitka.verify`，通过 ``cls._verify_compiled_modules``
 经 MRO 调用）。
 
-从 :mod:`fspack.packaging.nuitka_compile` 拆分而来，降低 ``nuitka_compile.py`` 行数
+从 :mod:`fspack.packaging.nuitka.compile` 拆分而来，降低 ``compile.py`` 行数
 与职责复杂度。产物剥离与构建目录清理同属"编译后处理"，独立成 mixin 便于复用与测试。
 """
 
@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING
 from fspack.progress import StageRecorder
 
 if TYPE_CHECKING:
-    from fspack.packaging.nuitka_protocol import NuitkaCompilerProtocol
+    from fspack.packaging.nuitka.protocol import NuitkaCompilerProtocol
 
 # 共享 logger 名：测试用 caplog.at_level(..., logger="fspack.packaging.nuitka") 锁定
 _logger = logging.getLogger("fspack.packaging.nuitka")
@@ -40,7 +40,7 @@ class NuitkaStrip:
     所有方法为 staticmethod/classmethod，无实例状态。
     通过 :class:`fspack.packaging.nuitka.NuitkaCompiler` 多继承组合使用。
 
-    依赖 :class:`fspack.packaging.nuitka_verify.NuitkaVerify` 提供：
+    依赖 :class:`fspack.packaging.nuitka.verify.NuitkaVerify` 提供：
     ``_verify_compiled_modules``（NuitkaVerify 在 MRO 后置，无法 stub 占位，
     用 :class:`NuitkaCompilerProtocol` 类型契约声明跨 mixin 调用签名）。
     """
