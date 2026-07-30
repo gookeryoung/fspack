@@ -24,9 +24,11 @@ __all__ = ["build_parser", "discover_subprojects", "main"]
 _logger = logging.getLogger(__name__)
 
 
-# 递归扫描子项目时跳过的目录名（与 analyzer._EXCLUDED_DIRS 共用语义）。
-# 这些目录下的 pyproject.toml 不应被视为可打包项目（如 .venv 内的 pip
-# 包含 pyproject.toml；dist 内是已构建产物；build 是临时构建目录）。
+# 递归扫描子项目时跳过的目录名。
+# 与 analyzer._EXCLUDED_DIRS 语义不同：本集合用于"找 pyproject.toml"（不进入
+# .venv/dist/build 等），_EXCLUDED_DIRS 用于"扫描 .py/.qml 源码"（额外排除
+# examples/tests/docs/templates 等开发期目录）。两者各自独立维护，不强行合并
+# 以避免语义混淆。
 _RECURSIVE_SKIP_DIRS: frozenset[str] = frozenset(
     {
         "dist",

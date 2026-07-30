@@ -148,6 +148,37 @@ def test_analyze_dependencies_excludes_dev_directories(tmp_path: Path) -> None:
     assert r.ast_third_party == ()
 
 
+def test_analyze_dependencies_excludes_cache_and_tool_dirs(tmp_path: Path) -> None:
+    """.uv-cache/node_modules/.pyrefly_cache/htmlcov 等缓存与工具目录不应被扫描.
+
+    这些目录可能含第三方包 .py 源码（如 ``.uv-cache`` 内的 wheel 解包源码），
+    误扫描会导致依赖分析多出第三方包内部依赖、源码指纹变化触发缓存失效。
+    """
+    (tmp_path / "main.py").write_text("import os\n")
+    # .uv-cache 内模拟第三方包源码（uv 缓存解包后的 wheel）
+    uv_cache_dir = tmp_path / ".uv-cache" / "archive-v0" / "hash"
+    uv_cache_dir.mkdir(parents=True)
+    (uv_cache_dir / "tornado.py").write_text("import cryptography\n")
+    # node_modules 内模拟 py2js 项目残留 .py
+    nm_dir = tmp_path / "node_modules" / "pkg"
+    nm_dir.mkdir(parents=True)
+    (nm_dir / "index.py").write_text("import flask\n")
+    # .pyrefly_cache 内模拟 pyrefly 缓存
+    pr_dir = tmp_path / ".pyrefly_cache"
+    pr_dir.mkdir()
+    (pr_dir / "stub.py").write_text("import typing\n")
+    # htmlcov 内模拟覆盖率报告残留 .py
+    hc_dir = tmp_path / "htmlcov"
+    hc_dir.mkdir()
+    (hc_dir / "helper.py").write_text("import coverage\n")
+    r = analyze_dependencies(tmp_path, "main", ())
+    assert "cryptography" not in r.ast_third_party
+    assert "flask" not in r.ast_third_party
+    assert "typing" not in r.ast_stdlib
+    assert "coverage" not in r.ast_third_party
+    assert r.ast_third_party == ()
+
+
 def test_analyze_dependencies_submodules(tmp_path: Path) -> None:
     """第三方包的子模块 import 被收集到 ast_submodules."""
     (tmp_path / "main.py").write_text("from PySide2.QtCore import QTimer\nfrom PySide2.QtWidgets import QApplication\n")
