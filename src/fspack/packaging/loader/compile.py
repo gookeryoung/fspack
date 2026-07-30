@@ -270,7 +270,7 @@ class LinuxLoader(LoaderCompiler):
         c_file: Path,
         out_exe: Path,
         app_type: AppType,  # noqa: ARG003 # 抽象方法签名要求，Linux 不区分 app_type
-        icon_obj: Path | None,  # noqa: ARG003 # 抽象方法签名要求，Linux 用 windres 而非 icon_obj
+        icon_obj: Path | None,  # noqa: ARG003 # 抽象方法签名要求，Linux 不支持 icon 资源嵌入
     ) -> list[str]:
         """构造 gcc 编译命令，链接 libdl。"""
         return [LINUX_GCC, "-O2", "-o", str(out_exe), str(c_file), "-ldl"]
