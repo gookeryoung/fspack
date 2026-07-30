@@ -41,14 +41,14 @@ req-37 完成性能基线建立与 5 大文件拆分（iter-51~60），req-38 �
 
 ### 大文件拆分（iter-81 ~ iter-84）
 
-- [ ] **iter-81 nuitka_env.py 拆分**：540 行 → `nuitka_env.py`（NuitkaEnv
+- [x] **iter-81 nuitka_env.py 拆分**：540 行 → `nuitka_env.py`（NuitkaEnv
   mixin 入口 + C 编译器检查 + ensure_env 编排）/
   `nuitka_standalone.py`（standalone python 下载与缓存：_ensure_build_python/
   _build_python_cache_dir/_build_python_exe）/
   `nuitka_ccache.py`（ccache 下载与 PATH 查找：_ensure_ccache/CCACHE_URLS），
   `nuitka.py` facade 不变。**基线对比**：Nuitka 不在性能基线，仅验证功能
   测试不破坏
-- [ ] **iter-82 wheel_pip.py 拆分**：524 行 → `wheel_pip.py`（download_wheels
+- [x] **iter-82 wheel_pip.py 拆分**：524 行 → `wheel_pip.py`（download_wheels
   入口 + 缓存调度）/
   `wheel_resolver.py`（_run_pip_download/_download_online/uv pip compile
   解析）/
@@ -56,24 +56,28 @@ req-37 完成性能基线建立与 5 大文件拆分（iter-51~60），req-38 �
   `wheels.py` facade 不变。**基线对比**：`test_slim_unpack_baseline`
   (5.2ms) 不退化（slim_unpack 依赖 download_wheels 产物，但下载不在基线
   测量范围，仅验证间接影响）
-- [ ] **iter-83 analyzer.py 拆分**：445 行 → `analyzer.py`（analyze_dependencies
-  入口 + ProcessPoolExecutor 并行调度）/
+- [x] **iter-83 analyzer.py 拆分**：560 行 → `analyzer.py`（analyze_dependencies
+  入口 + ProcessPoolExecutor 并行调度 + _local_packages 本地包识别）/
   `analyzer_ast.py`（collect_imports/collect_imports_and_submodules/
-  collect_submodule_imports + STDLIB_FALLBACK）/
-  `analyzer_fingerprint.py`（source_fingerprint + os.scandir 递归），
-  `analyzer.py` facade 不变。**基线对比**：
-  `test_analyze_dependencies_baseline` (6.8ms)、
-  `test_source_fingerprint_baseline` (428μs)、
-  `test_collect_imports_and_submodules_baseline` (33.5μs) 均不退化 > 10%
-- [ ] **iter-84 slim/qt.py 拆分**：443 行 → `qt.py`（QtSlimSpec 入口 +
-  classify_entry）/
-  `qt_closure.py`（_qt_module_closure/_normalize_qt_sub + 依赖映射表
-  _QT_PLUGIN_DEPS/_QT_RESOURCE_DEPS/_QT_QML_DEPS）/
+  collect_submodule_imports + STDLIB_FALLBACK + parse_qml_imports + QML 映射表）/
+  `analyzer_fingerprint.py`（source_fingerprint + _iter_py_entries +
+  _EXCLUDED_DIRS + _is_excluded），`analyzer.py` facade 不变。**基线对比**：
+  iter-109 实施完成，median 对比 iter-80 基线：
+  `test_analyze_dependencies_baseline` -13%（提速）、
+  `test_source_fingerprint_baseline` -0.9%（提速）、
+  `test_collect_imports_and_submodules_baseline` 0%，均不退化
+- [x] **iter-84 slim/qt.py 拆分**：439 行 → `qt.py`（QtSlimSpec 入口 +
+  classify_entry + facade re-export）/
+  `qt_closure.py`（_qt_module_closure + 依赖映射表 _QT_MODULE_DEPS/
+  _QT_PLUGIN_DEPS/_QT_RESOURCE_DEPS/_QT_QML_DEPS/_QT_ABI_DLL_DEPS/
+  _QT_OPENGL_DEPS/_QT_WEBENGINE_TOP_FILES）/
   `qt_helpers.py`（_is_ffmpeg_dll/_is_opengl_sw_dll/_is_qml_abi_dll/
-  _qt_dll_submodule + 常量 _QT_EXCLUDE_SUBDIRS/_QT_FFMPEG_DLL_PREFIXES），
-  `slim/__init__.py` re-export 不变。**基线对比**：
-  `test_classify_entry_baseline` (3.6μs)、
-  `test_slim_unpack_baseline` (5.2ms) 均不退化 > 10%
+  _normalize_qt_sub/_qt_dll_submodule + 常量 _QT_EXCLUDE_SUBDIRS/
+  _QT_LIB_EXCLUDE_SUBDIRS/_QT_FFMPEG_DLL_PREFIXES/_QT_QML_ABI_DLL_NAMES/
+  _QT_OPENGL_SW_DLL_NAMES），`slim/__init__.py` re-export 不变。
+  **基线对比**：iter-109 实施完成，median 对比 iter-80 基线：
+  `test_classify_entry_baseline` 0%（3.6μs）、
+  `test_slim_unpack_baseline` -0.6%（提速），均不退化
 
 ### 类型安全深化（iter-85）
 

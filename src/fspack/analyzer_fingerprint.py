@@ -1,0 +1,99 @@
+"""源码指纹与路径排除规则.
+
+提取自 :mod:`fspack.analyzer`，按职责拆分。本模块专注于"源码文件系统遍历"——
+递归扫描 ``.py`` 文件计算指纹、判断路径是否位于构建产物目录。
+
+公开 API：
+
+- :func:`source_fingerprint`：BLAKE2b 源码指纹（用于依赖分析缓存键）
+- :func:`_is_excluded`：判断路径是否位于构建产物/缓存目录
+- :data:`_EXCLUDED_DIRS`：始终排除的目录名集合
+"""
+
+from __future__ import annotations
+
+import hashlib
+import os
+from pathlib import Path
+from typing import Iterator
+
+__all__ = [
+    "_EXCLUDED_DIRS",
+    "_is_excluded",
+    "source_fingerprint",
+]
+
+_EXCLUDED_DIRS = frozenset(
+    {
+        "dist",
+        "build",
+        ".git",
+        "__pycache__",
+        ".venv",
+        ".tox",
+        ".fspack",
+        ".trae",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".mypy_cache",
+        # 开发期目录：非运行时代码，扫描会导致误报依赖
+        "examples",
+        "tests",
+        "docs",
+        "templates",
+    }
+)
+
+
+def _is_excluded(path: Path, src_dir: Path) -> bool:
+    """判断文件是否位于构建产物或缓存目录下，应跳过扫描.
+
+    适用于 .py 与 .qml 文件：仅检查路径的目录前缀是否在
+    :data:`_EXCLUDED_DIRS` 中或为 ``.egg-info`` 后缀。
+    """
+    parts = path.relative_to(src_dir).parts[:-1]
+    return any(part in _EXCLUDED_DIRS or part.endswith(".egg-info") for part in parts)
+
+
+def source_fingerprint(src_dir: Path) -> str:
+    """计算源码指纹用于依赖分析缓存键。
+
+    遍历 ``src_dir`` 下所有不被排除的 ``.py`` 文件，以 ``相对路径|mtime_ns|size``
+    拼接后求 BLAKE2b（digest_size=32，hex 64 字符，与原 SHA-256 输出长度一致）。
+    与 :func:`fspack.analyzer.analyze_dependencies` 使用相同的排除逻辑
+    （``_EXCLUDED_DIRS``），保证指纹只反映被分析的源码变化。
+
+    用 :func:`os.scandir` 递归遍历，利用 :meth:`os.DirEntry.stat` 缓存目录
+    枚举时的 stat 信息（Windows ``WIN32_FIND_DATA`` / Linux ``d_ino``），
+    避免对每个文件单独 ``stat`` 系统调用。同时按名称排序目录条目（含子目录），
+    保证跨平台/文件系统的指纹确定性（``os.walk`` 不保证目录遍历顺序）。
+
+    用 :func:`hashlib.blake2b` 替代 :func:`hashlib.sha256`：BLAKE2b 在 CPython
+    实现中略快（约 10-20%），且 ``digest_size=32`` 输出 64 hex 字符与
+    SHA-256 长度一致，缓存键文件名兼容。BLAKE2b 抗碰撞性足够用于缓存键场景。
+    """
+    h = hashlib.blake2b(digest_size=32)
+    for rel, mtime_ns, size in _iter_py_entries(src_dir, src_dir):
+        h.update(f"{rel}|{mtime_ns}|{size}\n".encode())
+    return h.hexdigest()
+
+
+def _iter_py_entries(current: Path, root: Path) -> Iterator[tuple[str, int, int]]:
+    """递归遍历 ``.py`` 文件，返回 ``(相对路径, mtime_ns, size)`` 三元组。
+
+    :func:`os.scandir` 返回的 :class:`os.DirEntry` 对象缓存了目录枚举时的
+    stat 信息，``entry.stat(follow_symlinks=False)`` 直接复用缓存避免独立
+    stat 调用。剪枝排除 ``_EXCLUDED_DIRS`` 与 ``*.egg-info`` 目录。
+
+    条目按名称排序（含子目录），保证遍历顺序跨平台确定性——``os.walk``
+    不保证目录遍历顺序，导致旧实现在不同文件系统上指纹不一致。
+    """
+    for entry in sorted(os.scandir(current), key=lambda e: e.name):
+        if entry.is_dir(follow_symlinks=False):
+            if entry.name in _EXCLUDED_DIRS or entry.name.endswith(".egg-info"):
+                continue
+            yield from _iter_py_entries(Path(entry.path), root)
+        elif entry.is_file(follow_symlinks=False) and entry.name.endswith(".py"):
+            rel = Path(entry.path).relative_to(root).as_posix()
+            st = entry.stat(follow_symlinks=False)
+            yield (rel, st.st_mtime_ns, st.st_size)
