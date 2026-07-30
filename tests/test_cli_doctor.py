@@ -448,7 +448,7 @@ def test_check_cache_dir_scan_error(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     def _raise_oserror(path: Path) -> int:
         raise OSError("permission denied")
 
-    monkeypatch.setattr("fspack.cli_doctor._dir_size", _raise_oserror)
+    monkeypatch.setattr("fspack.doctor_envs._dir_size", _raise_oserror)
     result = _check_cache_dir(cache)
     assert result.status is CheckStatus.WARN
     assert "扫描缓存目录失败" in result.suggestion
