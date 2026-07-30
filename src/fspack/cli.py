@@ -439,7 +439,7 @@ def _add_doctor_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParse
     在 ``--test`` 基础上收集性能数据（各阶段耗时、下载量、缓存命中），
     输出性能分析报告，作为后续优化的基准。
     """
-    p = sub.add_parser("doctor", help="环境诊断：检查打包工具可用性与配置")
+    p = sub.add_parser("doctor", aliases=["d"], help="环境诊断：检查打包工具可用性与配置")
     p.add_argument(
         "--test",
         action="store_true",
@@ -470,7 +470,7 @@ def main(argv: list[str] | None = None) -> None:
         _run_init(ns)
         return
 
-    if command == "doctor":
+    if command in ("doctor", "d"):
         _run_doctor(ns)
         return
 
