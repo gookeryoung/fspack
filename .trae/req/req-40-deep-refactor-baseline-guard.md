@@ -111,12 +111,13 @@ req-37 完成性能基线建立与 5 大文件拆分（iter-51~60），req-38 �
   识别重复的 fixture（tmp_path 包装、mock subprocess、样本项目构造等）
   提取到 `tests/conftest.py`。减少测试代码重复，提升新测试编写效率。
   **基线对比**：基线测试本身不退化（fixture 重构不影响测量逻辑）
-- [ ] **iter-89 性能基线矩阵扩展**：扩展 `test_perf_baseline.py`，
+- [x] **iter-89 性能基线矩阵扩展**：扩展 `test_perf_baseline.py`，
   新增 (1) `test_project_info_from_dir_baseline`（配置解析基线，配套
   iter-86）；(2) `test_nuitka_ensure_env_baseline`（Nuitka 环境检查基线，
   mock 网络下载）；(3) `test_wheel_download_cache_hit_baseline`（wheel
   缓存命中基线，mock pip download）。形成 8 个基线测试覆盖全部核心场景。
-  **基线对比**：新增基线不破坏现有 5 个基线
+  **基线对比**：新增基线不破坏现有 5 个基线。iter-94/102/112 累计完成
+  全部 3 个新增基线（ProjectInfo/Nuitka/wheel 缓存），总基线数 10 个
 
 ### 基线固化与 CI 门禁（iter-90）
 

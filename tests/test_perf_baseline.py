@@ -37,6 +37,7 @@ from fspack.analyzer import (
     source_fingerprint,
 )
 from fspack.config import ProjectInfo, clear_project_cache
+from fspack.packaging.wheel_cache import _deps_cache_key, _load_deps_cache, _save_deps_cache
 from fspack.slim import classify_entry, slim_unpack
 
 # ---- 测试样本 ----
@@ -356,3 +357,91 @@ class TestEntryWrapperBaseline:
         assert "class _LazyImportFinder:" in result
         assert "sys.path_importer_cache" in result
         assert "importlib.util.LazyLoader" in result
+
+
+@pytest.mark.slow
+class TestNuitkaEnsureEnvBaseline:
+    """Nuitka 环境就绪性能基线（iter-89 缓存命中场景）.
+
+    测量 :meth:`NuitkaCompiler.ensure_env` 缓存命中分支耗时：mingw 可用性
+    检查 + ``_is_nuitka_cached`` 文件系统检查 + ``StageRecorder`` 回写。
+    缓存命中是重复构建的主路径，耗时应远低于冷安装（pip install sdist
+    数十秒），此基线作为后续 nuitka 环境就绪优化的回归参考。
+    """
+
+    def test_ensure_env_cache_hit_baseline(
+        self,
+        benchmark: Any,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        mirror: Any,
+    ) -> None:
+        """ensure_env 缓存命中基线：预装 nuitka 后单次调用耗时.
+
+        优化目标（iter-89）：缓存命中分支应保持低耗时，仅 mingw 检查 +
+        一次 ``is_file()`` 调用 + ``StageRecorder`` 回写，无 subprocess
+        开销。退化 > 50% 失败（缓存命中是 O(1) 文件系统检查，退化空间极小）。
+        """
+        from fspack.packaging.nuitka import NuitkaCompiler
+        from fspack.platform import Platform
+        from fspack.progress import StageRecorder
+
+        # mingw 可用让 _check_c_compiler 通过（Windows 目标）
+        monkeypatch.setattr("fspack.packaging.loader.mingw_available", lambda: True)
+        cache_root = tmp_path / "nuitka_cache"
+        # 预装 nuitka 到缓存目录，让 _is_nuitka_cached 返回 True 走缓存命中分支
+        cache_dir = NuitkaCompiler._nuitka_cache_dir(cache_root, "3.11.9")
+        nuitka_pkg = cache_dir / "nuitka"
+        nuitka_pkg.mkdir(parents=True, exist_ok=True)
+        (nuitka_pkg / "__init__.py").write_text("", encoding="utf-8")
+
+        def _run() -> str:
+            # 每次新建 StageRecorder 避免 hit_cache 累积影响后续轮次
+            st = StageRecorder("Nuitka 环境")
+            return NuitkaCompiler.ensure_env(cache_root, "3.11.9", Platform.WINDOWS, mirror, stage=st)
+
+        result = benchmark(_run)
+        # 功能正确性验证
+        assert result == "4.1.3"
+
+
+@pytest.mark.slow
+class TestWheelDownloadCacheBaseline:
+    """wheel 依赖解析缓存性能基线（iter-89 缓存命中场景）.
+
+    测量 :func:`_load_deps_cache` 缓存命中分支耗时：读 JSON + 逐个校验
+    wheel 文件存在性。缓存命中让 ``download_wheels`` 跳过 pip 依赖解析
+    （数秒），此基线验证缓存查找开销可忽略，作为后续 wheel 缓存优化的
+    回归参考。
+    """
+
+    # 模拟中等规模项目依赖（50 个 wheel），与 AST 基线 50 个 .py 文件对齐
+    _WHEEL_COUNT = 50
+
+    def test_wheel_download_cache_hit_baseline(
+        self,
+        benchmark: Any,
+        tmp_path: Path,
+    ) -> None:
+        """_load_deps_cache 缓存命中基线：50 个 wheel 文件齐全时单次调用耗时.
+
+        优化目标（iter-89）：缓存命中应保持低耗时，仅 JSON 解析 + 50 次
+        ``is_file()`` 调用。退化 > 50% 失败（缓存查找是 O(n) 文件系统
+        检查，n=50 退化空间极小）。
+        """
+        cache = tmp_path / "cache"
+        cache.mkdir()
+        # 预创建 50 个 wheel 文件并写入依赖解析缓存
+        wheels: list[Path] = []
+        for i in range(self._WHEEL_COUNT):
+            whl = cache / f"pkg_{i:03d}-1.0.0-py3-none-any.whl"
+            whl.write_bytes(b"x" * 1024)
+            wheels.append(whl)
+        key = _deps_cache_key(("pkg_000",), "3.11.9", ("win_amd64",))
+        _save_deps_cache(cache, key, wheels)
+
+        result = benchmark(_load_deps_cache, cache, key)
+        # 功能正确性验证
+        assert result is not None
+        assert len(result) == self._WHEEL_COUNT
+        assert {p.name for p in result} == {w.name for w in wheels}
