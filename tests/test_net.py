@@ -58,7 +58,7 @@ class TestDownloaderDownload:
             captured["url"] = req.full_url
             return FakeResp(b"hello world data")
 
-        monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", fake_urlopen)
+        monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
         dest = tmp_path / "out" / "file.zip"
         downloader = Downloader(ssl_ctx=ssl.create_default_context())
         written = downloader.download("https://x/test.zip", dest, label="测试下载")
@@ -68,7 +68,7 @@ class TestDownloaderDownload:
 
     def test_stage_receives_bytes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
-            "fspack.packaging.net.urllib.request.urlopen",
+            "urllib.request.urlopen",
             lambda req, timeout, **kw: FakeResp(b"abc" * 100),
         )
         rec = StageRecorder("download")
@@ -79,7 +79,7 @@ class TestDownloaderDownload:
 
     def test_no_stage_works(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
-            "fspack.packaging.net.urllib.request.urlopen",
+            "urllib.request.urlopen",
             lambda req, timeout, **kw: FakeResp(b"abc"),
         )
         downloader = Downloader(ssl_ctx=ssl.create_default_context())
@@ -90,7 +90,7 @@ class TestDownloaderDownload:
         def fake_urlopen(req: object, timeout: int, **kwargs: object) -> object:
             raise OSError("boom")
 
-        monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", fake_urlopen)
+        monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
         downloader = Downloader(ssl_ctx=ssl.create_default_context())
         with pytest.raises(OSError, match="boom"):
             downloader.download("https://x/d", tmp_path / "f.zip")

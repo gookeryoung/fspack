@@ -831,3 +831,55 @@ def test_package_no_sign_flags_defaults_off(tmp_path: Path, monkeypatch: pytest.
     cli.main(["p", str(tmp_path)])
     assert called["sign_exe"] is False
     assert called["sign_deb"] is False
+
+
+# ---------- builder import 热路径懒加载基线 ----------
+
+
+def test_net_module_no_top_level_heavy_imports() -> None:
+    """源码基线：net.py 顶部不导入 urllib.request/rich.progress/console（运行时重模块）.
+
+    守护 iter-121~122 net.py 顶部轻量化：``urllib.request``（~15ms）、
+    ``rich.progress`` 多 column 类（~8ms）与 ``fspack.console`` 单例全部移到
+    ``Downloader.download`` 方法内延迟导入，确保 ``import fspack.packaging.net``
+    不连带加载这些重模块。``StageRecorder`` 在 TYPE_CHECKING 块内仅为类型注解，
+    运行时不执行，不在守护范围。
+
+    通过 inspect 源码检查顶部导入区（``class Downloader`` 之前）不含运行时重模块 import，
+    避免回退引入。iter-122 将测试 patch 路径从 ``fspack.packaging.net.urllib.request.urlopen``
+    改为全局 ``urllib.request.urlopen``，释放 net 顶部 urllib 约束。
+    """
+    import inspect
+    import re
+
+    from fspack.packaging import net
+
+    source = inspect.getsource(net)
+    top_section = source.split("class Downloader")[0]
+    # 移除 TYPE_CHECKING 块内容（仅类型注解，运行时不执行）
+    top_runtime = re.sub(r"if TYPE_CHECKING:.*?(?=\n\n|\n[^\s])", "", top_section, flags=re.DOTALL)
+    # 顶部运行时导入区不应含 urllib.request / rich.progress / console
+    assert "import urllib.request" not in top_runtime
+    assert "from rich.progress import" not in top_runtime
+    assert "from fspack.console import" not in top_runtime
+
+
+def test_builder_import_does_not_load_urllib_request() -> None:
+    """import 基线：``import fspack.builder`` 不触发 ``urllib.request`` 加载.
+
+    iter-122 将 ``urllib.request`` 从 net.py 顶部移到 ``Downloader.download``
+    方法内延迟导入。本测试在子进程内执行 ``import fspack.builder``，断言
+    ``urllib.request`` 未进入 ``sys.modules``。任何顶部误引入 ``urllib.request``
+    的回退都会被本测试拦截（典型成本：urllib.request 链式加载 ~15ms）。
+    """
+    import subprocess
+    import sys
+
+    code = (
+        "import sys\n"
+        "import fspack.builder\n"
+        "heavy = [m for m in ('urllib.request',) if m in sys.modules]\n"
+        "sys.exit(1 if heavy else 0)\n"
+    )
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, check=False)
+    assert result.returncode == 0, "import fspack.builder 不应加载 urllib.request"

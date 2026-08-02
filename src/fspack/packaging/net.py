@@ -10,23 +10,16 @@
 
 from __future__ import annotations
 
-import os
-import ssl
-import urllib.request
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from rich.progress import (
-    BarColumn,
-    DownloadColumn,
-    Progress,
-    SpinnerColumn,
-    TextColumn,
-    TimeRemainingColumn,
-    TransferSpeedColumn,
-)
+if TYPE_CHECKING:
+    # SSLContext / StageRecorder 仅用于类型注解（``from __future__ import
+    # annotations`` 使注解不在运行时求值），顶部不导入 ssl / fspack.progress
+    # 避免连锁触发 rich.progress 加载。
+    from ssl import SSLContext
 
-from fspack.console import console
-from fspack.progress import StageRecorder
+    from fspack.progress import StageRecorder
 
 __all__ = ["Downloader"]
 
@@ -49,13 +42,13 @@ class Downloader:
         self,
         *,
         timeout: int = 180,
-        ssl_ctx: ssl.SSLContext | None = None,
+        ssl_ctx: SSLContext | None = None,
     ) -> None:
         self._timeout = timeout
         self._ssl_ctx = ssl_ctx or self.create_ssl_context()
 
     @staticmethod
-    def create_ssl_context() -> ssl.SSLContext:
+    def create_ssl_context() -> SSLContext:
         """创建 SSL 上下文，按优先级合并 CA 证书源。
 
         优先级：
@@ -63,6 +56,9 @@ class Downloader:
         2. certifi CA bundle + 系统默认 CA（certifi 更新更及时）
         3. 系统默认 CA
         """
+        import os
+        import ssl
+
         env_ca = os.environ.get("SSL_CERT_FILE")
         if env_ca and Path(env_ca).is_file():
             return ssl.create_default_context(cafile=env_ca)
@@ -87,7 +83,30 @@ class Downloader:
 
         使用 ``urllib.request.urlopen`` + 分块读写 + ``rich.progress.Progress`` 显示下载进度。
         下载完成后若提供 ``stage``，调 ``stage.add_bytes`` 累加。
+
+        ``urllib.request`` / ``rich.progress`` / ``fspack.console`` 在方法内延迟导入：
+        ``import fspack.builder`` 热路径不触发 urllib.request（省 ~15ms）与
+        rich.progress 多 column 类加载（省 ~8ms），仅在实际下载时才加载。
+        测试通过 ``monkeypatch.setattr("urllib.request.urlopen", ...)`` 全局 patch
+        ``urllib.request.urlopen``，方法内 ``import urllib.request`` 拿到的就是
+        被 patch 后的同一模块对象。
         """
+        # 延迟导入：urllib.request + rich.progress 多 column 类 + console 单例。
+        # 仅在真正下载时加载，避免 import fspack.builder 热路径触发 ~23ms 重模块加载。
+        import urllib.request
+
+        from rich.progress import (
+            BarColumn,
+            DownloadColumn,
+            Progress,
+            SpinnerColumn,
+            TextColumn,
+            TimeRemainingColumn,
+            TransferSpeedColumn,
+        )
+
+        from fspack.console import console
+
         dest.parent.mkdir(parents=True, exist_ok=True)
         req = urllib.request.Request(url, headers={"User-Agent": "fspack"})
         progress = Progress(

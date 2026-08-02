@@ -50,7 +50,7 @@ def test_download_embed_offline_cache_hit(
     zip_path = cache / "python-3.11.9-embed-amd64.zip"
     zip_path.write_bytes(b"cached")
 
-    monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", fail_urlopen)
+    monkeypatch.setattr("urllib.request.urlopen", fail_urlopen)
     path = download_embed("3.11.9", mirror, cache)
     assert path.read_bytes() == b"cached"
 
@@ -60,7 +60,7 @@ def test_download_embed_offline_cache_miss(
 ) -> None:
     """离线模式下 embed 缓存未命中 → 立即抛 EmbedError，不尝试网络."""
     monkeypatch.setenv("FSPACK_OFFLINE", "1")
-    monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", fail_urlopen)
+    monkeypatch.setattr("urllib.request.urlopen", fail_urlopen)
     with pytest.raises(EmbedError, match=r"离线模式下.*缓存未命中"):
         download_embed("3.11.9", mirror, tmp_path / "cache")
 
@@ -73,7 +73,7 @@ def test_download_standalone_offline_cache_hit(tmp_path: Path, monkeypatch: pyte
     archive = cache / f"cpython-3.10.20+{STANDALONE_RELEASE_TAG}-x86_64-unknown-linux-gnu-install_only.tar.gz"
     archive.write_bytes(b"cached")
 
-    monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", fail_urlopen)
+    monkeypatch.setattr("urllib.request.urlopen", fail_urlopen)
     path = download_standalone("3.10.20", STANDALONE_RELEASE_TAG, cache)
     assert path.read_bytes() == b"cached"
 
@@ -81,7 +81,7 @@ def test_download_standalone_offline_cache_hit(tmp_path: Path, monkeypatch: pyte
 def test_download_standalone_offline_cache_miss(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """离线模式下 standalone 缓存未命中 → 立即抛 EmbedError."""
     monkeypatch.setenv("FSPACK_OFFLINE", "1")
-    monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", fail_urlopen)
+    monkeypatch.setattr("urllib.request.urlopen", fail_urlopen)
     with pytest.raises(EmbedError, match=r"离线模式下.*缓存未命中"):
         download_standalone("3.10.20", STANDALONE_RELEASE_TAG, tmp_path / "cache")
 
@@ -112,7 +112,7 @@ def test_download_embed_offline_disabled(tmp_path: Path, monkeypatch: pytest.Mon
     def fake_urlopen(req: Request, timeout: int, **kwargs: object) -> _FakeResp:
         return _FakeResp()
 
-    monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     path = download_embed("3.11.9", mirror, tmp_path / "cache")
     assert path.read_bytes() == b"DATA"
 

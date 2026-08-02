@@ -15,13 +15,22 @@ import re
 import tarfile
 import zipfile
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+# 保留顶部 ``Downloader`` 引用：测试通过 ``fspack.packaging.builtin.Downloader.download``
+# 路径 patch（test_builtin.py），移到方法内会破坏 monkeypatch.setattr 解析。
+# net.py 顶部已轻量化（rich.progress/console/StageRecorder 延迟导入），加载 builtin
+# 触发 net 模块定义不再连带加载 rich.progress。
 from fspack.config import is_offline
 from fspack.exceptions import BuiltinError
 from fspack.packaging.net import Downloader
 from fspack.packaging.runtime import STANDALONE_BASE_URL, STANDALONE_RELEASE_TAG
 from fspack.platform import Platform
-from fspack.progress import StageRecorder
+
+if TYPE_CHECKING:
+    # StageRecorder 仅用于类型注解；顶部不导入 fspack.progress 避免连锁触发
+    # rich.progress 加载（``import fspack.builder`` 热路径不打包 tkinter）。
+    from fspack.progress import StageRecorder
 
 __all__ = ["TkinterBundler"]
 

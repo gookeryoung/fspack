@@ -19,12 +19,16 @@ import sys
 import tarfile
 import zipfile
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from fspack._compat import override
 from fspack.config import MirrorConfig, is_offline
 from fspack.exceptions import EmbedError
-from fspack.packaging.net import Downloader
-from fspack.progress import StageRecorder
+
+if TYPE_CHECKING:
+    # StageRecorder 仅用于类型注解；顶部不导入 fspack.progress 避免连锁触发
+    # rich.progress 加载（``import fspack.builder`` 热路径不下载运行时）。
+    from fspack.progress import StageRecorder
 
 __all__ = [
     "STANDALONE_BASE_URL",
@@ -194,6 +198,9 @@ class RuntimeDownloader(abc.ABC):
         url = cls.download_url(version, **kwargs)
         _logger.info("下载 %s: %s", cls.runtime_label, url)
         try:
+            # 延迟导入：避免 ``import fspack.builder`` 触发 net 模块加载
+            from fspack.packaging.net import Downloader
+
             downloader = Downloader(timeout=cls.download_timeout)
             downloader.download(url, archive_path, stage=stage, label=cls.download_label(version))
         except OSError as e:

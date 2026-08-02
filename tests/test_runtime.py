@@ -63,7 +63,7 @@ def test_download_embed_fetches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
         captured["url"] = req.full_url
         return FakeResp(b"ZIPDATA")
 
-    monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     path = download_embed("3.11.9", mirror, tmp_path / "cache")
     assert path.read_bytes() == b"ZIPDATA"
     assert captured["url"].endswith("python-3.11.9-embed-amd64.zip")
@@ -73,7 +73,7 @@ def test_download_embed_network_error(tmp_path: Path, monkeypatch: pytest.Monkey
     def fake_urlopen(req: object, timeout: int, **kwargs: object) -> object:
         raise OSError("boom")
 
-    monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     with pytest.raises(EmbedError, match="下载 embed python 失败"):
         download_embed("3.11.9", mirror, tmp_path / "cache")
 
@@ -95,7 +95,7 @@ def test_download_embed_fetches_records_bytes(
 ) -> None:
     """下载成功时 stage.add_bytes 被调用."""
     monkeypatch.setattr(
-        "fspack.packaging.net.urllib.request.urlopen",
+        "urllib.request.urlopen",
         lambda req, timeout, **kw: FakeResp(b"ZIPDATA"),
     )
     rec = StageRecorder("test")
@@ -251,7 +251,7 @@ def test_download_standalone_fetches(tmp_path: Path, monkeypatch: pytest.MonkeyP
         captured["url"] = req.full_url
         return FakeResp(b"TARDATA")
 
-    monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     path = download_standalone("3.11.9", STANDALONE_RELEASE_TAG, tmp_path / "cache")
     assert path.read_bytes() == b"TARDATA"
     assert STANDALONE_RELEASE_TAG in captured["url"]
@@ -261,7 +261,7 @@ def test_download_standalone_network_error(tmp_path: Path, monkeypatch: pytest.M
     def fake_urlopen(req: object, timeout: int, **kwargs: object) -> object:
         raise OSError("boom")
 
-    monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     with pytest.raises(EmbedError, match="下载 python-build-standalone 失败"):
         download_standalone("3.11.9", STANDALONE_RELEASE_TAG, tmp_path / "cache")
 
@@ -282,7 +282,7 @@ def test_download_standalone_cache_hit_calls_stage(tmp_path: Path) -> None:
 def test_download_standalone_fetches_records_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """下载成功时 stage.add_bytes 被调用."""
     monkeypatch.setattr(
-        "fspack.packaging.net.urllib.request.urlopen",
+        "urllib.request.urlopen",
         lambda req, timeout, **kw: FakeResp(b"TARDATA"),
     )
     rec = StageRecorder("test")

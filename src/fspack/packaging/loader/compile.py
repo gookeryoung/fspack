@@ -18,13 +18,18 @@ import logging
 import shutil
 import subprocess
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from fspack._compat import override
 from fspack.config import AppType
 from fspack.exceptions import LoaderError
 from fspack.packaging.loader.source import _LOADER_C_LINUX, _LOADER_C_MACOS, _LOADER_C_WINDOWS
 from fspack.platform import Platform
-from fspack.progress import StageRecorder, spinner
+
+if TYPE_CHECKING:
+    # StageRecorder 仅用于类型注解；顶部不导入 fspack.progress 避免连锁触发
+    # rich.progress 加载（``import fspack.builder`` 热路径不编译 loader）。
+    from fspack.progress import StageRecorder
 
 __all__ = [
     "LINUX_GCC",
@@ -178,6 +183,9 @@ class LoaderCompiler(abc.ABC):
         cmd = cls._build_command(c_file, out_exe, app_type, icon_obj)
         _logger.info("编译 loader: %s", " ".join(cmd))
         try:
+            # 延迟导入：避免 ``import fspack.builder`` 触发 fspack.progress 加载
+            from fspack.progress import spinner
+
             with spinner(f"编译 loader ({cls.compiler_name})"):
                 subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8", errors="replace")
         except FileNotFoundError as e:

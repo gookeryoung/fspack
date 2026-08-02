@@ -67,7 +67,7 @@ def fail_urlopen(*a: object, **kw: object) -> object:
 
     用法::
 
-        monkeypatch.setattr("fspack.packaging.net.urllib.request.urlopen", fail_urlopen)
+        monkeypatch.setattr("urllib.request.urlopen", fail_urlopen)
 
     一旦被调用即抛 :class:`AssertionError`，确保离线模式测试不误触发网络请求。
     """
