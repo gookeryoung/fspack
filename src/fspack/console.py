@@ -1,9 +1,8 @@
 """控制台输出：rich 彩色日志与构建步骤进度显示.
 
-本模块同时承载 :class:`CICompat`（CI 环境兼容 shim）：它依赖 rich，
-自 iter-119 起从 ``fspack._compat`` 移入本模块——``_compat`` 仅保留
-``override``/``tomllib`` 零第三方依赖的 shim，避免仅需 ``override``
-的模块连带加载 rich（~17ms）。
+本模块同时承载 :class:`CICompat`（CI 环境兼容 shim）：它依赖 rich，位于
+本模块（``_compat`` 仅保留 ``override``/``tomllib`` 零第三方依赖的 shim，
+避免仅需 ``override`` 的模块连带加载 rich）。
 """
 
 from __future__ import annotations

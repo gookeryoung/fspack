@@ -12,8 +12,7 @@
 
 私有符号 re-export 仅为两类既有引用保留：测试 ``from fspack.builder import ...``
 （test_builder/test_icon）与 ``nuitka.standalone`` 的 ``_inject_win7_compat_dll``；
-monkeypatch 标准库调用请直接 patch ``subprocess.run`` 等标准库属性
-（iter-120 起测试已迁移，facade 不再 re-export 标准库模块）。
+monkeypatch 标准库调用请直接 patch ``subprocess.run`` 等标准库属性。
 """
 
 from __future__ import annotations

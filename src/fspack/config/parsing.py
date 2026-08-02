@@ -442,9 +442,9 @@ def _parse_build_defaults(fspack_cfg: dict[str, Any]) -> BuildDefaults:  # noqa:
         kwargs["nuitka_packages"] = tuple(raw_pkgs)
     # extras 为字符串列表：默认启用的 optional-dependencies 分组名
     kwargs["extras"] = _parse_string_list_cfg(fspack_cfg.get("extras"), "extras", reject_empty=True)
-    # lazy_imports 为字符串列表：延迟导入的顶层模块名（iter-102）
+    # lazy_imports 为字符串列表：延迟导入的顶层模块名
     kwargs["lazy_imports"] = _parse_string_list_cfg(fspack_cfg.get("lazy_imports"), "lazy_imports", reject_empty=True)
-    # iter-103 安全加固：签名证书/密码/密钥 ID 为字符串配置（非布尔开关）
+    # 安全加固：签名证书/密码/密钥 ID 为字符串配置（非布尔开关）
     sign_exe_cert = fspack_cfg.get("sign-exe-certificate")
     if sign_exe_cert is not None:
         if not isinstance(sign_exe_cert, str) or not sign_exe_cert.strip():

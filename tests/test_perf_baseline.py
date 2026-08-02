@@ -1,7 +1,6 @@
-"""性能基线测试：核心场景耗时基准，供 iter-52+ 性能优化迭代对比验证.
+"""性能基线测试：核心场景耗时基准，供性能优化迭代对比验证.
 
 用 ``pytest-benchmark`` 测量核心场景耗时，建立可复现基线。后续性能优化迭代
-（iter-52 AST 并行化、iter-53 wheel 并行解压、iter-54 fingerprint 优化等）
 须对比此基线验证性能提升，退化 > 10% 失败。
 
 运行方式：
@@ -180,8 +179,8 @@ class TestAstBaseline:
     def test_collect_imports_and_submodules_baseline(self, benchmark: Any, sample_project: Path) -> None:
         """单文件 AST 收集基线：collect_imports_and_submodules 单次调用耗时.
 
-        优化目标（iter-52）：多文件并行解析后此基线作为单文件参考，并行收益
-        通过 analyze_dependencies_baseline 测量。
+        多文件并行解析后此基线作为单文件参考，并行收益通过
+        analyze_dependencies_baseline 测量。
         """
         sample_py = sample_project / "myproj" / "mod_000.py"
         tree = ast.parse(sample_py.read_text(encoding="utf-8"))
@@ -194,8 +193,8 @@ class TestAstBaseline:
     def test_analyze_dependencies_baseline(self, benchmark: Any, sample_project: Path) -> None:
         """多文件依赖分析基线：50 个 .py 文件全量 AST 解析耗时.
 
-        优化目标（iter-52）：ProcessPoolExecutor 并行解析，预期提速 2-4x
-        （CPU 密集 ast.parse，50 文件足够并行收益）。
+        ProcessPoolExecutor 并行解析预期提速 2-4x（CPU 密集 ast.parse，
+        50 文件足够并行收益）。
         """
         result = benchmark(analyze_dependencies, sample_project, "myproj", ())
         # 功能正确性验证
@@ -221,8 +220,7 @@ class TestSlimBaseline:
     def test_slim_unpack_baseline(self, benchmark: Any, tmp_path: Path, sample_wheel: Path) -> None:
         """wheel 精简解压基线：单 wheel 按需解压耗时.
 
-        优化目标（iter-53）：多 wheel 并行解压，PySide6 拆分 wheel 场景
-        （3 个 wheel）预期提速 2-3x。
+        多 wheel 并行解压，PySide6 拆分 wheel 场景（3 个 wheel）预期提速 2-3x。
         """
         counter = {"n": 0}
 
@@ -248,8 +246,8 @@ class TestFingerprintBaseline:
     def test_source_fingerprint_baseline(self, benchmark: Any, sample_project: Path) -> None:
         """source_fingerprint 基线：50 个 .py 文件 mtime/size 哈希耗时.
 
-        优化目标（iter-54）：os.walk → os.scandir 递归 + DirEntry.stat，
-        预期提速 1.5-2x（减少 stat 系统调用）。
+        os.walk → os.scandir 递归 + DirEntry.stat 预期提速 1.5-2x
+        （减少 stat 系统调用）。
         """
         result = benchmark(source_fingerprint, sample_project)
         # 功能正确性：相同源码两次计算结果一致
@@ -259,7 +257,7 @@ class TestFingerprintBaseline:
 
 @pytest.mark.slow
 class TestProjectInfoBaseline:
-    """ProjectInfo 解析性能基线（iter-94 配置加载缓存优化）.
+    """ProjectInfo 解析性能基线（配置加载缓存优化）.
 
     测量两个场景：
 
@@ -277,7 +275,7 @@ class TestProjectInfoBaseline:
     ) -> None:
         """ProjectInfo.from_dir 冷解析基线：每次清空缓存后单次解析耗时.
 
-        优化目标（iter-94）：``lru_cache`` 让 ``fsp b``/``fsp p`` 流程内多次
+        ``lru_cache`` 让 ``fsp b``/``fsp p`` 流程内多次
         ``ProjectInfo.from_dir`` 调用复用缓存，本基线测量冷解析耗时作为
         缓存收益评估参考。缓存命中场景见 :meth:`test_project_info_from_dir_cached_baseline`。
 
@@ -315,9 +313,9 @@ class TestProjectInfoBaseline:
     ) -> None:
         """ProjectInfo.from_dir 缓存命中基线：预热后多次调用耗时.
 
-        优化目标（iter-94）：缓存命中应远快于冷解析（仅 ``stat`` +
-        ``lru_cache`` lookup，无 tomllib 解析与 AST 扫描）。本基线验证缓存
-        收益稳定，退化 > 50% 失败（缓存查找是 O(1) dict 查询，退化空间极小）。
+        缓存命中应远快于冷解析（仅 ``stat`` + ``lru_cache`` lookup，
+        无 tomllib 解析与 AST 扫描）。本基线验证缓存收益稳定，退化 > 50% 失败
+        （缓存查找是 O(1) dict 查询，退化空间极小）。
         """
         # 预热一次填充缓存
         ProjectInfo.from_dir(sample_pyproject_project)
@@ -327,7 +325,7 @@ class TestProjectInfoBaseline:
 
 @pytest.mark.slow
 class TestEntryWrapperBaseline:
-    """入口包装器生成性能基线（iter-102 启动时间优化）.
+    """入口包装器生成性能基线（启动时间优化）.
 
     测量 wrapper 源码生成耗时，作为启动时间优化的参考点。wrapper 在每次构建时
     为每个入口生成，包含 sys.path 设置、Qt 插件路径、path_importer_cache 预填充
@@ -338,8 +336,8 @@ class TestEntryWrapperBaseline:
     def test_generate_wrapper_source_baseline(self, benchmark: Any) -> None:
         """wrapper 源码生成基线：含 lazy-import 钩子的完整模板格式化耗时.
 
-        优化目标（iter-102）：模板格式化应保持 < 1ms，lazy-import 钩子注入
-        不引入显著开销。此基线作为后续 wrapper 扩展的回归参考。
+        模板格式化应保持 < 1ms，lazy-import 钩子注入不引入显著开销。
+        此基线作为后续 wrapper 扩展的回归参考。
         """
         from fspack.packaging.entry import EntryWrapper
 
@@ -361,7 +359,7 @@ class TestEntryWrapperBaseline:
 
 @pytest.mark.slow
 class TestNuitkaEnsureEnvBaseline:
-    """Nuitka 环境就绪性能基线（iter-89 缓存命中场景）.
+    """Nuitka 环境就绪性能基线（缓存命中场景）.
 
     测量 :meth:`NuitkaCompiler.ensure_env` 缓存命中分支耗时：mingw 可用性
     检查 + ``_is_nuitka_cached`` 文件系统检查 + ``StageRecorder`` 回写。
@@ -378,9 +376,9 @@ class TestNuitkaEnsureEnvBaseline:
     ) -> None:
         """ensure_env 缓存命中基线：预装 nuitka 后单次调用耗时.
 
-        优化目标（iter-89）：缓存命中分支应保持低耗时，仅 mingw 检查 +
-        一次 ``is_file()`` 调用 + ``StageRecorder`` 回写，无 subprocess
-        开销。退化 > 50% 失败（缓存命中是 O(1) 文件系统检查，退化空间极小）。
+        缓存命中分支应保持低耗时，仅 mingw 检查 + 一次 ``is_file()`` 调用 +
+        ``StageRecorder`` 回写，无 subprocess 开销。退化 > 50% 失败
+        （缓存命中是 O(1) 文件系统检查，退化空间极小）。
         """
         from fspack.packaging.nuitka import NuitkaCompiler
         from fspack.platform import Platform
@@ -407,7 +405,7 @@ class TestNuitkaEnsureEnvBaseline:
 
 @pytest.mark.slow
 class TestWheelDownloadCacheBaseline:
-    """wheel 依赖解析缓存性能基线（iter-89 缓存命中场景）.
+    """wheel 依赖解析缓存性能基线（缓存命中场景）.
 
     测量 :func:`_load_deps_cache` 缓存命中分支耗时：读 JSON + 逐个校验
     wheel 文件存在性。缓存命中让 ``download_wheels`` 跳过 pip 依赖解析
@@ -425,9 +423,8 @@ class TestWheelDownloadCacheBaseline:
     ) -> None:
         """_load_deps_cache 缓存命中基线：50 个 wheel 文件齐全时单次调用耗时.
 
-        优化目标（iter-89）：缓存命中应保持低耗时，仅 JSON 解析 + 50 次
-        ``is_file()`` 调用。退化 > 50% 失败（缓存查找是 O(n) 文件系统
-        检查，n=50 退化空间极小）。
+        缓存命中应保持低耗时，仅 JSON 解析 + 50 次 ``is_file()`` 调用。
+        退化 > 50% 失败（缓存查找是 O(n) 文件系统检查，n=50 退化空间极小）。
         """
         cache = tmp_path / "cache"
         cache.mkdir()

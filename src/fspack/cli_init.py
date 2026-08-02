@@ -1,7 +1,6 @@
 """``fsp init`` 命令：从模板创建新项目.
 
-基于 :mod:`fspack.templates` 渲染引擎生成本地项目目录结构。iter-80 实现骨架，
-iter-81 增加交互式模板选择：
+基于 :mod:`fspack.templates` 渲染引擎生成本地项目目录结构：
 
 - ``fsp init [project_name]`` — stdin 是 TTY 时弹出交互式选择，否则用 helloworld
 - ``fsp init --template <id>`` — 指定模板 id，跳过交互

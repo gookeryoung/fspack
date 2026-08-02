@@ -1227,7 +1227,7 @@ def _fake_compileall_runner(cmd: list[str], **kw: Any) -> Any:
     需从命令中解析 ``-o <optimize>`` 与目标目录，py_version 由调用方在 ``cmd`` 中
     无法获取，故用模块级 ``_FAKE_COMPILE_PY_VERSION`` 变量传递（默认 "3.11"）。
 
-    支持多目录合并调用（iter-55 优化）：``compileall dir1 dir2 -q -j 0 -o N``
+    支持多目录合并调用：``compileall dir1 dir2 -q -j 0 -o N``
     一次编译多目录，本函数收集所有非 flag 的目录参数逐个编译。
     """
     optimize = 0

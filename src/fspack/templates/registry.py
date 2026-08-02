@@ -5,12 +5,12 @@
 
 模板分类（``category``）：
 
-- ``cli`` — 命令行工具（iter-82 填充 6 项）
-- ``gui`` — 桌面 GUI 应用（iter-83 填充 6 项）
-- ``game`` — 游戏开发（iter-84 填充 2 项）
-- ``sci`` — 科学计算（iter-84 填充 3 项）
-- ``web`` — Web 服务（iter-84 填充 2 项）
-- ``config`` — 配置示例（iter-84 填充 1 项，iter-85 填充 2 项）
+- ``cli`` — 命令行工具
+- ``gui`` — 桌面 GUI 应用
+- ``game`` — 游戏开发
+- ``sci`` — 科学计算
+- ``web`` — Web 服务
+- ``config`` — 配置示例
 
 模板注册表 :data:`_TEMPLATES` 是模块级私有 tuple，通过 :func:`list_templates`
 与 :func:`get_template` 公开查询。
@@ -107,7 +107,7 @@ def _pyproject(dependencies: tuple[str, ...] = (), requires_python: str = ">=3.8
     )
 
 
-# ---- CLI 模板（iter-82）----
+# ---- CLI 模板 ----
 
 _HELLOWORLD_ENTRY = '''"""$project_name 入口."""
 
@@ -242,7 +242,7 @@ if __name__ == "__main__":
 '''
 
 
-# ---- GUI 模板（iter-83）----
+# ---- GUI 模板 ----
 #
 # GUI 类型由 fspack.config.infer_app_type 根据 import 自动推断：
 # PySide2/PySide6/PyQt5/tkinter 在 _GUI_HINTS 中，入口脚本 import 任一即识别为 GUI，
@@ -419,7 +419,7 @@ if __name__ == "__main__":
 '''
 
 
-# ---- 游戏/科学/Web 模板（iter-84）----
+# ---- 游戏/科学/Web 模板 ----
 #
 # pygame/matplotlib 在 _GUI_HINTS 中，入口脚本 import 任一即识别为 GUI（关闭控制台）。
 # numpy/scipy/flask/fastapi 不在 _GUI_HINTS 中，识别为 CLI（保留控制台，便于看输出）。
@@ -736,7 +736,7 @@ exclude = ["tests", "docs", ".github"]
 """
 
 
-# ---- 多入口/完整配置模板（iter-85）----
+# ---- 多入口/完整配置模板 ----
 
 _MULTI_ENTRY_CLI = '''"""$project_name CLI 入口：argparse 参数解析."""
 
@@ -873,8 +873,7 @@ exclude = ["tests", "docs", ".github"]
 """
 
 
-# 模板注册表：iter-82 填充 6 个 CLI 模板，iter-83 填充 6 个 GUI 模板，
-# iter-84 填充 8 个游戏/科学/Web 模板，iter-85 填充 2 个多入口/完整配置。
+# 模板注册表
 _TEMPLATES: tuple[Template, ...] = (
     Template(
         id="helloworld",
@@ -946,7 +945,7 @@ _TEMPLATES: tuple[Template, ...] = (
             TemplateFile(rel_path="$entry_module.py", content=_TYPER_ENTRY),
         ),
     ),
-    # ---- GUI 模板（iter-83）----
+    # ---- GUI 模板 ----
     Template(
         id="pyside2",
         name="PySide2 桌面 GUI",
@@ -1028,7 +1027,7 @@ _TEMPLATES: tuple[Template, ...] = (
             TemplateFile(rel_path="$entry_module.py", content=_TKINTER_ENTRY),
         ),
     ),
-    # ---- 游戏模板（iter-84）----
+    # ---- 游戏模板 ----
     Template(
         id="pygame",
         name="Pygame 游戏骨架",
@@ -1053,7 +1052,7 @@ _TEMPLATES: tuple[Template, ...] = (
             TemplateFile(rel_path="$entry_module.py", content=_SNAKE_ENTRY),
         ),
     ),
-    # ---- 科学计算模板（iter-84）----
+    # ---- 科学计算模板 ----
     Template(
         id="matplotlib",
         name="Matplotlib 图表",
@@ -1090,7 +1089,7 @@ _TEMPLATES: tuple[Template, ...] = (
             TemplateFile(rel_path="$entry_module.py", content=_SCIPY_ENTRY),
         ),
     ),
-    # ---- Web 服务模板（iter-84）----
+    # ---- Web 服务模板 ----
     Template(
         id="flask",
         name="Flask Web 服务",
@@ -1115,7 +1114,7 @@ _TEMPLATES: tuple[Template, ...] = (
             TemplateFile(rel_path="$entry_module.py", content=_FASTAPI_ENTRY),
         ),
     ),
-    # ---- 配置示例模板（iter-84）----
+    # ---- 配置示例模板 ----
     Template(
         id="pyinstaller",
         name="PyInstaller 兼容配置",
@@ -1127,7 +1126,7 @@ _TEMPLATES: tuple[Template, ...] = (
             TemplateFile(rel_path="$entry_module.py", content=_PYINSTALLER_ENTRY),
         ),
     ),
-    # ---- 多入口/完整配置模板（iter-85）----
+    # ---- 多入口/完整配置模板 ----
     Template(
         id="multi-entry",
         name="多入口项目（CLI + GUI）",

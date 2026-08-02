@@ -254,7 +254,7 @@ def _execute_build(  # noqa: PLR0912, PLR0913
         extra_pth_paths = ("Lib",) if has_tkinter else ()
         write_pth(cfg.dist_dir, info.py_version, extra_paths=extra_pth_paths, enable_site=not opts.no_site)
 
-    # .pth 文件优化（iter-102）：no_site=True 时 site.py 不加载，.pth 文件不会被
+    # .pth 文件优化：no_site=True 时 site.py 不加载，.pth 文件不会被
     # 处理，保留它们仅占空间且可能误导。剥离 site-packages 下所有 .pth 文件，
     # 典型节省数 KB 到数十 KB（pywin32_postinstall.pth、distutils-precedence.pth 等）。
     # no_site=False 时保留 .pth 文件，site.py 启动时处理（如设置 sys.path）。

@@ -1425,7 +1425,7 @@ def test_parse_project_with_build_defaults(tmp_path: Path) -> None:
 
 
 def test_parse_project_lazy_imports_config(tmp_path: Path) -> None:
-    """[tool.fspack] lazy_imports 解析为模块名元组（iter-102）."""
+    """[tool.fspack] lazy_imports 解析为模块名元组."""
     (tmp_path / "pyproject.toml").write_text(
         '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nlazy_imports = ["numpy", "pandas"]\n'
     )
@@ -1615,7 +1615,7 @@ def test_parse_project_private_sources_in_multi_entry(tmp_path: Path) -> None:
 
 # --- 解析缓存（lru_cache）测试 ---
 #
-# iter-95 引入：parse_project 按 (project_dir, py_version, mtime_ns) 缓存
+# parse_project 按 (project_dir, py_version, mtime_ns) 缓存
 # ProjectInfo。以下测试验证缓存命中、mtime 失效、显式清空、不同参数隔离。
 
 
@@ -1991,7 +1991,7 @@ def test_expand_extras_preserves_version_constraints() -> None:
     assert "PySide2>=5.15; platform_system=='Windows'" in result
 
 
-# ---------- iter-108 安全加固：require_hashes / no_sbom 配置 ----------
+# ---------- 安全加固：require_hashes / no_sbom 配置 ----------
 
 
 def test_parse_project_require_hashes_config(tmp_path: Path) -> None:
@@ -2071,7 +2071,7 @@ def test_parse_project_no_sbom_invalid_type_raises(tmp_path: Path) -> None:
         parse_project(tmp_path)
 
 
-# ---------- iter-108 安全加固：sign-exe-certificate / sign-exe-password / sign-deb-key 配置 ----------
+# ---------- 安全加固：sign-exe-certificate / sign-exe-password / sign-deb-key 配置 ----------
 
 
 def test_parse_project_sign_exe_certificate_config(tmp_path: Path) -> None:

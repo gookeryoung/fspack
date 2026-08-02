@@ -1,8 +1,8 @@
 """tkinter GUI 示例：验证 embed python 下 tkinter 内置库打包可用。
 
-验证 iter-29 实现的 TkinterBundler：AST 检出 ``import tkinter`` 后，从
-python-build-standalone Windows 构建提取 tkinter 组件（纯 Python 包 +
-``_tkinter.pyd`` + Tcl/Tk 运行时脚本）补充到 embed python runtime。
+fspack 通过 AST 检出 ``import tkinter`` 后，从 python-build-standalone Windows
+构建提取 tkinter 组件（纯 Python 包 + ``_tkinter.pyd`` + Tcl/Tk 运行时脚本）
+补充到 embed python runtime。
 
 wrapper 通过 ``TCL_LIBRARY``/``TK_LIBRARY`` 环境变量指定 Tcl/Tk 脚本路径，
 使 ``_tkinter.pyd`` 能找到 ``tcl8.6/`` 与 ``tk8.6/`` 运行时库。

@@ -276,7 +276,7 @@ def test_generate_wrapper_source_gui_subsystem_null_streams() -> None:
 
 
 def test_generate_wrapper_source_path_importer_cache_prepopulated() -> None:
-    """wrapper 预填充 sys.path_importer_cache 避免 lazy FileFinder 创建开销（iter-102）.
+    """wrapper 预填充 sys.path_importer_cache 避免 lazy FileFinder 创建开销.
 
     site-packages 是最高频搜索路径，预创建 FileFinder 注入 path_importer_cache
     使首次 import 直接命中缓存，跳过 path_hooks 迭代。
@@ -298,7 +298,7 @@ def test_generate_wrapper_source_lazy_imports_disabled_by_default() -> None:
 
 
 def test_generate_wrapper_source_lazy_imports_enabled() -> None:
-    """lazy_imports 非空：wrapper 注入 _LazyImportFinder meta path finder（iter-102）.
+    """lazy_imports 非空：wrapper 注入 _LazyImportFinder meta path finder.
 
     --lazy-import numpy,pandas 指定的模块由 LazyLoader 包装，首次属性访问时
     才执行 __init__.py，降低启动时间。

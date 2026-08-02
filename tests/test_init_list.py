@@ -1,7 +1,7 @@
 """init 命令模板列表与交互式选择测试.
 
-覆盖 iter-81 新增的 :func:`fspack.cli_init.prompt_template_selection` 与
-CLI 入口的 ``--template`` 未指定时的交互式选择分发逻辑。
+覆盖 :func:`fspack.cli_init.prompt_template_selection` 与 CLI 入口的
+``--template`` 未指定时的交互式选择分发逻辑。
 
 测试场景：
 
@@ -39,7 +39,7 @@ def test_prompt_template_selection_tty_returns_selected(monkeypatch: pytest.Monk
     """TTY 环境 + 用户输入 helloworld 在列表中的编号 → 返回 helloworld.
 
     list_templates 按 (category, id) 字母序排序，helloworld 并非第 1 个，
-    动态查询其位置避免硬编码（iter-82 后 cli 分类按 args/click/helloworld/... 排序）。
+    动态查询其位置避免硬编码（cli 分类按 args/click/helloworld/... 排序）。
     """
     from fspack.templates import list_templates
 

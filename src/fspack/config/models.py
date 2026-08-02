@@ -153,21 +153,21 @@ class BuildDefaults:
     # 默认启用的 optional-dependencies 分组名（来自 [tool.fspack] extras），
     # CLI --extra 指定时完全覆盖此值（集合语义，非合并）
     extras: tuple[str, ...] = ()
-    # 延迟导入的顶层模块名（来自 [tool.fspack] lazy-imports，iter-102）：
+    # 延迟导入的顶层模块名（来自 [tool.fspack] lazy-imports）：
     # wrapper 注入 _LazyImportFinder meta path finder，首次属性访问时才加载
     lazy_imports: tuple[str, ...] = ()
-    # 依赖下载强制哈希校验（iter-103）：透传 pip download --require-hashes，
+    # 依赖下载强制哈希校验：透传 pip download --require-hashes，
     # 仅在线模式生效，缓存命中时跳过（缓存目录 wheel 已首次校验）
     require_hashes: bool | None = None
-    # 关闭构建结束后的 SBOM 生成（iter-103）：默认输出 SPDX 2.3 兼容 JSON
+    # 关闭构建结束后的 SBOM 生成：默认输出 SPDX 2.3 兼容 JSON
     # 到 dist/release/<name>-<version>-sbom.json
     no_sbom: bool | None = None
-    # Windows 代码签名证书路径（iter-103）：未指定时跳过 signtool 签名。
+    # Windows 代码签名证书路径：未指定时跳过 signtool 签名。
     # 配置层仅作为 CLI --sign-exe-certificate 的回退默认值
     sign_exe_certificate: str | None = None
-    # Windows 代码签名证书密码（iter-103）：与 sign_exe_certificate 配套
+    # Windows 代码签名证书密码：与 sign_exe_certificate 配套
     sign_exe_password: str | None = None
-    # Linux .deb GPG 签名密钥 ID（iter-103）：未指定时跳过 gpg 签名。
+    # Linux .deb GPG 签名密钥 ID：未指定时跳过 gpg 签名。
     # 配置层仅作为 CLI --sign-deb-key 的回退默认值
     sign_deb_key: str | None = None
 
@@ -334,7 +334,7 @@ class BuildOptions:
     no_slim_runtime: bool = False
     no_pyc: bool = False
     pyc_strip: bool = False
-    # pyc_optimize 默认 2（与 cli.py --pyc-optimize argparse default 一致，iter-35 决策）
+    # pyc_optimize 默认 2（与 cli.py --pyc-optimize argparse default 一致）
     pyc_optimize: int = 2
     no_site: bool = False
     nuitka: bool = False
@@ -343,24 +343,24 @@ class BuildOptions:
     # 关闭构建结束后的体积报告（默认输出，--no-size-report 关闭）
     no_size_report: bool = False
     # 启用二进制依赖分析：解析 .dll/.so/.dylib 依赖树，剥离无引用文件
-    # （默认关闭，耗时；iter-101）
+    # （默认关闭，耗时）
     analyze_deps: bool = False
     # 启用的 [project.optional-dependencies] 分组名集合，
     # 来自 CLI --extra（覆盖配置默认）或 [tool.fspack] extras（配置默认）
     extras: frozenset[str] = frozenset()
-    # 延迟导入的顶层模块名元组（iter-102）：wrapper 注入 _LazyImportFinder，
+    # 延迟导入的顶层模块名元组：wrapper 注入 _LazyImportFinder，
     # 首次属性访问时才加载模块，降低启动时间
     lazy_imports: tuple[str, ...] = ()
-    # 依赖下载强制哈希校验（iter-103）：透传 pip download --require-hashes，
+    # 依赖下载强制哈希校验：透传 pip download --require-hashes，
     # 仅在线模式生效，缓存命中时跳过（缓存目录 wheel 已首次校验）
     require_hashes: bool = False
-    # 关闭构建结束后的 SBOM 生成（iter-103）：默认输出 SPDX 2.3 兼容 JSON
+    # 关闭构建结束后的 SBOM 生成：默认输出 SPDX 2.3 兼容 JSON
     no_sbom: bool = False
-    # Windows 代码签名证书路径（iter-103）：非 None 时调用 signtool 签名 exe 与安装包
+    # Windows 代码签名证书路径：非 None 时调用 signtool 签名 exe 与安装包
     sign_exe_certificate: Path | None = None
-    # Windows 代码签名证书密码（iter-103）：与 sign_exe_certificate 配套
+    # Windows 代码签名证书密码：与 sign_exe_certificate 配套
     sign_exe_password: str | None = None
-    # Linux .deb GPG 签名密钥 ID（iter-103）：非 None 时调用 gpg --detach-sign 签名 .deb
+    # Linux .deb GPG 签名密钥 ID：非 None 时调用 gpg --detach-sign 签名 .deb
     sign_deb_key: str | None = None
 
 

@@ -193,7 +193,7 @@ def _run_package(project: Path, ns: argparse.Namespace) -> None:
         if unknown:
             raise ProjectError(f"未知的 extras 分组: {sorted(unknown)}，可选: {sorted(info.optional_dependencies)}")
 
-    # iter-103 安全加固签名：CLI 优先合并配置默认（与 extras 不同，签名证书/密钥
+    # 安全加固签名：CLI 优先合并配置默认（与 extras 不同，签名证书/密钥
     # 用 CLI 优先 + 配置回退语义，避免 --sign-exe 显式开关与配置证书路径分离）
     info_for_sign = ProjectInfo.from_dir(project, ns.py_version) if (ns.sign_exe or ns.sign_deb) else None
     cfg_cert = info_for_sign.build_defaults.sign_exe_certificate if info_for_sign else None

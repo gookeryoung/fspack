@@ -187,7 +187,7 @@ def test_build_pyc_options_default_false(tmp_path: Path, monkeypatch: pytest.Mon
     assert opts.no_pyc is False
     assert opts.pyc_strip is False
     assert opts.no_stdlib_trim is False
-    # --pyc-optimize 默认 2（与 cli.py argparse default 一致，iter-35 决策）
+    # --pyc-optimize 默认 2（与 cli.py argparse default 一致）
     assert opts.pyc_optimize == 2
     assert opts.no_site is False
     assert opts.nuitka is False
@@ -621,7 +621,7 @@ def test_help_does_not_load_heavy_modules() -> None:
     assert result.returncode == 0, "fsp --help 不应加载 config/console/platform/rich"
 
 
-# ---------- iter-108 安全加固：哈希校验与 SBOM 开关 ----------
+# ---------- 安全加固：哈希校验与 SBOM 开关 ----------
 
 
 def test_build_require_hashes_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -678,7 +678,7 @@ def test_build_no_sbom_config_fallback(tmp_path: Path, monkeypatch: pytest.Monke
     assert called["options"].no_sbom is True
 
 
-# ---------- iter-108 安全加固：Windows exe 代码签名 ----------
+# ---------- 安全加固：Windows exe 代码签名 ----------
 
 
 def test_package_sign_exe_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -771,7 +771,7 @@ def test_package_sign_exe_password_cli_overrides_config(tmp_path: Path, monkeypa
     assert called["sign_exe_password"] == "cli-pwd"
 
 
-# ---------- iter-108 安全加固：Linux .deb GPG 签名 ----------
+# ---------- 安全加固：Linux .deb GPG 签名 ----------
 
 
 def test_package_sign_deb_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

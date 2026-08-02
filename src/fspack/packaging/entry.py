@@ -15,10 +15,10 @@ fspack 在 dist 根目录为每个入口生成 ``_entry_<name>.py`` 包装器，
    ``__init__.py``），用 :func:`runpy.run_module` 以包上下文运行，使相对导入
    （``from .conf import ...``）可用；否则用 :func:`runpy.run_path` 直接运行
    顶层脚本。
-5. **site-packages 缓存预填充**（iter-102）：预创建 ``FileFinder`` 注入
+5. **site-packages 缓存预填充**：预创建 ``FileFinder`` 注入
    ``sys.path_importer_cache``，使首次 import 直接命中缓存，跳过 ``path_hooks``
    迭代开销。
-6. **延迟导入钩子**（iter-102）：``--lazy-import numpy,pandas`` 指定的模块由
+6. **延迟导入钩子**：``--lazy-import numpy,pandas`` 指定的模块由
    :class:`_LazyImportFinder` 拦截，用 :class:`importlib.util.LazyLoader` 包装，
    首次属性访问时才执行 ``__init__.py``，降低启动时间。
 
@@ -79,7 +79,7 @@ if not os.path.isdir(_SITE_PACKAGES):
 if os.path.isdir(_SITE_PACKAGES) and _SITE_PACKAGES not in sys.path:
     sys.path.insert(0, _SITE_PACKAGES)
 
-# 预填充 sys.path_importer_cache 避免 lazy FileFinder 创建开销（iter-102）：
+# 预填充 sys.path_importer_cache 避免 lazy FileFinder 创建开销：
 # site-packages 是最高频搜索路径，首次 import 时 Python 会遍历 sys.path_hooks
 # 创建 FileFinder。预创建并缓存使后续 import 直接命中 path_importer_cache，
 # 跳过 path_hooks 迭代。等效于"sys.path_hooks 优先匹配 site-packages"——
@@ -93,7 +93,7 @@ if _SITE_PACKAGES and os.path.isdir(_SITE_PACKAGES) and _SITE_PACKAGES not in sy
         (importlib.machinery.SourcelessFileLoader, [".pyc"]),
     )
 
-# 重量级模块延迟导入钩子（iter-102）：--lazy-import numpy,pandas 指定的模块
+# 重量级模块延迟导入钩子：--lazy-import numpy,pandas 指定的模块
 # 用 importlib.util.LazyLoader 包装，首次 import 时不执行模块 __init__.py，
 # 首次属性访问时才真正加载。典型收益：numpy 启动省 ~80ms，pandas 省 ~150ms。
 # C 扩展模块（.pyd/.so）无法延迟（C 初始化必须即时执行），返回 None 让默认

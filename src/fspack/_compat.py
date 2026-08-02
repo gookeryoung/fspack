@@ -11,8 +11,8 @@
   ``typing_extensions``，运行时为 no-op（行为与 typing_extensions 等价）
 - :mod:`tomllib` — 3.11+ 标准库，低版本回退 ``tomli``（解析 ``pyproject.toml`` 用）
 
-CI 环境兼容 shim（:class:`CICompat`）依赖 rich，自 iter-119 起移至
-:mod:`fspack.console`（其唯一消费方）。
+CI 环境兼容 shim（:class:`CICompat`）依赖 rich，位于其唯一消费方
+:mod:`fspack.console`。
 """
 
 from __future__ import annotations

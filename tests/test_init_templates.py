@@ -1,6 +1,6 @@
 """项目模板内容测试.
 
-验证 iter-82~iter-85 注册的各分类模板（cli/gui/game/sci/web/config）的：
+验证各分类模板（cli/gui/game/sci/web/config）的：
 
 - 模板元数据正确（id/name/category/app_type/dependencies）
 - 文件列表完整（入口脚本、pyproject.toml、资源文件如 QML）
@@ -8,7 +8,7 @@
 - 入口脚本 import 触发正确的 app_type 推断（GUI 模板识别为 GUI）
 - init_project 创建项目后目录结构与文件内容正确
 
-iter-83 覆盖 6 个 GUI 模板：pyside2/pyside6/pyside2-qml/pyside6-qml/pyqt5/tkinter。
+覆盖 6 个 GUI 模板：pyside2/pyside6/pyside2-qml/pyside6-qml/pyqt5/tkinter。
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ import pytest
 from fspack.cli_init import init_project
 from fspack.templates import default_variables, get_template, list_templates, render_template
 
-# ---- GUI 模板注册与元数据（iter-83）----
+# ---- GUI 模板注册与元数据 ----
 
 GUI_TEMPLATE_IDS = ("pyside2", "pyside6", "pyside2-qml", "pyside6-qml", "pyqt5", "tkinter")
 
@@ -187,14 +187,14 @@ def test_init_project_pyside6(tmp_path: Path) -> None:
     assert "app.exec()" in entry
 
 
-# ---- iter-84 游戏/科学/Web/配置模板 ----
+# ---- 游戏/科学/Web/配置模板 ----
 
 GAME_TEMPLATE_IDS = ("pygame", "snake")
 SCI_TEMPLATE_IDS = ("matplotlib", "numpy", "scipy")
 WEB_TEMPLATE_IDS = ("flask", "fastapi")
 CONFIG_TEMPLATE_IDS = ("pyinstaller",)
 
-# iter-84 各模板的依赖声明
+# 各模板的依赖声明
 ITER84_DEPENDENCIES: dict[str, tuple[str, ...]] = {
     "pygame": ("pygame",),
     "snake": ("pygame",),
@@ -206,7 +206,7 @@ ITER84_DEPENDENCIES: dict[str, tuple[str, ...]] = {
     "pyinstaller": (),
 }
 
-# iter-84 各模板的 app_type（pygame/snake/matplotlib 因 import 在 _GUI_HINTS 中→gui）
+# 各模板的 app_type（pygame/snake/matplotlib 因 import 在 _GUI_HINTS 中→gui）
 ITER84_APP_TYPES: dict[str, str] = {
     "pygame": "gui",
     "snake": "gui",
@@ -223,13 +223,13 @@ ITER84_ALL_IDS = GAME_TEMPLATE_IDS + SCI_TEMPLATE_IDS + WEB_TEMPLATE_IDS + CONFI
 
 @pytest.mark.parametrize("tpl_id", ITER84_ALL_IDS)
 def test_iter84_templates_registered(tpl_id: str) -> None:
-    """iter-84 的 8 个模板都已注册."""
+    """8 个模板都已注册."""
     assert get_template(tpl_id) is not None, f"模板 {tpl_id!r} 未注册"
 
 
 @pytest.mark.parametrize("tpl_id", ITER84_ALL_IDS)
 def test_iter84_template_dependencies(tpl_id: str) -> None:
-    """iter-84 模板依赖声明与设计一致."""
+    """模板依赖声明与设计一致."""
     tpl = get_template(tpl_id)
     assert tpl is not None
     assert tpl.dependencies == ITER84_DEPENDENCIES[tpl_id]
@@ -237,7 +237,7 @@ def test_iter84_template_dependencies(tpl_id: str) -> None:
 
 @pytest.mark.parametrize("tpl_id", ITER84_ALL_IDS)
 def test_iter84_template_entry_script_syntax_valid(tpl_id: str) -> None:
-    """iter-84 模板渲染后的入口脚本能被 AST 解析（语法正确）."""
+    """模板渲染后的入口脚本能被 AST 解析（语法正确）."""
     rendered = _render_template_files(tpl_id)
     entry = rendered[Path("test_app.py")]
     ast.parse(entry)
@@ -245,7 +245,7 @@ def test_iter84_template_entry_script_syntax_valid(tpl_id: str) -> None:
 
 @pytest.mark.parametrize("tpl_id", ITER84_ALL_IDS)
 def test_iter84_template_app_type_inferred(tpl_id: str, tmp_path: Path) -> None:
-    """iter-84 模板入口脚本被 infer_app_type 识别为预期类型（gui/cli）."""
+    """模板入口脚本被 infer_app_type 识别为预期类型（gui/cli）."""
     from fspack.config import infer_app_type
 
     rendered = _render_template_files(tpl_id)
@@ -343,14 +343,14 @@ def test_init_project_pyinstaller(tmp_path: Path) -> None:
     assert "dependencies" not in pyproject_text
 
 
-# ---- iter-85 多入口/完整配置模板 ----
+# ---- 多入口/完整配置模板 ----
 
 ITER85_TEMPLATE_IDS = ("multi-entry", "full-config")
 
 
 @pytest.mark.parametrize("tpl_id", ITER85_TEMPLATE_IDS)
 def test_iter85_templates_registered(tpl_id: str) -> None:
-    """iter-85 的 2 个模板都已注册."""
+    """2 个模板都已注册."""
     assert get_template(tpl_id) is not None, f"模板 {tpl_id!r} 未注册"
 
 
@@ -433,12 +433,9 @@ def test_init_project_full_config(tmp_path: Path) -> None:
 
 
 def test_template_count_final() -> None:
-    """iter-85 后模板总数 = 22（6 CLI + 6 GUI + 2 game + 3 sci + 2 web + 3 config）.
-
-    满足"不少于 20 项"要求。10 轮迭代计划全部交付。
-    """
+    """模板总数 = 22（6 CLI + 6 GUI + 2 game + 3 sci + 2 web + 3 config）."""
     templates = list_templates()
-    assert len(templates) == 22, f"iter-85 后应有 22 个模板，实际 {len(templates)}"
+    assert len(templates) == 22, f"应有 22 个模板，实际 {len(templates)}"
     # 分类统计
     categories: dict[str, int] = {}
     for tpl in templates:
