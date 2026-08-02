@@ -883,3 +883,25 @@ def test_builder_import_does_not_load_urllib_request() -> None:
     )
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, check=False)
     assert result.returncode == 0, "import fspack.builder 不应加载 urllib.request"
+
+
+def test_builder_import_does_not_load_progress() -> None:
+    """import 基线：``import fspack.builder`` 不触发 ``fspack.progress`` 加载.
+
+    iter-123 将 ``BuildTracker``/``StageRecorder`` 从 stages.py 与 pipeline/__init__.py
+    顶部移到 TYPE_CHECKING 块（类型注解）与 ``build()`` 方法内（实例化）。本测试
+    在子进程内执行 ``import fspack.builder``，断言 ``fspack.progress`` 未进入
+    ``sys.modules``。任何顶部误引入 ``fspack.progress`` 的回退都会被本测试拦截
+    （典型成本：fspack.progress 链式加载 rich.progress/rich.table ~12ms）。
+    """
+    import subprocess
+    import sys
+
+    code = (
+        "import sys\n"
+        "import fspack.builder\n"
+        "heavy = [m for m in ('fspack.progress',) if m in sys.modules]\n"
+        "sys.exit(1 if heavy else 0)\n"
+    )
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, check=False)
+    assert result.returncode == 0, "import fspack.builder 不应加载 fspack.progress"

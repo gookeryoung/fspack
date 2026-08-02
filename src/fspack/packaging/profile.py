@@ -31,12 +31,18 @@ import json
 import time
 import tracemalloc
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from rich.table import Table
 
 from fspack.console import console
-from fspack.progress import BuildTracker, StageRecord, fmt_bytes
+
+if TYPE_CHECKING:
+    # BuildTracker / StageRecord 仅用于类型注解（``from __future__ import
+    # annotations`` 使注解不在运行时求值），顶部不导入 fspack.progress 避免连锁
+    # 触发 rich.progress/rich.table 加载（省 ~12ms）。fmt_bytes 在
+    # print_profile_report 函数内延迟导入（实际渲染时才加载）。
+    from fspack.progress import BuildTracker, StageRecord
 
 __all__ = [
     "ProfileContext",
@@ -147,6 +153,10 @@ def print_profile_report(report: ProfileReport) -> None:
 
     :param report: :class:`ProfileReport` 数据
     """
+    # 延迟导入：fmt_bytes 触发 fspack.progress 加载（含 rich.progress ~12ms）。
+    # 仅在实际渲染报告时加载，避免 import fspack.builder 热路径触发。
+    from fspack.progress import fmt_bytes
+
     table = Table(title="耗时分析报告", show_lines=False, title_style="bold magenta")
     table.add_column("阶段", style="bold cyan", no_wrap=True)
     table.add_column("耗时", justify="right")

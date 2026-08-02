@@ -32,7 +32,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence
 
 from fspack.exceptions import DependencyError
 from fspack.packaging.wheels.cache import _deps_cache_key, _load_deps_cache, _save_deps_cache
@@ -47,13 +47,19 @@ from fspack.packaging.wheels.resolver import (
     _resolve_with_uv,  # noqa: F401
     _run_pip_download,
 )
+
+if TYPE_CHECKING:
+    # StageRecorder 仅用于类型注解（``from __future__ import annotations`` 使
+    # 注解不在运行时求值），顶部不导入 fspack.progress 避免连锁触发
+    # rich.progress/rich.table 加载（省 ~12ms）。spinner 在 _run_pip 函数内
+    # 延迟导入（实际执行 pip 命令时才加载）。
+    from fspack.progress import StageRecorder
 from fspack.packaging.wheels.sdist import (
     _MISSING_PKG_RE,  # noqa: F401
     _build_sdist_wheels,  # noqa: F401
     _handle_sdist_fallback,  # noqa: F401
     _parse_missing_packages,  # noqa: F401
 )
-from fspack.progress import StageRecorder, spinner
 
 __all__ = ["download_wheels"]
 
@@ -347,6 +353,10 @@ def _run_pip(
     stderr 到终端（显示下载进度条），stdout 仍捕获用于解析 wheel 列表。适用于
     耗时的网络下载和 sdist 构建场景；快速本地缓存检查保持 ``stream=False`` 用 spinner。
     """
+    # 延迟导入：spinner 触发 fspack.progress 加载（含 rich.progress ~12ms）。
+    # 仅在实际执行 pip 命令时加载，避免 import fspack.builder 热路径触发。
+    from fspack.progress import spinner
+
     try:
         if stream:
             return _stream_subprocess(cmd)

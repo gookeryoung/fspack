@@ -13,10 +13,16 @@ import logging
 import shutil
 import subprocess
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from fspack.packaging.sync import _dir_size, _site_packages_fingerprint
 from fspack.platform import Platform
-from fspack.progress import StageRecorder
+
+if TYPE_CHECKING:
+    # StageRecorder 仅用于类型注解（``from __future__ import annotations``
+    # 使注解不在运行时求值），顶部不导入 fspack.progress 避免连锁触发
+    # rich.progress/rich.table 加载（省 ~12ms），仅在实际编译时才加载。
+    from fspack.progress import StageRecorder
 
 _logger = logging.getLogger(__name__)
 

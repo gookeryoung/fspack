@@ -20,7 +20,7 @@ import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence
 
 from fspack.config import (
     DEFAULT_SLIM_RULES,
@@ -56,7 +56,12 @@ from fspack.packaging.runtime import (
 from fspack.packaging.site_packages import normalize_pkg_name as _normalize_pkg_name
 from fspack.packaging.wheels import download_wheels
 from fspack.platform import Platform, detect_platform, wheel_platform_tags
-from fspack.progress import BuildTracker, StageRecorder
+
+if TYPE_CHECKING:
+    # BuildTracker / StageRecorder 仅用于类型注解（``from __future__ import
+    # annotations`` 使注解不在运行时求值），顶部不导入 fspack.progress 避免连锁
+    # 触发 rich.progress/rich.table 加载（省 ~12ms），仅在实际构建时才加载。
+    from fspack.progress import BuildTracker, StageRecorder
 
 __all__ = [
     "BuildContext",

@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 from dataclasses import replace
 from pathlib import Path
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence
 
 from fspack.config import (
     DEFAULT_LINUX_PY_VERSION,
@@ -78,7 +78,12 @@ from fspack.packaging.runtime import (  # noqa: F401
 from fspack.packaging.sync import copy_source
 from fspack.packaging.wheels import download_wheels  # noqa: F401
 from fspack.platform import Platform, detect_platform
-from fspack.progress import BuildTracker
+
+if TYPE_CHECKING:
+    # BuildTracker 仅用于 _execute_build 签名类型注解（``from __future__ import
+    # annotations`` 使注解不在运行时求值），顶部不导入 fspack.progress 避免连锁
+    # 触发 rich.progress/rich.table 加载（省 ~12ms）。build() 内实例化时才 import。
+    from fspack.progress import BuildTracker
 
 __all__ = [
     "BuildContext",
@@ -161,6 +166,10 @@ def build(  # noqa: PLR0913
     内存峰值）。便于识别瓶颈阶段。
     """
     opts = options or BuildOptions()
+    # 延迟导入：BuildTracker 实例化触发 fspack.progress 加载（含 rich.progress/
+    # rich.table ~12ms）。仅在真正构建时加载，避免 import fspack.builder 热路径触发。
+    from fspack.progress import BuildTracker
+
     tracker = BuildTracker()
     project_dir = Path(project_dir).resolve()
     target = target or detect_platform()
@@ -263,6 +272,10 @@ def _execute_build(  # noqa: PLR0912, PLR0913
             _pth_file.unlink()
 
     with tracker.stage("复制源码") as st:
+        # 延迟导入：spinner 触发 fspack.progress 加载（含 rich.progress ~12ms）。
+        # 仅在实际复制源码时加载，避免 import fspack.builder 热路径触发。
+        from fspack.progress import spinner
+
         src_dst = cfg.dist_dir / "src"
         with spinner(f"复制 {info.name} 源码"):
             copy_source(project_dir, src_dst, extra_excludes=info.exclude_dirs)
@@ -469,7 +482,3 @@ def _print_build_plan(ctx: BuildContext, report: DependencyReport) -> None:  # n
         f"{len(entries)} 入口 / {wheel_count} 声明依赖"
     )
     console.rich.print("[dim]以上为 dry-run 预览，未执行任何下载/编译/复制。去掉 --dry-run 执行实际构建。[/]")
-
-
-# 显式导入 spinner：_execute_build 内使用，兼容测试 monkeypatch
-from fspack.progress import spinner  # noqa: E402
