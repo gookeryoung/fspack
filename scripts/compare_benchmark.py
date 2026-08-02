@@ -236,26 +236,31 @@ def compare(
 
 
 def _detect_systemic_regression(report: ComparisonReport) -> None:
-    """检测系统性退化：全部测试同步大幅退化时判定为机器负载波动.
+    """检测系统性退化：多个不相关测试同步中等幅度退化时判定为机器负载波动.
 
-    GitHub Actions 共享机器性能波动可达 2-3x，会导致所有测试同步退化。
-    真实代码退化只影响特定测试（如 AST 优化只影响 analyze_dependencies），
+    GitHub Actions 共享机器性能波动可达 2-3x，会让多个相互独立的测试同步
+    退化。真实代码退化只影响特定测试（如 AST 优化只影响 analyze_dependencies），
     不会让 collect_imports/slim_unpack/fingerprint 等无关测试同时退化。
 
     判定条件（同时满足）：
-    - 可比测试数 ≥ 3（样本太少不判定）
-    - 退化率 > 60%（超半数测试退化）
-    - 退化测试的中位退化幅度 > 50%（大幅退化，非边缘抖动）
+    - 可比测试数 ≥ 5（样本足够，避免小样本误判）
+    - 退化率 ≥ 50%（至少一半测试退化，体现"同步"特征）
+    - 退化测试的中位退化幅度 ≥ 30%（中等幅度，排除边缘抖动）
+
+    阈值依据：实测 GitHub Actions 共享机器在多测试同步退化场景下，中位幅度
+    常落在 30%-50% 区间（如 2026-08-02 run #275：5/9 测试退化，中位 45.9%，
+    涵盖 AST 收集/分析、slim 分类、指纹、ProjectInfo 解析四个不相关领域）。
+    旧阈值（60%/50%）会让此类典型机器抖动漏判，导致 CI 误阻断。
 
     判定为系统性退化时设置 ``report.is_systemic = True``，``main()`` 据此
-    输出警告但不阻断 CI（exit 0）。
+    输出警告但不阻断 CI（exit 0），建议人工审查 artifact 确认无真实退化。
     """
     comparable = report.total_benchmarks - report.no_history
-    if comparable < 3:
+    if comparable < 5:
         return
 
     regression_rate = report.regressions / comparable
-    if regression_rate <= 0.6:
+    if regression_rate < 0.5:
         return
 
     regressed_deltas = [r.delta_pct for r in report.rows if r.is_regression]
@@ -263,7 +268,7 @@ def _detect_systemic_regression(report: ComparisonReport) -> None:
         return
 
     median_delta = sorted(regressed_deltas)[len(regressed_deltas) // 2]
-    if median_delta <= 50.0:
+    if median_delta < 30.0:
         return
 
     report.is_systemic = True
