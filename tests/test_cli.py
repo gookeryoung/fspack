@@ -905,3 +905,27 @@ def test_builder_import_does_not_load_progress() -> None:
     )
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, check=False)
     assert result.returncode == 0, "import fspack.builder 不应加载 fspack.progress"
+
+
+def test_builder_import_does_not_load_console() -> None:
+    """import 基线：``import fspack.builder`` 不触发 ``fspack.console`` 加载.
+
+    iter-124 将 ``fspack.console`` 与 ``fspack.packaging.profile`` 从
+    pipeline/__init__.py 顶部移到 ``_execute_build``/``_print_build_plan``/
+    ``build()`` 方法内延迟导入（profile 顶部 ``from fspack.console import console``
+    会连锁触发 rich.console/rich.logging/rich.theme ~17ms）。本测试在子进程内
+    执行 ``import fspack.builder``，断言 ``fspack.console`` 与
+    ``fspack.packaging.profile`` 未进入 ``sys.modules``。任何顶部误引入的回退
+    都会被本测试拦截。
+    """
+    import subprocess
+    import sys
+
+    code = (
+        "import sys\n"
+        "import fspack.builder\n"
+        "heavy = [m for m in ('fspack.console', 'fspack.packaging.profile') if m in sys.modules]\n"
+        "sys.exit(1 if heavy else 0)\n"
+    )
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, check=False)
+    assert result.returncode == 0, "import fspack.builder 不应加载 fspack.console/fspack.packaging.profile"

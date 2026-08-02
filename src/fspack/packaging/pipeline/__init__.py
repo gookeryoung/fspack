@@ -37,7 +37,6 @@ from fspack.config import (
     embed_cache_dir,
     resolve_py_version,
 )
-from fspack.console import console
 from fspack.packaging.loader import compile_loader  # noqa: F401
 from fspack.packaging.log_file import LogFormat, setup_log_file, teardown_log_file
 
@@ -65,7 +64,6 @@ from fspack.packaging.pipeline.stages import (
     fspack_wheel_cache_dir,
     unpack_wheels,
 )
-from fspack.packaging.profile import ProfileContext, print_profile_report
 
 # 显式导入运行时依赖：兼容测试 monkeypatch.setattr("fspack.packaging.pipeline.<func>", ...)
 from fspack.packaging.runtime import (  # noqa: F401
@@ -83,6 +81,10 @@ if TYPE_CHECKING:
     # BuildTracker 仅用于 _execute_build 签名类型注解（``from __future__ import
     # annotations`` 使注解不在运行时求值），顶部不导入 fspack.progress 避免连锁
     # 触发 rich.progress/rich.table 加载（省 ~12ms）。build() 内实例化时才 import。
+    # ProfileContext 仅用于 build() 内 ``profile_ctx`` 局部变量类型注解。
+    # 顶部不导入 fspack.packaging.profile 避免连锁触发 fspack.console
+    # （~17ms）+ rich.table 加载，build() 内启用 profile 时才 import。
+    from fspack.packaging.profile import ProfileContext
     from fspack.progress import BuildTracker
 
 __all__ = [
@@ -178,7 +180,13 @@ def build(  # noqa: PLR0913
     cfg = BuildConfig(project_dir=project_dir, dist_dir=dist, embed_cache_dir=cache, mirror=mirror, target=target)
 
     log_wrapper = setup_log_file(Path(log_file), log_format) if log_file is not None else None
-    profile_ctx = ProfileContext() if profile else None
+    # 延迟导入：profile 模块顶部 from fspack.console import console 会连锁触发
+    # rich.console/rich.logging/rich.theme 加载（~17ms）。仅在启用 profile 时加载。
+    profile_ctx: ProfileContext | None = None
+    if profile:
+        from fspack.packaging.profile import ProfileContext
+
+        profile_ctx = ProfileContext()
     try:
         if profile_ctx is not None:
             with profile_ctx:
@@ -208,6 +216,9 @@ def build(  # noqa: PLR0913
     finally:
         teardown_log_file(log_wrapper)
     if profile_ctx is not None:
+        # print_profile_report 与 ProfileContext 同模块，此时已加载，import 仅 dict 查询
+        from fspack.packaging.profile import print_profile_report
+
         report = profile_ctx.collect(tracker)
         print_profile_report(report)
     return info
@@ -318,6 +329,11 @@ def _execute_build(  # noqa: PLR0912, PLR0913
                 _logger.warning("SBOM 生成失败，跳过: %s", e)
                 st.set_detail("生成失败")
 
+    # 延迟导入：console 触发 fspack.console 加载（含 rich.console/rich.logging/
+    # rich.theme ~17ms）。仅在构建完成输出 summary 时加载。注意 _execute_build
+    # 内 spinner（L277）已连锁加载 fspack.console，此 import 为显式自包含。
+    from fspack.console import console
+
     console.rich.print(tracker.summary())
     if not opts.no_size_report:
         from fspack.packaging.size_report import print_size_report
@@ -375,7 +391,11 @@ def _print_build_plan(ctx: BuildContext, report: DependencyReport) -> None:  # n
     - 镜像源配置
     - 构建选项摘要（Nuitka/ccache/pyc_strip/no_site 等）
     """
+    # 延迟导入：dry-run 路径不经过 _execute_build 的 spinner 加载，需独立加载
+    # fspack.console（含 rich.console/rich.logging/rich.theme ~17ms）。
     from rich.table import Table
+
+    from fspack.console import console
 
     info = ctx.info
     target = ctx.cfg.target
