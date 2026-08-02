@@ -23,18 +23,18 @@ def test_detect_platform_returns_platform() -> None:
 
 
 def test_detect_platform_windows(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("fspack.platform._platform.system", lambda: "Windows")
+    monkeypatch.setattr("platform.system", lambda: "Windows")
     assert detect_platform() == Platform.WINDOWS
 
 
 def test_detect_platform_linux(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("fspack.platform._platform.system", lambda: "Linux")
+    monkeypatch.setattr("platform.system", lambda: "Linux")
     assert detect_platform() == Platform.LINUX
 
 
 def test_detect_platform_macos(monkeypatch: pytest.MonkeyPatch) -> None:
     """detect_platform 识别 Darwin 系统为 MACOS."""
-    monkeypatch.setattr("fspack.platform._platform.system", lambda: "Darwin")
+    monkeypatch.setattr("platform.system", lambda: "Darwin")
     assert detect_platform() == Platform.MACOS
 
 

@@ -1,9 +1,13 @@
-"""平台抽象：目标平台枚举与平台相关常量."""
+"""平台抽象：目标平台枚举与平台相关常量.
+
+顶部仅导入 ``enum``；标准库 ``platform`` 延迟到 :func:`detect_platform`
+内导入——Windows 上 ``import platform`` 连带加载 ``_wmi``（~1.5ms），
+而 ``Platform`` 枚举本身（如 ``--target`` 解析、类型注解）无需它。
+"""
 
 from __future__ import annotations
 
 import enum
-import platform as _platform
 
 __all__ = ["MACOS_ARCHS", "Platform", "detect_platform", "libpython_so", "wheel_platform_tags"]
 
@@ -22,6 +26,8 @@ MACOS_ARCHS = ("x86_64", "arm64")
 
 def detect_platform() -> Platform:
     """根据当前系统识别目标平台."""
+    import platform as _platform
+
     system = _platform.system()
     if system == "Windows":
         return Platform.WINDOWS

@@ -87,7 +87,7 @@ def test_make_console_disables_legacy_windows_in_ci(monkeypatch: pytest.MonkeyPa
     """
     from rich.console import Console
 
-    from fspack._compat import CICompat
+    from fspack.console import CICompat
 
     captured, spy_init = _spy_console_init()
     monkeypatch.setattr(Console, "__init__", spy_init)
@@ -101,7 +101,7 @@ def test_make_console_keeps_auto_detection_outside_ci(monkeypatch: pytest.Monkey
     """非 CI 环境下保持 legacy_windows=None，交由 rich 自动检测."""
     from rich.console import Console
 
-    from fspack._compat import CICompat
+    from fspack.console import CICompat
 
     captured, spy_init = _spy_console_init()
     monkeypatch.setattr(Console, "__init__", spy_init)
@@ -124,7 +124,9 @@ class _FakeStream:
 
 def test_ensure_utf8_stdio_reconfigures_non_utf8(monkeypatch: pytest.MonkeyPatch) -> None:
     """非 UTF-8 编码的 stdout/stderr 应被重配置为 UTF-8."""
-    from fspack._compat import CICompat, sys
+    import sys
+
+    from fspack.console import CICompat
 
     fake_out = _FakeStream("cp1252")
     fake_err = _FakeStream("cp936")
@@ -137,7 +139,9 @@ def test_ensure_utf8_stdio_reconfigures_non_utf8(monkeypatch: pytest.MonkeyPatch
 
 def test_ensure_utf8_stdio_skips_already_utf8(monkeypatch: pytest.MonkeyPatch) -> None:
     """已经是 UTF-8 编码的流不应被重配置."""
-    from fspack._compat import CICompat, sys
+    import sys
+
+    from fspack.console import CICompat
 
     fake_out = _FakeStream("utf-8")
     fake_err = _FakeStream("UTF-8")
@@ -150,7 +154,9 @@ def test_ensure_utf8_stdio_skips_already_utf8(monkeypatch: pytest.MonkeyPatch) -
 
 def test_ensure_utf8_stdio_handles_no_reconfigure(monkeypatch: pytest.MonkeyPatch) -> None:
     """流无 reconfigure 方法时不应崩溃（如已关闭的流或自定义对象）."""
-    from fspack._compat import CICompat, sys
+    import sys
+
+    from fspack.console import CICompat
 
     class _NoReconfigure:
         encoding = "cp1252"
@@ -162,7 +168,9 @@ def test_ensure_utf8_stdio_handles_no_reconfigure(monkeypatch: pytest.MonkeyPatc
 
 def test_ensure_utf8_stdio_handles_reconfigure_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     """reconfigure 抛 OSError/ValueError 时应静默忽略（流已关闭等场景）."""
-    from fspack._compat import CICompat, sys
+    import sys
+
+    from fspack.console import CICompat
 
     class _FailingStream:
         encoding = "cp1252"
@@ -179,7 +187,7 @@ def test_get_theme_returns_expected_styles() -> None:
     """get_theme 返回含 info/warning/error/success/step 样式的 Theme."""
     from rich.theme import Theme
 
-    from fspack._compat import CICompat
+    from fspack.console import CICompat
 
     theme = CICompat.get_theme()
     assert isinstance(theme, Theme)
@@ -196,8 +204,7 @@ def test_console_ui_delegates_to_ci_compat(monkeypatch: pytest.MonkeyPatch) -> N
     """ConsoleUI.__init__ 通过 CICompat.make_console 创建底层 Console."""
     from rich.console import Console
 
-    from fspack._compat import CICompat
-    from fspack.console import ConsoleUI
+    from fspack.console import CICompat, ConsoleUI
 
     captured: dict[str, object] = {}
     real_make = CICompat.make_console

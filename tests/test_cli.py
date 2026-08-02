@@ -462,6 +462,8 @@ def test_parse_lazy_imports_overrides_base() -> None:
 
 
 def test_invalid_mirror_rejected(tmp_path: Path) -> None:
+    """非法 --mirror 在执行期校验失败（SystemExit(2)，与 argparse 退出码一致）."""
+    _make_minimal_project(tmp_path)
     with pytest.raises(SystemExit):
         cli.main(["b", str(tmp_path), "--mirror", "nope"])
 
@@ -531,12 +533,37 @@ def test_build_extra_index_url_combined_with_find_links(tmp_path: Path, monkeypa
 # ---------- CLI 启动懒加载 ----------
 
 
-def test_mirrors_choices_returns_valid_list() -> None:
-    """_mirrors_choices 返回非空字符串列表（延迟导入 MIRRORS）."""
-    choices = cli._mirrors_choices()
-    assert isinstance(choices, list)
-    assert len(choices) > 0
-    assert all(isinstance(c, str) for c in choices)
+def test_build_parser_does_not_load_config() -> None:
+    """build_parser() 不触发 fspack.config 导入（--mirror 无 choices 校验）."""
+    import subprocess
+    import sys
+
+    code = (
+        "import sys; import fspack.cli; fspack.cli.build_parser(); sys.exit(1 if 'fspack.config' in sys.modules else 0)"
+    )
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, check=False)
+    assert result.returncode == 0, "build_parser() 不应导入 fspack.config"
+
+
+def test_mirror_help_lists_all_mirror_keys() -> None:
+    """--mirror help 文本与 MIRRORS 键同步（防止静态列表漂移）."""
+    from fspack.config import MIRRORS
+
+    parser = cli.build_parser()
+    helps: list[str] = []
+    for action in parser._subparsers._group_actions:  # type: ignore[attr-defined]
+        for choice_action in action.choices.values():
+            helps.extend(a.help or "" for a in choice_action._actions if "--mirror" in (a.option_strings or []))
+    assert helps, "未找到 --mirror 参数"
+    for key in MIRRORS:
+        assert any(key in h for h in helps), f"--mirror help 缺少镜像键: {key}"
+
+
+def test_resolve_mirror_invalid_exits_with_code_2(tmp_path: Path) -> None:
+    """非法 --mirror 在执行期报错并以退出码 2 退出（与 argparse 一致）."""
+    with pytest.raises(SystemExit) as exc_info:
+        cli._resolve_mirror("nope")
+    assert exc_info.value.code == 2
 
 
 def test_cli_module_no_top_level_console_import() -> None:
@@ -548,8 +575,8 @@ def test_cli_module_no_top_level_console_import() -> None:
     import inspect
 
     source = inspect.getsource(cli)
-    # 顶部导入区（build_parser 之前的全局代码）不应含 console
-    top_section = source.split("def build_parser")[0]
+    # 顶部导入区（main 之前的全局代码）不应含 console
+    top_section = source.split("def main")[0]
     assert "from fspack.console" not in top_section
     assert "import fspack.console" not in top_section
 
@@ -562,11 +589,36 @@ def test_cli_module_no_top_level_platform_import() -> None:
     import inspect
 
     source = inspect.getsource(cli)
-    top_section = source.split("def build_parser")[0]
-    # TYPE_CHECKING 块内的导入允许
-    assert "from fspack.platform import Platform" not in top_section.replace(
-        "if TYPE_CHECKING:\n    from fspack.platform import Platform", ""
+    top_section = source.split("def main")[0]
+    # TYPE_CHECKING 块内的导入允许（含 MirrorConfig/Platform 两行注解导入）
+    type_checking_block = (
+        "if TYPE_CHECKING:\n    from fspack.config import MirrorConfig\n    from fspack.platform import Platform\n"
     )
+    assert "from fspack.platform import Platform" not in top_section.replace(type_checking_block, "")
+
+
+def test_help_does_not_load_heavy_modules() -> None:
+    """import 基线：``fsp --help`` 全链路不加载 config/console/platform/rich.
+
+    子进程内执行 ``main(['--help'])``（argparse 打印帮助后以 SystemExit(0) 退出），
+    随后断言重模块均未进入 ``sys.modules``。任何顶部误引入重模块的回退都会被
+    本测试拦截（典型成本：config ~20ms / rich ~17ms / platform 轻量但链式引入）。
+    """
+    import subprocess
+    import sys
+
+    code = (
+        "import sys\n"
+        "from fspack.cli import main\n"
+        "try:\n"
+        "    main(['--help'])\n"
+        "except SystemExit:\n"
+        "    pass\n"
+        "heavy = [m for m in ('fspack.config', 'fspack.console', 'fspack.platform', 'rich') if m in sys.modules]\n"
+        "sys.exit(1 if heavy else 0)\n"
+    )
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, check=False)
+    assert result.returncode == 0, "fsp --help 不应加载 config/console/platform/rich"
 
 
 # ---------- iter-108 安全加固：哈希校验与 SBOM 开关 ----------

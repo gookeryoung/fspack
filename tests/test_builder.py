@@ -269,7 +269,7 @@ def test_build_skips_runtime_when_already_prepared_linux(tmp_path: Path, monkeyp
         )[-1],
     )
     # mock 预编译阶段的 subprocess.run（Linux python3.11 二进制在 Windows 上无法执行）
-    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
+    monkeypatch.setattr("subprocess.run", lambda cmd, **kw: _CompileCompleted())
 
     build(proj, get_mirror("huawei"), "3.11.9", target=Platform.LINUX)
     assert not download_called
@@ -747,7 +747,7 @@ def test_build_orchestration_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr("fspack.packaging.pipeline.stages.compile_loader", fake_compile)
     # mock 预编译阶段的 subprocess.run（Linux python3.11 二进制在 Windows 上无法执行）
-    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
+    monkeypatch.setattr("subprocess.run", lambda cmd, **kw: _CompileCompleted())
 
     info = build(proj, get_mirror("huawei"), "3.11.9", target=Platform.LINUX)
     assert info.name == "cli_helloworld_pyall"
@@ -985,7 +985,7 @@ def test_build_skips_win7_compat_dll_for_linux(tmp_path: Path, monkeypatch: pyte
         )[-1],
     )
     # mock 预编译阶段的 subprocess.run（Linux python3.11 二进制在 Windows 上无法执行）
-    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
+    monkeypatch.setattr("subprocess.run", lambda cmd, **kw: _CompileCompleted())
 
     build(proj, get_mirror("huawei"), "3.11.9", target=Platform.LINUX)
     assert not (proj / "dist" / "runtime" / "api-ms-win-core-path-l1-1-0.dll").exists()
@@ -1150,7 +1150,7 @@ def test_precompile_pyc_windows_calls_compileall(tmp_path: Path, monkeypatch: py
     (dist / "src" / "app.py").write_text("print('hi')")
 
     captured: list[list[str]] = []
-    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: captured.append(cmd) or _CompileCompleted())
+    monkeypatch.setattr("subprocess.run", lambda cmd, **kw: captured.append(cmd) or _CompileCompleted())
 
     st = StageRecorder("预编译字节码")
     _precompile_pyc(dist, runtime, "3.11.9", Platform.WINDOWS, strip_py=False, stage=st)
@@ -1175,7 +1175,7 @@ def test_precompile_pyc_linux_uses_python3_bin(tmp_path: Path, monkeypatch: pyte
     (dist / "src" / "app.py").write_text("")
 
     captured: list[list[str]] = []
-    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: captured.append(cmd) or _CompileCompleted())
+    monkeypatch.setattr("subprocess.run", lambda cmd, **kw: captured.append(cmd) or _CompileCompleted())
 
     st = StageRecorder("预编译字节码")
     _precompile_pyc(dist, runtime, "3.11.9", Platform.LINUX, strip_py=False, stage=st)
@@ -1202,7 +1202,7 @@ def test_precompile_pyc_strip_deletes_non_init_py(tmp_path: Path, monkeypatch: p
     (src / "sub" / "__init__.py").write_text("")
     (src / "sub" / "mod.py").write_text("x")
 
-    monkeypatch.setattr("fspack.builder.subprocess.run", _fake_compileall_runner)
+    monkeypatch.setattr("subprocess.run", _fake_compileall_runner)
 
     st = StageRecorder("预编译字节码")
     _precompile_pyc(dist, runtime, "3.11.9", Platform.WINDOWS, strip_py=True, stage=st)
@@ -1270,7 +1270,7 @@ def test_precompile_pyc_strip_keeps_init_py(tmp_path: Path, monkeypatch: pytest.
     (src / "__init__.py").write_text("PKG = 1")
     (src / "main.py").write_text("print('main')")
 
-    monkeypatch.setattr("fspack.builder.subprocess.run", _fake_compileall_runner)
+    monkeypatch.setattr("subprocess.run", _fake_compileall_runner)
 
     st = StageRecorder("预编译字节码")
     _precompile_pyc(dist, runtime, "3.11.9", Platform.WINDOWS, strip_py=True, stage=st)
@@ -1301,7 +1301,7 @@ def test_precompile_pyc_strip_keeps_entry_files(tmp_path: Path, monkeypatch: pyt
     (pkg / "cli.py").write_text("def main(): pass")  # 入口文件
     (pkg / "utils.py").write_text("x = 1")  # 非入口文件
 
-    monkeypatch.setattr("fspack.builder.subprocess.run", _fake_compileall_runner)
+    monkeypatch.setattr("subprocess.run", _fake_compileall_runner)
 
     st = StageRecorder("预编译字节码")
     _precompile_pyc(
@@ -1437,7 +1437,7 @@ def test_precompile_pyc_python_missing_skips(tmp_path: Path, monkeypatch: pytest
     (dist / "src" / "app.py").write_text("")
 
     called: list[object] = []
-    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: called.append(cmd))
+    monkeypatch.setattr("subprocess.run", lambda cmd, **kw: called.append(cmd))
 
     st = StageRecorder("预编译字节码")
     _precompile_pyc(dist, runtime, "3.11.9", Platform.WINDOWS, strip_py=False, stage=st)
@@ -1462,7 +1462,7 @@ def test_precompile_pyc_compileall_failure_warns_not_raises(
         stderr = "syntax error"
         stdout = ""
 
-    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _Failed())
+    monkeypatch.setattr("subprocess.run", lambda cmd, **kw: _Failed())
 
     st = StageRecorder("预编译字节码")
     with caplog.at_level("WARNING", logger="fspack.builder"):
@@ -1482,7 +1482,7 @@ def test_precompile_pyc_optimize_passes_o_flag(tmp_path: Path, monkeypatch: pyte
     (dist / "src" / "app.py").write_text("print('hi')")
 
     captured: list[list[str]] = []
-    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: captured.append(cmd) or _CompileCompleted())
+    monkeypatch.setattr("subprocess.run", lambda cmd, **kw: captured.append(cmd) or _CompileCompleted())
 
     st = StageRecorder("预编译字节码")
     _precompile_pyc(dist, runtime, "3.11.9", Platform.WINDOWS, strip_py=False, stage=st, optimize=2)
@@ -1504,7 +1504,7 @@ def test_precompile_pyc_optimize_default_zero(tmp_path: Path, monkeypatch: pytes
     (dist / "src" / "app.py").write_text("print('hi')")
 
     captured: list[list[str]] = []
-    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: captured.append(cmd) or _CompileCompleted())
+    monkeypatch.setattr("subprocess.run", lambda cmd, **kw: captured.append(cmd) or _CompileCompleted())
 
     st = StageRecorder("预编译字节码")
     _precompile_pyc(dist, runtime, "3.11.9", Platform.WINDOWS, strip_py=False, stage=st)
@@ -1546,9 +1546,7 @@ def test_precompile_pyc_optimize_invalidates_old_stamp(tmp_path: Path, monkeypat
 
     # 先用 optimize=0 编译，写 stamp
     captured_first: list[list[str]] = []
-    monkeypatch.setattr(
-        "fspack.builder.subprocess.run", lambda cmd, **kw: captured_first.append(cmd) or _CompileCompleted()
-    )
+    monkeypatch.setattr("subprocess.run", lambda cmd, **kw: captured_first.append(cmd) or _CompileCompleted())
     st = StageRecorder("预编译字节码")
     _precompile_pyc(dist, runtime, "3.11.9", Platform.WINDOWS, strip_py=False, stage=st, optimize=0)
     assert captured_first  # 实际调用了 compileall
@@ -1556,9 +1554,7 @@ def test_precompile_pyc_optimize_invalidates_old_stamp(tmp_path: Path, monkeypat
 
     # 切换 optimize=2，应触发重编译
     captured_second: list[list[str]] = []
-    monkeypatch.setattr(
-        "fspack.builder.subprocess.run", lambda cmd, **kw: captured_second.append(cmd) or _CompileCompleted()
-    )
+    monkeypatch.setattr("subprocess.run", lambda cmd, **kw: captured_second.append(cmd) or _CompileCompleted())
     st2 = StageRecorder("预编译字节码")
     _precompile_pyc(dist, runtime, "3.11.9", Platform.WINDOWS, strip_py=False, stage=st2, optimize=2)
     assert captured_second  # 重新调用 compileall，stamp 未命中
@@ -1591,7 +1587,7 @@ def test_build_includes_new_stages_in_summary(tmp_path: Path, monkeypatch: pytes
     _setup_embed_mocks(tmp_path, monkeypatch, "3.11.9")
     # 覆盖 download_wheels 返回非空列表，触发「解压 wheel(精简)」阶段
     monkeypatch.setattr("fspack.packaging.pipeline.stages.download_wheels", lambda *a, **k: [tmp_path / "fake.whl"])
-    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
+    monkeypatch.setattr("subprocess.run", lambda cmd, **kw: _CompileCompleted())
     # 模拟同平台构建（CI 可能在 Linux 上跑 Windows 目标测试，交叉构建会跳过预编译）
     monkeypatch.setattr("fspack.packaging.pipeline.stages.detect_platform", lambda: Platform.WINDOWS)
 
@@ -1611,7 +1607,7 @@ def test_build_no_pyc_skips_precompile_stage(tmp_path: Path, monkeypatch: pytest
     (proj / "app.py").write_text("def main():\n    pass\n")
 
     _setup_embed_mocks(tmp_path, monkeypatch, "3.11.9")
-    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
+    monkeypatch.setattr("subprocess.run", lambda cmd, **kw: _CompileCompleted())
 
     stage_names = _capture_stage_names(monkeypatch)
     build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, options=BuildOptions(no_pyc=True))
@@ -1628,7 +1624,7 @@ def test_build_no_stdlib_trim_skips_trim_stage(tmp_path: Path, monkeypatch: pyte
     (proj / "app.py").write_text("def main():\n    pass\n")
 
     _setup_embed_mocks(tmp_path, monkeypatch, "3.11.9")
-    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
+    monkeypatch.setattr("subprocess.run", lambda cmd, **kw: _CompileCompleted())
     # 模拟同平台构建（CI 可能在 Linux 上跑 Windows 目标测试，交叉构建会跳过预编译）
     monkeypatch.setattr("fspack.packaging.pipeline.stages.detect_platform", lambda: Platform.WINDOWS)
 
@@ -1658,7 +1654,7 @@ def test_build_pyc_strip_deletes_non_init_py(tmp_path: Path, monkeypatch: pytest
     runtime = proj / "dist" / "runtime"
     runtime.mkdir(parents=True, exist_ok=True)
     (runtime / "python.exe").write_bytes(b"")
-    monkeypatch.setattr("fspack.builder.subprocess.run", _fake_compileall_runner)
+    monkeypatch.setattr("subprocess.run", _fake_compileall_runner)
     # 模拟同平台构建（CI 可能在 Linux 上跑 Windows 目标测试，交叉构建会跳过预编译）
     monkeypatch.setattr("fspack.packaging.pipeline.stages.detect_platform", lambda: Platform.WINDOWS)
 
@@ -1684,7 +1680,7 @@ def test_build_default_keeps_py_source(tmp_path: Path, monkeypatch: pytest.Monke
     runtime = proj / "dist" / "runtime"
     runtime.mkdir(parents=True, exist_ok=True)
     (runtime / "python.exe").write_bytes(b"")
-    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
+    monkeypatch.setattr("subprocess.run", lambda cmd, **kw: _CompileCompleted())
 
     build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
 
@@ -1952,7 +1948,7 @@ def test_build_dep_cache_hit_skips_ast_analysis(tmp_path: Path, monkeypatch: pyt
     (proj / "app.py").write_text("import rich\n\ndef main():\n    pass\n")
 
     _setup_embed_mocks(tmp_path, monkeypatch, "3.11.9")
-    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
+    monkeypatch.setattr("subprocess.run", lambda cmd, **kw: _CompileCompleted())
 
     # 第一次构建：生成缓存
     build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
@@ -1995,7 +1991,7 @@ def test_precompile_pyc_stamp_cache_hit_skips_compileall(tmp_path: Path, monkeyp
 
     call_count = {"n": 0}
     monkeypatch.setattr(
-        "fspack.builder.subprocess.run",
+        "subprocess.run",
         lambda cmd, **kw: call_count.__setitem__("n", call_count["n"] + 1) or _CompileCompleted(),
     )
 
@@ -2019,7 +2015,7 @@ def test_build_with_nuitka_invokes_compiler(tmp_path: Path, monkeypatch: pytest.
     runtime = proj / "dist" / "runtime"
     runtime.mkdir(parents=True, exist_ok=True)
     (runtime / "python.exe").write_bytes(b"")
-    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
+    monkeypatch.setattr("subprocess.run", lambda cmd, **kw: _CompileCompleted())
     monkeypatch.setattr("fspack.packaging.pipeline.stages.detect_platform", lambda: Platform.WINDOWS)
 
     # 拦截 NuitkaCompiler.compile_with_stamp 验证调用
@@ -2081,7 +2077,7 @@ def test_build_nuitka_skipped_on_cross_compile(tmp_path: Path, monkeypatch: pyte
     runtime = proj / "dist" / "runtime"
     runtime.mkdir(parents=True, exist_ok=True)
     (runtime / "python.exe").write_bytes(b"")
-    monkeypatch.setattr("fspack.builder.subprocess.run", lambda cmd, **kw: _CompileCompleted())
+    monkeypatch.setattr("subprocess.run", lambda cmd, **kw: _CompileCompleted())
     # 构建机是 Linux，目标是 Windows → 交叉构建
     monkeypatch.setattr("fspack.packaging.pipeline.stages.detect_platform", lambda: Platform.LINUX)
 
