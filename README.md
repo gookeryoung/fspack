@@ -52,7 +52,7 @@ cd my-gui
 fsp b                                    # 打包为 my-gui.exe
 ```
 
-## 为什么选 fspack
+## 核心特性
 
 | 你想要的 | fspack 给你的 |
 |---------|--------------|
@@ -64,41 +64,20 @@ fsp b                                    # 打包为 my-gui.exe
 | 首次启动快 | 默认预编译字节码，`--nuitka` 可本机编译提速 30-50% |
 | 多入口项目 | 一个项目生成多个 exe（cli/gui/web），共享运行时与依赖 |
 | 国内网络友好 | 默认清华镜像，`--mirror` 一键切换阿里/华为源 |
+| 递归打包 | `-R` 递归扫描子项目（monorepo 友好），单项目失败不中断，最后汇总结果 |
+| 离线打包 | `FSPACK_OFFLINE=1` 仅从本地缓存读取，缓存未命中即报错，不卡死不重试 |
 
-## 核心特性
+### 自动依赖推断与按需精简
 
-### 一行命令，零配置打包
+fspack 扫描源码 `import` 推断依赖，并按使用情况精简 wheel。例如
+`from PySide6.QtWidgets import QApplication` 只打包 QtWidgets 及其依赖闭包
+（QtGui/QtCore），剥离未用的 QtCharts/QtWebEngine 等大体积模块。典型 PySide6
+应用可从 300MB 精简到 80MB。
 
-无需写 spec 文件、无需改源码。fspack 自动识别 `pyproject.toml` 的入口与依赖，
-AST 扫描源码推断实际使用的第三方库，开箱即用。
+### 多入口项目
 
-```bash
-fsp b                    # 打包
-fsp r                    # 运行验证
-fsp p                    # 生成安装包
-fsp c                    # 清理
-```
-
-### 自动依赖推断，按需精简
-
-fspack 扫描源码的 `import` 语句，自动识别你用了哪些第三方库。更智能的是：
-只打包你真正用到的部分。例如 `from PySide6.QtWidgets import QApplication` 只会
-打包 QtWidgets 及其依赖闭包（QtGui/QtCore），剥离未用的 QtCharts/QtWebEngine
-等大体积模块。典型 PySide6 应用可从 300MB 精简到 80MB。
-
-### 生成可分发安装包
-
-| 平台 | 产出 | 特性 |
-|------|------|------|
-| Windows | `<name>-setup.exe` | NSIS 安装包，开始菜单/桌面快捷方式、卸载器、中英文双语 |
-| Linux | `<name>_<ver>_amd64.deb` | dpkg 安装包，`apt install` 即用 |
-| Linux | `<name>-<ver>-linux.tar.gz` | 便携包，解压即用 |
-| 跨平台 | `<name>-<ver>-<plat>.zip` | `--format zip` 生成跨平台便携包 |
-
-### 多入口项目一次打包
-
-一个项目里有 CLI 工具 + GUI 界面 + Web 服务？fspack 支持声明多个入口，一次打包
-生成多个 exe，共享运行时与依赖，不重复打包。
+一个项目里有 CLI 工具 + GUI 界面 + Web 服务，可声明多个入口，一次打包生成多个
+exe，共享运行时与依赖：
 
 ```toml
 [tool.fspack.entries]
@@ -107,21 +86,11 @@ gui = "gui.py"        # 生成 gui.exe（GUI 类型，无控制台窗口）
 web = "web.py"        # 生成 web.exe
 ```
 
-### Nuitka 本机编译加速（可选）
+### 离线打包
 
-`--nuitka` 将用户源码编译为 `.pyd` 本机执行，速度提升 30-50%。Nuitka 自动装到
-本地缓存，不污染项目环境；stamp 缓存命中跳过整个编译阶段。
-
-### 递归打包多项目（monorepo 友好）
-
-`-R/--recursive` 递归扫描目录下所有含 `pyproject.toml` 的子项目，依次构建/打包，
-便于一次性处理 monorepo 或 `examples/` 目录。单项目失败不中断，最后汇总结果。
-
-### 离线打包（内网/无网络环境）
-
-fspack 内置离线模式，适用于内网 CI、离线打包机或需精确控制缓存来源的场景。
-启用离线模式后，所有下载阶段（运行时、wheel、Nuitka、ccache、tkinter 补充包）
-**只从本地缓存读取**，缓存未命中时立即报清晰错误，不卡死、不重试网络。
+`FSPACK_OFFLINE=1` 启用离线模式，所有下载阶段（运行时、wheel、Nuitka、ccache、
+tkinter 补充包）只从本地缓存读取，缓存未命中时立即报清晰错误，不卡死、不重试网络。
+适用于内网 CI、离线打包机或需精确控制缓存来源的场景。
 
 #### 环境变量
 
@@ -183,7 +152,7 @@ find-links = ["./wheels", "/shared/wheels"]
 
 #### 离线模式错误排查
 
-缓存未命中时，fspack 会抛出包含"离线模式"关键字的明确异常，并列出**已搜索路径**，
+缓存未命中时，fspack 会抛出包含"离线模式"关键字的明确异常，并列出已搜索路径，
 便于快速定位：
 
 ```text
