@@ -122,7 +122,7 @@ iter-117~125 完成结构优化与懒加载主题（`import fspack` 从 ~55ms �
 - [x] **iter-141 打包速度端到端基线**：新增 `tests/test_build_perf_baseline.py`：
   (1) 小项目（1 入口、3 依赖）冷/热缓存构建耗时基线；(2) 中项目（10 入口、20 依赖）
   基线；(3) 用 `pytest-benchmark` 的 `pedantic` 模式确保可复现
-- [ ] **iter-142 Nuitka 编译基线**：(1) 50 文件串行 vs 并行（iter-131）对比基线；
+- [x] **iter-142 Nuitka 编译基线**：(1) 50 文件串行 vs 并行（iter-131）对比基线；
   (2) ccache 命中 vs 未命中对比；(3) 加入 CI benchmark job，退化 >10% 失败
 - [ ] **iter-143 wheel 下载基线**：(1) pip vs uv（iter-132）下载 50 wheel 对比基线；
   (2) 缓存命中 vs 冷下载对比；(3) 加入 CI benchmark job
