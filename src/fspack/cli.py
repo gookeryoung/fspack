@@ -280,16 +280,27 @@ def _run_init(ns: argparse.Namespace) -> None:
 
 
 def _run_doctor(ns: argparse.Namespace) -> None:
-    """执行 doctor 子命令：环境诊断 + 可选的模板构建测试/性能基准.
+    """执行 doctor 子命令：环境诊断 + 可选的模板构建测试/性能基准/缓存检查.
 
-    无 ``--test``/``--bench`` 时仅执行环境诊断，输出三色诊断报告。
+    无 ``--test``/``--bench``/``--check-cache`` 时仅执行环境诊断，输出三色诊断报告。
     ``--test`` 运行所有模板构建并打印汇总结果。``--bench`` 额外收集
-    性能数据并输出性能分析报告。
+    性能数据并输出性能分析报告。``--check-cache`` 扫描 wheel 缓存目录
+    的依赖解析缓存文件并删除损坏文件（iter-128，可与 ``--test``/``--bench``
+    组合使用）。
     """
-    from fspack.cli_doctor import print_doctor_report, run_doctor, run_doctor_bench, run_doctor_test
+    from fspack.cli_doctor import (
+        print_doctor_report,
+        run_doctor,
+        run_doctor_bench,
+        run_doctor_cache_check,
+        run_doctor_test,
+    )
 
     report = run_doctor()
     print_doctor_report(report)
+
+    if getattr(ns, "check_cache", False):
+        run_doctor_cache_check()
 
     if getattr(ns, "bench", False):
         run_doctor_bench()

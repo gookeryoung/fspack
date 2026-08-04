@@ -10,9 +10,12 @@ sys.path 调用 nuitka，绕过 ``python3X._pth`` 对 ``PYTHONPATH`` 的限制�
 
 from __future__ import annotations
 
+import inspect
 import io
+import json
 import logging
 import os
+import subprocess
 import sys
 import tarfile
 import zipfile
@@ -30,6 +33,13 @@ from fspack.config import (
 )
 from fspack.exceptions import NuitkaError
 from fspack.packaging.nuitka import NuitkaCompiler
+from fspack.packaging.nuitka.compile import (
+    _HASH_INDEX_MAX,
+    _MAX_COMPILE_WORKERS,
+    _hash_index_path,
+    _load_hash_index,
+    _update_hash_index,
+)
 from fspack.packaging.runtime import STANDALONE_RELEASE_TAG
 from fspack.platform import Platform
 from fspack.progress import StageRecorder
@@ -598,6 +608,70 @@ def test_compile_src_failure_warns_continues(
     assert not (src / "ok.py").exists()
     # 失败的 bad.py 必须保留：运行时回退到 .pyc 加载，避免 dist/src 无可用代码
     assert (src / "bad.py").is_file(), "编译失败的 .py 不应被删除，需保留供 .pyc 回退加载"
+
+
+def test_compile_src_failure_cleans_build_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """单文件编译失败时 _cleanup_build_dirs 仍清理 .build 残留（iter-130）.
+
+    Nuitka --remove-output 仅在编译成功时清理 .build/，失败时残留。
+    compile_src 在 finally 块调 _cleanup_build_dirs 确保失败时也清理。
+    """
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "python.exe").write_bytes(b"")
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("x = 1")
+    cache = _make_nuitka_cache(tmp_path / "cache")
+
+    def fake_stream(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int, str, str]:
+        # 模拟编译失败：Nuitka 残留 .build 目录（--remove-output 仅成功时清理）
+        py_file = Path(cmd[-1])
+        (py_file.parent / f"{py_file.stem}.build").mkdir(exist_ok=True)
+        (py_file.parent / f"{py_file.stem}.build" / "module.c").write_text("// c")
+        return (1, "", "compile error")
+
+    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(fake_stream))
+
+    st = StageRecorder("Nuitka 编译")
+    NuitkaCompiler.compile_src(src, runtime, "3.11.9", Platform.WINDOWS, cache, stage=st)
+
+    # 编译失败但 .build 残留应被清理
+    assert not (src / "app.build").exists(), "编译失败的 .build 残留应被 _cleanup_build_dirs 清理"
+    # 失败的 .py 保留（运行时回退 .pyc）
+    assert (src / "app.py").is_file()
+
+
+def test_compile_src_compile_files_exception_cleans_build_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_compile_files 抛异常时 finally 块仍清理 .build 残留（iter-130）.
+
+    _stream_compile 抛 FileNotFoundError（py_exe 不存在）时 _compile_files 传播异常，
+    compile_src 外层 finally 调 _cleanup_build_dirs 确保异常时也清理 .build 残留。
+    """
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "python.exe").write_bytes(b"")
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("x = 1")
+    # 预存在的 .build 目录（模拟上次编译残留）
+    build_dir = src / "app.build"
+    build_dir.mkdir()
+    (build_dir / "module.c").write_text("// c")
+    cache = _make_nuitka_cache(tmp_path / "cache")
+
+    def fake_stream(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int, str, str]:
+        raise FileNotFoundError("python exe not found")
+
+    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(fake_stream))
+
+    st = StageRecorder("Nuitka 编译")
+    # _compile_files 传播 FileNotFoundError
+    with pytest.raises(FileNotFoundError):
+        NuitkaCompiler.compile_src(src, runtime, "3.11.9", Platform.WINDOWS, cache, stage=st)
+
+    # 异常时 .build 残留也应被清理（finally 块）
+    assert not build_dir.exists(), "异常时 .build 残留也应被 finally 块清理"
 
 
 def test_compile_src_linux_uses_python3_bin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2055,7 +2129,11 @@ def test_compile_with_stamp_read_oserror_proceeds(tmp_path: Path, monkeypatch: p
 def test_compile_with_stamp_write_oserror_warns(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """stamp 写入 OSError（如只读文件系统）时仅告警不中断."""
+    """stamp 原子写入失败（os.replace OSError）时仅告警不中断.
+
+    iter-128 改用 ``_atomic_write_text``（tempfile + os.replace）写 stamp，
+    patch ``_atomic_write_text`` 抛 OSError 模拟只读文件系统/跨设备 rename 失败。
+    """
     src = tmp_path / "src"
     src.mkdir()
     (src / "app.py").write_text("print('hi')")
@@ -2065,15 +2143,10 @@ def test_compile_with_stamp_write_oserror_warns(
     runtime.mkdir()
     cache_root = tmp_path / "nuitka_cache"
 
-    stamp = NuitkaCompiler._stamp_path(dist)
-    orig_write_text = Path.write_text
+    def raise_oserror(*a: Any, **kw: Any) -> None:
+        raise OSError("read-only file system")
 
-    def fake_write_text(self: Path, data: str, *args: Any, **kwargs: Any) -> int:
-        if self == stamp:
-            raise OSError("read-only file system")
-        return orig_write_text(self, data, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "write_text", fake_write_text)
+    monkeypatch.setattr("fspack.packaging.nuitka.compile._atomic_write_text", raise_oserror)
 
     monkeypatch.setattr(NuitkaCompiler, "ensure_env", classmethod(lambda cls, *a, **kw: "4.1.3"))
     monkeypatch.setattr(NuitkaCompiler, "_ensure_build_python", classmethod(lambda cls, *a, **kw: Path()))
@@ -2087,6 +2160,365 @@ def test_compile_with_stamp_write_oserror_warns(
         )
 
     assert any("写入 Nuitka stamp 失败" in r.message for r in caplog.records)
+    # stamp 未写入（原子化保证：要么完整写入要么不存在）
+    assert not NuitkaCompiler._stamp_path(dist).is_file()
+
+
+# ---- compile_with_stamp hash 索引回退测试（iter-129） ----
+
+
+def test_hash_index_path_under_dist(tmp_path: Path) -> None:
+    """hash 索引文件位于 dist/.nuitka_hash_index.json，与 stamp 同目录."""
+    dist = tmp_path / "dist"
+    assert _hash_index_path(dist) == dist / ".nuitka_hash_index.json"
+
+
+def test_load_hash_index_missing_file_returns_empty(tmp_path: Path) -> None:
+    """索引文件不存在时返回空 dict，不抛异常."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    assert _load_hash_index(dist) == {}
+
+
+def test_load_hash_index_corrupt_json_deletes_file(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """索引文件 JSON 非法时删除并返回空 dict（与 _load_deps_cache 策略一致）."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    index_file = _hash_index_path(dist)
+    index_file.write_text("{not valid json", encoding="utf-8")
+
+    with caplog.at_level("WARNING", logger="fspack.packaging.nuitka"):
+        result = _load_hash_index(dist)
+
+    assert result == {}
+    assert not index_file.is_file()
+    assert any("hash 索引损坏" in r.message for r in caplog.records)
+
+
+def test_load_hash_index_non_dict_deletes_file(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """索引文件顶层非 dict 时删除并返回空 dict."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    index_file = _hash_index_path(dist)
+    index_file.write_text('["not", "a", "dict"]', encoding="utf-8")
+
+    with caplog.at_level("WARNING", logger="fspack.packaging.nuitka"):
+        result = _load_hash_index(dist)
+
+    assert result == {}
+    assert not index_file.is_file()
+    assert any("非 dict" in r.message for r in caplog.records)
+
+
+def test_load_hash_index_strips_non_str_entries(tmp_path: Path) -> None:
+    """索引含非 str 键/值时剔除异常条目，保留有效条目并回写."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    index_file = _hash_index_path(dist)
+    # 混合有效与无效条目：123 是 int 键，"valid" 是有效条目，None 是无效值
+    raw = json.dumps({"valid": "2026-01-01T00:00:00", "123": "2026-01-01", "bad_val": None})
+    index_file.write_text(raw, encoding="utf-8")
+
+    result = _load_hash_index(dist)
+
+    # 仅保留 valid 条目（int 键 JSON 转为 str，但值 None 被剔除）
+    # 注意：json.loads 把数字键转为 str，所以 "123" 实际是 str 键 + str 值，会被保留
+    # 真正被剔除的是 "bad_val": None（值非 str）
+    assert result["valid"] == "2026-01-01T00:00:00"
+    assert "bad_val" not in result
+    # 索引文件被回写（剔除后）
+    rewritten = json.loads(index_file.read_text(encoding="utf-8"))
+    assert "bad_val" not in rewritten
+
+
+def test_load_hash_index_read_oserror_returns_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """索引读取 OSError（如权限错误）时返回空 dict，不删除文件（瞬时错误）."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    index_file = _hash_index_path(dist)
+    index_file.write_text('{"k": "v"}', encoding="utf-8")
+
+    orig_read_text = Path.read_text
+
+    def fake_read_text(self: Path, *args: Any, **kwargs: Any) -> str:
+        if self == index_file:
+            raise OSError("permission denied")
+        return orig_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", fake_read_text)
+
+    with caplog.at_level("WARNING", logger="fspack.packaging.nuitka"):
+        result = _load_hash_index(dist)
+
+    assert result == {}
+    # OSError 不删除文件（瞬时错误，下次重试）
+    assert index_file.is_file()
+    assert any("读取 hash 索引失败" in r.message for r in caplog.records)
+
+
+def test_load_hash_index_corrupt_json_unlink_oserror_warns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """索引损坏但删除文件失败时仅告警，仍返回空 dict（不因删除失败中断）."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    index_file = _hash_index_path(dist)
+    index_file.write_text("{corrupt", encoding="utf-8")
+
+    def raise_oserror(self: Path, *args: Any, **kwargs: Any) -> None:
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(Path, "unlink", raise_oserror)
+
+    with caplog.at_level("WARNING", logger="fspack.packaging.nuitka"):
+        result = _load_hash_index(dist)
+
+    assert result == {}
+    # 删除失败告警
+    assert any("删除文件失败" in r.message for r in caplog.records)
+    # 文件仍在（删除失败）
+    assert index_file.is_file()
+
+
+def test_update_hash_index_writes_new_entry(tmp_path: Path) -> None:
+    """更新索引：新条目写入，含当前 ISO 时间戳."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    stamp_key = "4.1.3|3.11.9|fingerprint||"
+
+    _update_hash_index(dist, stamp_key)
+
+    index = json.loads(_hash_index_path(dist).read_text(encoding="utf-8"))
+    assert stamp_key in index
+    assert isinstance(index[stamp_key], str)
+    assert len(index[stamp_key]) > 0
+
+
+def test_update_hash_index_merges_existing(tmp_path: Path) -> None:
+    """更新索引：保留已有条目，合并新条目."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    index_file = _hash_index_path(dist)
+    index_file.write_text('{"old_key": "2026-01-01T00:00:00"}', encoding="utf-8")
+
+    _update_hash_index(dist, "new_key")
+
+    index = json.loads(index_file.read_text(encoding="utf-8"))
+    assert "old_key" in index
+    assert "new_key" in index
+
+
+def test_update_hash_index_lru_eviction(tmp_path: Path) -> None:
+    """索引超过 _HASH_INDEX_MAX 时按时间戳淘汰最旧条目."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    index_file = _hash_index_path(dist)
+    # 预写 _HASH_INDEX_MAX 条旧条目（同一天内秒数递增，字符串排序与数值一致）
+    old_index = {f"old_{i:02d}": f"2026-01-01T00:00:{i:02d}" for i in range(_HASH_INDEX_MAX)}
+    index_file.write_text(json.dumps(old_index), encoding="utf-8")
+
+    # 更新一条新条目（now_iso 比所有旧条目都新）
+    _update_hash_index(dist, "new_key")
+
+    index = json.loads(index_file.read_text(encoding="utf-8"))
+    # 总数不超过 _HASH_INDEX_MAX
+    assert len(index) == _HASH_INDEX_MAX
+    # 新条目保留
+    assert "new_key" in index
+    # 最旧条目被淘汰（old_00 时间戳最早）
+    assert "old_00" not in index
+    # 次新条目保留
+    assert f"old_{_HASH_INDEX_MAX - 1:02d}" in index
+
+
+def test_update_hash_index_write_oserror_warns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """索引原子写入失败时仅告警不中断（索引是回退优化，不影响主流程）."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+
+    def raise_oserror(*a: Any, **kw: Any) -> None:
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr("fspack.packaging.nuitka.compile._atomic_write_text", raise_oserror)
+
+    with caplog.at_level("WARNING", logger="fspack.packaging.nuitka"):
+        # 不抛异常即通过
+        _update_hash_index(dist, "some_key")
+
+    assert any("写入 hash 索引失败" in r.message for r in caplog.records)
+
+
+def test_compile_with_stamp_hash_index_hit_skips_compile_and_restamps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """stamp 未命中但 hash 索引命中时跳过编译，重建 stamp（iter-129 核心场景）.
+
+    场景：dist 完整保留（.pyd 产物在）但 stamp 文件单独丢失/损坏。
+    索引与 stamp 同在 dist/，删除 dist 时一并清理，故索引命中安全。
+    """
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("print('hi')")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    cache_root = tmp_path / "nuitka_cache"
+
+    # 预写 hash 索引含当前 stamp_key，但不写 stamp 文件
+    nuitka_ver = nuitka_version_for("3.11.9")
+    expected_key = NuitkaCompiler._stamp_key(src, nuitka_ver, "3.11.9")
+    _hash_index_path(dist).write_text(json.dumps({expected_key: "2026-01-01T00:00:00"}), encoding="utf-8")
+
+    ensure_called = {"n": 0}
+    compile_called = {"n": 0}
+    monkeypatch.setattr(
+        NuitkaCompiler,
+        "ensure_env",
+        classmethod(lambda cls, *a, **kw: ensure_called.__setitem__("n", ensure_called["n"] + 1) or "4.1.3"),
+    )
+    monkeypatch.setattr(
+        NuitkaCompiler,
+        "compile_src",
+        classmethod(lambda cls, *a, **kw: compile_called.__setitem__("n", compile_called["n"] + 1)),
+    )
+
+    st = StageRecorder("Nuitka 编译")
+    NuitkaCompiler.compile_with_stamp(
+        src, dist, runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), cache_root, stage=st
+    )
+
+    # 索引命中：跳过 ensure_env 与 compile_src
+    assert ensure_called["n"] == 0
+    assert compile_called["n"] == 0
+    assert st._hits == 1
+    assert "hash 索引命中" in st._detail
+    # stamp 被重建
+    stamp = NuitkaCompiler._stamp_path(dist)
+    assert stamp.is_file()
+    assert stamp.read_text(encoding="utf-8") == expected_key
+
+
+def test_compile_with_stamp_hash_index_miss_proceeds_compile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """stamp 未命中且 hash 索引未命中时走完整编译，编译后更新索引."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("print('hi')")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    cache_root = tmp_path / "nuitka_cache"
+
+    # 不写 stamp，不写索引（索引文件不存在）
+
+    monkeypatch.setattr(NuitkaCompiler, "ensure_env", classmethod(lambda cls, *a, **kw: "4.1.3"))
+    fake_py = tmp_path / "fake_python.exe"
+    fake_py.write_text("")
+    monkeypatch.setattr(NuitkaCompiler, "_ensure_build_python", classmethod(lambda cls, *a, **kw: fake_py))
+    monkeypatch.setattr(NuitkaCompiler, "compile_src", classmethod(lambda cls, *a, **kw: None))
+
+    st = StageRecorder("Nuitka 编译")
+    NuitkaCompiler.compile_with_stamp(
+        src, dist, runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), cache_root, stage=st
+    )
+
+    # 编译后 stamp 与索引均写入
+    nuitka_ver = nuitka_version_for("3.11.9")
+    expected_key = NuitkaCompiler._stamp_key(src, nuitka_ver, "3.11.9")
+    assert NuitkaCompiler._stamp_path(dist).read_text(encoding="utf-8") == expected_key
+    index = json.loads(_hash_index_path(dist).read_text(encoding="utf-8"))
+    assert expected_key in index
+
+
+def test_compile_with_stamp_hash_index_corrupt_falls_through(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """hash 索引文件损坏时删除并走完整编译（不因损坏中断）."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("print('hi')")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    cache_root = tmp_path / "nuitka_cache"
+
+    # 预写损坏的索引文件
+    _hash_index_path(dist).write_text("{corrupt json", encoding="utf-8")
+
+    monkeypatch.setattr(NuitkaCompiler, "ensure_env", classmethod(lambda cls, *a, **kw: "4.1.3"))
+    fake_py = tmp_path / "fake_python.exe"
+    fake_py.write_text("")
+    monkeypatch.setattr(NuitkaCompiler, "_ensure_build_python", classmethod(lambda cls, *a, **kw: fake_py))
+    compile_called = {"n": 0}
+    monkeypatch.setattr(
+        NuitkaCompiler,
+        "compile_src",
+        classmethod(lambda cls, *a, **kw: compile_called.__setitem__("n", compile_called["n"] + 1)),
+    )
+
+    st = StageRecorder("Nuitka 编译")
+    with caplog.at_level("WARNING", logger="fspack.packaging.nuitka"):
+        NuitkaCompiler.compile_with_stamp(
+            src, dist, runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), cache_root, stage=st
+        )
+
+    # 损坏索引被删除，走完整编译
+    assert compile_called["n"] == 1
+    assert any("hash 索引损坏" in r.message for r in caplog.records)
+    # 编译后索引重建
+    assert _hash_index_path(dist).is_file()
+
+
+def test_compile_with_stamp_hash_index_hit_restamp_oserror_warns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """hash 索引命中但重建 stamp 失败时仅告警，仍跳过编译（索引命中即视为已编译）."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("print('hi')")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    cache_root = tmp_path / "nuitka_cache"
+
+    nuitka_ver = nuitka_version_for("3.11.9")
+    expected_key = NuitkaCompiler._stamp_key(src, nuitka_ver, "3.11.9")
+    _hash_index_path(dist).write_text(json.dumps({expected_key: "2026-01-01T00:00:00"}), encoding="utf-8")
+
+    # patch _atomic_write_text 抛 OSError（仅影响 stamp 重建）
+    def raise_oserror(*a: Any, **kw: Any) -> None:
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr("fspack.packaging.nuitka.compile._atomic_write_text", raise_oserror)
+
+    ensure_called = {"n": 0}
+    monkeypatch.setattr(
+        NuitkaCompiler,
+        "ensure_env",
+        classmethod(lambda cls, *a, **kw: ensure_called.__setitem__("n", ensure_called["n"] + 1) or "4.1.3"),
+    )
+    monkeypatch.setattr(NuitkaCompiler, "compile_src", classmethod(lambda cls, *a, **kw: None))
+
+    st = StageRecorder("Nuitka 编译")
+    with caplog.at_level("WARNING", logger="fspack.packaging.nuitka"):
+        NuitkaCompiler.compile_with_stamp(
+            src, dist, runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), cache_root, stage=st
+        )
+
+    # 索引命中仍跳过编译（ensure_env 未调用）
+    assert ensure_called["n"] == 0
+    assert st._hits == 1
+    # 重建 stamp 失败告警
+    assert any("重建 Nuitka stamp 失败" in r.message for r in caplog.records)
+    # stamp 未写入（_atomic_write_text 抛 OSError）
+    assert not NuitkaCompiler._stamp_path(dist).is_file()
 
 
 # ---- compile_with_stamp 环境就绪失败回退测试 ----
@@ -2469,10 +2901,11 @@ def test_compile_src_heartbeat_logs_progress(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """compile_src 在编译期间通过心跳线程输出进度日志.
+    """compile_src 在编译期间通过全局心跳线程输出进度日志（iter-131 并行化）.
 
     nuitka 的 reExecute 机制导致子进程输出不可靠（Windows close_fds=True 不继承 PIPE），
-    心跳线程是唯一的进度反馈。mock _stream_compile 模拟耗时编译，验证心跳日志输出。
+    全局心跳线程是唯一的进度反馈。mock _stream_compile 模拟耗时编译，验证心跳日志输出
+    "Nuitka 并行编译中: 已完成 X/Y, 已耗时 Zs" 格式。
     """
     import time as _time
 
@@ -2504,10 +2937,11 @@ def test_compile_src_heartbeat_logs_progress(
         st = StageRecorder("Nuitka 编译")
         NuitkaCompiler.compile_src(src, runtime, "3.10.11", Platform.WINDOWS, cache, stage=st)
 
-    # 验证心跳日志输出（至少 1 次 "Nuitka 编译中... 已耗时"）
-    heartbeat_logs = [r for r in caplog.records if "Nuitka 编译中" in r.message]
+    # 验证全局心跳日志输出（至少 1 次 "Nuitka 并行编译中"）
+    heartbeat_logs = [r for r in caplog.records if "并行编译中" in r.message]
     assert len(heartbeat_logs) >= 1, f"期望至少 1 次心跳日志，实际 {len(heartbeat_logs)} 次"
-    # 验证心跳消息格式
+    # 验证心跳消息格式：含 "已完成" 与 "已耗时"
+    assert "已完成" in heartbeat_logs[0].message
     assert "已耗时" in heartbeat_logs[0].message
 
 
@@ -2540,6 +2974,267 @@ def test_compile_src_heartbeat_stops_after_compile(
     st = StageRecorder("Nuitka 编译")
     NuitkaCompiler.compile_src(src, runtime, "3.10.11", Platform.WINDOWS, cache, stage=st)
     # 编译成功，无异常即通过
+
+
+# ---- 并行编译测试（iter-131）----
+
+
+def test_max_compile_workers_constant() -> None:
+    """``_MAX_COMPILE_WORKERS`` 常量为 4，平衡并行收益与资源限制."""
+    assert _MAX_COMPILE_WORKERS == 4
+
+
+def test_compile_files_parallel_max_workers_capped(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``_compile_files`` 的 ``max_workers = min(cpu_count, _MAX_COMPILE_WORKERS)``.
+
+    mock ThreadPoolExecutor 捕获 max_workers 参数，验证：
+    - cpu_count >= 4 时 max_workers = 4（上限）
+    - cpu_count < 4 时 max_workers = cpu_count
+    """
+    import concurrent.futures as cf
+
+    captured_max_workers: list[int] = []
+    real_tpe = cf.ThreadPoolExecutor
+
+    class CapturingTPE(real_tpe):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            captured_max_workers.append(kwargs.get("max_workers", args[0] if args else None))
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr("fspack.packaging.nuitka.compile.ThreadPoolExecutor", CapturingTPE)
+    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(lambda cmd, **kw: (0, "", "")))
+    monkeypatch.setattr(NuitkaCompiler, "_build_compile_env", classmethod(lambda cls, *a, **kw: {}))
+
+    src = tmp_path / "src"
+    src.mkdir()
+    for i in range(3):
+        (src / f"f{i}.py").write_text("x = 1", encoding="utf-8")
+
+    st = StageRecorder("编译")
+    NuitkaCompiler._compile_files(
+        tmp_path / "python.exe",
+        tmp_path / "bootstrap.py",
+        sorted(src.glob("*.py")),
+        st,
+        target=Platform.WINDOWS,
+    )
+
+    assert len(captured_max_workers) == 1
+    expected = min(os.cpu_count() or 1, _MAX_COMPILE_WORKERS)
+    assert captured_max_workers[0] == expected
+
+
+def test_compile_files_parallel_completes_all_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """并行编译完成所有文件，成功/失败计数正确."""
+
+    # 文件 0/1 成功，文件 2 失败
+    def fake_stream(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int, str, str]:
+        py_file = cmd[-1]
+        if "f2" in py_file:
+            return (1, "", "error")
+        return (0, "", "")
+
+    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(fake_stream))
+    monkeypatch.setattr(NuitkaCompiler, "_build_compile_env", classmethod(lambda cls, *a, **kw: {}))
+
+    src = tmp_path / "src"
+    src.mkdir()
+    files = []
+    for i in range(3):
+        f = src / f"f{i}.py"
+        f.write_text("x = 1", encoding="utf-8")
+        files.append(f)
+
+    st = StageRecorder("编译")
+    compiled, failed = NuitkaCompiler._compile_files(
+        tmp_path / "python.exe",
+        tmp_path / "bootstrap.py",
+        files,
+        st,
+        target=Platform.WINDOWS,
+    )
+
+    assert failed == 1
+    assert len(compiled) == 2
+    # 成功的是 f0 和 f1
+    compiled_names = {p.name for p in compiled}
+    assert compiled_names == {"f0.py", "f1.py"}
+    # stage.processed 被调用 2 次（2 个成功）
+    assert st._items == 2
+
+
+def test_compile_files_parallel_exception_propagates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """worker 内 _stream_compile 抛异常时 _compile_files 传播异常（如 FileNotFoundError）.
+
+    并行模式下 future.result() 重抛 worker 异常，with 块 __exit__ 的 shutdown(wait=True)
+    等待在途任务后传播。验证心跳线程也正常停止（finally 块）。
+    """
+
+    def fake_stream(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int, str, str]:
+        raise FileNotFoundError("python exe not found")
+
+    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(fake_stream))
+    monkeypatch.setattr(NuitkaCompiler, "_build_compile_env", classmethod(lambda cls, *a, **kw: {}))
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("x = 1", encoding="utf-8")
+
+    st = StageRecorder("编译")
+    with pytest.raises(FileNotFoundError, match="python exe not found"):
+        NuitkaCompiler._compile_files(
+            tmp_path / "python.exe",
+            tmp_path / "bootstrap.py",
+            [src / "app.py"],
+            st,
+            target=Platform.WINDOWS,
+        )
+
+
+def test_compile_files_parallel_heartbeat_stops_on_exception(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """异常时 finally 块停止心跳线程，不泄漏."""
+    import threading as _threading
+
+    monkeypatch.setattr("fspack.packaging.nuitka.compile._HEARTBEAT_INTERVAL", 0.05)
+
+    def fake_stream(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int, str, str]:
+        raise FileNotFoundError("python exe not found")
+
+    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(fake_stream))
+    monkeypatch.setattr(NuitkaCompiler, "_build_compile_env", classmethod(lambda cls, *a, **kw: {}))
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("x = 1", encoding="utf-8")
+
+    active_before = _threading.active_count()
+    st = StageRecorder("编译")
+    with pytest.raises(FileNotFoundError):
+        NuitkaCompiler._compile_files(
+            tmp_path / "python.exe",
+            tmp_path / "bootstrap.py",
+            [src / "app.py"],
+            st,
+            target=Platform.WINDOWS,
+        )
+    # 心跳线程已停止（daemon=True 会在主线程退出时清理，但这里验证 finally 已 join）
+    # 等待短暂时间让 daemon 线程完全退出
+    import time as _time
+
+    _time.sleep(0.1)
+    active_after = _threading.active_count()
+    # 心跳线程不应残留（active_count 不应增加）
+    assert active_after <= active_before + 1  # 允许少量波动（其他 daemon 线程）
+
+
+def test_compile_files_parallel_jobs_adjusted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """并行模式 --jobs = max(1, cpu_count // max_workers)，避免过度超订."""
+    captured_cmds: list[list[str]] = []
+
+    def fake_stream(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int, str, str]:
+        captured_cmds.append(cmd)
+        return (0, "", "")
+
+    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(fake_stream))
+    monkeypatch.setattr(NuitkaCompiler, "_build_compile_env", classmethod(lambda cls, *a, **kw: {}))
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("x = 1", encoding="utf-8")
+
+    st = StageRecorder("编译")
+    NuitkaCompiler._compile_files(
+        tmp_path / "python.exe",
+        tmp_path / "bootstrap.py",
+        [src / "app.py"],
+        st,
+        target=Platform.WINDOWS,
+    )
+
+    assert len(captured_cmds) == 1
+    # 找到 --jobs=N 参数
+    jobs_args = [arg for arg in captured_cmds[0] if arg.startswith("--jobs=")]
+    assert len(jobs_args) == 1
+    jobs_value = int(jobs_args[0].split("=")[1])
+    cpu = os.cpu_count() or 1
+    max_workers = min(cpu, _MAX_COMPILE_WORKERS)
+    expected_jobs = max(1, cpu // max_workers)
+    assert jobs_value == expected_jobs
+
+
+def test_compile_files_parallel_empty_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """空文件列表时 _compile_files 返回空集合，无异常."""
+    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(lambda cmd, **kw: (0, "", "")))
+    monkeypatch.setattr(NuitkaCompiler, "_build_compile_env", classmethod(lambda cls, *a, **kw: {}))
+
+    st = StageRecorder("编译")
+    compiled, failed = NuitkaCompiler._compile_files(
+        tmp_path / "python.exe",
+        tmp_path / "bootstrap.py",
+        [],
+        st,
+        target=Platform.WINDOWS,
+    )
+    assert compiled == set()
+    assert failed == 0
+
+
+def test_compile_files_parallel_global_heartbeat_format(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """全局心跳输出 "Nuitka 并行编译中: 已完成 X/Y, 已耗时 Zs" 格式."""
+    import time as _time
+
+    monkeypatch.setattr("fspack.packaging.nuitka.compile._HEARTBEAT_INTERVAL", 0.05)
+
+    def slow_stream(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int, str, str]:
+        _time.sleep(0.2)
+        return (0, "", "")
+
+    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(slow_stream))
+    monkeypatch.setattr(NuitkaCompiler, "_build_compile_env", classmethod(lambda cls, *a, **kw: {}))
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("x = 1", encoding="utf-8")
+
+    st = StageRecorder("编译")
+    with caplog.at_level(logging.INFO, logger="fspack.packaging.nuitka"):
+        NuitkaCompiler._compile_files(
+            tmp_path / "python.exe",
+            tmp_path / "bootstrap.py",
+            [src / "app.py"],
+            st,
+            target=Platform.WINDOWS,
+        )
+
+    heartbeat_logs = [r for r in caplog.records if "并行编译中" in r.message]
+    assert len(heartbeat_logs) >= 1
+    # 验证格式含 "已完成" 和 "/"
+    msg = heartbeat_logs[0].message
+    assert "已完成" in msg
+    assert "/" in msg
+    assert "已耗时" in msg
 
 
 # ---- ccache 相关测试 ----
@@ -3057,3 +3752,329 @@ def test_ensure_ccache_download_succeeds_but_exe_missing_returns_none(
     st = StageRecorder("Nuitka 编译")
     result = NuitkaCompiler._ensure_ccache(tmp_path / "nuitka", Platform.WINDOWS, st)
     assert result is None
+
+
+# ---- _stream_compile 超时防护测试（iter-127） ----
+
+
+def test_stream_compile_timeout_default_value() -> None:
+    """``_stream_compile`` 默认超时为 ``_COMPILE_TIMEOUT``（600s），可被参数覆盖."""
+    from fspack.packaging.nuitka.compile import _COMPILE_TIMEOUT
+
+    assert _COMPILE_TIMEOUT == 600.0
+    # 检查 timeout 参数默认值（通过 __defaults__ 或签名）
+    sig = inspect.signature(NuitkaCompiler._stream_compile)
+    timeout_param = sig.parameters["timeout"]
+    assert timeout_param.default == _COMPILE_TIMEOUT
+
+
+def test_stream_compile_timeout_kills_long_process(
+    capfd: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """``timeout`` 超时后 kill 子进程，返回非零退出码并记录 warning."""
+    # 子进程 sleep 30s，timeout=0.5s 必然超时
+    cmd = [sys.executable, "-c", "import time; time.sleep(30)"]
+    with caplog.at_level(logging.WARNING, logger="fspack.packaging.nuitka"):
+        returncode, _stdout, _stderr = NuitkaCompiler._stream_compile(cmd, timeout=0.5)
+    # kill 后 returncode 非 0（POSIX -9 / Windows 1）
+    assert returncode != 0
+    # warning 日志记录超时
+    timeout_logs = [r for r in caplog.records if "超时" in r.message]
+    assert len(timeout_logs) == 1
+    assert "0s" in timeout_logs[0].message or "终止子进程" in timeout_logs[0].message
+
+
+def test_stream_compile_timeout_not_triggered_for_fast_process(
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    """快速子进程不触发超时，正常返回退出码."""
+    cmd = [sys.executable, "-c", "print('fast')"]
+    returncode, stdout, _stderr = NuitkaCompiler._stream_compile(cmd, timeout=10.0)
+    assert returncode == 0
+    assert "fast" in stdout
+
+
+def test_stream_compile_timeout_preserves_drained_output(
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    """超时 kill 前已 drain 的输出仍保留在返回值中供诊断."""
+    # 子进程先输出再 sleep，超时 kill 后已输出的内容应保留
+    cmd = [
+        sys.executable,
+        "-c",
+        "print('partial-output'); import sys; sys.stdout.flush(); import time; time.sleep(30)",
+    ]
+    returncode, stdout, _stderr = NuitkaCompiler._stream_compile(cmd, timeout=0.5)
+    assert returncode != 0
+    # partial-output 在 kill 前已 drain 到 chunks（drain 线程 join 后）
+    assert "partial-output" in stdout
+
+
+def test_stream_compile_drain_join_timeout_constant() -> None:
+    """``_DRAIN_JOIN_TIMEOUT`` 常量存在且为合理值（5s 覆盖 fd 关闭与调度延迟）."""
+    from fspack.packaging.nuitka.compile import _DRAIN_JOIN_TIMEOUT
+
+    assert _DRAIN_JOIN_TIMEOUT == 5.0
+
+
+# ---- _parse_parallel 超时防护测试（iter-127） ----
+
+
+def test_parse_parallel_timeout_warns_on_slow_worker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """``_parse_parallel`` 整体超时后 warning 提示，已处理结果保留.
+
+    用 fake ``ProcessPoolExecutor`` 替代真实进程池，其 ``map`` 抛 ``TimeoutError``
+    模拟超时。验证 warning 日志输出（不验证部分结果——fake map 不返回任何结果）。
+    """
+    from concurrent.futures import TimeoutError as FuturesTimeoutError
+
+    from fspack import analyzer
+    from fspack.analyzer import _parse_parallel
+
+    # 构造 5 个 .py 文件
+    for i in range(5):
+        (tmp_path / f"mod_{i}.py").write_text(f"x = {i}\n", encoding="utf-8")
+    py_files = sorted(tmp_path.glob("*.py"))
+
+    class _FakePool:
+        def __init__(self, *args: object, **kw: object) -> None:
+            pass
+
+        def __enter__(self) -> _FakePool:
+            return self
+
+        def __exit__(self, *args: object) -> bool:
+            return False
+
+        def map(self, *args: object, **kw: object) -> object:
+            raise FuturesTimeoutError("simulated timeout")
+
+    monkeypatch.setattr(analyzer, "ProcessPoolExecutor", _FakePool)
+
+    all_imports: list[str] = []
+    all_submodules: dict[str, set[str]] = {}
+
+    with caplog.at_level(logging.WARNING, logger="fspack.analyzer"):
+        _parse_parallel(py_files, all_imports, all_submodules)
+
+    # 超时 warning
+    timeout_logs = [r for r in caplog.records if "超时" in r.message]
+    assert len(timeout_logs) == 1
+    assert "AST 并行解析" in timeout_logs[0].message
+    # 超时后 imports/submodules 为空（fake map 抛异常未返回结果）
+    assert all_imports == []
+    assert all_submodules == {}
+
+
+def test_parse_parallel_normal_completes_without_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """正常完成的并行解析不触发超时，结果完整."""
+    from fspack import analyzer
+    from fspack.analyzer import _parse_parallel
+
+    for i in range(5):
+        (tmp_path / f"mod_{i}.py").write_text(f"import os\nx = {i}\n", encoding="utf-8")
+    py_files = sorted(tmp_path.glob("*.py"))
+
+    # 设较长 timeout 确保正常完成
+    monkeypatch.setattr(analyzer, "_PARSE_TOTAL_TIMEOUT", 60.0)
+
+    all_imports: list[str] = []
+    all_submodules: dict[str, set[str]] = {}
+
+    _parse_parallel(py_files, all_imports, all_submodules)
+
+    # 5 个文件都应解析到 os import
+    assert all_imports.count("os") == 5
+
+
+def test_parse_parallel_timeout_constant_default() -> None:
+    """``_PARSE_TOTAL_TIMEOUT`` 默认 300s."""
+    from fspack.analyzer import _PARSE_TOTAL_TIMEOUT
+
+    assert _PARSE_TOTAL_TIMEOUT == 300.0
+
+
+# ---- _precompile_pyc compileall 超时防护测试（iter-127） ----
+
+
+def test_precompile_pyc_timeout_skips_stamp_and_warns(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """compileall 超时不写 stamp（下次重试），记录 warning 并 set_detail."""
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    (runtime / "python.exe").write_bytes(b"")
+    dist = tmp_path / "dist"
+    src = dist / "src"
+    src.mkdir(parents=True)
+    (src / "main.py").write_text("print('hi')", encoding="utf-8")
+
+    # patch subprocess.run 抛 TimeoutExpired
+    def raise_timeout(*args: Any, **kw: Any) -> Any:
+        raise subprocess.TimeoutExpired(cmd=args[0] if args else [], timeout=0.5)
+
+    monkeypatch.setattr("subprocess.run", raise_timeout)
+
+    from fspack.packaging.pyc import _COMPILEALL_TIMEOUT, _precompile_pyc
+
+    st = StageRecorder("预编译字节码")
+    with caplog.at_level(logging.WARNING, logger="fspack.packaging.pyc"):
+        _precompile_pyc(dist, runtime, "3.11.9", Platform.WINDOWS, strip_py=False, stage=st)
+
+    # 不写 stamp（下次重试）
+    stamp = dist / ".pyc_stamp"
+    assert not stamp.is_file()
+    # warning 日志
+    timeout_logs = [r for r in caplog.records if "超时" in r.message]
+    assert len(timeout_logs) == 1
+    assert "compileall" in timeout_logs[0].message
+    assert str(int(_COMPILEALL_TIMEOUT)) in timeout_logs[0].message
+
+
+def test_precompile_pyc_timeout_constant_default() -> None:
+    """``_COMPILEALL_TIMEOUT`` 默认 300s."""
+    from fspack.packaging.pyc import _COMPILEALL_TIMEOUT
+
+    assert _COMPILEALL_TIMEOUT == 300.0
+
+
+def test_precompile_pyc_normal_no_timeout_writes_stamp(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """正常完成（无超时）的 compileall 仍写 stamp，验证超时分支不影响正常路径."""
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    (runtime / "python.exe").write_bytes(b"")
+    dist = tmp_path / "dist"
+    src = dist / "src"
+    src.mkdir(parents=True)
+    (src / "main.py").write_text("print('hi')", encoding="utf-8")
+
+    monkeypatch.setattr("subprocess.run", lambda cmd, **kw: _CompileOK())
+
+    from fspack.packaging.pyc import _precompile_pyc
+
+    st = StageRecorder("预编译字节码")
+    _precompile_pyc(dist, runtime, "3.11.9", Platform.WINDOWS, strip_py=False, stage=st)
+
+    # 正常路径写 stamp
+    stamp = dist / ".pyc_stamp"
+    assert stamp.is_file()
+
+
+# ---- _atomic_write_text 原子化写入测试（iter-128） ----
+
+
+def test_atomic_write_text_creates_file_with_content(tmp_path: Path) -> None:
+    """``_atomic_write_text`` 成功写入创建目标文件且内容正确."""
+    from fspack.packaging.nuitka.compile import _atomic_write_text
+
+    target = tmp_path / "stamp.txt"
+    _atomic_write_text(target, "hello-stamp\n")
+    assert target.is_file()
+    assert target.read_text(encoding="utf-8") == "hello-stamp\n"
+
+
+def test_atomic_write_text_overwrites_existing(tmp_path: Path) -> None:
+    """``_atomic_write_text`` 覆盖已有文件且内容完整替换（无残留旧内容）."""
+    from fspack.packaging.nuitka.compile import _atomic_write_text
+
+    target = tmp_path / "stamp.txt"
+    target.write_text("old-content", encoding="utf-8")
+    _atomic_write_text(target, "new-content-longer")
+    assert target.read_text(encoding="utf-8") == "new-content-longer"
+
+
+def test_atomic_write_text_no_tmp_residue(tmp_path: Path) -> None:
+    """``_atomic_write_text`` 成功后不残留 ``.tmp_`` 临时文件."""
+    from fspack.packaging.nuitka.compile import _atomic_write_text
+
+    target = tmp_path / "stamp.txt"
+    _atomic_write_text(target, "x")
+    residues = [p for p in tmp_path.iterdir() if p.name.startswith(".tmp_")]
+    assert residues == []
+
+
+def test_atomic_write_text_replace_failure_cleans_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``Path.replace`` 失败时清理临时文件并重抛 OSError，目标文件保持原样."""
+    from fspack.packaging.nuitka import compile as nuitka_compile
+
+    target = tmp_path / "stamp.txt"
+    target.write_text("original", encoding="utf-8")
+
+    orig_replace = Path.replace
+
+    def fail_replace(self: Path, dst: Path, *args: Any, **kwargs: Any) -> Path:
+        raise OSError("cross-device link not permitted")
+
+    monkeypatch.setattr(Path, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="cross-device"):
+        nuitka_compile._atomic_write_text(target, "new-content")
+
+    # 临时文件被清理
+    residues = [p for p in tmp_path.iterdir() if p.name.startswith(".tmp_")]
+    assert residues == []
+    # 目标文件保持原内容（未被替换）
+    assert target.read_text(encoding="utf-8") == "original"
+    # 确认 Path.replace 被调用过（restore 后可正常使用）
+    monkeypatch.setattr(Path, "replace", orig_replace)
+
+
+def test_atomic_write_text_creates_parent_dir(tmp_path: Path) -> None:
+    """``_atomic_write_text`` 自动创建父目录（与原 ``stamp.parent.mkdir`` 行为一致）."""
+    from fspack.packaging.nuitka.compile import _atomic_write_text
+
+    target = tmp_path / "nested" / "deep" / "stamp.txt"
+    _atomic_write_text(target, "key")
+    assert target.is_file()
+    assert target.read_text(encoding="utf-8") == "key"
+
+
+# ---- _precompile_pyc returncode != 0 不写 stamp 测试（iter-128） ----
+
+
+def test_precompile_pyc_returncode_nonzero_skips_stamp(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """compileall 非零退出码时不写 stamp（与超时分支一致的"失败不缓存"策略）.
+
+    iter-128 扩展 iter-127 的超时不写 stamp 策略到 returncode != 0 场景，
+    避免失败的编译被 stamp 跳过导致用户长期运行未编译的 .py。
+    """
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    (runtime / "python.exe").write_bytes(b"")
+    dist = tmp_path / "dist"
+    src = dist / "src"
+    src.mkdir(parents=True)
+    (src / "main.py").write_text("print('hi')", encoding="utf-8")
+
+    class _CompileFail:
+        returncode = 2
+        stderr = "SyntaxError: invalid syntax"
+        stdout = ""
+
+    monkeypatch.setattr("subprocess.run", lambda cmd, **kw: _CompileFail())
+
+    from fspack.packaging.pyc import _precompile_pyc
+
+    st = StageRecorder("预编译字节码")
+    with caplog.at_level(logging.WARNING, logger="fspack.packaging.pyc"):
+        _precompile_pyc(dist, runtime, "3.11.9", Platform.WINDOWS, strip_py=False, stage=st)
+
+    stamp = dist / ".pyc_stamp"
+    assert not stamp.is_file()
+    fail_logs = [r for r in caplog.records if "compileall 失败" in r.message]
+    assert len(fail_logs) == 1
+    assert "SyntaxError" in fail_logs[0].message

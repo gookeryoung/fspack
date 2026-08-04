@@ -111,6 +111,35 @@ def standalone_url(
     )
 
 
+def _sha256_file(path: Path, *, chunk_size: int = 64 * 1024) -> str:
+    """计算文件 sha256 十六进制摘要（小写），用于下载归档完整性校验.
+
+    分块读取避免大文件（如 python-build-standalone ~30MB）一次性占用内存。
+    """
+    import hashlib
+
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        while True:
+            chunk = f.read(chunk_size)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _safe_unlink_archive(archive_path: Path, label: str) -> None:
+    """删除损坏的归档文件，OSError 仅告警不抛.
+
+    用于 ``extract_archive`` 解压失败时清理损坏归档，避免下次构建缓存命中
+    损坏文件反复解压失败。删除失败不中断流程（仍抛 EmbedError 让上层处理）。
+    """
+    try:
+        archive_path.unlink()
+    except OSError as e:
+        _logger.warning("删除损坏的 %s 失败: %s: %s", label, archive_path, e)
+
+
 # ---- 基类 ----
 
 
@@ -172,6 +201,7 @@ class RuntimeDownloader(abc.ABC):
         cache_dir: Path,
         *,
         stage: StageRecorder | None = None,
+        expected_hash: str | None = None,
         **kwargs: object,
     ) -> Path:
         """下载运行时归档到缓存目录，已存在则复用。
@@ -182,14 +212,35 @@ class RuntimeDownloader(abc.ABC):
         离线模式（``FSPACK_OFFLINE=1``）下缓存未命中时立即抛 :class:`EmbedError`，
         不尝试网络请求避免超时卡死。错误信息包含缺失文件名与缓存路径，
         便于用户预下载归档放入缓存。
+
+        ``expected_hash`` 非 None 时下载后校验归档 sha256（hex 小写），不匹配则
+        删除已下载文件并抛 :class:`EmbedError`，避免缓存损坏归档。校验失败不重试：
+        hash 不匹配通常是源被篡改或 URL 指向错误版本，重试无意义。缓存命中时
+        仍校验（检测缓存损坏或被替换的归档）。
         """
         cache_dir.mkdir(parents=True, exist_ok=True)
         archive_path = cache_dir / cls.archive_name(version, **kwargs)
         if archive_path.is_file():
-            _logger.info("%s 已缓存: %s", cls.runtime_label, archive_path)
-            if stage is not None:
-                stage.hit_cache()
-            return archive_path
+            if expected_hash is not None:
+                actual = _sha256_file(archive_path)
+                if actual != expected_hash:
+                    _logger.warning(
+                        "%s 缓存 sha256 不匹配（期望 %s，实际 %s），删除重新下载",
+                        cls.runtime_label,
+                        expected_hash,
+                        actual,
+                    )
+                    archive_path.unlink(missing_ok=True)
+                else:
+                    _logger.info("%s 已缓存且 hash 匹配: %s", cls.runtime_label, archive_path)
+                    if stage is not None:
+                        stage.hit_cache()
+                    return archive_path
+            else:
+                _logger.info("%s 已缓存: %s", cls.runtime_label, archive_path)
+                if stage is not None:
+                    stage.hit_cache()
+                return archive_path
         if is_offline():
             raise EmbedError(
                 f"离线模式下 {cls.runtime_label} 缓存未命中: {archive_path.name}，"
@@ -205,6 +256,14 @@ class RuntimeDownloader(abc.ABC):
             downloader.download(url, archive_path, stage=stage, label=cls.download_label(version))
         except OSError as e:
             raise EmbedError(f"下载 {cls.runtime_label} 失败: {url} -> {e}") from e
+        if expected_hash is not None:
+            actual = _sha256_file(archive_path)
+            if actual != expected_hash:
+                archive_path.unlink(missing_ok=True)
+                raise EmbedError(
+                    f"{cls.runtime_label} sha256 校验失败: 期望 {expected_hash}，实际 {actual}，"
+                    f"已下载文件可能被篡改或 URL 指向错误版本"
+                )
         return archive_path
 
     @classmethod
@@ -239,7 +298,9 @@ class RuntimeDownloader(abc.ABC):
             if stage is not None:  # pragma: no cover
                 stage.hit_cache()  # pragma: no cover
         else:  # pragma: no cover
-            archive_path = cls.download(version, cache_dir, stage=stage, **kwargs)  # pragma: no cover
+            archive_path = cls.download(
+                version, cache_dir, stage=stage, **kwargs  # pyrefly: ignore[bad-argument-type]
+            )  # pragma: no cover
             cls.extract(archive_path, runtime_dir)  # pragma: no cover
         cls.post_extract(runtime_dir, version)  # pragma: no cover
         return runtime_dir  # pragma: no cover
@@ -277,11 +338,13 @@ class EmbedRuntime(RuntimeDownloader):
     @classmethod
     @override
     def extract_archive(cls, archive_path: Path, runtime_dir: Path) -> None:
-        """解压 embed zip 到 runtime_dir。"""
+        """解压 embed zip 到 runtime_dir，损坏时删除归档避免缓存污染."""
         try:
             with zipfile.ZipFile(archive_path) as zf:
                 zf.extractall(runtime_dir)
         except zipfile.BadZipFile as e:
+            # 删除损坏的归档：下次构建会重新下载，避免反复尝试解压损坏文件
+            _safe_unlink_archive(archive_path, "embed zip")
             raise EmbedError(f"embed zip 损坏: {archive_path}") from e
 
     @classmethod
@@ -332,7 +395,7 @@ class StandaloneRuntime(RuntimeDownloader):
     @classmethod
     @override
     def extract_archive(cls, archive_path: Path, runtime_dir: Path) -> None:
-        """解压 tar.gz 到 runtime_dir。"""
+        """解压 tar.gz 到 runtime_dir，损坏时删除归档避免缓存污染."""
         try:
             with tarfile.open(archive_path, "r:gz") as tf:
                 # Python 3.12+ 显式指定 data 过滤器（PEP 706）：消除 DeprecationWarning，
@@ -343,6 +406,10 @@ class StandaloneRuntime(RuntimeDownloader):
                 else:
                     tf.extractall(runtime_dir)
         except (tarfile.TarError, OSError) as e:
+            # 删除损坏的归档：下次构建会重新下载，避免反复尝试解压损坏文件。
+            # OSError 与 TarError 一并处理：tarfile.open 遇到非 gzip 文件抛 OSError
+            # （" seeking back is not allowed"）或 ReadError，统一视为损坏。
+            _safe_unlink_archive(archive_path, "python-build-standalone tarball")
             raise EmbedError(f"python-build-standalone tarball 损坏: {archive_path}") from e
 
 
@@ -356,9 +423,13 @@ def download_embed(
     cache_dir: Path,
     *,
     stage: StageRecorder | None = None,
+    expected_hash: str | None = None,
 ) -> Path:
-    """从镜像下载 embed zip 到缓存目录，已存在则直接复用。"""
-    return EmbedRuntime.download(version, cache_dir, stage=stage, mirror=mirror)
+    """从镜像下载 embed zip 到缓存目录，已存在则直接复用.
+
+    ``expected_hash`` 非 None 时下载后校验 sha256（见 :meth:`RuntimeDownloader.download`）。
+    """
+    return EmbedRuntime.download(version, cache_dir, stage=stage, expected_hash=expected_hash, mirror=mirror)
 
 
 def extract_embed(zip_path: Path, runtime_dir: Path) -> None:
@@ -366,13 +437,14 @@ def extract_embed(zip_path: Path, runtime_dir: Path) -> None:
     EmbedRuntime.extract(zip_path, runtime_dir)
 
 
-def ensure_embed(
+def ensure_embed(  # noqa: PLR0913
     version: str,
     mirror: MirrorConfig,
     cache_dir: Path,
     runtime_dir: Path,
     *,
     stage: StageRecorder | None = None,
+    expected_hash: str | None = None,
 ) -> Path:
     """确保 runtime_dir 内有可用 embed python，返回 runtime_dir。
 
@@ -384,26 +456,35 @@ def ensure_embed(
         if stage is not None:
             stage.hit_cache()
     else:
-        zip_path = download_embed(version, mirror, cache_dir, stage=stage)
+        zip_path = download_embed(version, mirror, cache_dir, stage=stage, expected_hash=expected_hash)
         extract_embed(zip_path, runtime_dir)
     EmbedRuntime.post_extract(runtime_dir, version)
     return runtime_dir
 
 
-def download_standalone(
+def download_standalone(  # noqa: PLR0913
     version: str,
     release_tag: str,
     cache_dir: Path,
     *,
     stage: StageRecorder | None = None,
     macos_arch: str | None = None,
+    expected_hash: str | None = None,
 ) -> Path:
     """下载 python-build-standalone tar.gz 到缓存目录，已存在则复用。
 
     Args:
         macos_arch: macOS 架构（``"x86_64"`` 或 ``"arm64"``），None 表示 Linux。
+        expected_hash: 期望 sha256 hex，非 None 时下载后校验。
     """
-    return StandaloneRuntime.download(version, cache_dir, stage=stage, release_tag=release_tag, macos_arch=macos_arch)
+    return StandaloneRuntime.download(
+        version,
+        cache_dir,
+        stage=stage,
+        expected_hash=expected_hash,
+        release_tag=release_tag,
+        macos_arch=macos_arch,
+    )
 
 
 def extract_standalone(tar_path: Path, runtime_dir: Path) -> None:
@@ -419,6 +500,7 @@ def ensure_standalone(  # noqa: PLR0913
     *,
     stage: StageRecorder | None = None,
     macos_arch: str | None = None,
+    expected_hash: str | None = None,
 ) -> Path:
     """确保 runtime_dir 内有可用 python-build-standalone，返回 runtime_dir。
 
@@ -426,6 +508,7 @@ def ensure_standalone(  # noqa: PLR0913
 
     Args:
         macos_arch: macOS 架构（``"x86_64"`` 或 ``"arm64"``），None 表示 Linux。
+        expected_hash: 期望 sha256 hex，非 None 时下载后校验。
     """
     python_bin = StandaloneRuntime.marker_path(runtime_dir, version)
     if python_bin.is_file():
@@ -433,7 +516,9 @@ def ensure_standalone(  # noqa: PLR0913
         if stage is not None:
             stage.hit_cache()
     else:
-        tar_path = download_standalone(version, release_tag, cache_dir, stage=stage, macos_arch=macos_arch)
+        tar_path = download_standalone(
+            version, release_tag, cache_dir, stage=stage, macos_arch=macos_arch, expected_hash=expected_hash
+        )
         extract_standalone(tar_path, runtime_dir)
     return runtime_dir
 

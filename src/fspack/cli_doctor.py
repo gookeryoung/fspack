@@ -50,6 +50,7 @@ from fspack.doctor_bench import (
 )
 from fspack.doctor_envs import (
     _check_cache_dir,
+    _check_cache_integrity,
     _check_fspack_version,
     _check_mirror_config,
     _check_platform_info,
@@ -112,6 +113,7 @@ __all__ = [
     "_build_single_template",
     "_build_table",
     "_check_cache_dir",
+    "_check_cache_integrity",
     "_check_clang",
     "_check_fspack_version",
     "_check_gcc",
@@ -150,6 +152,7 @@ __all__ = [
     "print_doctor_report",
     "run_doctor",
     "run_doctor_bench",
+    "run_doctor_cache_check",
     "run_doctor_test",
 ]
 
@@ -194,3 +197,21 @@ def run_doctor() -> DoctorReport:
         env_info=tuple(env_info),
         tool_checks=tuple(tool_checks),
     )
+
+
+def run_doctor_cache_check() -> CheckResult:
+    """执行缓存完整性检查，渲染结果到控制台并返回 :class:`CheckResult`.
+
+    iter-128 引入：``fsp doctor --check-cache`` 调用。
+
+    扫描 ``wheel_cache_dir()`` 下的 ``.deps-*.json`` 依赖解析缓存文件，
+    校验 JSON 结构完整性，损坏文件自动删除。结果用单行表格渲染（复用
+    :func:`_build_table`），返回 :class:`CheckResult` 便于测试断言。
+    """
+    from fspack.config.cache import wheel_cache_dir
+    from fspack.console import console
+
+    result = _check_cache_integrity(wheel_cache_dir())
+    console.step("缓存完整性检查")
+    console.rich.print(_build_table("缓存完整性", (result,)))
+    return result

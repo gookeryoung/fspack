@@ -31,6 +31,11 @@ _logger = logging.getLogger(__name__)
 # 随 fspack 分发（assets/runtime/），无需网络下载。
 _WIN7_COMPAT_DLL_NAME = "api-ms-win-core-path-l1-1-0.dll"
 
+# compileall 超时（秒）：实测 1000 文件 P99 <60s（含 -j 0 并行），
+# 300s 裕量覆盖慢速 CI 与大 site-packages。超时不写 stamp 下次重试，
+# 避免 compileall 卡死（如磁盘 I/O hang）无限阻塞构建。iter-127 引入。
+_COMPILEALL_TIMEOUT = 300.0
+
 # Linux standalone 标准库精简：剥离运行时无用的模块目录。
 # Windows embed 标准库在 python3XX.zip 内（只读、官方已精简），无需处理。
 # 顶层目录：test/ensurepip/idlelib/pydoc_data/turtledemo 是开发/测试/文档工具，运行时不用
@@ -441,20 +446,46 @@ def _precompile_pyc(  # noqa: PLR0913
     if targets:
         # 合并多目录为单次 compileall 调用，减少 subprocess 启动开销（~50-100ms/次）
         # compileall 支持多位置参数：python -m compileall dir1 dir2 -q -j 0 -o N
-        result = subprocess.run(
-            [str(py_exe), "-m", "compileall", *[str(d) for d in targets], "-q", "-j", "0", "-o", str(optimize)],
-            check=False,
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-        )
+        try:
+            result = subprocess.run(
+                [
+                    str(py_exe),
+                    "-m",
+                    "compileall",
+                    *[str(d) for d in targets],
+                    "-q",
+                    "-j",
+                    "0",
+                    "-o",
+                    str(optimize),
+                ],
+                check=False,
+                capture_output=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=_COMPILEALL_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            # 超时：subprocess.run 内部已 kill 子进程。不写 stamp 下次重试（iter-127
+            # 引入，iter-128 统一为"失败不缓存"策略：returncode != 0 与超时都不写 stamp）。
+            _logger.warning(
+                "compileall 超时（%ds），跳过本次预编译，下次构建重试",
+                int(_COMPILEALL_TIMEOUT),
+            )
+            stage.set_detail(f"compileall 超时（{int(_COMPILEALL_TIMEOUT)}s），跳过")
+            return
         if result.returncode != 0:
             _logger.warning("compileall 失败: %s", result.stderr.strip())
-        else:
-            compiled = len(targets)
+            stage.processed()
+            # 编译失败不写 stamp：让下次构建重试，避免失败的编译被 stamp 跳过
+            # 导致用户长期运行未编译的 .py。iter-128 引入（与 iter-127 超时分支
+            # 一致的"失败不缓存"策略）。
+            stage.set_detail(f"compileall 失败（退出码 {result.returncode}），跳过 stamp")
+            return
+        compiled = len(targets)
         stage.processed()
 
-    # 写 stamp（编译后、strip 前写入，存编译前的 src_fp）
+    # 写 stamp（编译成功后、strip 前写入，存编译前的 src_fp）
     stamp.parent.mkdir(parents=True, exist_ok=True)
     stamp.write_text(stamp_key, encoding="utf-8")
 

@@ -151,18 +151,25 @@ def download_wheels(  # noqa: PLR0913
     _logger.info("下载依赖 wheel: %s", " ".join(filtered))
     before = {f.name for f in cache_dir.glob("*.whl")}
 
-    result = _run_pip_download(
-        filtered,
-        base_args,
-        py,
-        py_version,
-        platform_tags,
-        pypi_index,
-        cache_dir,
-        extra_index_urls=extra_index_urls,
-        find_links=find_links,
-        require_hashes=require_hashes,
-    )
+    try:
+        result = _run_pip_download(
+            filtered,
+            base_args,
+            py,
+            py_version,
+            platform_tags,
+            pypi_index,
+            cache_dir,
+            extra_index_urls=extra_index_urls,
+            find_links=find_links,
+            require_hashes=require_hashes,
+        )
+    except DependencyError:
+        # pip download 失败时清理本次部分下载的 .whl：pip 可能已下载部分 wheel
+        # 才失败，残留的半成品 wheel 会被下次构建的 --no-index 离线解析错误命中，
+        # 导致依赖缺失。清理后下次构建重新下载完整依赖。
+        _cleanup_partial_wheels(cache_dir, before)
+        raise
 
     wheel_names, used_fallback = _parse_wheel_names(result.stdout, cache_dir)
     wheels = [cache_dir / name for name in wheel_names if (cache_dir / name).is_file()]
@@ -181,6 +188,29 @@ def _prefilter_by_python_version(packages: tuple[str, ...] | list[str], py_versi
     if not filtered:
         _logger.info("所有依赖被 python_version 标记过滤，跳过下载")
     return filtered
+
+
+def _cleanup_partial_wheels(cache_dir: Path, before: set[str]) -> None:
+    """清理本次下载产生的部分 wheel 文件.
+
+    pip download 失败时可能已下载部分 wheel 才中断，残留的半成品 wheel 会被
+    下次构建的 ``--no-index`` 离线解析错误命中（认为依赖已就绪但实际不完整），
+    导致依赖缺失。删除本次新增的 wheel（``cache_dir`` 中存在但不在 ``before``
+    集合中的），保留下载前已存在的 wheel（其他项目的依赖缓存）。
+
+    Args:
+        cache_dir: wheel 缓存目录.
+        before: 下载前 ``cache_dir`` 中已有的 wheel 文件名集合.
+    """
+    partial = [f for f in cache_dir.glob("*.whl") if f.name not in before]
+    if not partial:
+        return
+    for whl in partial:
+        try:
+            whl.unlink()
+        except OSError as e:
+            _logger.warning("清理部分下载的 wheel 失败 %s: %s", whl, e)
+    _logger.warning("pip download 失败，已清理 %d 个部分下载的 wheel", len(partial))
 
 
 def _build_pip_download_args(

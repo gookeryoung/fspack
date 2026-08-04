@@ -38,6 +38,7 @@ from fspack.packaging.wheels.downloader import (
     _UV_RESOLVED_LINE_RE,  # noqa: F401
     _build_pip_download_args,  # noqa: F401
     _build_sdist_wheels,  # noqa: F401
+    _cleanup_partial_wheels,  # noqa: F401
     _download_one_resolved,  # noqa: F401
     _download_online,  # noqa: F401
     _download_resolved_parallel,  # noqa: F401

@@ -121,6 +121,26 @@ def test_extract_embed_bad_zip(tmp_path: Path) -> None:
     bad.write_bytes(b"not a zip")
     with pytest.raises(EmbedError, match="embed zip 损坏"):
         extract_embed(bad, tmp_path / "runtime")
+    # iter-130：损坏归档应被删除，避免下次构建缓存命中损坏文件反复解压失败
+    assert not bad.exists(), "损坏的 embed zip 应被删除"
+
+
+def test_extract_embed_bad_zip_unlink_failure_warns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """删除损坏 embed zip 失败时仅告警不抛（仍抛 EmbedError 让上层处理）."""
+    bad = tmp_path / "bad.zip"
+    bad.write_bytes(b"not a zip")
+
+    def fail_unlink(self: Path) -> None:
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(Path, "unlink", fail_unlink)
+    with caplog.at_level("WARNING", logger="fspack.packaging.runtime"), pytest.raises(
+        EmbedError, match="embed zip 损坏"
+    ):
+        extract_embed(bad, tmp_path / "runtime")
+    assert any("删除损坏的 embed zip 失败" in r.message for r in caplog.records)
 
 
 def test_write_pth_content(tmp_path: Path) -> None:
@@ -306,6 +326,24 @@ def test_extract_standalone_bad_tar(tmp_path: Path) -> None:
     bad.write_bytes(b"not a tar")
     with pytest.raises(EmbedError, match="tarball 损坏"):
         extract_standalone(bad, tmp_path / "runtime")
+    # iter-130：损坏归档应被删除，避免下次构建缓存命中损坏文件反复解压失败
+    assert not bad.exists(), "损坏的 tarball 应被删除"
+
+
+def test_extract_standalone_bad_tar_unlink_failure_warns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """删除损坏 tarball 失败时仅告警不抛（仍抛 EmbedError 让上层处理）."""
+    bad = tmp_path / "bad.tar.gz"
+    bad.write_bytes(b"not a tar")
+
+    def fail_unlink(self: Path) -> None:
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(Path, "unlink", fail_unlink)
+    with caplog.at_level("WARNING", logger="fspack.packaging.runtime"), pytest.raises(EmbedError, match="tarball 损坏"):
+        extract_standalone(bad, tmp_path / "runtime")
+    assert any("删除损坏的 python-build-standalone tarball 失败" in r.message for r in caplog.records)
 
 
 def test_ensure_standalone_skips_when_python_present(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

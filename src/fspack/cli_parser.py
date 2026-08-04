@@ -398,12 +398,13 @@ def _add_init_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]
 
 
 def _add_doctor_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    """添加 doctor 子命令：环境诊断 + 模板构建测试 + 性能基准.
+    """添加 doctor 子命令：环境诊断 + 模板构建测试 + 性能基准 + 缓存完整性检查.
 
     无参数时仅执行环境诊断（检查工具可用性与配置）。``--test`` 运行
     ``assets/templates/`` 下所有项目模板的构建，打印汇总结果。``--bench``
     在 ``--test`` 基础上收集性能数据（各阶段耗时、下载量、缓存命中），
-    输出性能分析报告，作为后续优化的基准。
+    输出性能分析报告，作为后续优化的基准。``--check-cache`` 扫描 wheel
+    缓存目录的依赖解析缓存文件，删除损坏文件（iter-128）。
     """
     p = sub.add_parser("doctor", aliases=["d"], help="环境诊断：检查打包工具可用性与配置")
     p.add_argument(
@@ -415,4 +416,9 @@ def _add_doctor_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParse
         "--bench",
         action="store_true",
         help="运行所有模板构建并收集性能数据，输出性能分析报告（基准评估）",
+    )
+    p.add_argument(
+        "--check-cache",
+        action="store_true",
+        help="扫描 wheel 缓存目录的依赖解析缓存文件，删除损坏文件",
     )

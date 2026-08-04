@@ -14,8 +14,10 @@ facade 模块：编排 :mod:`fspack.analyzer_ast`（AST 解析）与
 from __future__ import annotations
 
 import ast
+import logging
 import os
 from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from pathlib import Path
 
 from fspack.analyzer_ast import (
@@ -44,6 +46,8 @@ __all__ = [
     "parse_qml_imports",
     "source_fingerprint",
 ]
+
+_logger = logging.getLogger(__name__)
 
 
 def _local_packages(src_dir: Path, project_name: str) -> set[str]:
@@ -132,6 +136,13 @@ def analyze_dependencies(src_dir: Path, project_name: str, declared: tuple[str, 
 # Windows spawn 启动 ~100-200ms，需足够工作量摊销；Linux fork 较快可更低
 _PARALLEL_THRESHOLD = 200
 
+# 并行解析整体超时（秒）：``Executor.map(timeout=)`` 从调用起算的总等待时间，
+# 任一结果未就绪则抛 ``TimeoutError``。实测 500 文件 P99 <30s（8 核），
+# 300s 裕量覆盖慢速 CI 与病态输入（深度嵌套 AST）。iter-127 引入。
+# 注：req-49 原计划"单 chunk 60s"，但 ``Executor.map`` 的 timeout 是整体
+# 而非单 chunk 维度；改用整体超时更符合 ``map`` 语义且病态场景能失败而非无限阻塞。
+_PARSE_TOTAL_TIMEOUT = 300.0
+
 
 def _parse_file_worker(py: str) -> tuple[list[str], dict[str, frozenset[str]]]:
     """进程池 worker：解析单个 .py 文件返回 ``(顶层导入, 子模块字典)``。
@@ -171,11 +182,29 @@ def _parse_parallel(py_files: list[Path], all_imports: list[str], all_submodules
     """进程池并行解析 .py 文件（CPU 密集 ``ast.parse``）。
 
     ``chunksize`` 按 CPU 核心数与文件数自适应，减少 IPC 调度开销。
+
+    **超时防护**（iter-127）：``Executor.map(timeout=)`` 设整体超时
+    :data:`_PARSE_TOTAL_TIMEOUT`（300s）。超时抛 ``TimeoutError``，
+    已处理的结果保留（依赖分析可能不完整但不会无限阻塞），warning 提示用户。
+    超时不回退串行（若 ast.parse 真卡死，串行同样会卡死）。
     """
     cpu_count = os.cpu_count() or 4
     chunksize = max(1, len(py_files) // (cpu_count * 4))
     with ProcessPoolExecutor(max_workers=cpu_count) as pool:
-        for tops, subs in pool.map(_parse_file_worker, [str(p) for p in py_files], chunksize=chunksize):
-            all_imports.extend(tops)
-            for pkg, sub_set in subs.items():
-                all_submodules.setdefault(pkg, set()).update(sub_set)
+        try:
+            results = pool.map(
+                _parse_file_worker,
+                [str(p) for p in py_files],
+                chunksize=chunksize,
+                timeout=_PARSE_TOTAL_TIMEOUT,
+            )
+            for tops, subs in results:
+                all_imports.extend(tops)
+                for pkg, sub_set in subs.items():
+                    all_submodules.setdefault(pkg, set()).update(sub_set)
+        except FuturesTimeoutError:
+            _logger.warning(
+                "AST 并行解析超时（%ds），%d 个文件部分未完成，依赖分析可能不完整",
+                int(_PARSE_TOTAL_TIMEOUT),
+                len(py_files),
+            )

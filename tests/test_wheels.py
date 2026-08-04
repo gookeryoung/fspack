@@ -14,6 +14,7 @@ from fspack.exceptions import DependencyError
 from fspack.packaging.wheels import (
     _PIP_PYTHON_NAMES,
     _build_sdist_wheels,
+    _cleanup_partial_wheels,
     _deps_cache_key,
     _download_one_resolved,
     _download_online,
@@ -151,6 +152,97 @@ def test_download_wheels_pip_error(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr("fspack.packaging.wheels.resolver._find_uv", lambda: None)
     with pytest.raises(DependencyError, match="依赖下载失败"):
         download_wheels(("numpy",), "3.11.9", "https://idx", tmp_path / "cache")
+
+
+def test_download_wheels_pip_error_cleans_partial_wheels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """pip download 失败时清理本次部分下载的 wheel，保留下载前已存在的 wheel（iter-130）."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    # 下载前已存在的 wheel（其他项目缓存），应保留
+    existing = cache / "otherpkg-1.0-cp311-cp311-win_amd64.whl"
+    existing.write_bytes(b"existing")
+    # 本次部分下载的 wheel（pip 失败前已下载），应清理
+    partial_name = "numpy-1.24.0-cp311-cp311-win_amd64.whl"
+    err = subprocess.CalledProcessError(1, "pip", stderr="no wheel")
+
+    def fake_run(cmd: list[str], **kw: Any) -> object:
+        # 模拟 pip 下载了部分 wheel 后失败
+        (cache / partial_name).write_bytes(b"partial")
+        raise err
+
+    def fake_stream(cmd: list[str]) -> CompletedStub:
+        raise err
+
+    monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    monkeypatch.setattr("fspack.packaging.wheels.downloader._find_pip_python", lambda: "/py/python")
+    monkeypatch.setattr("fspack.packaging.wheels.resolver._find_uv", lambda: None)
+
+    with caplog.at_level("WARNING", logger="fspack.packaging.wheels.downloader"), pytest.raises(
+        DependencyError, match="依赖下载失败"
+    ):
+        download_wheels(("numpy",), "3.11.9", "https://idx", cache)
+
+    # 部分下载的 wheel 应被清理
+    assert not (cache / partial_name).exists(), "部分下载的 wheel 应被清理"
+    # 下载前已存在的 wheel 应保留
+    assert existing.is_file(), "下载前已存在的 wheel 应保留"
+    assert any("清理" in r.message and "wheel" in r.message for r in caplog.records)
+
+
+def test_cleanup_partial_wheels_preserves_existing(tmp_path: Path) -> None:
+    """_cleanup_partial_wheels 仅删除不在 before 集合中的 wheel."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    existing = cache / "existing-1.0.whl"
+    partial1 = cache / "partial-1.0.whl"
+    partial2 = cache / "partial-2.0.whl"
+    existing.write_bytes(b"old")
+    partial1.write_bytes(b"new1")
+    partial2.write_bytes(b"new2")
+
+    _cleanup_partial_wheels(cache, before={"existing-1.0.whl"})
+
+    assert existing.is_file()
+    assert not partial1.exists()
+    assert not partial2.exists()
+
+
+def test_cleanup_partial_wheels_no_partial(tmp_path: Path) -> None:
+    """无部分下载 wheel 时 _cleanup_partial_wheels 无操作."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    existing = cache / "existing-1.0.whl"
+    existing.write_bytes(b"old")
+
+    # 无部分下载，before 与当前一致
+    _cleanup_partial_wheels(cache, before={"existing-1.0.whl"})
+
+    assert existing.is_file()
+
+
+def test_cleanup_partial_wheels_unlink_oserror_warns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """_cleanup_partial_wheels 删除失败时 warning 不中断."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    partial = cache / "partial-1.0.whl"
+    partial.write_bytes(b"new")
+
+    original_unlink = Path.unlink
+
+    def fail_unlink(self: Path, *args: Any, **kwargs: Any) -> None:
+        if self == partial:
+            raise OSError("permission denied")
+        original_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_unlink)
+    with caplog.at_level("WARNING", logger="fspack.packaging.wheels.downloader"):
+        _cleanup_partial_wheels(cache, before=set())
+    assert any("清理部分下载的 wheel 失败" in r.message for r in caplog.records)
 
 
 def test_download_wheels_python_disappeared(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -302,11 +394,69 @@ def test_load_deps_cache_miss_when_wheel_deleted(tmp_path: Path) -> None:
 
 
 def test_load_deps_cache_handles_corrupt_json(tmp_path: Path) -> None:
-    """缓存文件 JSON 损坏时返回 None 不抛异常."""
+    """缓存文件 JSON 损坏时返回 None 不抛异常（iter-128 起删除损坏文件）."""
     cache = tmp_path / "cache"
     cache.mkdir()
-    (cache / ".deps-corrupt.json").write_text("{bad json", encoding="utf-8")
+    corrupt_file = cache / ".deps-corrupt.json"
+    corrupt_file.write_text("{bad json", encoding="utf-8")
     assert _load_deps_cache(cache, "corrupt") is None
+    # iter-128：损坏的缓存文件被删除，避免下次构建重复告警
+    assert not corrupt_file.is_file()
+
+
+def test_load_deps_cache_deletes_corrupt_non_dict_json(tmp_path: Path) -> None:
+    """缓存根对象非 dict（如 list/int）时删除文件（iter-128）."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    corrupt_file = cache / ".deps-corrupt.json"
+    # JSON 合法但结构不对：根对象是 list 而非 dict
+    corrupt_file.write_text("[1, 2, 3]", encoding="utf-8")
+    assert _load_deps_cache(cache, "corrupt") is None
+    assert not corrupt_file.is_file()
+
+
+def test_load_deps_cache_deletes_corrupt_wheels_field(tmp_path: Path) -> None:
+    """wheels 字段类型错误（非 list）时删除文件（iter-128）."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    corrupt_file = cache / ".deps-corrupt.json"
+    # wheels 字段是字符串而非 list
+    corrupt_file.write_text('{"wheels": "not-a-list"}', encoding="utf-8")
+    assert _load_deps_cache(cache, "corrupt") is None
+    assert not corrupt_file.is_file()
+
+
+def test_load_deps_cache_deletes_invalid_utf8(tmp_path: Path) -> None:
+    """缓存文件含非法 UTF-8 字节时删除文件（iter-128）.
+
+    UnicodeDecodeError 是 ValueError 子类，被 except (json.JSONDecodeError, ValueError) 捕获。
+    """
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    corrupt_file = cache / ".deps-corrupt.json"
+    # 写入非法 UTF-8 字节序列（0xff 不是合法 UTF-8 起始字节）
+    corrupt_file.write_bytes(b"\xff\xfe{bad}")
+    assert _load_deps_cache(cache, "corrupt") is None
+    assert not corrupt_file.is_file()
+
+
+def test_load_deps_cache_oserror_keeps_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """read_text 抛 OSError（文件系统错误）时不删除文件（iter-128）.
+
+    OSError 可能是瞬时文件系统问题（权限/磁盘 I/O），删除反而误伤可恢复的缓存。
+    """
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    cache_file = cache / ".deps-corrupt.json"
+    cache_file.write_text('{"wheels": ["x.whl"]}', encoding="utf-8")
+
+    def raise_oserror(self: Path, *args: object, **kwargs: object) -> str:
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(Path, "read_text", raise_oserror)
+    assert _load_deps_cache(cache, "corrupt") is None
+    # OSError 不删除文件：可能是瞬时问题，下次构建重试
+    assert cache_file.is_file()
 
 
 def test_save_deps_cache_best_effort(tmp_path: Path) -> None:
@@ -2030,3 +2180,136 @@ def test_download_wheels_cache_miss_when_private_sources_change(
         extra_index_urls=("https://pypi.company.com/simple/",),
     )
     assert call_count["pip_run"] > first_count, "私有包源变化时应跳过缓存重新调用 pip"
+
+
+# ---------- require_hashes 路径（iter-126 补覆盖）----------
+
+
+def test_download_online_require_hashes_uses_hashes_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """require_hashes=True 且 uv 可用时走 _download_with_hashes：命令含 --require-hashes -r."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setattr("fspack.packaging.wheels.resolver._find_uv", lambda: "/usr/bin/uv")
+    monkeypatch.setattr(
+        "fspack.packaging.wheels.resolver._resolve_with_uv",
+        lambda pkgs, pv, pt, idx, **kw: "numpy==1.24.0 \\\n  --hash=sha256:abc\n",
+    )
+    captured: dict[str, list[str]] = {}
+
+    def fake_stream(cmd: list[str]) -> CompletedStub:
+        captured["cmd"] = cmd
+        return CompletedStub()
+
+    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
+    _download_online(
+        ["numpy>=1.0"],
+        base_args,
+        "/py/python",
+        "3.11.9",
+        ("win_amd64",),
+        "https://idx/simple",
+        cache,
+        require_hashes=True,
+    )
+    cmd = captured["cmd"]
+    assert "--require-hashes" in cmd
+    assert "-r" in cmd
+    # 临时 requirements 文件路径（-r 后跟文件名）
+    r_idx = cmd.index("-r")
+    assert r_idx + 1 < len(cmd), "-r 后应有文件路径"
+    req_file = cmd[r_idx + 1]
+    assert "requirements" in req_file or req_file.endswith(".txt")
+    # 调用完成后临时文件应被删除
+    assert not Path(req_file).exists(), "临时 requirements.txt 应被删除"
+
+
+def test_download_online_require_hashes_no_uv_degrades(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """require_hashes=True 但 uv 不可用时降级为不校验（warning），走 pip 完整解析下载."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setattr("fspack.packaging.wheels.resolver._find_uv", lambda: None)
+    captured: dict[str, list[str]] = {}
+
+    def fake_stream(cmd: list[str]) -> CompletedStub:
+        captured["cmd"] = cmd
+        return CompletedStub()
+
+    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
+    with caplog.at_level("WARNING"):
+        _download_online(
+            ["numpy>=1.0"],
+            base_args,
+            "/py/python",
+            "3.11.9",
+            ("win_amd64",),
+            "https://idx/simple",
+            cache,
+            require_hashes=True,
+        )
+    # 降级后走 pip 完整解析（stream=True），命令含 -i index 但不含 --require-hashes
+    cmd = captured["cmd"]
+    assert "-i" in cmd
+    assert "https://idx/simple" in cmd
+    assert "--require-hashes" not in cmd
+    # warning 记录了降级
+    assert any("require_hashes" in rec.message and "降级" in rec.message for rec in caplog.records)
+
+
+def test_download_wheels_require_hashes_cache_hit_skips_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """require_hashes=True 缓存命中时跳过校验（缓存 wheel 已首次校验）."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    # 预置依赖解析缓存
+    wheel_file = cache / "numpy-1.24.0-cp311-cp311-win_amd64.whl"
+    wheel_file.write_bytes(b"fake wheel")
+    _save_deps_cache(cache, _deps_cache_key(("numpy",), "3.11.9", ("win_amd64",), (), ()), [wheel_file])
+
+    # pip 不应被调用
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
+        raise AssertionError("缓存命中不应调用 pip")
+
+    monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.wheels.downloader._find_pip_python", lambda: "/py/python")
+    wheels = download_wheels(("numpy",), "3.11.9", "https://idx/simple", cache, require_hashes=True)
+    assert wheels == [wheel_file]
+
+
+def test_download_with_hashes_cleanup_on_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_download_with_hashes 路径：pip 失败时临时 requirements.txt 仍被删除.
+
+    `_run_pip` 把 `CalledProcessError` 转为 `DependencyError`（suppress_error=False），
+    但 `finally` 块仍执行清理。本测试断言临时文件不残留。
+    """
+    from fspack.packaging.wheels.resolver import _download_with_hashes
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setattr(
+        "fspack.packaging.wheels.resolver._resolve_with_uv",
+        lambda pkgs, pv, pt, idx, **kw: "numpy==1.24.0 \\\n  --hash=sha256:abc\n",
+    )
+
+    def fake_stream(cmd: list[str]) -> CompletedStub:
+        # 模拟 pip 校验失败（hash mismatch）
+        raise subprocess.CalledProcessError(1, cmd, stderr="hash mismatch")
+
+    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
+    # _run_pip 把 CalledProcessError 转为 DependencyError
+    with pytest.raises(DependencyError, match="hash mismatch"):
+        _download_with_hashes(
+            ["numpy>=1.0"],
+            base_args,
+            [],
+            "https://idx/simple",
+            "3.11.9",
+            ("win_amd64",),
+            cache,
+        )
+    # 临时 requirements 文件应被清理（finally 块）
+    leftover = list(cache.glob("*requirements*.txt"))
+    assert not leftover, "失败后临时 requirements.txt 应被 finally 清理"

@@ -34,6 +34,7 @@ from fspack.builder import (
 from fspack.config import BuildOptions, DependencyReport, get_mirror
 from fspack.console import console
 from fspack.exceptions import DependencyError
+from fspack.packaging.pipeline import _warn_dist_incomplete
 from fspack.packaging.pipeline.stages import BuildContext
 from fspack.platform import Platform
 from fspack.progress import StageRecorder
@@ -1448,7 +1449,11 @@ def test_precompile_pyc_python_missing_skips(tmp_path: Path, monkeypatch: pytest
 def test_precompile_pyc_compileall_failure_warns_not_raises(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """compileall 非零退出码时仅 warning 不抛异常，继续处理后续目录."""
+    """compileall 非零退出码时仅 warning 不抛异常，且不写 stamp（下次构建重试）.
+
+    iter-128 扩展"失败不缓存"策略：returncode != 0 与超时一致都不写 stamp，
+    避免失败的编译被 stamp 跳过导致用户长期运行未编译的 .py。
+    """
     runtime = tmp_path / "runtime"
     runtime.mkdir(parents=True, exist_ok=True)
     (runtime / "python.exe").write_bytes(b"")
@@ -1469,6 +1474,8 @@ def test_precompile_pyc_compileall_failure_warns_not_raises(
         _precompile_pyc(dist, runtime, "3.11.9", Platform.WINDOWS, strip_py=False, stage=st)
 
     assert any("compileall 失败" in r.message for r in caplog.records)
+    # 编译失败不写 stamp（iter-128）：下次构建重试，避免失败的编译被缓存跳过
+    assert not (dist / ".pyc_stamp").is_file()
 
 
 def test_precompile_pyc_optimize_passes_o_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2126,6 +2133,70 @@ def test_clean_dist_preserves_nsi(tmp_path: Path) -> None:
 
 def test_clean_dist_no_dist(tmp_path: Path) -> None:
     clean_dist(tmp_path)
+
+
+# --- _warn_dist_incomplete 测试（iter-130 dist 半成品检测） ---
+
+
+def test_warn_dist_incomplete_no_dist(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """dist 目录不存在时不告警."""
+    with caplog.at_level("WARNING", logger="fspack.packaging.pipeline"):
+        _warn_dist_incomplete(tmp_path / "nonexistent")
+    assert not caplog.records
+
+
+def test_warn_dist_incomplete_empty_dist(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """dist 目录为空时不告警（无构建产物）."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    with caplog.at_level("WARNING", logger="fspack.packaging.pipeline"):
+        _warn_dist_incomplete(dist)
+    assert not caplog.records
+
+
+def test_warn_dist_incomplete_only_nsi(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """dist 仅含 installer.nsi（clean_dist 保留）时不告警."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "installer.nsi").write_text('Name "app"', encoding="utf-8")
+    with caplog.at_level("WARNING", logger="fspack.packaging.pipeline"):
+        _warn_dist_incomplete(dist)
+    assert not caplog.records
+
+
+def test_warn_dist_incomplete_artifacts_no_stamp_warns(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """dist 含构建产物但无 stamp 文件时告警（中断/失败的上次构建）."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "runtime").mkdir()
+    (dist / "src").mkdir()
+    (dist / "app.exe").write_bytes(b"")
+    with caplog.at_level("WARNING", logger="fspack.packaging.pipeline"):
+        _warn_dist_incomplete(dist)
+    assert any("残留产物" in r.message and "fsp c" in r.message for r in caplog.records)
+
+
+def test_warn_dist_incomplete_with_pyc_stamp_no_warn(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """dist 含产物且有 .pyc_stamp 时不告警（上次构建至少完成到编译阶段）."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "runtime").mkdir()
+    (dist / "src").mkdir()
+    (dist / ".pyc_stamp").write_text("fingerprint", encoding="utf-8")
+    with caplog.at_level("WARNING", logger="fspack.packaging.pipeline"):
+        _warn_dist_incomplete(dist)
+    assert not caplog.records
+
+
+def test_warn_dist_incomplete_with_nuitka_stamp_no_warn(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """dist 含产物且有 .nuitka_compile_stamp 时不告警."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "runtime").mkdir()
+    (dist / ".nuitka_compile_stamp").write_text("fingerprint", encoding="utf-8")
+    with caplog.at_level("WARNING", logger="fspack.packaging.pipeline"):
+        _warn_dist_incomplete(dist)
+    assert not caplog.records
 
 
 # --- _trim_standalone_runtime 测试 ---

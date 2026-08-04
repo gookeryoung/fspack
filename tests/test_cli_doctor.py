@@ -454,6 +454,167 @@ def test_check_cache_dir_scan_error(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert "扫描缓存目录失败" in result.suggestion
 
 
+# ---- _check_cache_integrity（iter-128） ----
+
+
+def test_check_cache_integrity_dir_not_exists(tmp_path: Path) -> None:
+    """缓存目录不存在时返回 OK（无需检查）."""
+    from fspack.cli_doctor import _check_cache_integrity
+
+    result = _check_cache_integrity(tmp_path / "no-cache")
+    assert result.status is CheckStatus.OK
+    assert "缓存目录不存在" in result.detail
+
+
+def test_check_cache_integrity_no_cache_files(tmp_path: Path) -> None:
+    """缓存目录存在但无 .deps-*.json 文件时返回 OK."""
+    from fspack.cli_doctor import _check_cache_integrity
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    # 只有普通 wheel 文件，无 deps 缓存
+    (cache / "numpy-1.0.whl").write_bytes(b"x")
+
+    result = _check_cache_integrity(cache)
+    assert result.status is CheckStatus.OK
+    assert "无依赖解析缓存文件" in result.detail
+
+
+def test_check_cache_integrity_all_valid(tmp_path: Path) -> None:
+    """所有缓存文件结构有效时返回 OK."""
+    from fspack.cli_doctor import _check_cache_integrity
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / ".deps-key1.json").write_text('{"wheels": ["numpy-1.0.whl"]}', encoding="utf-8")
+    (cache / ".deps-key2.json").write_text('{"wheels": ["rich-1.0.whl", "click-1.0.whl"]}', encoding="utf-8")
+
+    result = _check_cache_integrity(cache)
+    assert result.status is CheckStatus.OK
+    assert "扫描 2 个缓存文件" in result.detail
+    assert "全部有效" in result.detail
+    # 有效文件保留
+    assert (cache / ".deps-key1.json").is_file()
+    assert (cache / ".deps-key2.json").is_file()
+
+
+def test_check_cache_integrity_corrupt_json_deleted(tmp_path: Path) -> None:
+    """JSON 损坏的缓存文件被删除并返回 WARN."""
+    from fspack.cli_doctor import _check_cache_integrity
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / ".deps-good.json").write_text('{"wheels": ["numpy-1.0.whl"]}', encoding="utf-8")
+    corrupt = cache / ".deps-bad.json"
+    corrupt.write_text("{bad json", encoding="utf-8")
+
+    result = _check_cache_integrity(cache)
+    assert result.status is CheckStatus.WARN
+    assert "1 有效" in result.detail
+    assert "1 损坏已删除" in result.detail
+    assert ".deps-bad.json" in result.detail
+    # 损坏文件被删除
+    assert not corrupt.is_file()
+    # 有效文件保留
+    assert (cache / ".deps-good.json").is_file()
+
+
+def test_check_cache_integrity_non_dict_root_deleted(tmp_path: Path) -> None:
+    """JSON 根对象非 dict（如 list）的缓存文件被删除."""
+    from fspack.cli_doctor import _check_cache_integrity
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    corrupt = cache / ".deps-corrupt.json"
+    corrupt.write_text("[1, 2, 3]", encoding="utf-8")
+
+    result = _check_cache_integrity(cache)
+    assert result.status is CheckStatus.WARN
+    assert not corrupt.is_file()
+
+
+def test_check_cache_integrity_wrong_wheels_type_deleted(tmp_path: Path) -> None:
+    """wheels 字段非 list 的缓存文件被删除."""
+    from fspack.cli_doctor import _check_cache_integrity
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    corrupt = cache / ".deps-corrupt.json"
+    corrupt.write_text('{"wheels": "not-a-list"}', encoding="utf-8")
+
+    result = _check_cache_integrity(cache)
+    assert result.status is CheckStatus.WARN
+    assert not corrupt.is_file()
+
+
+def test_check_cache_integrity_multiple_corrupt_preview(tmp_path: Path) -> None:
+    """多个损坏文件时详情只列前 3 个文件名 + 总数."""
+    from fspack.cli_doctor import _check_cache_integrity
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    for i in range(5):
+        (cache / f".deps-bad{i}.json").write_text("{bad", encoding="utf-8")
+
+    result = _check_cache_integrity(cache)
+    assert result.status is CheckStatus.WARN
+    assert "5 损坏已删除" in result.detail
+    assert "等 5 个" in result.detail
+
+
+def test_check_cache_integrity_oserror_skipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """read_text 抛 OSError 时不计为损坏（可能是瞬时文件系统问题）."""
+    from fspack.cli_doctor import _check_cache_integrity
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    cache_file = cache / ".deps-key.json"
+    cache_file.write_text('{"wheels": ["x.whl"]}', encoding="utf-8")
+
+    def raise_oserror(self: Path, *args: object, **kwargs: object) -> str:
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(Path, "read_text", raise_oserror)
+    result = _check_cache_integrity(cache)
+    # OSError 不计为损坏，0 损坏 -> OK
+    assert result.status is CheckStatus.OK
+    assert "扫描 1 个缓存文件" in result.detail
+    # 文件未被删除
+    assert cache_file.is_file()
+
+
+def test_run_doctor_cache_check_renders_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """run_doctor_cache_check 调 _check_cache_integrity 并渲染表格，返回 CheckResult."""
+    from fspack.cli_doctor import run_doctor_cache_check
+
+    cache = tmp_path / "wheels"
+    cache.mkdir()
+    (cache / ".deps-key.json").write_text('{"wheels": ["x.whl"]}', encoding="utf-8")
+
+    # patch wheel_cache_dir 返回测试目录（run_doctor_cache_check 内部局部 import
+    # 查 fspack.config.cache 模块属性，monkeypatch 替换模块属性生效）
+    monkeypatch.setattr("fspack.config.cache.wheel_cache_dir", lambda: cache)
+
+    result = run_doctor_cache_check()
+    assert result.status is CheckStatus.OK
+    assert "扫描 1 个缓存文件" in result.detail
+
+
+def test_cli_doctor_check_cache_flag_dispatches() -> None:
+    """``fsp doctor --check-cache`` 触发 run_doctor_cache_check 调用（iter-128）."""
+    from fspack.cli import main
+
+    fake_report = DoctorReport(
+        env_info=(CheckResult("Python", CheckStatus.OK, "3.11.9"),),
+        tool_checks=(CheckResult("pip", CheckStatus.OK, "24.0"),),
+    )
+    with patch("fspack.cli_doctor.run_doctor", return_value=fake_report), patch(
+        "fspack.cli_doctor.print_doctor_report"
+    ), patch("fspack.cli_doctor.run_doctor_cache_check") as mock_check:
+        main(["doctor", "--check-cache"])
+    mock_check.assert_called_once()
+
+
 # ---- _dir_size ----
 
 

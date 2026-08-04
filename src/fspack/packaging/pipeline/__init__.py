@@ -179,6 +179,10 @@ def build(  # noqa: PLR0913
     cache = embed_cache or embed_cache_dir()
     cfg = BuildConfig(project_dir=project_dir, dist_dir=dist, embed_cache_dir=cache, mirror=mirror, target=target)
 
+    # dist 半成品检测：dist 已存在且含构建产物但缺少 stamp 文件时，提示用户清理。
+    # 在构建开始前检测，避免残留产物（中断/失败的上次构建留下）干扰本次构建。
+    _warn_dist_incomplete(dist)
+
     log_wrapper = setup_log_file(Path(log_file), log_format) if log_file is not None else None
     # 延迟导入：profile 模块顶部 from fspack.console import console 会连锁触发
     # rich.console/rich.logging/rich.theme 加载（~17ms）。仅在启用 profile 时加载。
@@ -350,6 +354,34 @@ def _execute_build(  # noqa: PLR0912, PLR0913
 
 # 清理 dist 时保留的 NSIS 脚本文件名（便于改代码后重新打包分发）
 _KEEP_NSI = "installer.nsi"
+
+# 编译阶段产出的 stamp 文件名：存在即说明上次构建至少完成到编译阶段
+_PYC_STAMP = ".pyc_stamp"
+_NUITKA_STAMP = ".nuitka_compile_stamp"
+
+
+def _warn_dist_incomplete(dist_dir: Path) -> None:
+    """检测 dist 半成品并提示用户清理.
+
+    dist 已存在且含构建产物（子目录或 .exe 文件，排除 :data:`_KEEP_NSI`）
+    但缺少任何编译 stamp 文件时，说明上次构建在编译阶段前中断。warning 提示
+    用户执行 ``fsp c`` 清理后重试，避免残留产物干扰本次构建。
+
+    stamp 存在（`.pyc_stamp` 或 `.nuitka_compile_stamp`）时视为上次构建至少
+    完成到编译阶段，不告警——这种情况下残留产物可被 stamp 缓存机制正确处理。
+    """
+    if not dist_dir.is_dir():
+        return
+    has_artifacts = any(p.name != _KEEP_NSI and (p.is_dir() or p.suffix == ".exe") for p in dist_dir.iterdir())
+    if not has_artifacts:
+        return
+    if (dist_dir / _PYC_STAMP).is_file() or (dist_dir / _NUITKA_STAMP).is_file():
+        return
+    _logger.warning(
+        "dist 目录含上次构建的残留产物但缺少 stamp 文件: %s，"
+        "可能为中断/失败的构建。建议执行 `fsp c` 清理后重新构建，避免残留文件干扰。",
+        dist_dir,
+    )
 
 
 def clean_dist(project: Path) -> None:
