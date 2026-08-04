@@ -32,6 +32,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_package_subparser(sub)
     _add_init_subparser(sub)
     _add_doctor_subparser(sub)
+    _add_cache_subparser(sub)
     return parser
 
 

@@ -15,8 +15,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 
 __all__ = [
+    "CacheHealthReport",
     "CheckResult",
     "CheckStatus",
     "DoctorReport",
@@ -113,3 +115,41 @@ class TemplateBuildResult:
     dist_size: int = 0
     entry_count: int = 0
     run_result: TemplateRunResult | None = None
+
+
+@dataclass(frozen=True)
+class CacheHealthReport:
+    """wheel 缓存目录健康扫描报告（iter-139）.
+
+    由 :func:`fspack.doctor_envs._scan_cache_health` 生成，供
+    :func:`fspack.cli_doctor.run_doctor_cache_check`/``run_cache_status``/
+    ``run_cache_clean`` 复用，避免重复扫描。
+
+    扫描期间已删除 JSON 损坏的 ``.deps-*.json`` 文件（与 iter-128
+    :func:`_check_cache_integrity` 行为一致）；``stale_deps`` 与 ``orphan_wheels``
+    需显式 :func:`_clean_cache_issues` 才会被删除。
+
+    :param cache_dir: 扫描的 wheel 缓存目录
+    :param total_deps_files: 扫描到的 ``.deps-*.json`` 文件总数（含已删除的损坏文件）
+    :param corrupt_deps_files: JSON 结构损坏已删除的 ``.deps-*.json`` 文件名列表
+    :param stale_deps_files: 引用了不存在 wheel 的 ``.deps-*.json`` 文件名列表
+        （文件本身 JSON 有效，但 ``wheels`` 列表指向已缺失的 wheel，未删除）
+    :param missing_wheels: 被 ``.deps-*.json`` 引用但 cache_dir 中不存在的 wheel 文件名列表
+    :param orphan_wheels: cache_dir 中未被任何 ``.deps-*.json`` 引用的 wheel 文件名列表
+    :param total_wheels: cache_dir 中 wheel 文件总数（``*.whl``，含孤儿）
+    :param orphan_size_bytes: 孤儿 wheel 占用字节数（供清理建议展示收益）
+    """
+
+    cache_dir: Path
+    total_deps_files: int = 0
+    corrupt_deps_files: tuple[str, ...] = ()
+    stale_deps_files: tuple[str, ...] = ()
+    missing_wheels: tuple[str, ...] = ()
+    orphan_wheels: tuple[str, ...] = ()
+    total_wheels: int = 0
+    orphan_size_bytes: int = 0
+
+    @property
+    def has_issues(self) -> bool:
+        """是否存在需要清理的问题（损坏/stale/orphan 任一即 True）."""
+        return bool(self.corrupt_deps_files or self.stale_deps_files or self.orphan_wheels)
