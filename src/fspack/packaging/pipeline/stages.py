@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Sequence
@@ -27,6 +29,7 @@ from fspack.config import (
     BuildConfig,
     BuildOptions,
     DependencyReport,
+    EntryPoint,
     ProjectInfo,
     SlimRules,
     cache_root,
@@ -89,6 +92,11 @@ _logger = logging.getLogger(__name__)
 # 默认 icon：打包在 fspack 包内，随 wheel 分发
 # stages.py 在 src/fspack/packaging/pipeline/ 下，parent.parent.parent 即 src/fspack/
 _DEFAULT_ICON = Path(__file__).parent.parent.parent / "assets" / "icons" / "app.ico"
+
+# 多入口 loader 并行编译上限（iter-133）：subprocess 释放 GIL，线程足够并行。
+# 4 上限平衡并行收益与 Windows 资源限制（mingw/gcc 子进程句柄/内存），
+# 与 _MAX_COMPILE_WORKERS（nuitka 模块）保持一致。
+_MAX_LOADER_WORKERS = 4
 
 
 @dataclass(frozen=True)
@@ -415,46 +423,108 @@ def _build_entry_loaders(ctx: BuildContext, resolved_icon: Path | None, has_tkin
     用 ``tempfile.TemporaryDirectory`` 作为 loader 编译工作目录，编译完成后自动清理，
     避免 ``dist/build/`` 残留 ``loader.c``/``icon.rc``/``icon.ico``/``icon.o`` 中间文件
     被打包进发行包。loader 缓存命中路径不创建工作目录，无副作用。
+
+    **并行编译**（iter-133）：多入口场景用 :class:`ThreadPoolExecutor` 并行编译
+    每个 entry loader（mingw/gcc/clang 子进程释放 GIL，线程足够并行）。
+    ``max_workers = min(cpu_count, :data:`_MAX_LOADER_WORKERS`)`` 平衡并行收益与
+    Windows 资源限制。共享 ``TemporaryDirectory``，每个入口分配独立子目录
+    （``<tmp>/<entry_name>``）避免 ``loader.c``/``icon.rc``/``icon.o`` 文件冲突。
+
+    **线程安全**：``exes``/``st.processed()`` 仅在主线程（``future.result()`` 迭代）
+    聚合，无共享可变状态竞争。``compile_loader`` 内部 ``stage.hit_cache()``/
+    ``stage.set_detail()`` 在 worker 线程调用，``StageRecorder._hits += 1`` 在 GIL 下
+    最坏丢失一次计数（benign race，不影响正确性）。
+
+    **异常传播**：worker 内 ``compile_loader`` 抛异常（如 ``LoaderError``）时
+    ``future.result()`` 重抛，``with ThreadPoolExecutor`` 的 ``__exit__`` 调
+    ``shutdown(wait=True)`` 等待在途任务后传播。
     """
     target = ctx.cfg.target
     exes: list[Path] = []
     with ctx.tracker.stage("生成 C loader") as st:
         source = generate_loader_source(ctx.info.py_xy, target)
+        entries = ctx.info.all_entries
+        # 单入口无需并行（线程池开销无收益）
+        if len(entries) <= 1:
+            with tempfile.TemporaryDirectory(prefix="fspack_loader_") as tmp:
+                _build_one_loader(ctx, entries[0], source, Path(tmp), resolved_icon, has_tkinter, st)
+                exes.append(_loader_exe_path(ctx, entries[0], target))
+            st.processed(len(exes))
+            return exes
+
+        cpu = os.cpu_count() or 1
+        max_workers = min(cpu, _MAX_LOADER_WORKERS)
+        _logger.info("并行编译 %d 个 entry loader（max_workers=%d）", len(entries), max_workers)
         # 临时工作目录：编译完成（或异常）后自动清理，不污染 dist/
+        # 共享 TemporaryDirectory，每入口独立子目录避免 loader.c/icon.rc/icon.o 冲突
         with tempfile.TemporaryDirectory(prefix="fspack_loader_") as tmp:
             build_dir = Path(tmp)
-            for ep in ctx.info.all_entries:
-                entry_rel = ep.entry_rel(ctx.info.src_dir)
-                result = EntryWrapper.dotted_module_name(ctx.info.src_dir, ep.file)
-                module_dotted = result[0] if result is not None else None
-                pkg_root_rel = result[1] if result is not None else "."
-                # 生成入口包装器：处理 sys.path、Qt 插件路径与包上下文（相对导入）
-                wrapper_name = f"_entry_{ep.name}.py"
-                wrapper_path = ctx.cfg.dist_dir / wrapper_name
-                wrapper_path.write_text(
-                    EntryWrapper.generate_wrapper_source(
-                        ep.name,
-                        module_dotted,
-                        entry_rel,
-                        pkg_root_rel,
-                        has_tkinter=has_tkinter,
-                        lazy_imports=ctx.opts.lazy_imports,
-                    ),
-                    encoding="utf-8",
-                )
-                # .entry 指向 wrapper（loader 读 .entry 路径运行）
-                if ctx.info.entries:
-                    # 多入口模式：每个入口写 <name>.entry
-                    (ctx.cfg.dist_dir / f"{ep.name}.entry").write_text(wrapper_name, encoding="utf-8")
-                else:
-                    # 单入口模式：写 .entry（向后兼容）
-                    (ctx.cfg.dist_dir / ".entry").write_text(wrapper_name, encoding="utf-8")
-                exe_name = f"{ep.name}.exe" if target is Platform.WINDOWS else ep.name
-                exe = ctx.cfg.dist_dir / exe_name
-                compile_loader(source, exe, ep.app_type, build_dir, target, icon=resolved_icon, stage=st)
-                exes.append(exe)
+
+            def _build_one(ep: EntryPoint) -> Path:
+                """单入口编译 worker：生成包装器 + .entry + 编译 loader，返回 exe 路径."""
+                work_subdir = build_dir / ep.name
+                work_subdir.mkdir(parents=True, exist_ok=True)
+                _build_one_loader(ctx, ep, source, work_subdir, resolved_icon, has_tkinter, st)
+                return _loader_exe_path(ctx, ep, target)
+
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                futures = [pool.submit(_build_one, ep) for ep in entries]
+                # 按 submit 顺序取 result，保持 exes 顺序与 entries 一致
+                # future.result() 重抛 worker 异常（如 LoaderError），由 with 块 __exit__
+                # 的 shutdown(wait=True) 等待在途任务后传播
+                for future in futures:
+                    exes.append(future.result())
         st.processed(len(exes))
     return exes
+
+
+def _build_one_loader(  # noqa: PLR0913
+    ctx: BuildContext,
+    ep: EntryPoint,
+    source: str,
+    work_dir: Path,
+    resolved_icon: Path | None,
+    has_tkinter: bool,
+    stage: StageRecorder,
+) -> None:
+    """为单个入口生成包装器、``.entry`` 文件并编译 loader.
+
+    抽取自 :func:`_build_entry_loaders` 供串行与并行路径复用。``work_dir`` 由调用方
+    分配（并行模式下为 ``<tmp>/<entry_name>`` 子目录，避免多入口文件冲突）。
+    """
+    entry_rel = ep.entry_rel(ctx.info.src_dir)
+    result = EntryWrapper.dotted_module_name(ctx.info.src_dir, ep.file)
+    module_dotted = result[0] if result is not None else None
+    pkg_root_rel = result[1] if result is not None else "."
+    # 生成入口包装器：处理 sys.path、Qt 插件路径与包上下文（相对导入）
+    wrapper_name = f"_entry_{ep.name}.py"
+    wrapper_path = ctx.cfg.dist_dir / wrapper_name
+    wrapper_path.write_text(
+        EntryWrapper.generate_wrapper_source(
+            ep.name,
+            module_dotted,
+            entry_rel,
+            pkg_root_rel,
+            has_tkinter=has_tkinter,
+            lazy_imports=ctx.opts.lazy_imports,
+        ),
+        encoding="utf-8",
+    )
+    # .entry 指向 wrapper（loader 读 .entry 路径运行）
+    if ctx.info.entries:
+        # 多入口模式：每个入口写 <name>.entry
+        (ctx.cfg.dist_dir / f"{ep.name}.entry").write_text(wrapper_name, encoding="utf-8")
+    else:
+        # 单入口模式：写 .entry（向后兼容）
+        (ctx.cfg.dist_dir / ".entry").write_text(wrapper_name, encoding="utf-8")
+    exe = _loader_exe_path(ctx, ep, ctx.cfg.target)
+    compile_loader(source, exe, ep.app_type, work_dir, ctx.cfg.target, icon=resolved_icon, stage=stage)
+
+
+def _loader_exe_path(ctx: BuildContext, ep: EntryPoint, target: Platform) -> Path:
+    """返回入口对应的 loader exe 路径（Windows 加 ``.exe`` 后缀）."""
+    exe_name = f"{ep.name}.exe" if target is Platform.WINDOWS else ep.name
+    return ctx.cfg.dist_dir / exe_name
 
 
 def _analyze_binary_dependencies(ctx: BuildContext) -> int:
