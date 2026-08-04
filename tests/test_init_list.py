@@ -188,3 +188,190 @@ def test_cli_init_directory_option(tmp_path: Path) -> None:
     target = parent / "sub-app"
     assert target.is_dir()
     assert (target / "pyproject.toml").is_file()
+
+
+# ---- CLI --python-version 覆盖 requires-python ----
+
+
+def test_cli_init_python_version_overrides_requires_python(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """fsp init <name> --python-version 3.10 → pyproject.toml requires-python = ">=3.10"."""
+    monkeypatch.chdir(tmp_path)
+    cli_main(["init", "ver-app", "--template", "helloworld", "--python-version", "3.10"])
+    pyproject = (tmp_path / "ver-app" / "pyproject.toml").read_text(encoding="utf-8")
+    assert 'requires-python = ">=3.10"' in pyproject
+    # 模板默认约束被覆盖（helloworld 默认 >=3.8,<3.12）
+    assert "<3.12" not in pyproject
+
+
+def test_cli_init_python_version_3_8_for_pyside2(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """fsp init --python-version 3.8 --template pyside2 → requires-python = ">=3.8".
+
+    覆盖 PySide2 模板默认的 ``>=3.8,<3.11`` 约束为 ``>=3.8``（去掉上界）。
+    """
+    monkeypatch.chdir(tmp_path)
+    cli_main(["init", "p2-app", "--template", "pyside2", "--python-version", "3.8"])
+    pyproject = (tmp_path / "p2-app" / "pyproject.toml").read_text(encoding="utf-8")
+    assert 'requires-python = ">=3.8"' in pyproject
+    assert "<3.11" not in pyproject
+
+
+def test_cli_init_python_version_invalid_format_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """fsp init --python-version 3 → 无效格式（缺 minor），打印错误并退出码 1."""
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as exc_info:
+        cli_main(["init", "bad-app", "--template", "helloworld", "--python-version", "3"])
+    assert exc_info.value.code == 1
+    captured = capsys.readouterr()
+    assert "无效的 Python 版本号" in captured.out
+
+
+def test_cli_init_python_version_non_numeric_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """fsp init --python-version 3.x → 非数字 minor，打印错误并退出码 1."""
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as exc_info:
+        cli_main(["init", "bad-app2", "--template", "helloworld", "--python-version", "3.x"])
+    assert exc_info.value.code == 1
+
+
+def test_init_project_python_version_none_keeps_default(tmp_path: Path) -> None:
+    """init_project(python_version=None) → 保持模板默认 requires-python."""
+    from fspack.cli_init import init_project
+
+    target = init_project("def-app", template_id="helloworld", directory=tmp_path)
+    pyproject = (target / "pyproject.toml").read_text(encoding="utf-8")
+    # helloworld 默认约束 >=3.8,<3.12
+    assert 'requires-python = ">=3.8,<3.12"' in pyproject
+
+
+# ---- _format_requires_python 单元测试 ----
+
+
+def test_format_requires_python_3_8() -> None:
+    """3.8 → >=3.8."""
+    from fspack.cli_init import _format_requires_python
+
+    assert _format_requires_python("3.8") == ">=3.8"
+
+
+def test_format_requires_python_3_10() -> None:
+    """3.10 → >=3.10."""
+    from fspack.cli_init import _format_requires_python
+
+    assert _format_requires_python("3.10") == ">=3.10"
+
+
+def test_format_requires_python_3_11() -> None:
+    """3.11 → >=3.11."""
+    from fspack.cli_init import _format_requires_python
+
+    assert _format_requires_python("3.11") == ">=3.11"
+
+
+def test_format_requires_python_invalid_single_component() -> None:
+    """3 → ValueError（缺 minor）."""
+    from fspack.cli_init import _format_requires_python
+
+    with pytest.raises(ValueError, match="无效的 Python 版本号"):
+        _format_requires_python("3")
+
+
+def test_format_requires_python_invalid_non_numeric() -> None:
+    """3.x → ValueError（minor 非数字）."""
+    from fspack.cli_init import _format_requires_python
+
+    with pytest.raises(ValueError, match="无效的 Python 版本号"):
+        _format_requires_python("3.x")
+
+
+def test_format_requires_python_invalid_empty() -> None:
+    """空字符串 → ValueError."""
+    from fspack.cli_init import _format_requires_python
+
+    with pytest.raises(ValueError, match="无效的 Python 版本号"):
+        _format_requires_python("")
+
+
+# ---- Win7 + fastapi 拦截 ----
+
+
+def test_is_windows_7_non_windows_returns_false(monkeypatch: pytest.MonkeyPatch) -> None:
+    """非 Windows 系统 → _is_windows_7 返回 False."""
+    from fspack.cli_init import _is_windows_7
+
+    monkeypatch.setattr("sys.platform", "linux")
+    assert _is_windows_7() is False
+
+
+def test_is_windows_7_win10_returns_false(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Win10（NT 10.0）→ _is_windows_7 返回 False."""
+    from fspack.cli_init import _is_windows_7
+
+    monkeypatch.setattr("sys.platform", "win32")
+
+    class _FakeWinVer:
+        major = 10
+        minor = 0
+
+    monkeypatch.setattr("sys.getwindowsversion", _FakeWinVer, raising=False)
+    assert _is_windows_7() is False
+
+
+def test_is_windows_7_win7_returns_true(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Win7（NT 6.1）→ _is_windows_7 返回 True."""
+    from fspack.cli_init import _is_windows_7
+
+    monkeypatch.setattr("sys.platform", "win32")
+
+    class _FakeWinVer:
+        major = 6
+        minor = 1
+
+    monkeypatch.setattr("sys.getwindowsversion", _FakeWinVer, raising=False)
+    assert _is_windows_7() is True
+
+
+def test_init_project_fastapi_on_win7_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Win7 下选择 fastapi 模板 → ValueError 提示 Win7 不可用."""
+    from fspack.cli_init import init_project
+
+    monkeypatch.setattr("fspack.cli_init._is_windows_7", lambda: True)
+    with pytest.raises(ValueError, match="Win7 下不可用"):
+        init_project("api-app", template_id="fastapi", directory=tmp_path)
+
+
+def test_init_project_fastapi_on_non_win7_succeeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """非 Win7 下选择 fastapi 模板 → 正常创建项目."""
+    from fspack.cli_init import init_project
+
+    monkeypatch.setattr("fspack.cli_init._is_windows_7", lambda: False)
+    target = init_project("api-ok", template_id="fastapi", directory=tmp_path)
+    assert target.is_dir()
+    entry = (target / "api_ok.py").read_text(encoding="utf-8")
+    assert "from fastapi" in entry
+
+
+def test_init_project_helloworld_on_win7_succeeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Win7 下选择 helloworld 模板 → 正常创建（helloworld 不在 Win7 黑名单）."""
+    from fspack.cli_init import init_project
+
+    monkeypatch.setattr("fspack.cli_init._is_windows_7", lambda: True)
+    target = init_project("hw-win7", template_id="helloworld", directory=tmp_path)
+    assert target.is_dir()
+
+
+def test_cli_init_fastapi_on_win7_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """fsp init --template fastapi（Win7）→ 打印错误并退出码 1."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("fspack.cli_init._is_windows_7", lambda: True)
+    with pytest.raises(SystemExit) as exc_info:
+        cli_main(["init", "win7-api", "--template", "fastapi"])
+    assert exc_info.value.code == 1
+    captured = capsys.readouterr()
+    assert "Win7" in captured.out
+    assert "fastapi" in captured.out.lower() or "fastapi" in captured.out

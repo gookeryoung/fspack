@@ -270,6 +270,7 @@ def _run_init(ns: argparse.Namespace) -> None:
             template_id=template_id,
             directory=directory,
             description=ns.description,
+            python_version=ns.python_version,
         )
     except ValueError as exc:
         from fspack.console import console

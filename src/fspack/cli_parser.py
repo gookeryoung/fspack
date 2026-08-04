@@ -389,6 +389,12 @@ def _add_init_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]
         default="",
         help="项目描述（写入 pyproject.toml 的 description 字段）",
     )
+    p.add_argument(
+        "--python-version",
+        default=None,
+        metavar="X.Y",
+        help="指定目标 Python 版本（如 3.8、3.10），覆盖模板默认 requires-python 下限",
+    )
 
 
 def _add_doctor_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
