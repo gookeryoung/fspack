@@ -56,10 +56,11 @@ def _is_windows_7() -> bool:
     """
     if not sys.platform.startswith("win"):
         return False
-    # sys.getwindowsversion() 仅 Windows 存在；用 getattr 兜底避免类型检查告警
-    win_ver = getattr(sys, "getwindowsversion", lambda: None)()
-    if win_ver is None:
+    # sys.getwindowsversion() 仅 Windows 存在；hasattr 运行时守卫 + type: ignore
+    # 抑制 pyrefly 在 Linux 上对 sys.getwindowsversion 的 union-attr 报错
+    if not hasattr(sys, "getwindowsversion"):
         return False
+    win_ver = sys.getwindowsversion()  # type: ignore[union-attr]
     return (win_ver.major, win_ver.minor) == (6, 1)
 
 
