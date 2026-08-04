@@ -38,14 +38,18 @@ from fspack.exceptions import DependencyError
 from fspack.packaging.wheels.cache import _deps_cache_key, _load_deps_cache, _save_deps_cache
 from fspack.packaging.wheels.markers import _filter_by_python_version
 from fspack.packaging.wheels.resolver import (
+    _UV_DOWNLOAD_WHEEL_RE,  # noqa: F401
     _UV_RESOLVED_LINE_RE,  # noqa: F401
+    _convert_uv_output_to_pip_format,  # noqa: F401
     _download_one_resolved,  # noqa: F401
+    _download_one_with_uv,  # noqa: F401
     _download_online,  # noqa: F401
     _download_resolved_parallel,  # noqa: F401
     _find_uv,  # noqa: F401
     _merge_parallel_results,  # noqa: F401
     _resolve_with_uv,  # noqa: F401
     _run_pip_download,
+    _uv_supports_download,  # noqa: F401
 )
 
 if TYPE_CHECKING:

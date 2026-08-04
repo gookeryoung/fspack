@@ -35,11 +35,14 @@ from fspack.packaging.wheels.downloader import (
     _MISSING_PKG_RE,  # noqa: F401
     _PIP_PYTHON_NAMES,  # noqa: F401
     _PIP_WHEEL_LINE_RE,  # noqa: F401
+    _UV_DOWNLOAD_WHEEL_RE,  # noqa: F401
     _UV_RESOLVED_LINE_RE,  # noqa: F401
     _build_pip_download_args,  # noqa: F401
     _build_sdist_wheels,  # noqa: F401
     _cleanup_partial_wheels,  # noqa: F401
+    _convert_uv_output_to_pip_format,  # noqa: F401
     _download_one_resolved,  # noqa: F401
+    _download_one_with_uv,  # noqa: F401
     _download_online,  # noqa: F401
     _download_resolved_parallel,  # noqa: F401
     _find_pip_python,  # noqa: F401
@@ -55,6 +58,7 @@ from fspack.packaging.wheels.downloader import (
     _run_pip,  # noqa: F401
     _run_pip_download,  # noqa: F401
     _stream_subprocess,  # noqa: F401
+    _uv_supports_download,  # noqa: F401
     download_wheels,
 )
 from fspack.packaging.wheels.markers import (

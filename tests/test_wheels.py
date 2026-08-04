@@ -15,8 +15,10 @@ from fspack.packaging.wheels import (
     _PIP_PYTHON_NAMES,
     _build_sdist_wheels,
     _cleanup_partial_wheels,
+    _convert_uv_output_to_pip_format,
     _deps_cache_key,
     _download_one_resolved,
+    _download_one_with_uv,
     _download_online,
     _eval_python_version_marker,
     _eval_single_marker,
@@ -31,6 +33,7 @@ from fspack.packaging.wheels import (
     _run_pip,
     _save_deps_cache,
     _stream_subprocess,
+    _uv_supports_download,
     download_wheels,
 )
 from fspack.progress import StageRecorder
@@ -1168,6 +1171,7 @@ def test_download_online_uv_resolved_uses_no_deps(tmp_path: Path, monkeypatch: p
     cache = tmp_path / "cache"
     cache.mkdir()
     monkeypatch.setattr("fspack.packaging.wheels.resolver._find_uv", lambda: "/usr/bin/uv")
+    monkeypatch.setattr("fspack.packaging.wheels.resolver._uv_supports_download", lambda uv_path: False)
     monkeypatch.setattr(
         "fspack.packaging.wheels.resolver._resolve_with_uv",
         lambda pkgs, pv, pt, idx, **kw: "numpy==1.24.0\nrequests==2.31.0\n",
@@ -1283,6 +1287,7 @@ def test_download_wheels_uv_path_integration(tmp_path: Path, monkeypatch: pytest
     whl_name = "numpy-1.24.0-cp311-cp311-win_amd64.whl"
     monkeypatch.setattr("fspack.packaging.wheels.downloader._find_pip_python", lambda: "/py/python")
     monkeypatch.setattr("fspack.packaging.wheels.resolver._find_uv", lambda: "/usr/bin/uv")
+    monkeypatch.setattr("fspack.packaging.wheels.resolver._uv_supports_download", lambda uv_path: False)
     monkeypatch.setattr(
         "fspack.packaging.wheels.resolver._resolve_with_uv",
         lambda pkgs, pv, pt, idx, **kw: "numpy==1.24.0\n",
@@ -1316,6 +1321,7 @@ def test_download_online_uv_sdist_fallback(tmp_path: Path, monkeypatch: pytest.M
     cache.mkdir()
     whl_name = "win-unicode-console-0.5-py3-none-any.whl"
     monkeypatch.setattr("fspack.packaging.wheels.resolver._find_uv", lambda: "/usr/bin/uv")
+    monkeypatch.setattr("fspack.packaging.wheels.resolver._uv_supports_download", lambda uv_path: False)
     monkeypatch.setattr(
         "fspack.packaging.wheels.resolver._resolve_with_uv",
         lambda pkgs, pv, pt, idx, **kw: "win-unicode-console==0.5\n",
@@ -1377,6 +1383,7 @@ def test_download_resolved_parallel_multiple_packages(tmp_path: Path, monkeypatc
     cache = tmp_path / "cache"
     cache.mkdir()
     monkeypatch.setattr("fspack.packaging.wheels.resolver._find_uv", lambda: "/usr/bin/uv")
+    monkeypatch.setattr("fspack.packaging.wheels.resolver._uv_supports_download", lambda uv_path: False)
     resolved_pkgs = ["numpy==1.24.0", "requests==2.31.0", "rich==13.5.0"]
     monkeypatch.setattr(
         "fspack.packaging.wheels.resolver._resolve_with_uv",
@@ -1417,6 +1424,7 @@ def test_download_resolved_parallel_partial_failure_sdist_fallback(
     cache = tmp_path / "cache"
     cache.mkdir()
     monkeypatch.setattr("fspack.packaging.wheels.resolver._find_uv", lambda: "/usr/bin/uv")
+    monkeypatch.setattr("fspack.packaging.wheels.resolver._uv_supports_download", lambda uv_path: False)
     # numpy 成功，odfpy 失败（无 wheel，仅 sdist）
     monkeypatch.setattr(
         "fspack.packaging.wheels.resolver._resolve_with_uv",
@@ -1486,6 +1494,7 @@ def test_download_resolved_parallel_multi_sdist_fallback(tmp_path: Path, monkeyp
     cache = tmp_path / "cache"
     cache.mkdir()
     monkeypatch.setattr("fspack.packaging.wheels.resolver._find_uv", lambda: "/usr/bin/uv")
+    monkeypatch.setattr("fspack.packaging.wheels.resolver._uv_supports_download", lambda uv_path: False)
     # 3 个包：numpy 成功，odfpy 与 win-unicode-console 均仅 sdist
     monkeypatch.setattr(
         "fspack.packaging.wheels.resolver._resolve_with_uv",
@@ -1949,6 +1958,7 @@ def test_download_online_uv_resolved_passes_extra_sources(tmp_path: Path, monkey
     cache = tmp_path / "cache"
     cache.mkdir()
     monkeypatch.setattr("fspack.packaging.wheels.resolver._find_uv", lambda: "/usr/bin/uv")
+    monkeypatch.setattr("fspack.packaging.wheels.resolver._uv_supports_download", lambda uv_path: False)
 
     def fake_resolve(  # noqa: PLR0913
         pkgs: Sequence[str],
@@ -2313,3 +2323,240 @@ def test_download_with_hashes_cleanup_on_failure(tmp_path: Path, monkeypatch: py
     # 临时 requirements 文件应被清理（finally 块）
     leftover = list(cache.glob("*requirements*.txt"))
     assert not leftover, "失败后临时 requirements.txt 应被 finally 清理"
+
+
+# ---------- iter-132 uv 下载路径测试 ----------
+
+
+def test_uv_supports_download_returns_true_when_help_exits_zero(monkeypatch: pytest.MonkeyPatch) -> None:
+    """uv pip download --help 退出码 0 时返回 True."""
+    monkeypatch.setattr(
+        "fspack.packaging.wheels.subprocess.run",
+        lambda *a, **kw: subprocess.CompletedProcess(args=[], returncode=0),
+    )
+    assert _uv_supports_download("/usr/bin/uv") is True
+
+
+def test_uv_supports_download_returns_false_when_help_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    """uv pip download --help 非零退出时返回 False（uv 0.1.9+ 移除该子命令）."""
+    monkeypatch.setattr(
+        "fspack.packaging.wheels.subprocess.run",
+        lambda *a, **kw: subprocess.CompletedProcess(args=[], returncode=2),
+    )
+    assert _uv_supports_download("/usr/bin/uv") is False
+
+
+def test_uv_supports_download_returns_false_when_uv_path_is_none() -> None:
+    """uv_path 为 None 时直接返回 False，不调 subprocess."""
+    assert _uv_supports_download(None) is False
+
+
+def test_uv_supports_download_returns_false_on_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """uv pip download --help 超时时返回 False."""
+
+    def raise_timeout(*a: object, **kw: object) -> object:
+        raise subprocess.TimeoutExpired(cmd=["uv"], timeout=5.0)
+
+    monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", raise_timeout)
+    assert _uv_supports_download("/usr/bin/uv") is False
+
+
+def test_convert_uv_output_downloaded_to_saved() -> None:
+    """uv 'Downloaded <name>.whl' 转为 'Saved <name>.whl'."""
+    uv_output = "Resolved 1 package in 10ms\nDownloaded numpy-1.24.0-cp311-cp311-win_amd64.whl\n"
+    result = _convert_uv_output_to_pip_format(uv_output)
+    assert "Saved numpy-1.24.0-cp311-cp311-win_amd64.whl" in result
+
+
+def test_convert_uv_output_cached_to_saved() -> None:
+    """uv 'Cached <name>.whl' 也转为 'Saved <name>.whl'."""
+    uv_output = "Cached requests-2.31.0-py3-none-any.whl\n"
+    result = _convert_uv_output_to_pip_format(uv_output)
+    assert "Saved requests-2.31.0-py3-none-any.whl" in result
+
+
+def test_convert_uv_output_empty_returns_empty() -> None:
+    """空输入返回空字符串."""
+    assert _convert_uv_output_to_pip_format("") == ""
+    assert _convert_uv_output_to_pip_format("No wheels here\n") == ""
+
+
+def test_download_one_with_uv_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """uv pip download 成功时返回 stdout 含 'Saved <name>.whl'（兼容 pip 格式）."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    captured: dict[str, list[str]] = {}
+
+    def fake_run(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(
+            args=cmd,
+            returncode=0,
+            stdout="Downloaded numpy-1.24.0-cp311-cp311-win_amd64.whl\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
+    result = _download_one_with_uv(
+        "/usr/bin/uv",
+        "numpy==1.24.0",
+        cache,
+        [],
+        py_version="3.11.9",
+        platform_tags=("win_amd64",),
+        pypi_index="https://idx/simple",
+        with_index=False,
+    )
+    cmd = captured["cmd"]
+    assert cmd[0] == "/usr/bin/uv"
+    assert "pip" in cmd and "download" in cmd
+    assert "--no-deps" in cmd
+    assert "-d" in cmd and str(cache) in cmd
+    assert "--python-version" in cmd and "3.11" in cmd
+    assert "--python-platform" in cmd and "windows" in cmd
+    assert "numpy==1.24.0" in cmd
+    assert "-i" not in cmd  # with_index=False
+    # stdout 转换为 pip 兼容格式
+    assert "Saved numpy-1.24.0-cp311-cp311-win_amd64.whl" in result.stdout
+
+
+def test_download_one_with_uv_with_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """with_index=True 时附加 --index-url."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    captured: dict[str, list[str]] = {}
+
+    def fake_run(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="Downloaded a.whl\n", stderr="")
+
+    monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
+    _download_one_with_uv(
+        "/usr/bin/uv",
+        "numpy==1.24.0",
+        cache,
+        [],
+        py_version="3.11.9",
+        platform_tags=("win_amd64",),
+        pypi_index="https://idx/simple",
+        with_index=True,
+    )
+    cmd = captured["cmd"]
+    assert "--index-url" in cmd
+    assert "https://idx/simple" in cmd
+
+
+def test_download_one_with_uv_failure_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """uv 非零退出时抛 CalledProcessError（由调用方捕获回退 pip）."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+
+    def fake_run(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+        raise subprocess.CalledProcessError(1, cmd, stderr="uv error")
+
+    monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
+    with pytest.raises(subprocess.CalledProcessError):
+        _download_one_with_uv(
+            "/usr/bin/uv",
+            "numpy==1.24.0",
+            cache,
+            [],
+            py_version="3.11.9",
+            platform_tags=("win_amd64",),
+            pypi_index="https://idx/simple",
+            with_index=False,
+        )
+
+
+def test_download_online_shares_uv_path_detection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_download_online 顶部调 _find_uv 一次，共享给 require_hashes 检查与 uv 解析."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    call_count = {"find_uv": 0}
+
+    def counting_find_uv() -> str:
+        call_count["find_uv"] += 1
+        return "/usr/bin/uv"
+
+    monkeypatch.setattr("fspack.packaging.wheels.resolver._find_uv", counting_find_uv)
+    monkeypatch.setattr("fspack.packaging.wheels.resolver._uv_supports_download", lambda uv_path: False)
+    monkeypatch.setattr(
+        "fspack.packaging.wheels.resolver._resolve_with_uv",
+        lambda pkgs, pv, pt, idx, **kw: "numpy==1.24.0\n",
+    )
+    monkeypatch.setattr(
+        "fspack.packaging.wheels.subprocess.run",
+        lambda *a, **kw: subprocess.CompletedProcess(args=[], returncode=0, stdout="Saved numpy.whl\n"),
+    )
+    base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
+    _download_online(["numpy>=1.0"], base_args, "/py/python", "3.11.9", ("win_amd64",), "https://idx/simple", cache)
+    # _find_uv 只调一次（共享），不是两次（require_hashes 检查 + uv 解析检查）
+    assert call_count["find_uv"] == 1
+
+
+def test_download_online_uses_uv_download_when_supported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """uv 可用且支持 pip download 时，并行下载用 uv pip download 而非 pip download."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setattr("fspack.packaging.wheels.resolver._find_uv", lambda: "/usr/bin/uv")
+    monkeypatch.setattr("fspack.packaging.wheels.resolver._uv_supports_download", lambda uv_path: True)
+    monkeypatch.setattr(
+        "fspack.packaging.wheels.resolver._resolve_with_uv",
+        lambda pkgs, pv, pt, idx, **kw: "numpy==1.24.0\nrequests==2.31.0\n",
+    )
+    captured_cmds: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+        captured_cmds.append(cmd)
+        # uv 输出格式
+        pkg = cmd[-1].split("==")[0]
+        return subprocess.CompletedProcess(
+            args=cmd,
+            returncode=0,
+            stdout=f"Downloaded {pkg}-wheel.whl\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
+    base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
+    _download_online(["numpy>=1.0"], base_args, "/py/python", "3.11.9", ("win_amd64",), "https://idx/simple", cache)
+    # 2 个包用 uv 下载，触发 2 次 subprocess.run（不含 --help 检测，因 _uv_supports_download 已 mock）
+    assert len(captured_cmds) == 2
+    for cmd in captured_cmds:
+        assert cmd[0] == "/usr/bin/uv"
+        assert "download" in cmd
+        assert "--no-deps" in cmd
+    # stdout 转换后含 Saved 行
+    all_args = {arg for cmd in captured_cmds for arg in cmd}
+    assert "numpy==1.24.0" in all_args
+    assert "requests==2.31.0" in all_args
+
+
+def test_download_online_uv_download_fails_falls_back_to_pip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """uv 下载失败时单包回退到 pip download."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setattr("fspack.packaging.wheels.resolver._find_uv", lambda: "/usr/bin/uv")
+    monkeypatch.setattr("fspack.packaging.wheels.resolver._uv_supports_download", lambda uv_path: True)
+    monkeypatch.setattr(
+        "fspack.packaging.wheels.resolver._resolve_with_uv",
+        lambda pkgs, pv, pt, idx, **kw: "numpy==1.24.0\n",
+    )
+    call_log: list[str] = []
+
+    def fake_run(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+        if cmd[0] == "/usr/bin/uv":
+            call_log.append("uv")
+            raise subprocess.CalledProcessError(1, cmd, stderr="uv fail")
+        call_log.append("pip")
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="Saved numpy.whl\n", stderr="")
+
+    monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
+    base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
+    result = _download_online(
+        ["numpy>=1.0"], base_args, "/py/python", "3.11.9", ("win_amd64",), "https://idx/simple", cache
+    )
+    # uv 失败后回退到 pip
+    assert "uv" in call_log
+    assert "pip" in call_log
+    assert "Saved numpy.whl" in result.stdout

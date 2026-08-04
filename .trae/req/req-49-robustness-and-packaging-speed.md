@@ -77,10 +77,10 @@ iter-117~125 完成结构优化与懒加载主题（`import fspack` 从 ~55ms �
   `concurrent.futures.ThreadPoolExecutor`（subprocess 释放 GIL，线程足够）并行编译
   多个 `.py`，`max_workers=min(cpu_count, 4)`；(2) 保留心跳线程但改为全局心跳
   （不是每文件一个）；(3) 基线对比：50 文件场景提速 ≥30%（req-39 iter-76 目标，留 iter-142）
-- [ ] **iter-132 wheel 下载 uv 加速**：(1) `_download_online` 在 uv 可用时改用
+- [x] **iter-132 wheel 下载 uv 加速**：(1) `_download_online` 在 uv 可用时改用
   `uv pip download`（比 pip 快 2-5x）；(2) 保留 pip 回退（uv 不支持的场景）；
   (3) `_resolve_with_uv` 与下载阶段共享 uv 路径检测；(4) 基线对比：50 wheel 场景
-  提速 ≥40%
+  提速 ≥40%（留 iter-142）
 - [ ] **iter-133 多入口 loader 并行编译**：(1) `_build_entry_loaders` 用
   `ThreadPoolExecutor` 并行编译多个 entry loader（每个 loader 独立 mingw/gcc 子进程）；
   (2) 共享 `tempfile.TemporaryDirectory` 工作目录，避免并发创建；(3) 测试覆盖多入口
