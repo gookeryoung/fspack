@@ -454,7 +454,7 @@ def test_check_cache_dir_scan_error(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert "扫描缓存目录失败" in result.suggestion
 
 
-# ---- _check_cache_integrity（iter-128） ----
+# ---- _check_cache_integrity（iter-128，iter-139 扩展 stale/orphan 检测） ----
 
 
 def test_check_cache_integrity_dir_not_exists(tmp_path: Path) -> None:
@@ -466,33 +466,51 @@ def test_check_cache_integrity_dir_not_exists(tmp_path: Path) -> None:
     assert "缓存目录不存在" in result.detail
 
 
-def test_check_cache_integrity_no_cache_files(tmp_path: Path) -> None:
-    """缓存目录存在但无 .deps-*.json 文件时返回 OK."""
+def test_check_cache_integrity_empty_dir(tmp_path: Path) -> None:
+    """缓存目录为空（无 deps 文件与 wheel 文件）时返回 OK."""
     from fspack.cli_doctor import _check_cache_integrity
 
     cache = tmp_path / "cache"
     cache.mkdir()
-    # 只有普通 wheel 文件，无 deps 缓存
-    (cache / "numpy-1.0.whl").write_bytes(b"x")
 
     result = _check_cache_integrity(cache)
     assert result.status is CheckStatus.OK
-    assert "无依赖解析缓存文件" in result.detail
+    assert "无依赖解析缓存文件与 wheel 文件" in result.detail
+
+
+def test_check_cache_integrity_orphan_wheel_only(tmp_path: Path) -> None:
+    """只有 wheel 文件无 deps 引用时返回 WARN（孤儿 wheel，iter-139）."""
+    from fspack.cli_doctor import _check_cache_integrity
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / "numpy-1.0.whl").write_bytes(b"x")
+
+    result = _check_cache_integrity(cache)
+    assert result.status is CheckStatus.WARN
+    assert "1 个 wheel" in result.detail
+    assert "1 孤儿" in result.detail
+    assert "fsp cache clean" in result.suggestion
 
 
 def test_check_cache_integrity_all_valid(tmp_path: Path) -> None:
-    """所有缓存文件结构有效时返回 OK."""
+    """所有缓存文件结构有效且引用的 wheel 都存在时返回 OK."""
     from fspack.cli_doctor import _check_cache_integrity
 
     cache = tmp_path / "cache"
     cache.mkdir()
     (cache / ".deps-key1.json").write_text('{"wheels": ["numpy-1.0.whl"]}', encoding="utf-8")
     (cache / ".deps-key2.json").write_text('{"wheels": ["rich-1.0.whl", "click-1.0.whl"]}', encoding="utf-8")
+    # 创建对应的 wheel 文件，使 deps 引用有效（iter-139 扩展检查 wheel 存在性）
+    (cache / "numpy-1.0.whl").write_bytes(b"x")
+    (cache / "rich-1.0.whl").write_bytes(b"x")
+    (cache / "click-1.0.whl").write_bytes(b"x")
 
     result = _check_cache_integrity(cache)
     assert result.status is CheckStatus.OK
-    assert "扫描 2 个缓存文件" in result.detail
-    assert "全部有效" in result.detail
+    assert "扫描 2 个 deps 缓存" in result.detail
+    assert "2 有效" in result.detail
+    assert "3 个 wheel" in result.detail
     # 有效文件保留
     assert (cache / ".deps-key1.json").is_file()
     assert (cache / ".deps-key2.json").is_file()
@@ -505,6 +523,7 @@ def test_check_cache_integrity_corrupt_json_deleted(tmp_path: Path) -> None:
     cache = tmp_path / "cache"
     cache.mkdir()
     (cache / ".deps-good.json").write_text('{"wheels": ["numpy-1.0.whl"]}', encoding="utf-8")
+    (cache / "numpy-1.0.whl").write_bytes(b"x")  # 创建 wheel 避免 stale
     corrupt = cache / ".deps-bad.json"
     corrupt.write_text("{bad json", encoding="utf-8")
 
@@ -512,7 +531,6 @@ def test_check_cache_integrity_corrupt_json_deleted(tmp_path: Path) -> None:
     assert result.status is CheckStatus.WARN
     assert "1 有效" in result.detail
     assert "1 损坏已删除" in result.detail
-    assert ".deps-bad.json" in result.detail
     # 损坏文件被删除
     assert not corrupt.is_file()
     # 有效文件保留
@@ -547,8 +565,8 @@ def test_check_cache_integrity_wrong_wheels_type_deleted(tmp_path: Path) -> None
     assert not corrupt.is_file()
 
 
-def test_check_cache_integrity_multiple_corrupt_preview(tmp_path: Path) -> None:
-    """多个损坏文件时详情只列前 3 个文件名 + 总数."""
+def test_check_cache_integrity_multiple_corrupt_count(tmp_path: Path) -> None:
+    """多个损坏文件时详情显示总数（iter-139 改为概要，文件名列表在 fsp cache status）."""
     from fspack.cli_doctor import _check_cache_integrity
 
     cache = tmp_path / "cache"
@@ -559,7 +577,6 @@ def test_check_cache_integrity_multiple_corrupt_preview(tmp_path: Path) -> None:
     result = _check_cache_integrity(cache)
     assert result.status is CheckStatus.WARN
     assert "5 损坏已删除" in result.detail
-    assert "等 5 个" in result.detail
 
 
 def test_check_cache_integrity_oserror_skipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -576,11 +593,42 @@ def test_check_cache_integrity_oserror_skipped(tmp_path: Path, monkeypatch: pyte
 
     monkeypatch.setattr(Path, "read_text", raise_oserror)
     result = _check_cache_integrity(cache)
-    # OSError 不计为损坏，0 损坏 -> OK
+    # OSError 不计为损坏，0 损坏 -> OK（iter-139：详情用 "deps 缓存" 格式）
     assert result.status is CheckStatus.OK
-    assert "扫描 1 个缓存文件" in result.detail
+    assert "扫描 1 个 deps 缓存" in result.detail
+    assert "1 有效" in result.detail
     # 文件未被删除
     assert cache_file.is_file()
+
+
+def test_check_cache_integrity_stale_deps_warns(tmp_path: Path) -> None:
+    """deps 引用的 wheel 不存在时返回 WARN（stale deps，iter-139）."""
+    from fspack.cli_doctor import _check_cache_integrity
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / ".deps-key.json").write_text('{"wheels": ["missing.whl"]}', encoding="utf-8")
+
+    result = _check_cache_integrity(cache)
+    assert result.status is CheckStatus.WARN
+    assert "1 stale 引用缺失 wheel" in result.detail
+    assert "fsp cache clean" in result.suggestion
+
+
+def test_check_cache_integrity_orphan_wheel_with_valid_deps(tmp_path: Path) -> None:
+    """有有效 deps 但存在未被引用的孤儿 wheel 时返回 WARN（iter-139）."""
+    from fspack.cli_doctor import _check_cache_integrity
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / ".deps-key.json").write_text('{"wheels": ["numpy-1.0.whl"]}', encoding="utf-8")
+    (cache / "numpy-1.0.whl").write_bytes(b"x")
+    (cache / "orphan-1.0.whl").write_bytes(b"yy")
+
+    result = _check_cache_integrity(cache)
+    assert result.status is CheckStatus.WARN
+    assert "1 孤儿" in result.detail
+    assert "fsp cache clean" in result.suggestion
 
 
 def test_run_doctor_cache_check_renders_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -590,6 +638,7 @@ def test_run_doctor_cache_check_renders_result(tmp_path: Path, monkeypatch: pyte
     cache = tmp_path / "wheels"
     cache.mkdir()
     (cache / ".deps-key.json").write_text('{"wheels": ["x.whl"]}', encoding="utf-8")
+    (cache / "x.whl").write_bytes(b"x")  # 创建 wheel 避免 stale（iter-139）
 
     # patch wheel_cache_dir 返回测试目录（run_doctor_cache_check 内部局部 import
     # 查 fspack.config.cache 模块属性，monkeypatch 替换模块属性生效）
@@ -597,7 +646,7 @@ def test_run_doctor_cache_check_renders_result(tmp_path: Path, monkeypatch: pyte
 
     result = run_doctor_cache_check()
     assert result.status is CheckStatus.OK
-    assert "扫描 1 个缓存文件" in result.detail
+    assert "扫描 1 个 deps 缓存" in result.detail
 
 
 def test_cli_doctor_check_cache_flag_dispatches() -> None:
@@ -613,6 +662,558 @@ def test_cli_doctor_check_cache_flag_dispatches() -> None:
     ), patch("fspack.cli_doctor.run_doctor_cache_check") as mock_check:
         main(["doctor", "--check-cache"])
     mock_check.assert_called_once()
+
+
+# ---- _scan_cache_health（iter-139） ----
+
+
+def test_scan_cache_health_dir_not_exists(tmp_path: Path) -> None:
+    """缓存目录不存在时返回空报告."""
+    from fspack.cli_doctor import _scan_cache_health
+
+    report = _scan_cache_health(tmp_path / "no-cache")
+    assert report.total_deps_files == 0
+    assert report.total_wheels == 0
+    assert report.corrupt_deps_files == ()
+    assert report.stale_deps_files == ()
+    assert report.orphan_wheels == ()
+    assert not report.has_issues
+
+
+def test_scan_cache_health_empty_dir(tmp_path: Path) -> None:
+    """空缓存目录返回空报告."""
+    from fspack.cli_doctor import _scan_cache_health
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    report = _scan_cache_health(cache)
+    assert report.total_deps_files == 0
+    assert report.total_wheels == 0
+    assert not report.has_issues
+
+
+def test_scan_cache_health_all_valid(tmp_path: Path) -> None:
+    """所有 deps 有效且 wheel 都存在时无问题."""
+    from fspack.cli_doctor import _scan_cache_health
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / ".deps-key1.json").write_text('{"wheels": ["numpy-1.0.whl"]}', encoding="utf-8")
+    (cache / ".deps-key2.json").write_text('{"wheels": ["rich-1.0.whl"]}', encoding="utf-8")
+    (cache / "numpy-1.0.whl").write_bytes(b"x")
+    (cache / "rich-1.0.whl").write_bytes(b"yy")
+
+    report = _scan_cache_health(cache)
+    assert report.total_deps_files == 2
+    assert report.total_wheels == 2
+    assert report.corrupt_deps_files == ()
+    assert report.stale_deps_files == ()
+    assert report.orphan_wheels == ()
+    assert report.orphan_size_bytes == 0
+    assert not report.has_issues
+
+
+def test_scan_cache_health_corrupt_deleted(tmp_path: Path) -> None:
+    """损坏 deps 文件被删除并计入 corrupt_deps_files."""
+    from fspack.cli_doctor import _scan_cache_health
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / ".deps-good.json").write_text('{"wheels": ["x.whl"]}', encoding="utf-8")
+    (cache / "x.whl").write_bytes(b"x")
+    corrupt = cache / ".deps-bad.json"
+    corrupt.write_text("{bad", encoding="utf-8")
+
+    report = _scan_cache_health(cache)
+    assert report.total_deps_files == 2
+    assert report.corrupt_deps_files == (".deps-bad.json",)
+    assert not corrupt.is_file()
+    assert report.stale_deps_files == ()
+    assert report.orphan_wheels == ()
+    assert report.has_issues
+
+
+def test_scan_cache_health_stale_deps_detected(tmp_path: Path) -> None:
+    """deps 引用缺失 wheel 时计入 stale_deps_files 与 missing_wheels."""
+    from fspack.cli_doctor import _scan_cache_health
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / ".deps-stale.json").write_text('{"wheels": ["missing.whl"]}', encoding="utf-8")
+
+    report = _scan_cache_health(cache)
+    assert report.stale_deps_files == (".deps-stale.json",)
+    assert "missing.whl" in report.missing_wheels
+    # stale deps 文件未被删除（需 _clean_cache_issues 才删）
+    assert (cache / ".deps-stale.json").is_file()
+    assert report.has_issues
+
+
+def test_scan_cache_health_orphan_wheel_detected(tmp_path: Path) -> None:
+    """未被任何 deps 引用的 wheel 计入 orphan_wheels 并累加体积."""
+    from fspack.cli_doctor import _scan_cache_health
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / ".deps-key.json").write_text('{"wheels": ["numpy-1.0.whl"]}', encoding="utf-8")
+    (cache / "numpy-1.0.whl").write_bytes(b"x")
+    (cache / "orphan-1.0.whl").write_bytes(b"yyyy")
+
+    report = _scan_cache_health(cache)
+    assert report.total_wheels == 2
+    assert report.orphan_wheels == ("orphan-1.0.whl",)
+    assert report.orphan_size_bytes == 4
+    assert report.has_issues
+
+
+def test_scan_cache_health_shared_wheel_not_orphan(tmp_path: Path) -> None:
+    """多个 deps 引用同一 wheel 时该 wheel 不算孤儿."""
+    from fspack.cli_doctor import _scan_cache_health
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / ".deps-key1.json").write_text('{"wheels": ["shared.whl"]}', encoding="utf-8")
+    (cache / ".deps-key2.json").write_text('{"wheels": ["shared.whl", "other.whl"]}', encoding="utf-8")
+    (cache / "shared.whl").write_bytes(b"x")
+    (cache / "other.whl").write_bytes(b"y")
+
+    report = _scan_cache_health(cache)
+    assert report.orphan_wheels == ()
+    assert not report.has_issues
+
+
+def test_scan_cache_health_non_string_wheels_ignored(tmp_path: Path) -> None:
+    """wheels 列表中非字符串元素被忽略（防御性，避免 is_file 报错）."""
+    from fspack.cli_doctor import _scan_cache_health
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    # wheels 含非字符串元素（理论上不会出现，但 _scan_cache_health 应防御）
+    (cache / ".deps-key.json").write_text('{"wheels": ["x.whl", 123, null]}', encoding="utf-8")
+    (cache / "x.whl").write_bytes(b"x")
+
+    report = _scan_cache_health(cache)
+    assert report.stale_deps_files == ()
+    assert report.missing_wheels == ()
+    assert not report.has_issues
+
+
+# ---- _clean_cache_issues（iter-139） ----
+
+
+def test_clean_cache_issues_no_issues(tmp_path: Path) -> None:
+    """无问题时清理不删除任何文件."""
+    from fspack.cli_doctor import _clean_cache_issues
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / ".deps-key.json").write_text('{"wheels": ["x.whl"]}', encoding="utf-8")
+    (cache / "x.whl").write_bytes(b"x")
+
+    report = _clean_cache_issues(cache)
+    assert not report.has_issues
+    assert (cache / ".deps-key.json").is_file()
+    assert (cache / "x.whl").is_file()
+
+
+def test_clean_cache_issues_dry_run_no_delete(tmp_path: Path) -> None:
+    """dry_run=True 时仅扫描不删除文件."""
+    from fspack.cli_doctor import _clean_cache_issues
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / ".deps-stale.json").write_text('{"wheels": ["missing.whl"]}', encoding="utf-8")
+    (cache / "orphan.whl").write_bytes(b"x")
+
+    report = _clean_cache_issues(cache, dry_run=True)
+    assert report.stale_deps_files == (".deps-stale.json",)
+    assert report.orphan_wheels == ("orphan.whl",)
+    # dry_run 不删除
+    assert (cache / ".deps-stale.json").is_file()
+    assert (cache / "orphan.whl").is_file()
+
+
+def test_clean_cache_issues_deletes_stale_and_orphan(tmp_path: Path) -> None:
+    """清理删除 stale deps 文件与孤儿 wheel 文件."""
+    from fspack.cli_doctor import _clean_cache_issues
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / ".deps-stale.json").write_text('{"wheels": ["missing.whl"]}', encoding="utf-8")
+    (cache / ".deps-good.json").write_text('{"wheels": ["good.whl"]}', encoding="utf-8")
+    (cache / "good.whl").write_bytes(b"x")
+    (cache / "orphan.whl").write_bytes(b"yy")
+
+    report = _clean_cache_issues(cache)
+    assert report.stale_deps_files == (".deps-stale.json",)
+    assert report.orphan_wheels == ("orphan.whl",)
+    # stale deps 与 orphan wheel 被删除
+    assert not (cache / ".deps-stale.json").is_file()
+    assert not (cache / "orphan.whl").is_file()
+    # 有效 deps 与被引用的 wheel 保留
+    assert (cache / ".deps-good.json").is_file()
+    assert (cache / "good.whl").is_file()
+
+
+def test_clean_cache_issues_keeps_shared_wheel(tmp_path: Path) -> None:
+    """清理时多个 deps 共享的 wheel 不被删除（即使某个 deps 是 stale）."""
+    from fspack.cli_doctor import _clean_cache_issues
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    # stale deps 引用 shared.whl + missing.whl；good deps 引用 shared.whl
+    # shared.whl 仍存在（被 good deps 引用），不应被删
+    (cache / ".deps-stale.json").write_text('{"wheels": ["shared.whl", "missing.whl"]}', encoding="utf-8")
+    (cache / ".deps-good.json").write_text('{"wheels": ["shared.whl"]}', encoding="utf-8")
+    (cache / "shared.whl").write_bytes(b"x")
+
+    report = _clean_cache_issues(cache)
+    assert report.stale_deps_files == (".deps-stale.json",)
+    assert report.orphan_wheels == ()  # shared.whl 被 good deps 引用，非孤儿
+    # stale deps 被删除
+    assert not (cache / ".deps-stale.json").is_file()
+    # shared.whl 保留（被 good deps 引用）
+    assert (cache / "shared.whl").is_file()
+    assert (cache / ".deps-good.json").is_file()
+
+
+def test_clean_cache_issues_unlink_oserror_continues(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """unlink 抛 OSError 时不阻断其他文件清理（best-effort）."""
+    from fspack.cli_doctor import _clean_cache_issues
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / ".deps-stale1.json").write_text('{"wheels": ["missing1.whl"]}', encoding="utf-8")
+    (cache / ".deps-stale2.json").write_text('{"wheels": ["missing2.whl"]}', encoding="utf-8")
+    (cache / "orphan1.whl").write_bytes(b"x")
+    (cache / "orphan2.whl").write_bytes(b"yy")
+
+    real_unlink = Path.unlink
+
+    def flaky_unlink(self: Path, *args: object, **kwargs: object) -> None:
+        # 第一个文件 unlink 失败，后续正常
+        if self.name in (".deps-stale1.json", "orphan1.whl"):
+            raise OSError("simulated permission denied")
+        real_unlink(self)
+
+    monkeypatch.setattr(Path, "unlink", flaky_unlink)
+
+    report = _clean_cache_issues(cache)
+    # 第一组文件 unlink 失败但保留在报告中
+    assert ".deps-stale1.json" in report.stale_deps_files
+    assert ".deps-stale2.json" in report.stale_deps_files
+    assert "orphan1.whl" in report.orphan_wheels
+    assert "orphan2.whl" in report.orphan_wheels
+    # 第二组文件成功删除
+    assert not (cache / ".deps-stale2.json").is_file()
+    assert not (cache / "orphan2.whl").is_file()
+
+
+def test_scan_cache_health_orphan_stat_oserror_skipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """orphan wheel 的 stat() 抛 OSError 时跳过体积累加但仍视为孤儿."""
+    from fspack.cli_doctor import _scan_cache_health
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / ".deps-key.json").write_text('{"wheels": ["good.whl"]}', encoding="utf-8")
+    (cache / "good.whl").write_bytes(b"x")
+    (cache / "orphan.whl").write_bytes(b"yy")
+
+    real_stat = Path.stat
+
+    def fail_orphan_stat(self: Path, *args: object, **kwargs: object) -> object:
+        if self.name == "orphan.whl":
+            raise OSError("simulated")
+        return real_stat(self)
+
+    monkeypatch.setattr(Path, "stat", fail_orphan_stat)
+
+    report = _scan_cache_health(cache)
+    # orphan 仍被识别，但体积为 0（stat 失败跳过）
+    assert report.orphan_wheels == ("orphan.whl",)
+    assert report.orphan_size_bytes == 0
+
+
+# ---- run_cache_status / run_cache_clean（iter-139） ----
+
+
+def test_run_cache_status_no_issues(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """run_cache_status 渲染健康报告，无问题时返回 has_issues=False."""
+    from fspack.cli_doctor import run_cache_status
+
+    cache = tmp_path / "wheels"
+    cache.mkdir()
+    (cache / ".deps-key.json").write_text('{"wheels": ["x.whl"]}', encoding="utf-8")
+    (cache / "x.whl").write_bytes(b"x")
+    monkeypatch.setattr("fspack.config.cache.wheel_cache_dir", lambda: cache)
+
+    report = run_cache_status()
+    assert not report.has_issues
+    assert report.total_deps_files == 1
+    assert report.total_wheels == 1
+
+
+def test_run_cache_status_with_orphan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """run_cache_status 渲染孤儿 wheel 警告并提示 fsp cache clean."""
+    from fspack.cli_doctor import run_cache_status
+
+    cache = tmp_path / "wheels"
+    cache.mkdir()
+    (cache / ".deps-key.json").write_text('{"wheels": ["x.whl"]}', encoding="utf-8")
+    (cache / "x.whl").write_bytes(b"x")
+    (cache / "orphan.whl").write_bytes(b"yy")
+    monkeypatch.setattr("fspack.config.cache.wheel_cache_dir", lambda: cache)
+
+    report = run_cache_status()
+    assert report.orphan_wheels == ("orphan.whl",)
+    assert report.orphan_size_bytes == 2
+
+
+def test_run_cache_status_dir_not_exists(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """缓存目录不存在时 run_cache_status 返回空报告."""
+    from fspack.cli_doctor import run_cache_status
+
+    cache = tmp_path / "no-cache"
+    monkeypatch.setattr("fspack.config.cache.wheel_cache_dir", lambda: cache)
+
+    report = run_cache_status()
+    assert report.total_deps_files == 0
+    assert report.total_wheels == 0
+
+
+def test_run_cache_status_empty_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """缓存目录为空时 run_cache_status 输出"为空"提示."""
+    from fspack.cli_doctor import run_cache_status
+
+    cache = tmp_path / "wheels"
+    cache.mkdir()
+    monkeypatch.setattr("fspack.config.cache.wheel_cache_dir", lambda: cache)
+
+    report = run_cache_status()
+    assert report.total_deps_files == 0
+    assert report.total_wheels == 0
+    assert not report.has_issues
+
+
+def test_run_cache_status_with_corrupt_and_stale(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """run_cache_status 同时检测 corrupt/stale/orphan 三类问题."""
+    from fspack.cli_doctor import run_cache_status
+
+    cache = tmp_path / "wheels"
+    cache.mkdir()
+    # 损坏 deps（扫描时删除）
+    (cache / ".deps-bad.json").write_text("{bad", encoding="utf-8")
+    # stale deps（引用缺失 wheel）
+    (cache / ".deps-stale.json").write_text('{"wheels": ["missing.whl"]}', encoding="utf-8")
+    # 有效 deps + 引用的 wheel
+    (cache / ".deps-good.json").write_text('{"wheels": ["good.whl"]}', encoding="utf-8")
+    (cache / "good.whl").write_bytes(b"x")
+    # 孤儿 wheel
+    (cache / "orphan.whl").write_bytes(b"yy")
+
+    monkeypatch.setattr("fspack.config.cache.wheel_cache_dir", lambda: cache)
+
+    report = run_cache_status()
+    assert report.corrupt_deps_files == (".deps-bad.json",)
+    assert report.stale_deps_files == (".deps-stale.json",)
+    assert "missing.whl" in report.missing_wheels
+    assert report.orphan_wheels == ("orphan.whl",)
+    assert report.has_issues
+
+
+def test_run_cache_status_wheels_only_no_orphan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """run_cache_status 在 wheel 全部被引用时不报孤儿（覆盖 _format_cache_summary 分支）."""
+    from fspack.cli_doctor import run_cache_status
+
+    cache = tmp_path / "wheels"
+    cache.mkdir()
+    (cache / ".deps-key.json").write_text('{"wheels": ["a.whl", "b.whl"]}', encoding="utf-8")
+    (cache / "a.whl").write_bytes(b"x")
+    (cache / "b.whl").write_bytes(b"yy")
+
+    monkeypatch.setattr("fspack.config.cache.wheel_cache_dir", lambda: cache)
+
+    report = run_cache_status()
+    assert not report.has_issues
+    assert report.orphan_wheels == ()
+    assert report.total_wheels == 2
+
+
+def test_run_cache_clean_dry_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """run_cache_clean --dry-run 仅预览不删除."""
+    from fspack.cli_doctor import run_cache_clean
+
+    cache = tmp_path / "wheels"
+    cache.mkdir()
+    (cache / ".deps-stale.json").write_text('{"wheels": ["missing.whl"]}', encoding="utf-8")
+    (cache / "orphan.whl").write_bytes(b"yy")
+    monkeypatch.setattr("fspack.config.cache.wheel_cache_dir", lambda: cache)
+
+    report = run_cache_clean(dry_run=True)
+    assert report.stale_deps_files == (".deps-stale.json",)
+    assert report.orphan_wheels == ("orphan.whl",)
+    # dry_run 不删除
+    assert (cache / ".deps-stale.json").is_file()
+    assert (cache / "orphan.whl").is_file()
+
+
+def test_run_cache_clean_actual_delete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """run_cache_clean 实际删除 stale deps 与孤儿 wheel."""
+    from fspack.cli_doctor import run_cache_clean
+
+    cache = tmp_path / "wheels"
+    cache.mkdir()
+    (cache / ".deps-stale.json").write_text('{"wheels": ["missing.whl"]}', encoding="utf-8")
+    (cache / "orphan.whl").write_bytes(b"yy")
+    monkeypatch.setattr("fspack.config.cache.wheel_cache_dir", lambda: cache)
+
+    report = run_cache_clean(dry_run=False)
+    assert report.stale_deps_files == (".deps-stale.json",)
+    assert report.orphan_wheels == ("orphan.whl",)
+    assert not (cache / ".deps-stale.json").is_file()
+    assert not (cache / "orphan.whl").is_file()
+
+
+def test_run_cache_clean_no_issues(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """run_cache_clean 在无问题时输出"无需清理"且不删除文件."""
+    from fspack.cli_doctor import run_cache_clean
+
+    cache = tmp_path / "wheels"
+    cache.mkdir()
+    (cache / ".deps-key.json").write_text('{"wheels": ["x.whl"]}', encoding="utf-8")
+    (cache / "x.whl").write_bytes(b"x")
+    monkeypatch.setattr("fspack.config.cache.wheel_cache_dir", lambda: cache)
+
+    report = run_cache_clean()
+    assert not report.has_issues
+    assert (cache / ".deps-key.json").is_file()
+    assert (cache / "x.whl").is_file()
+
+
+def test_run_cache_clean_dir_not_exists(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """缓存目录不存在时 run_cache_clean 返回空报告."""
+    from fspack.cli_doctor import run_cache_clean
+
+    cache = tmp_path / "no-cache"
+    monkeypatch.setattr("fspack.config.cache.wheel_cache_dir", lambda: cache)
+
+    report = run_cache_clean()
+    assert report.total_deps_files == 0
+    assert report.total_wheels == 0
+
+
+def test_run_cache_clean_with_corrupt_and_orphan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """run_cache_clean 同时处理 corrupt/stale/orphan 三类问题（覆盖 _print_cache_clean_lists 分支）."""
+    from fspack.cli_doctor import run_cache_clean
+
+    cache = tmp_path / "wheels"
+    cache.mkdir()
+    # 损坏 deps（扫描时删除，计入 corrupt_deps_files）
+    (cache / ".deps-bad.json").write_text("{bad", encoding="utf-8")
+    # stale deps（引用缺失 wheel，clean 阶段删除）
+    (cache / ".deps-stale.json").write_text('{"wheels": ["missing.whl"]}', encoding="utf-8")
+    # 有效 deps + 引用的 wheel
+    (cache / ".deps-good.json").write_text('{"wheels": ["good.whl"]}', encoding="utf-8")
+    (cache / "good.whl").write_bytes(b"x")
+    # 孤儿 wheel（clean 阶段删除）
+    (cache / "orphan.whl").write_bytes(b"yy")
+
+    monkeypatch.setattr("fspack.config.cache.wheel_cache_dir", lambda: cache)
+
+    report = run_cache_clean()
+    assert report.corrupt_deps_files == (".deps-bad.json",)
+    assert report.stale_deps_files == (".deps-stale.json",)
+    assert report.orphan_wheels == ("orphan.whl",)
+    # stale deps 与 orphan wheel 被删除
+    assert not (cache / ".deps-stale.json").is_file()
+    assert not (cache / "orphan.whl").is_file()
+    # 有效 deps 与被引用的 wheel 保留
+    assert (cache / ".deps-good.json").is_file()
+    assert (cache / "good.whl").is_file()
+
+
+def test_run_cache_clean_dry_run_with_all_issue_types(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """run_cache_clean --dry-run 同时预览 corrupt/stale/orphan（覆盖 dry_run 分支）."""
+    from fspack.cli_doctor import run_cache_clean
+
+    cache = tmp_path / "wheels"
+    cache.mkdir()
+    (cache / ".deps-bad.json").write_text("{bad", encoding="utf-8")
+    (cache / ".deps-stale.json").write_text('{"wheels": ["missing.whl"]}', encoding="utf-8")
+    (cache / "orphan.whl").write_bytes(b"yy")
+
+    monkeypatch.setattr("fspack.config.cache.wheel_cache_dir", lambda: cache)
+
+    report = run_cache_clean(dry_run=True)
+    assert report.corrupt_deps_files == (".deps-bad.json",)
+    assert report.stale_deps_files == (".deps-stale.json",)
+    assert report.orphan_wheels == ("orphan.whl",)
+    # dry_run 不删除任何文件（stale deps 与 orphan wheel 保留）
+    assert (cache / ".deps-stale.json").is_file()
+    assert (cache / "orphan.whl").is_file()
+
+
+def test_preview_names_truncates_at_limit() -> None:
+    """_preview_names 超过 limit 时显示前 N 个 + 总数提示."""
+    from fspack.cli_doctor import _preview_names
+
+    names = tuple(f"file{i}.whl" for i in range(10))
+    result = _preview_names(names, limit=3)
+    assert "file0.whl" in result
+    assert "file2.whl" in result
+    assert "file3.whl" not in result
+    assert "等 10 个" in result
+
+
+def test_preview_names_empty_returns_empty() -> None:
+    """_preview_names 空列表返回空字符串."""
+    from fspack.cli_doctor import _preview_names
+
+    assert _preview_names(()) == ""
+
+
+def test_preview_names_under_limit() -> None:
+    """_preview_names 数量不超过 limit 时全部列出."""
+    from fspack.cli_doctor import _preview_names
+
+    result = _preview_names(("a.whl", "b.whl"), limit=5)
+    assert result == "a.whl, b.whl"
+
+
+# ---- fsp cache CLI 派发（iter-139） ----
+
+
+def test_cli_cache_status_dispatches() -> None:
+    """``fsp cache status`` 触发 run_cache_status 调用."""
+    from fspack.cli import main
+    from fspack.doctor_models import CacheHealthReport
+
+    fake_report = CacheHealthReport(cache_dir=Path("/tmp/cache"))
+    with patch("fspack.cli_doctor.run_cache_status", return_value=fake_report) as mock_status:
+        main(["cache", "status"])
+    mock_status.assert_called_once()
+
+
+def test_cli_cache_clean_dispatches() -> None:
+    """``fsp cache clean`` 触发 run_cache_clean 调用（dry_run=False）."""
+    from fspack.cli import main
+    from fspack.doctor_models import CacheHealthReport
+
+    fake_report = CacheHealthReport(cache_dir=Path("/tmp/cache"))
+    with patch("fspack.cli_doctor.run_cache_clean", return_value=fake_report) as mock_clean:
+        main(["cache", "clean"])
+    mock_clean.assert_called_once_with(dry_run=False)
+
+
+def test_cli_cache_clean_dry_run_dispatches() -> None:
+    """``fsp cache clean --dry-run`` 触发 run_cache_clean(dry_run=True)."""
+    from fspack.cli import main
+    from fspack.doctor_models import CacheHealthReport
+
+    fake_report = CacheHealthReport(cache_dir=Path("/tmp/cache"))
+    with patch("fspack.cli_doctor.run_cache_clean", return_value=fake_report) as mock_clean:
+        main(["cache", "clean", "--dry-run"])
+    mock_clean.assert_called_once_with(dry_run=True)
 
 
 # ---- _dir_size ----

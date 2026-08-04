@@ -79,6 +79,10 @@ def main(argv: list[str] | None = None) -> None:
         _run_doctor(ns)
         return
 
+    if command == "cache":
+        _run_cache(ns)
+        return
+
     project = Path(ns.project).resolve()
     if command in ("build", "b"):
         if ns.recursive:
@@ -306,6 +310,23 @@ def _run_doctor(ns: argparse.Namespace) -> None:
         run_doctor_bench()
     elif getattr(ns, "test", False):
         run_doctor_test()
+
+
+def _run_cache(ns: argparse.Namespace) -> None:
+    """执行 cache 子命令：wheel 缓存健康检查与清理（iter-139）.
+
+    ``fsp cache status`` 扫描缓存目录健康状态并渲染详细报告。
+    ``fsp cache clean [--dry-run]`` 清理 stale deps 与孤儿 wheel，
+    ``--dry-run`` 仅预览不删除。
+    """
+    from fspack.cli_doctor import run_cache_clean, run_cache_status
+
+    action = getattr(ns, "cache_action", None)
+    if action == "status":
+        run_cache_status()
+    elif action == "clean":
+        run_cache_clean(dry_run=getattr(ns, "dry_run", False))
+    # argparse 已用 required=True 保证 cache_action 必填，到这里 action 必非 None
 
 
 def discover_subprojects(root: Path) -> list[Path]:

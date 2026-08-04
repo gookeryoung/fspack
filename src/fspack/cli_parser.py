@@ -421,5 +421,28 @@ def _add_doctor_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParse
     p.add_argument(
         "--check-cache",
         action="store_true",
-        help="扫描 wheel 缓存目录的依赖解析缓存文件，删除损坏文件",
+        help="扫描 wheel 缓存目录的依赖解析缓存文件，删除损坏文件，报告 stale/orphan",
+    )
+
+
+def _add_cache_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """添加 cache 子命令：wheel 缓存健康检查与清理（iter-139）.
+
+    ``fsp cache status`` 扫描 ``~/.fspack/cache/wheels`` 下的 ``.deps-*.json``
+    依赖解析缓存与 ``*.whl`` wheel 文件，报告：
+
+    - 损坏 deps（JSON 结构非法，扫描时已自动删除）
+    - stale deps（引用了缺失 wheel 的 deps 文件，需 ``fsp cache clean`` 清理）
+    - 孤儿 wheel（未被任何 deps 引用的 wheel 文件，需 ``fsp cache clean`` 清理）
+
+    ``fsp cache clean`` 删除 stale deps 与孤儿 wheel，``--dry-run`` 仅预览不删除。
+    """
+    p = sub.add_parser("cache", help="wheel 缓存健康检查与清理")
+    cache_sub = p.add_subparsers(dest="cache_action", metavar="<action>", required=True)
+    cache_sub.add_parser("status", help="扫描缓存目录健康状态（损坏/stale/orphan）")
+    clean_p = cache_sub.add_parser("clean", help="清理 stale deps 与孤儿 wheel 文件")
+    clean_p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="仅预览将删除的文件，不实际删除",
     )

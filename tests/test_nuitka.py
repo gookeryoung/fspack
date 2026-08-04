@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tarfile
 import zipfile
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -4025,7 +4026,7 @@ def test_parse_parallel_interleave_and_submit(
 
         def submit(self, fn: object, *args: object) -> _FakeFuture:
             # args[0] 是文件路径 str
-            submit_calls.append(args[0] if args else "")
+            submit_calls.append(str(args[0]) if args else "")
             return _FakeFuture()
 
     monkeypatch.setattr(analyzer, "ProcessPoolExecutor", _Pool)
@@ -4105,7 +4106,7 @@ def test_parse_parallel_partial_timeout_aggregates_completed_results(
 
     monkeypatch.setattr(analyzer, "ProcessPoolExecutor", _FakePool)
 
-    def fake_as_completed(futures: object, timeout: float | None = None) -> object:
+    def fake_as_completed(futures: object, timeout: float | None = None) -> Iterator[object]:
         # 前 3 个已完成的 yield，然后抛 TimeoutError 模拟后 2 个超时
         futures_list = list(futures)  # type: ignore[arg-type]
         yield from futures_list[:3]
