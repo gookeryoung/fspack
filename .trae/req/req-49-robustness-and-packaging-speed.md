@@ -119,7 +119,7 @@ iter-117~125 完成结构优化与懒加载主题（`import fspack` 从 ~55ms �
 
 低风险，建立可量化的性能守护机制。
 
-- [ ] **iter-141 打包速度端到端基线**：新增 `tests/test_build_perf_baseline.py`：
+- [x] **iter-141 打包速度端到端基线**：新增 `tests/test_build_perf_baseline.py`：
   (1) 小项目（1 入口、3 依赖）冷/热缓存构建耗时基线；(2) 中项目（10 入口、20 依赖）
   基线；(3) 用 `pytest-benchmark` 的 `pedantic` 模式确保可复现
 - [ ] **iter-142 Nuitka 编译基线**：(1) 50 文件串行 vs 并行（iter-131）对比基线；
