@@ -176,6 +176,7 @@ def _run_build(project: Path, ns: argparse.Namespace) -> None:
         log_file=log_file,
         log_format=log_format,
         profile=ns.profile,
+        auto_clean=getattr(ns, "auto_clean", False),
     )
 
 

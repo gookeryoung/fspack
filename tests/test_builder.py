@@ -34,7 +34,14 @@ from fspack.builder import (
 from fspack.config import AppType, BuildOptions, DependencyReport, EntryPoint, ProjectInfo, get_mirror
 from fspack.console import console
 from fspack.exceptions import DependencyError, LoaderError
-from fspack.packaging.pipeline import _warn_dist_incomplete
+from fspack.packaging.pipeline import (
+    _BUILD_FAILED,
+    _clean_dist_dir,
+    _handle_dist_incomplete,
+    _load_build_failure,
+    _remove_build_failure,
+    _save_build_failure,
+)
 from fspack.packaging.pipeline.stages import _MAX_LOADER_WORKERS, BuildContext, _build_entry_loaders
 from fspack.platform import Platform
 from fspack.progress import StageRecorder
@@ -2135,36 +2142,36 @@ def test_clean_dist_no_dist(tmp_path: Path) -> None:
     clean_dist(tmp_path)
 
 
-# --- _warn_dist_incomplete 测试（iter-130 dist 半成品检测） ---
+# --- _handle_dist_incomplete 测试（iter-140 扩展 iter-130 dist 半成品检测） ---
 
 
-def test_warn_dist_incomplete_no_dist(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+def test_handle_dist_incomplete_no_dist(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """dist 目录不存在时不告警."""
     with caplog.at_level("WARNING", logger="fspack.packaging.pipeline"):
-        _warn_dist_incomplete(tmp_path / "nonexistent")
+        _handle_dist_incomplete(tmp_path / "nonexistent", auto_clean=False)
     assert not caplog.records
 
 
-def test_warn_dist_incomplete_empty_dist(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+def test_handle_dist_incomplete_empty_dist(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """dist 目录为空时不告警（无构建产物）."""
     dist = tmp_path / "dist"
     dist.mkdir()
     with caplog.at_level("WARNING", logger="fspack.packaging.pipeline"):
-        _warn_dist_incomplete(dist)
+        _handle_dist_incomplete(dist, auto_clean=False)
     assert not caplog.records
 
 
-def test_warn_dist_incomplete_only_nsi(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+def test_handle_dist_incomplete_only_nsi(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """dist 仅含 installer.nsi（clean_dist 保留）时不告警."""
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "installer.nsi").write_text('Name "app"', encoding="utf-8")
     with caplog.at_level("WARNING", logger="fspack.packaging.pipeline"):
-        _warn_dist_incomplete(dist)
+        _handle_dist_incomplete(dist, auto_clean=False)
     assert not caplog.records
 
 
-def test_warn_dist_incomplete_artifacts_no_stamp_warns(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+def test_handle_dist_incomplete_artifacts_no_stamp_warns(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """dist 含构建产物但无 stamp 文件时告警（中断/失败的上次构建）."""
     dist = tmp_path / "dist"
     dist.mkdir()
@@ -2172,11 +2179,11 @@ def test_warn_dist_incomplete_artifacts_no_stamp_warns(tmp_path: Path, caplog: p
     (dist / "src").mkdir()
     (dist / "app.exe").write_bytes(b"")
     with caplog.at_level("WARNING", logger="fspack.packaging.pipeline"):
-        _warn_dist_incomplete(dist)
-    assert any("残留产物" in r.message and "fsp c" in r.message for r in caplog.records)
+        _handle_dist_incomplete(dist, auto_clean=False)
+    assert any("残留" in r.message and "fsp c" in r.message for r in caplog.records)
 
 
-def test_warn_dist_incomplete_with_pyc_stamp_no_warn(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+def test_handle_dist_incomplete_with_pyc_stamp_no_warn(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """dist 含产物且有 .pyc_stamp 时不告警（上次构建至少完成到编译阶段）."""
     dist = tmp_path / "dist"
     dist.mkdir()
@@ -2184,19 +2191,281 @@ def test_warn_dist_incomplete_with_pyc_stamp_no_warn(tmp_path: Path, caplog: pyt
     (dist / "src").mkdir()
     (dist / ".pyc_stamp").write_text("fingerprint", encoding="utf-8")
     with caplog.at_level("WARNING", logger="fspack.packaging.pipeline"):
-        _warn_dist_incomplete(dist)
+        _handle_dist_incomplete(dist, auto_clean=False)
     assert not caplog.records
 
 
-def test_warn_dist_incomplete_with_nuitka_stamp_no_warn(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+def test_handle_dist_incomplete_with_nuitka_stamp_no_warn(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """dist 含产物且有 .nuitka_compile_stamp 时不告警."""
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "runtime").mkdir()
     (dist / ".nuitka_compile_stamp").write_text("fingerprint", encoding="utf-8")
     with caplog.at_level("WARNING", logger="fspack.packaging.pipeline"):
-        _warn_dist_incomplete(dist)
+        _handle_dist_incomplete(dist, auto_clean=False)
     assert not caplog.records
+
+
+# --- _handle_dist_incomplete auto_clean 与 .build_failed 测试（iter-140） ---
+
+
+def test_handle_dist_incomplete_auto_clean_removes_artifacts(tmp_path: Path) -> None:
+    """auto_clean=True 时清空 dist 残留产物（不保留 .build_failed）."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "runtime").mkdir()
+    (dist / "src").mkdir()
+    (dist / "app.exe").write_bytes(b"")
+    (dist / _BUILD_FAILED).write_text('{"stage":"x"}', encoding="utf-8")
+
+    _handle_dist_incomplete(dist, auto_clean=True)
+
+    assert dist.is_dir()
+    assert not (dist / "runtime").exists()
+    assert not (dist / "src").exists()
+    assert not (dist / "app.exe").exists()
+    assert not (dist / _BUILD_FAILED).exists()
+
+
+def test_handle_dist_incomplete_auto_clean_preserves_nsi(tmp_path: Path) -> None:
+    """auto_clean=True 仍保留 installer.nsi（便于重新打包）."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "runtime").mkdir()
+    (dist / "installer.nsi").write_text('Name "app"', encoding="utf-8")
+
+    _handle_dist_incomplete(dist, auto_clean=True)
+
+    assert (dist / "installer.nsi").read_text(encoding="utf-8") == 'Name "app"'
+    assert not (dist / "runtime").exists()
+
+
+def test_handle_dist_incomplete_build_failed_shows_warning(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """dist 含 .build_failed 时输出失败阶段与错误信息."""
+    import json
+
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / _BUILD_FAILED).write_text(
+        json.dumps({"stage": "编译源码", "error": "NuitkaError: compile failed", "timestamp": "2026-08-04T21:00:00"}),
+        encoding="utf-8",
+    )
+
+    _handle_dist_incomplete(dist, auto_clean=False)
+
+    assert any("残留" in r.message for r in caplog.records)
+
+
+def test_handle_dist_incomplete_build_failed_auto_clean_removes_it(tmp_path: Path) -> None:
+    """auto_clean=True 时 .build_failed 也被清除（全新开始）."""
+    import json
+
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / _BUILD_FAILED).write_text(
+        json.dumps({"stage": "编译源码", "error": "failed"}),
+        encoding="utf-8",
+    )
+
+    _handle_dist_incomplete(dist, auto_clean=True)
+
+    assert not (dist / _BUILD_FAILED).exists()
+
+
+def test_handle_dist_incomplete_no_artifacts_with_build_failed_warns(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """dist 无产物但有 .build_failed 时仍视为半成品并告警."""
+    import json
+
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / _BUILD_FAILED).write_text(
+        json.dumps({"stage": "下载依赖", "error": "NetworkError"}),
+        encoding="utf-8",
+    )
+
+    with caplog.at_level("WARNING", logger="fspack.packaging.pipeline"):
+        _handle_dist_incomplete(dist, auto_clean=False)
+
+    assert any("残留" in r.message for r in caplog.records)
+
+
+# --- _save/_load/_remove_build_failure 测试（iter-140） ---
+
+
+def test_save_build_failure_writes_json(tmp_path: Path) -> None:
+    """_save_build_failure 写入 JSON 含 stage/error/timestamp."""
+    import json
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    dist = tmp_path / "dist"
+    dist.mkdir()
+
+    tracker = MagicMock()
+    # SimpleNamespace 而非 MagicMock(name=...)：MagicMock 的 name 参数设置 repr
+    # 名称而非属性，records[-1].name 返回 MagicMock 无法 JSON 序列化
+    tracker.records = [SimpleNamespace(name="解析项目"), SimpleNamespace(name="下载依赖")]
+
+    exc = RuntimeError("test error")
+    _save_build_failure(dist, tracker, exc)
+
+    data = json.loads((dist / _BUILD_FAILED).read_text(encoding="utf-8"))
+    assert data["stage"] == "下载依赖"
+    assert "RuntimeError" in data["error"]
+    assert "test error" in data["error"]
+    assert "timestamp" in data
+
+
+def test_save_build_failure_no_records_uses_unknown(tmp_path: Path) -> None:
+    """tracker.records 为空时 stage 记为'未知'."""
+    import json
+    from unittest.mock import MagicMock
+
+    dist = tmp_path / "dist"
+    dist.mkdir()
+
+    tracker = MagicMock()
+    tracker.records = []  # type: ignore[list-item]
+
+    _save_build_failure(dist, tracker, ValueError("err"))
+
+    data = json.loads((dist / _BUILD_FAILED).read_text(encoding="utf-8"))
+    assert data["stage"] == "未知"
+
+
+def test_save_build_failure_truncates_long_error(tmp_path: Path) -> None:
+    """错误信息超 500 字符时截断."""
+    import json
+    from unittest.mock import MagicMock
+
+    dist = tmp_path / "dist"
+    dist.mkdir()
+
+    tracker = MagicMock()
+    tracker.records = []  # type: ignore[list-item]
+    long_msg = "x" * 600
+    _save_build_failure(dist, tracker, RuntimeError(long_msg))
+
+    data = json.loads((dist / _BUILD_FAILED).read_text(encoding="utf-8"))
+    assert len(data["error"]) <= 500
+    assert data["error"].endswith("...")
+
+
+def test_save_build_failure_dist_not_exists_skips(tmp_path: Path) -> None:
+    """dist 目录不存在时跳过写入（构建可能在创建 dist 前失败）."""
+    from unittest.mock import MagicMock
+
+    tracker = MagicMock()
+    tracker.records = []  # type: ignore[list-item]
+
+    _save_build_failure(tmp_path / "nonexistent", tracker, RuntimeError("err"))
+
+    assert not (tmp_path / "nonexistent").exists()
+
+
+def test_load_build_failure_returns_dict(tmp_path: Path) -> None:
+    """_load_build_failure 读取 JSON 返回 dict."""
+    import json
+
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / _BUILD_FAILED).write_text(
+        json.dumps({"stage": "编译", "error": "err", "timestamp": "2026-01-01T00:00:00"}),
+        encoding="utf-8",
+    )
+
+    result = _load_build_failure(dist)
+    assert result is not None
+    assert result["stage"] == "编译"
+    assert result["error"] == "err"
+
+
+def test_load_build_failure_no_file_returns_none(tmp_path: Path) -> None:
+    """文件不存在时返回 None."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+
+    assert _load_build_failure(dist) is None
+
+
+def test_load_build_failure_invalid_json_returns_none(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """JSON 解析失败返回 None 并告警."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / _BUILD_FAILED).write_text("not json", encoding="utf-8")
+
+    with caplog.at_level("WARNING", logger="fspack.packaging.pipeline"):
+        result = _load_build_failure(dist)
+
+    assert result is None
+
+
+def test_remove_build_failure_deletes_file(tmp_path: Path) -> None:
+    """_remove_build_failure 删除 .build_failed 文件."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / _BUILD_FAILED).write_text("{}", encoding="utf-8")
+
+    _remove_build_failure(dist)
+
+    assert not (dist / _BUILD_FAILED).exists()
+
+
+def test_remove_build_failure_no_file_noop(tmp_path: Path) -> None:
+    """文件不存在时 _remove_build_failure 无操作."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+
+    _remove_build_failure(dist)  # 不抛异常
+
+
+# --- _clean_dist_dir 与 clean_dist 保留诊断测试（iter-140） ---
+
+
+def test_clean_dist_dir_keeps_diagnostics_preserves_build_failed(tmp_path: Path) -> None:
+    """keep_diagnostics=True 时保留 .build_failed 与 installer.nsi."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "runtime").mkdir()
+    (dist / _BUILD_FAILED).write_text('{"stage":"x"}', encoding="utf-8")
+    (dist / "installer.nsi").write_text('Name "app"', encoding="utf-8")
+
+    _clean_dist_dir(dist, keep_diagnostics=True)
+
+    assert (dist / _BUILD_FAILED).read_text(encoding="utf-8") == '{"stage":"x"}'
+    assert (dist / "installer.nsi").read_text(encoding="utf-8") == 'Name "app"'
+    assert not (dist / "runtime").exists()
+
+
+def test_clean_dist_dir_no_diagnostics_removes_build_failed(tmp_path: Path) -> None:
+    """keep_diagnostics=False 时删除 .build_failed（全新开始）."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "runtime").mkdir()
+    (dist / _BUILD_FAILED).write_text('{"stage":"x"}', encoding="utf-8")
+
+    _clean_dist_dir(dist, keep_diagnostics=False)
+
+    assert not (dist / _BUILD_FAILED).exists()
+    assert not (dist / "runtime").exists()
+
+
+def test_clean_dist_preserves_build_failed(tmp_path: Path) -> None:
+    """fsp c (clean_dist) 保留 .build_failed 便于用户排查."""
+    project = tmp_path / "proj"
+    dist = project / "dist"
+    dist.mkdir(parents=True)
+    (dist / "runtime").mkdir()
+    (dist / _BUILD_FAILED).write_text('{"stage":"编译"}', encoding="utf-8")
+    (dist / "installer.nsi").write_text('Name "app"', encoding="utf-8")
+
+    clean_dist(project)
+
+    assert (dist / _BUILD_FAILED).read_text(encoding="utf-8") == '{"stage":"编译"}'
+    assert (dist / "installer.nsi").read_text(encoding="utf-8") == 'Name "app"'
+    assert not (dist / "runtime").exists()
 
 
 # --- _trim_standalone_runtime 测试 ---

@@ -249,6 +249,15 @@ def _add_build_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser
             "到 dist/release/<name>-<version>-sbom.json，含依赖名称/版本/许可证/SHA256）"
         ),
     )
+    p.add_argument(
+        "--auto-clean",
+        action="store_true",
+        help=(
+            "构建前自动清理 dist 残留（含上次失败标记 .build_failed），"
+            "无需手动 fsp c。检测到半成品时：无此标志则告警并继续（可能因残留文件失败），"
+            "有此标志则清空 dist 后重新构建"
+        ),
+    )
 
 
 def _add_run_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:

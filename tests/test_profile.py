@@ -326,6 +326,7 @@ def test_cli_build_profile_flag_passed_to_build(tmp_path: Path, monkeypatch: pyt
         log_file: Path | None = None,
         log_format: object = None,
         profile: bool = False,
+        auto_clean: bool = False,
     ) -> None:
         captured["profile"] = profile
 
@@ -353,6 +354,7 @@ def test_cli_build_without_profile_defaults_false(tmp_path: Path, monkeypatch: p
         log_file: Path | None = None,
         log_format: object = None,
         profile: bool = False,
+        auto_clean: bool = False,
     ) -> None:
         captured["profile"] = profile
 

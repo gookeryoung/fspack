@@ -111,7 +111,7 @@ iter-117~125 完成结构优化与懒加载主题（`import fspack` 从 ~55ms �
 - [x] **iter-139 缓存目录健康检查**：(1) `fsp doctor` 扩展 `--check-cache` 检测损坏缓存
   （`.deps-*.json` 损坏、wheel 文件缺失、stamp 不一致）；(2) 检测孤儿文件（cache 目录中
   不属于任何项目的 wheel）；(3) 输出清理建议（`fsp cache clean` 子命令）
-- [ ] **iter-140 构建中断恢复**：(1) `fsp b` 开始时检测 `dist/` 半成品（有 runtime/ 无 exe），
+- [x] **iter-140 构建中断恢复**：(1) `fsp b` 开始时检测 `dist/` 半成品（有 runtime/ 无 exe），
   交互式确认或 `--auto-clean` 自动清理；(2) 构建异常时保存失败阶段到 `dist/.build_failed`，
   下次 `fsp b` 检测并提示；(3) `fsp c` 保留 `installer.nsi` 逻辑扩展到保留失败诊断文件
 
