@@ -126,7 +126,7 @@ iter-117~125 完成结构优化与懒加载主题（`import fspack` 从 ~55ms �
   (2) ccache 命中 vs 未命中对比；(3) 加入 CI benchmark job，退化 >10% 失败
 - [x] **iter-143 wheel 下载基线**：(1) pip vs uv（iter-132）下载 50 wheel 对比基线；
   (2) 缓存命中 vs 冷下载对比；(3) 加入 CI benchmark job
-- [ ] **iter-144 启动时间基线**：(1) entry wrapper 启动耗时基线（用 `python -X importtime`
+- [x] **iter-144 启动时间基线**：(1) entry wrapper 启动耗时基线（用 `python -X importtime`
   解析）；(2) lazy-import 启用 vs 关闭对比；(3) `--no-site` 启用 vs 关闭对比
 - [ ] **iter-145 CI 性能门禁固化**：(1) `.github/workflows/ci.yml` benchmark job 扩展，
   覆盖 iter-141~144 新基线；(2) `scripts/compare_benchmark.py` 支持按基线类别分组对比；

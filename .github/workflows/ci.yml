@@ -110,7 +110,7 @@ jobs:
 
       - name: Run benchmark tests
         run: |
-          uv run pytest tests/test_perf_baseline.py tests/test_build_perf_baseline.py tests/test_nuitka_compile_baseline.py tests/test_wheel_download_baseline.py -m slow \
+          uv run pytest tests/test_perf_baseline.py tests/test_build_perf_baseline.py tests/test_nuitka_compile_baseline.py tests/test_wheel_download_baseline.py tests/test_entry_startup_baseline.py -m slow \
             --benchmark-only \
             --benchmark-save=main \
             --benchmark-min-rounds=20 \
