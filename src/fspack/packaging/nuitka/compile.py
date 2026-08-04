@@ -104,6 +104,58 @@ def _hash_index_path(dist_dir: Path) -> Path:
     return dist_dir / ".nuitka_hash_index.json"
 
 
+def _failed_files_path(dist_dir: Path) -> Path:
+    """返回 Nuitka 失败文件列表路径：``dist/.nuitka_failed_files.json``.
+
+    iter-137 引入：记录上次构建编译失败的 .py 文件相对 ``src_dir`` 的 POSIX 路径。
+    与 stamp 文件同目录（dist/），删除 dist 时一并清理。stamp 不命中时读取，
+    传给 :meth:`NuitkaCompile.compile_src` 跳过这些文件避免反复尝试。
+    """
+    return dist_dir / ".nuitka_failed_files.json"
+
+
+def _load_failed_files(dist_dir: Path) -> frozenset[str]:
+    """读取失败文件列表，返回相对 ``src_dir`` 的 POSIX 路径集合.
+
+    文件不存在或损坏返回空 frozenset（不影响构建，相当于"无上次失败文件"）。
+    与 :func:`_load_hash_index` 的"内容损坏删文件"策略一致。
+    """
+    path = _failed_files_path(dist_dir)
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return frozenset()
+    except OSError:
+        _logger.warning("读取失败文件列表失败，视为空: %s", path)
+        return frozenset()
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, ValueError) as e:
+        _logger.warning("失败文件列表损坏，删除并重建: %s: %s", path, e)
+        _safe_unlink(path)
+        return frozenset()
+    if not isinstance(data, list):
+        _logger.warning("失败文件列表非 list，删除并重建: %s", path)
+        _safe_unlink(path)
+        return frozenset()
+    # 类型校验：仅保留 str 条目
+    return frozenset(s for s in data if isinstance(s, str))
+
+
+def _save_failed_files(dist_dir: Path, failed_files: list[str]) -> None:
+    """写入失败文件列表到 ``dist/.nuitka_failed_files.json``.
+
+    用 :func:`_atomic_write_text` 原子写入（与 stamp/hash 索引一致，避免半写入）。
+    空列表也写入（覆盖上次失败记录，表示本次无失败）。任何 I/O 错误仅告警不中断
+    构建（失败文件列表是优化项，写入失败不影响主流程）。
+    """
+    path = _failed_files_path(dist_dir)
+    try:
+        _atomic_write_text(path, json.dumps(failed_files, ensure_ascii=False, indent=2))
+    except OSError as e:
+        _logger.warning("写入失败文件列表失败（不影响构建）: %s: %s", path, e)
+
+
 def _load_hash_index(dist_dir: Path) -> dict[str, str]:
     """读取 hash 索引文件，返回 ``{stamp_key: compiled_at_iso}`` 字典.
 
@@ -312,8 +364,20 @@ class NuitkaCompile:
         entry_rels: frozenset[str] | None = None,
         ccache: bool = False,
         cache_root: Path | None = None,
-    ) -> None:
+        skip_files: frozenset[str] | None = None,
+    ) -> list[str]:
         """编译 ``src_dir`` 下所有 ``.py`` 为 ``.pyd``/``.so``，编译后删除 ``.py`` 源码.
+
+        返回失败文件的相对 POSIX 路径列表（相对 ``src_dir``），供调用方
+        :meth:`compile_with_stamp` 写入 ``.nuitka_failed_files.json``，
+        下次构建跳过这些文件避免反复尝试（iter-137）。
+
+        Args:
+            skip_files: 上次构建失败的文件相对 ``src_dir`` 的 POSIX 路径集合。
+                这些文件本次构建跳过（不编译不删除），由 :meth:`_collect_py_files` 排除。
+                None 表示不跳过任何文件（首次构建或上次无失败）。
+
+        其余参数与返回行为见类级 docstring。
 
         用 **standalone python**（``build_python_exe``）运行 nuitka，避免 embed runtime
         python 不完整导致 reExecute 进程衍生。``build_python_exe`` 为 None 或不存在时
@@ -359,7 +423,7 @@ class NuitkaCompile:
         """
         py_exe = cls._resolve_compile_python(build_python_exe, runtime_dir, py_version, target, stage)
         if py_exe is None:
-            return
+            return []
 
         if not cls._is_nuitka_cached(nuitka_cache):  # NuitkaEnv mixin（stub 在类顶部，运行时 MRO 派发）
             _logger.warning(
@@ -367,12 +431,12 @@ class NuitkaCompile:
                 nuitka_cache,
             )
             stage.set_detail("nuitka 未安装，跳过（回退到 .pyc 模式）")
-            return
+            return []
 
-        py_files = cls._collect_py_files(src_dir, entry_rels)
+        py_files = cls._collect_py_files(src_dir, entry_rels, skip_files)
         if not py_files:
             stage.set_detail("无 .py 文件可编译")
-            return
+            return []
 
         # ccache 就绪：优先系统 PATH，缺失则下载到 ~/.fspack/cache/ccache/
         ccache_exe = None
@@ -384,7 +448,7 @@ class NuitkaCompile:
         bootstrap_script = cls._create_bootstrap_script(nuitka_cache)
         try:
             try:
-                compiled_files, failed = cls._compile_files(
+                compiled_files, failed_files = cls._compile_files(
                     py_exe, bootstrap_script, py_files, stage, target=target, ccache_exe=ccache_exe
                 )
             finally:
@@ -409,10 +473,13 @@ class NuitkaCompile:
             # 放在 finally：_compile_files 抛异常时也清理，避免残留目录污染下次构建。
             cls._cleanup_build_dirs(src_dir)
         compiled = len(compiled_files)
-        if failed:
-            stage.set_detail(f"编译 {compiled} 个，失败 {failed} 个，剥离 {stripped} 个 .py")
+        if failed_files:
+            stage.set_detail(f"编译 {compiled} 个，失败 {len(failed_files)} 个，剥离 {stripped} 个 .py")
         else:
             stage.set_detail(f"编译 {compiled} 个，剥离 {stripped} 个 .py")
+        # 返回失败文件相对 src_dir 的 POSIX 路径，供 compile_with_stamp 写入
+        # .nuitka_failed_files.json，下次构建跳过这些文件避免反复尝试（iter-137）
+        return [f.relative_to(src_dir).as_posix() for f in failed_files]
 
     @classmethod
     def compile_packages(  # noqa: PLR0913, PLR0912
@@ -497,7 +564,7 @@ class NuitkaCompile:
 
         bootstrap_script = cls._create_bootstrap_script(nuitka_cache)
         try:
-            compiled_files, failed = cls._compile_files(
+            compiled_files, failed_files = cls._compile_files(
                 py_exe, bootstrap_script, py_files, stage, target=target, ccache_exe=ccache_exe
             )
         finally:
@@ -523,8 +590,10 @@ class NuitkaCompile:
             if pkg_dir.is_dir():
                 cls._cleanup_build_dirs(pkg_dir)
         compiled = len(compiled_files)
-        if failed:
-            _logger.warning("Nuitka 包编译完成: 成功 %d 个，失败 %d 个，剥离 %d 个 .py", compiled, failed, stripped)
+        if failed_files:
+            _logger.warning(
+                "Nuitka 包编译完成: 成功 %d 个，失败 %d 个，剥离 %d 个 .py", compiled, len(failed_files), stripped
+            )
         else:
             _logger.info("Nuitka 包编译完成: 成功 %d 个，剥离 %d 个 .py", compiled, stripped)
 
@@ -551,8 +620,12 @@ class NuitkaCompile:
         return py_exe
 
     @staticmethod
-    def _collect_py_files(src_dir: Path, entry_rels: frozenset[str] | None) -> list[Path]:
-        """收集待编译的 .py 文件，排除 Nuitka 残留目录、__init__.py 与入口文件.
+    def _collect_py_files(
+        src_dir: Path,
+        entry_rels: frozenset[str] | None,
+        skip_files: frozenset[str] | None = None,
+    ) -> list[Path]:
+        """收集待编译的 .py 文件，排除 Nuitka 残留目录、__init__.py、入口文件与上次失败文件.
 
         排除规则：
 
@@ -563,6 +636,9 @@ class NuitkaCompile:
            字节码优化。跳过后 compiled_files 不含 __init__.py，删除循环天然跳过。
         3. 入口文件（``entry_rels``）：入口包装器用 ``runpy.run_path()`` 显式指定 .py 路径，
            编译后 .py 被删除会导致 FileNotFoundError。入口文件保留 .py 形态，由 .pyc 优化。
+        4. 上次失败文件（``skip_files``，iter-137）：相对 ``src_dir`` 的 POSIX 路径集合，
+           这些文件上次构建编译失败，本次跳过避免反复尝试。用户修复后需删除
+           ``.nuitka_failed_files.json`` 或 stamp 文件强制重试。
         """
         py_files = sorted(
             p
@@ -571,6 +647,8 @@ class NuitkaCompile:
         )
         if entry_rels:
             py_files = [p for p in py_files if p.relative_to(src_dir).as_posix() not in entry_rels]
+        if skip_files:
+            py_files = [p for p in py_files if p.relative_to(src_dir).as_posix() not in skip_files]
         return py_files
 
     @staticmethod
@@ -601,8 +679,8 @@ class NuitkaCompile:
         *,
         target: Platform,
         ccache_exe: Path | None = None,
-    ) -> tuple[set[Path], int]:
-        """并行编译 .py 文件，返回 (成功编译的文件集合, 失败数).
+    ) -> tuple[set[Path], list[Path]]:
+        """并行编译 .py 文件，返回 (成功编译的文件集合, 失败文件路径列表).
 
         用 :class:`ThreadPoolExecutor` 并行调 nuitka ``--module``（subprocess 释放 GIL，
         线程足够并行）。``max_workers = min(cpu_count, :data:`_MAX_COMPILE_WORKERS`)`` 平衡
@@ -648,10 +726,12 @@ class NuitkaCompile:
         # （4 并行 * 8 gcc = 32 gcc 进程会 OOM）。单文件场景 max_workers 不影响（只 submit 1 个任务）。
         jobs = max(1, cpu // max_workers)
         compiled_files: set[Path] = set()
-        failed = 0
+        failed_files: list[Path] = []
         total = len(py_files)
         # 记录成功编译的文件：仅这些 .py 可安全删除（.pyd 已生成）。
         # 失败的 .py 保留，让运行时回退到 .pyc 加载，避免编译失败导致 dist/src 无可用代码。
+        # iter-137：失败文件列表返回给 compile_src → compile_with_stamp，写入
+        # .nuitka_failed_files.json，下次构建跳过这些文件避免反复尝试。
 
         def _compile_one(py_file: Path) -> tuple[Path, int]:
             """单文件编译 worker：调 nuitka --module，返回 (文件路径, 退出码)."""
@@ -710,12 +790,12 @@ class NuitkaCompile:
                         stage.processed()
                         _logger.info("编译 [%d/%d] %s 成功", idx, total, py_file.name)
                     else:
-                        failed += 1
+                        failed_files.append(py_file)
                         _logger.warning("Nuitka 编译失败 %s（退出码 %s），详见上方输出", py_file, returncode)
         finally:
             stop_heartbeat.set()
             hb_thread.join(timeout=1.0)
-        return compiled_files, failed
+        return compiled_files, failed_files
 
     @staticmethod
     def _stamp_path(dist_dir: Path) -> Path:
@@ -870,7 +950,13 @@ class NuitkaCompile:
             stage.set_detail(f"回退到 .pyc 模式: {e}")
             return
 
-        cls.compile_src(
+        # iter-137：读取上次构建失败的文件列表，传给 compile_src 跳过这些文件
+        # 避免反复尝试（非源码原因失败的文件，如 Nuitka 不支持的语法）
+        skip_files = _load_failed_files(dist_dir)
+        if skip_files:
+            _logger.info("跳过上次失败的 %d 个 .py 文件: %s", len(skip_files), sorted(skip_files))
+
+        failed_files = cls.compile_src(
             src_dir,
             runtime_dir,
             py_version,
@@ -881,6 +967,7 @@ class NuitkaCompile:
             entry_rels=entry_rels,
             ccache=ccache,
             cache_root=cache_root,
+            skip_files=skip_files,
         )
 
         # 编译用户指定的第三方包（site-packages 中的纯 Python 包）
@@ -912,3 +999,5 @@ class NuitkaCompile:
         except OSError as e:
             _logger.warning("写入 Nuitka stamp 失败: %s", e)
         _update_hash_index(dist_dir, stamp_key)
+        # iter-137：写入失败文件列表，下次构建跳过这些文件避免反复尝试
+        _save_failed_files(dist_dir, failed_files)

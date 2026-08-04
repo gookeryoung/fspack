@@ -157,8 +157,9 @@ class NuitkaCompilerProtocol(Protocol):
         entry_rels: frozenset[str] | None = None,
         ccache: bool = False,
         cache_root: Path | None = None,
-    ) -> None:
-        """编译 src_dir 下所有 .py 为 .pyd/.so."""
+        skip_files: frozenset[str] | None = None,
+    ) -> list[str]:
+        """编译 src_dir 下所有 .py 为 .pyd/.so，返回失败文件相对 POSIX 路径列表."""
         ...
 
     @classmethod
@@ -192,8 +193,12 @@ class NuitkaCompilerProtocol(Protocol):
         ...
 
     @staticmethod
-    def _collect_py_files(src_dir: Path, entry_rels: frozenset[str] | None) -> list[Path]:
-        """收集待编译的 .py 文件."""
+    def _collect_py_files(
+        src_dir: Path,
+        entry_rels: frozenset[str] | None,
+        skip_files: frozenset[str] | None = None,
+    ) -> list[Path]:
+        """收集待编译的 .py 文件，排除上次失败文件."""
         ...
 
     @staticmethod
@@ -211,8 +216,8 @@ class NuitkaCompilerProtocol(Protocol):
         *,
         target: Platform,
         ccache_exe: Path | None = None,
-    ) -> tuple[set[Path], int]:
-        """逐个编译 .py 文件，返回 (成功编译的文件集合, 失败数)."""
+    ) -> tuple[set[Path], list[Path]]:
+        """逐个编译 .py 文件，返回 (成功编译的文件集合, 失败文件路径列表)."""
         ...
 
     @staticmethod

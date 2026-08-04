@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import abc
 import logging
+import stat
 import sys
 import tarfile
 import zipfile
@@ -138,6 +139,48 @@ def _safe_unlink_archive(archive_path: Path, label: str) -> None:
         archive_path.unlink()
     except OSError as e:
         _logger.warning("删除损坏的 %s 失败: %s: %s", label, archive_path, e)
+
+
+def _validate_tar_member(member: tarfile.TarInfo) -> None:
+    """PEP 706 ``data`` filter 等价检查（用于 Python 3.11 及以下手动实现）.
+
+    拒绝：绝对路径（Unix ``/`` 或 Windows 盘符 ``C:``）、路径穿越（``..`` 段）、
+    符号链接、硬链接、设备文件（字符/块设备）。
+
+    Python 3.12+ 使用内置 ``tarfile.data_filter``，本函数仅在低版本生效。
+    tarball 来自网络下载（镜像站），预检防止恶意条目逃逸 ``runtime_dir``。
+    """
+    name = member.name.replace("\\", "/")
+    if name.startswith("/"):
+        raise EmbedError(f"python-build-standalone tarball 含绝对路径条目: {member.name}")
+    if len(name) >= 2 and name[1] == ":":
+        raise EmbedError(f"python-build-standalone tarball 含盘符条目: {member.name}")
+    if ".." in name.split("/"):
+        raise EmbedError(f"python-build-standalone tarball 含路径穿越条目: {member.name}")
+    if member.issym() or member.islnk():
+        raise EmbedError(f"python-build-standalone tarball 含链接条目: {member.name}")
+    if member.isdev():
+        raise EmbedError(f"python-build-standalone tarball 含设备文件条目: {member.name}")
+
+
+def _validate_zip_member(info: zipfile.ZipInfo) -> None:
+    """校验 zip 条目路径安全：拒绝绝对路径、路径穿越（``..``）、符号链接.
+
+    zipfile 无内置安全过滤（与 tarfile 3.12+ ``filter='data'`` 不同），
+    解压前必须手动校验，防止恶意 zip 路径穿越逃逸 ``runtime_dir``。
+    embed zip 来自镜像下载，需防范镜像被篡改注入恶意条目。
+    """
+    name = info.filename.replace("\\", "/")
+    if name.startswith("/"):
+        raise EmbedError(f"embed zip 含绝对路径条目: {info.filename}")
+    if len(name) >= 2 and name[1] == ":":
+        raise EmbedError(f"embed zip 含盘符条目: {info.filename}")
+    if ".." in name.split("/"):
+        raise EmbedError(f"embed zip 含路径穿越条目: {info.filename}")
+    # Unix 模式位在 external_attr 高 16 位（MS-DOS 兼容设计），0 表示未设置
+    mode = info.external_attr >> 16
+    if mode and stat.S_ISLNK(mode):
+        raise EmbedError(f"embed zip 含符号链接条目: {info.filename}")
 
 
 # ---- 基类 ----
@@ -299,7 +342,10 @@ class RuntimeDownloader(abc.ABC):
                 stage.hit_cache()  # pragma: no cover
         else:  # pragma: no cover
             archive_path = cls.download(
-                version, cache_dir, stage=stage, **kwargs  # pyrefly: ignore[bad-argument-type]
+                version,
+                cache_dir,
+                stage=stage,
+                **kwargs,  # pyrefly: ignore[bad-argument-type]
             )  # pragma: no cover
             cls.extract(archive_path, runtime_dir)  # pragma: no cover
         cls.post_extract(runtime_dir, version)  # pragma: no cover
@@ -338,14 +384,22 @@ class EmbedRuntime(RuntimeDownloader):
     @classmethod
     @override
     def extract_archive(cls, archive_path: Path, runtime_dir: Path) -> None:
-        """解压 embed zip 到 runtime_dir，损坏时删除归档避免缓存污染."""
+        """解压 embed zip 到 runtime_dir，损坏或含恶意条目时删除归档避免缓存污染."""
         try:
             with zipfile.ZipFile(archive_path) as zf:
+                # zipfile 无内置安全过滤，解压前手动预检每个条目路径与类型，
+                # 拒绝绝对路径/路径穿越/符号链接（防恶意 zip 逃逸 runtime_dir）。
+                for info in zf.infolist():
+                    _validate_zip_member(info)
                 zf.extractall(runtime_dir)
         except zipfile.BadZipFile as e:
             # 删除损坏的归档：下次构建会重新下载，避免反复尝试解压损坏文件
             _safe_unlink_archive(archive_path, "embed zip")
             raise EmbedError(f"embed zip 损坏: {archive_path}") from e
+        except EmbedError:
+            # 预检发现的恶意条目：归档可能被篡改，删除避免下次构建再次使用
+            _safe_unlink_archive(archive_path, "embed zip")
+            raise
 
     @classmethod
     @override
@@ -395,22 +449,28 @@ class StandaloneRuntime(RuntimeDownloader):
     @classmethod
     @override
     def extract_archive(cls, archive_path: Path, runtime_dir: Path) -> None:
-        """解压 tar.gz 到 runtime_dir，损坏时删除归档避免缓存污染."""
+        """解压 tar.gz 到 runtime_dir，损坏或含恶意条目时删除归档避免缓存污染."""
         try:
             with tarfile.open(archive_path, "r:gz") as tf:
                 # Python 3.12+ 显式指定 data 过滤器（PEP 706）：消除 DeprecationWarning，
                 # 并阻止绝对路径/路径穿越等恶意条目（tarball 来自网络下载）。
-                # 低版本无 filter 参数，回退原行为。
+                # 低版本无 filter 参数，手动预检每个 member 等价实现 data filter。
                 if sys.version_info >= (3, 12):
                     tf.extractall(runtime_dir, filter="data")  # pragma: no cover # 测试环境为 3.11，3.12+ 分支无法覆盖
                 else:
+                    for member in tf.getmembers():
+                        _validate_tar_member(member)
                     tf.extractall(runtime_dir)
         except (tarfile.TarError, OSError) as e:
             # 删除损坏的归档：下次构建会重新下载，避免反复尝试解压损坏文件。
             # OSError 与 TarError 一并处理：tarfile.open 遇到非 gzip 文件抛 OSError
-            # （" seeking back is not allowed"）或 ReadError，统一视为损坏。
+            # （"seeking back is not allowed"）或 ReadError，统一视为损坏。
             _safe_unlink_archive(archive_path, "python-build-standalone tarball")
             raise EmbedError(f"python-build-standalone tarball 损坏: {archive_path}") from e
+        except EmbedError:
+            # 预检发现的恶意条目：归档可能被篡改，删除避免下次构建再次使用
+            _safe_unlink_archive(archive_path, "python-build-standalone tarball")
+            raise
 
 
 # ---- 函数式 API（委托给类，保持向后兼容）----

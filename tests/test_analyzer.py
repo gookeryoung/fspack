@@ -225,26 +225,133 @@ def test_analyze_dependencies_parallel_matches_serial(tmp_path: Path, monkeypatc
 
 
 def test_parse_file_worker_skips_syntax_error(tmp_path: Path) -> None:
-    """worker 函数对语法错误文件返回空结果."""
+    """worker 函数对语法错误文件返回空结果与错误记录（iter-138 记录 ast_errors）."""
     from fspack.analyzer import _parse_file_worker
 
     bad = tmp_path / "bad.py"
     bad.write_text("def bad(:\n", encoding="utf-8")
-    tops, subs = _parse_file_worker(str(bad))
-    assert tops == []
+    non_stdlib_tops, stdlib_tops, subs, errors = _parse_file_worker(str(bad))
+    assert non_stdlib_tops == []
+    assert stdlib_tops == []
     assert subs == {}
+    # iter-138：错误记录为 (abs_path, error_msg) 元组
+    assert len(errors) == 1
+    assert errors[0][0] == str(bad)
+    assert "bad" in errors[0][1].lower() or "syntax" in errors[0][1].lower() or errors[0][1]
 
 
 def test_parse_file_worker_normal(tmp_path: Path) -> None:
-    """worker 函数正常解析返回顶层导入与子模块."""
+    """worker 函数正常解析返回非标准库/标准库分离的顶层导入与子模块."""
     from fspack.analyzer import _parse_file_worker
 
     py = tmp_path / "ok.py"
     py.write_text("import os\nfrom PySide2.QtWidgets import QApplication\n", encoding="utf-8")
-    tops, subs = _parse_file_worker(str(py))
-    assert "os" in tops
-    assert "PySide2" in tops
+    non_stdlib_tops, stdlib_tops, subs, errors = _parse_file_worker(str(py))
+    assert "os" in stdlib_tops
+    assert "os" not in non_stdlib_tops
+    assert "PySide2" in non_stdlib_tops
+    assert "PySide2" not in stdlib_tops
     assert subs["PySide2"] == frozenset({"QtWidgets"})
+    assert errors == []
+
+
+# ---------- iter-134 AST 并行解析调优测试 ----------
+
+
+def test_interleave_by_size_distributes_large_files(tmp_path: Path) -> None:
+    """``_interleave_by_size`` 将大文件分散到不同 chunk，避免扎堆.
+
+    构造 8 个文件（4 大 4 小），``num_chunks=4``，验证每个 chunk 都含至少一个大文件。
+    """
+    from fspack.analyzer import _interleave_by_size
+
+    files: list[Path] = []
+    for i in range(4):
+        big = tmp_path / f"big_{i}.py"
+        big.write_text("x = 0\n" * 1000, encoding="utf-8")
+        files.append(big)
+    for i in range(4):
+        small = tmp_path / f"small_{i}.py"
+        small.write_text("x = 0\n", encoding="utf-8")
+        files.append(small)
+
+    num_chunks = 4
+    interleaved = _interleave_by_size(files, num_chunks)
+    chunk_size = len(interleaved) // num_chunks
+    # 每个 chunk 应含至少一个大文件（大文件分散，不扎堆）
+    for i in range(num_chunks):
+        chunk = interleaved[i * chunk_size : (i + 1) * chunk_size]
+        big_count = sum(1 for p in chunk if p.name.startswith("big_"))
+        assert big_count >= 1, f"chunk {i} 无大文件: {[p.name for p in chunk]}"
+
+
+def test_interleave_by_size_preserves_all_files(tmp_path: Path) -> None:
+    """``_interleave_by_size`` 重排后文件集合不变."""
+    from fspack.analyzer import _interleave_by_size
+
+    files = [(tmp_path / f"f{i}.py") for i in range(10)]
+    for f in files:
+        f.write_text("x = 0\n", encoding="utf-8")
+
+    interleaved = _interleave_by_size(files, 4)
+    assert set(interleaved) == set(files)
+    assert len(interleaved) == len(files)
+
+
+def test_interleave_by_size_empty_and_single_chunk(tmp_path: Path) -> None:
+    """``_interleave_by_size`` 空列表返回空，``num_chunks<=1`` 原序返回."""
+    from fspack.analyzer import _interleave_by_size
+
+    assert _interleave_by_size([], 4) == []
+    f1 = tmp_path / "a.py"
+    f1.write_text("x = 0\n", encoding="utf-8")
+    f2 = tmp_path / "b.py"
+    f2.write_text("y = 0\n", encoding="utf-8")
+    single = _interleave_by_size([f1, f2], 1)
+    assert single == [f1, f2]
+
+
+def test_init_parse_worker_sets_stdlib(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``_init_parse_worker`` 设置 worker 状态 ``_WORKER_STATE["stdlib"]``."""
+    from fspack import analyzer
+
+    monkeypatch.setattr(analyzer, "_WORKER_STATE", {"stdlib": frozenset()})
+    custom = frozenset({"os", "sys", "json"})
+    analyzer._init_parse_worker(custom)
+    assert custom == analyzer._WORKER_STATE["stdlib"]
+
+
+def test_parse_file_worker_uses_worker_stdlib(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``_parse_file_worker`` 用 ``_WORKER_STATE["stdlib"]`` 分离标准库（worker 路径）.
+
+    设置自定义 ``_WORKER_STATE["stdlib"]`` 后，其中的模块应进入 stdlib_tops。
+    """
+    from fspack import analyzer
+
+    py = tmp_path / "ok.py"
+    py.write_text("import os\nimport numpy\n", encoding="utf-8")
+    # os 在自定义集合中，numpy 不在
+    monkeypatch.setattr(analyzer, "_WORKER_STATE", {"stdlib": frozenset({"os"})})
+    non_stdlib_tops, stdlib_tops, subs, errors = analyzer._parse_file_worker(str(py))
+    assert "os" in stdlib_tops
+    assert "os" not in non_stdlib_tops
+    assert "numpy" in non_stdlib_tops
+    assert "numpy" not in stdlib_tops
+    assert subs == {}
+    assert errors == []
+
+
+def test_parse_file_worker_falls_back_to_module_stdlib(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``_WORKER_STATE["stdlib"]`` 为空时回退到模块级 ``_STDLIB``（主进程直接调用）."""
+    from fspack import analyzer
+
+    py = tmp_path / "ok.py"
+    py.write_text("import os\n", encoding="utf-8")
+    monkeypatch.setattr(analyzer, "_WORKER_STATE", {"stdlib": frozenset()})
+    non_stdlib_tops, stdlib_tops, _subs, _errors = analyzer._parse_file_worker(str(py))
+    # 回退到模块级 _STDLIB（含 os）
+    assert "os" in stdlib_tops
+    assert non_stdlib_tops == []
 
 
 # ---------- QML 文件扫描测试 ----------
@@ -395,3 +502,92 @@ def test_analyze_dependencies_qml_excluded_dirs_skipped(tmp_path: Path) -> None:
     assert "Charts" not in r.ast_submodules.get("PySide2", frozenset())
     # Quick 在项目根 QML 中，应被收集
     assert "Quick" in r.ast_submodules["PySide2"]
+
+
+# ---------- iter-138 依赖分析异常容错测试 ----------
+
+
+def test_analyze_dependencies_records_ast_errors(tmp_path: Path) -> None:
+    """``analyze_dependencies`` 将 AST 解析失败记录到 ``ast_errors`` 字段（iter-138）.
+
+    语法错误文件不静默跳过，记录 ``"<相对路径>: <错误信息>"`` 供用户诊断。
+    """
+    (tmp_path / "bad.py").write_text("def bad(:\n", encoding="utf-8")
+    (tmp_path / "good.py").write_text("import sys\n", encoding="utf-8")
+    r = analyze_dependencies(tmp_path, "good", ())
+    assert "sys" in r.ast_stdlib
+    assert r.ast_third_party == ()
+    assert len(r.ast_errors) == 1
+    assert "bad.py" in r.ast_errors[0]
+
+
+def test_analyze_dependencies_records_multiple_ast_errors(tmp_path: Path) -> None:
+    """多个语法错误文件都记录到 ``ast_errors``（iter-138）."""
+    (tmp_path / "bad1.py").write_text("def bad1(:\n", encoding="utf-8")
+    (tmp_path / "bad2.py").write_text("import (\n", encoding="utf-8")
+    (tmp_path / "good.py").write_text("import os\n", encoding="utf-8")
+    r = analyze_dependencies(tmp_path, "good", ())
+    assert len(r.ast_errors) == 2
+    error_files = {e.split(":")[0] for e in r.ast_errors}
+    assert "bad1.py" in error_files
+    assert "bad2.py" in error_files
+
+
+def test_analyze_dependencies_parallel_records_ast_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """并行路径下 AST 解析失败也记录到 ``ast_errors``（iter-138）."""
+    from fspack import analyzer
+
+    (tmp_path / "bad.py").write_text("def bad(:\n", encoding="utf-8")
+    (tmp_path / "good.py").write_text("import os\n", encoding="utf-8")
+    # 强制走并行路径
+    monkeypatch.setattr(analyzer, "_PARALLEL_THRESHOLD", 1)
+    r = analyze_dependencies(tmp_path, "good", ())
+    assert "os" in r.ast_stdlib
+    assert len(r.ast_errors) == 1
+    assert "bad.py" in r.ast_errors[0]
+
+
+def test_analyze_dependencies_qml_parse_failure_does_not_block(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """QML 文件解析失败（OSError）不阻塞依赖分析主流程（iter-138）.
+
+    ``parse_qml_imports`` 内部已 catch OSError 返回空集合，但 ``analyze_dependencies``
+    循环外加防御性 try/except 兜底其他异常场景。
+    """
+    (tmp_path / "main.py").write_text("from PySide2.QtQml import QQmlApplicationEngine\n", encoding="utf-8")
+    (tmp_path / "Main.qml").write_text("import QtQuick 2.15\n", encoding="utf-8")
+
+    def raise_oserror(qml_file: Path) -> set[str]:
+        raise OSError("simulated permission error")
+
+    monkeypatch.setattr("fspack.analyzer.parse_qml_imports", raise_oserror)
+
+    # 不抛异常，PySide2.QtQml 仍被收集
+    r = analyze_dependencies(tmp_path, "main", ())
+    assert "PySide2" in r.ast_third_party
+    assert r.ast_submodules.get("PySide2", frozenset()) >= frozenset({"QtQml"})
+
+
+def test_format_ast_errors_converts_to_relative_path(tmp_path: Path) -> None:
+    """``_format_ast_errors`` 将绝对路径转为相对 src_dir 的 POSIX 路径（iter-138）."""
+    from fspack.analyzer import _format_ast_errors
+
+    src_dir = tmp_path
+    bad_abs = str(tmp_path / "subdir" / "bad.py")
+    errors = [(bad_abs, "invalid syntax")]
+    formatted = _format_ast_errors(src_dir, errors)
+    assert formatted == ["subdir/bad.py: invalid syntax"]
+
+
+def test_format_ast_errors_falls_back_to_abs_path(tmp_path: Path) -> None:
+    """``_format_ast_errors`` 路径不在 src_dir 下时回退到绝对路径（iter-138，不同盘符场景）."""
+    from fspack.analyzer import _format_ast_errors
+
+    src_dir = tmp_path
+    # ``Z:/...`` 在 Windows 是不同盘符，在 Linux 是相对路径，两者都会让 relative_to 抛 ValueError
+    outside_abs = "Z:/nonexistent/bad.py"
+    errors = [(outside_abs, "syntax error")]
+    formatted = _format_ast_errors(src_dir, errors)
+    # 回退到绝对路径（不抛 ValueError）
+    assert len(formatted) == 1
+    assert "syntax error" in formatted[0]
+    assert outside_abs in formatted[0]

@@ -30,7 +30,6 @@ import os
 import re
 import subprocess
 import sys
-import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Sequence
 
@@ -333,6 +332,10 @@ def _stream_subprocess(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     调用方应在调用前停止 spinner（避免 ``\\r`` 与 pip 进度条冲突），并在调用后
     恢复 spinner 或继续后续日志输出。
     """
+    # 延迟导入 threading：保持模块顶部零 stdlib 副作用约定（与 net.py/runtime.py
+    # 等热路径模块一致）。site.py 启动期已加载 threading，此处为 dict 查询，无实际开销。
+    import threading
+
     process = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,

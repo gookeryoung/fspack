@@ -81,14 +81,15 @@ iter-117~125 完成结构优化与懒加载主题（`import fspack` 从 ~55ms �
   `uv pip download`（比 pip 快 2-5x）；(2) 保留 pip 回退（uv 不支持的场景）；
   (3) `_resolve_with_uv` 与下载阶段共享 uv 路径检测；(4) 基线对比：50 wheel 场景
   提速 ≥40%（留 iter-142）
-- [ ] **iter-133 多入口 loader 并行编译**：(1) `_build_entry_loaders` 用
+- [x] **iter-133 多入口 loader 并行编译**：(1) `_build_entry_loaders` 用
   `ThreadPoolExecutor` 并行编译多个 entry loader（每个 loader 独立 mingw/gcc 子进程）；
   (2) 共享 `tempfile.TemporaryDirectory` 工作目录，避免并发创建；(3) 测试覆盖多入口
   场景（4+ 入口）
-- [ ] **iter-134 AST 并行解析调优**：(1) `_parse_parallel` chunksize 自适应算法优化
+- [x] **iter-134 AST 并行解析调优**：(1) `_parse_parallel` chunksize 自适应算法优化
   （按文件大小加权，避免大文件扎堆）；(2) `ProcessPoolExecutor` 改用 `initializer`
   预加载 `_STDLIB` 集合，减少 worker 启动开销；(3) 基线对比：500 文件场景提速 ≥15%
-- [ ] **iter-135 冷启动 import 终极惰性化**：(1) `pipeline/__init__.py` 顶部
+  （留 iter-142）
+- [x] **iter-135 冷启动 import 终极惰性化**：(1) `pipeline/__init__.py` 顶部
   `fspack.console` 移至函数内（解决 project_memory 遗留 ~17ms）；(2) `stages.py`
   顶部 `BuildTracker` 类型注解改用字符串前向引用，`progress` 导入移至 `build()` 内
   （解决 ~8ms）；(3) `wheels/downloader.py` 顶部 `threading` 移至方法内；
@@ -98,13 +99,13 @@ iter-117~125 完成结构优化与懒加载主题（`import fspack` 从 ~55ms �
 
 中高风险，安全加固与异常容错。
 
-- [ ] **iter-136 tarball 安全 extract 完整化**：(1) `extract_standalone` 3.11 及以下
+- [x] **iter-136 tarball 安全 extract 完整化**：(1) `extract_standalone` 3.11 及以下
   用 `tarfile.open` + 手动 `data` filter（参考 PEP 706 backport）；(2) `extract_embed`
   校验 zip 条目路径无 `..` 与绝对路径；(3) 测试覆盖恶意 tarball（路径穿越、符号链接攻击）
-- [ ] **iter-137 编译产物验证增强**：(1) `_strip_compiled_sources` 批量验证 .pyd 可加载性
+- [x] **iter-137 编译产物验证增强**：(1) `_strip_compiled_sources` 批量验证 .pyd 可加载性
   （已有，扩展为并发验证）；(2) 损坏 .pyd 自动删除并回退到 .py（已有，补测试覆盖损坏
   场景）；(3) Nuitka 编译失败时记录失败文件列表到 stamp，下次跳过这些文件避免反复尝试
-- [ ] **iter-138 依赖分析异常容错**：(1) `_parse_file_worker` 单文件 ast.parse 失败记录到
+- [x] **iter-138 依赖分析异常容错**：(1) `_parse_file_worker` 单文件 ast.parse 失败记录到
   报告（`ast_errors` 字段），不静默跳过；(2) `_parse_parallel` 单个 worker 超时不阻塞
   其他 worker（`as_completed` + timeout）；(3) QML 解析失败不影响主流程（已有，补测试）
 - [ ] **iter-139 缓存目录健康检查**：(1) `fsp doctor` 扩展 `--check-cache` 检测损坏缓存

@@ -268,13 +268,19 @@ class ProjectInfo:
 
 @dataclass(frozen=True)
 class DependencyReport:
-    """依赖分析结果."""
+    """依赖分析结果.
+
+    ``ast_errors`` 记录 AST 解析失败的文件与错误信息（iter-138 引入），
+    格式为 ``"<相对路径>: <错误信息>"``，供上层向用户提示哪些文件被跳过，
+    避免静默丢失依赖分析失败的诊断信息。
+    """
 
     declared: tuple[str, ...]
     ast_third_party: tuple[str, ...]
     ast_stdlib: tuple[str, ...]
     ast_local: tuple[str, ...]
     ast_submodules: dict[str, frozenset[str]] = field(default_factory=dict)
+    ast_errors: tuple[str, ...] = ()
 
     @classmethod
     def from_src(cls, src_dir: Path, project_name: str, declared: tuple[str, ...]) -> DependencyReport:

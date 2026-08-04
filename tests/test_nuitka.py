@@ -1439,9 +1439,9 @@ def test_compile_packages_warns_when_failed_gt_zero(
 
     def fake_compile_files(
         cls: Any, py_exe: Path, bootstrap: Path, py_files: list[Path], stage: Any, **kw: Any
-    ) -> tuple[set[Path], int]:
+    ) -> tuple[set[Path], list[Path]]:
         # 返回 1 个失败
-        return (set(), 1)
+        return (set(), [Path("fake.py")])
 
     monkeypatch.setattr(NuitkaCompiler, "_compile_files", classmethod(fake_compile_files))
 
@@ -1929,7 +1929,7 @@ def test_compile_with_stamp_writes_stamp_after_compile(tmp_path: Path, monkeypat
         "_ensure_build_python",
         classmethod(lambda cls, *a, **kw: fake_py),
     )
-    monkeypatch.setattr(NuitkaCompiler, "compile_src", classmethod(lambda cls, *a, **kw: None))
+    monkeypatch.setattr(NuitkaCompiler, "compile_src", classmethod(lambda cls, *a, **kw: []))
 
     st = StageRecorder("Nuitka 编译")
     NuitkaCompiler.compile_with_stamp(
@@ -2150,7 +2150,7 @@ def test_compile_with_stamp_write_oserror_warns(
 
     monkeypatch.setattr(NuitkaCompiler, "ensure_env", classmethod(lambda cls, *a, **kw: "4.1.3"))
     monkeypatch.setattr(NuitkaCompiler, "_ensure_build_python", classmethod(lambda cls, *a, **kw: Path()))
-    monkeypatch.setattr(NuitkaCompiler, "compile_src", classmethod(lambda cls, *a, **kw: None))
+    monkeypatch.setattr(NuitkaCompiler, "compile_src", classmethod(lambda cls, *a, **kw: []))
 
     st = StageRecorder("Nuitka 编译")
     with caplog.at_level("WARNING", logger="fspack.packaging.nuitka"):
@@ -2420,7 +2420,7 @@ def test_compile_with_stamp_hash_index_miss_proceeds_compile(tmp_path: Path, mon
     fake_py = tmp_path / "fake_python.exe"
     fake_py.write_text("")
     monkeypatch.setattr(NuitkaCompiler, "_ensure_build_python", classmethod(lambda cls, *a, **kw: fake_py))
-    monkeypatch.setattr(NuitkaCompiler, "compile_src", classmethod(lambda cls, *a, **kw: None))
+    monkeypatch.setattr(NuitkaCompiler, "compile_src", classmethod(lambda cls, *a, **kw: []))
 
     st = StageRecorder("Nuitka 编译")
     NuitkaCompiler.compile_with_stamp(
@@ -2504,7 +2504,7 @@ def test_compile_with_stamp_hash_index_hit_restamp_oserror_warns(
         "ensure_env",
         classmethod(lambda cls, *a, **kw: ensure_called.__setitem__("n", ensure_called["n"] + 1) or "4.1.3"),
     )
-    monkeypatch.setattr(NuitkaCompiler, "compile_src", classmethod(lambda cls, *a, **kw: None))
+    monkeypatch.setattr(NuitkaCompiler, "compile_src", classmethod(lambda cls, *a, **kw: []))
 
     st = StageRecorder("Nuitka 编译")
     with caplog.at_level("WARNING", logger="fspack.packaging.nuitka"):
@@ -2626,7 +2626,7 @@ def test_compile_with_stamp_compile_src_failure_does_not_fall_back(
     fake_py = tmp_path / "fake_python.exe"
     fake_py.write_text("")
     monkeypatch.setattr(NuitkaCompiler, "_ensure_build_python", classmethod(lambda cls, *a, **kw: fake_py))
-    monkeypatch.setattr(NuitkaCompiler, "compile_src", classmethod(lambda cls, *a, **kw: None))
+    monkeypatch.setattr(NuitkaCompiler, "compile_src", classmethod(lambda cls, *a, **kw: []))
 
     st = StageRecorder("Nuitka 编译")
     NuitkaCompiler.compile_with_stamp(
@@ -2744,7 +2744,7 @@ def test_compile_with_stamp_passes_nuitka_packages_to_compile_packages(
     fake_py = tmp_path / "fake_python.exe"
     fake_py.write_text("")
     monkeypatch.setattr(NuitkaCompiler, "_ensure_build_python", classmethod(lambda cls, *a, **kw: fake_py))
-    monkeypatch.setattr(NuitkaCompiler, "compile_src", classmethod(lambda cls, *a, **kw: None))
+    monkeypatch.setattr(NuitkaCompiler, "compile_src", classmethod(lambda cls, *a, **kw: []))
 
     # 创建 site-packages 目录使 compile_with_stamp 进入 compile_packages 分支
     (runtime / "Lib" / "site-packages").mkdir(parents=True)
@@ -2792,7 +2792,7 @@ def test_compile_with_stamp_warns_when_site_packages_missing(
     fake_py = tmp_path / "fake_python.exe"
     fake_py.write_text("")
     monkeypatch.setattr(NuitkaCompiler, "_ensure_build_python", classmethod(lambda cls, *a, **kw: fake_py))
-    monkeypatch.setattr(NuitkaCompiler, "compile_src", classmethod(lambda cls, *a, **kw: None))
+    monkeypatch.setattr(NuitkaCompiler, "compile_src", classmethod(lambda cls, *a, **kw: []))
 
     # 不创建 site-packages 目录
 
@@ -3062,7 +3062,7 @@ def test_compile_files_parallel_completes_all_files(
         target=Platform.WINDOWS,
     )
 
-    assert failed == 1
+    assert len(failed) == 1
     assert len(compiled) == 2
     # 成功的是 f0 和 f1
     compiled_names = {p.name for p in compiled}
@@ -3196,7 +3196,7 @@ def test_compile_files_parallel_empty_files(
         target=Platform.WINDOWS,
     )
     assert compiled == set()
-    assert failed == 0
+    assert len(failed) == 0
 
 
 def test_compile_files_parallel_global_heartbeat_format(
@@ -3497,9 +3497,9 @@ def test_compile_src_passes_ccache_to_compile_files(tmp_path: Path, monkeypatch:
 
     captured_ccache: list[Path | None] = []
 
-    def fake_compile_files(cls: Any, *args: Any, **kwargs: Any) -> tuple[set[Path], int]:
+    def fake_compile_files(cls: Any, *args: Any, **kwargs: Any) -> tuple[set[Path], list[Path]]:
         captured_ccache.append(kwargs.get("ccache_exe"))
-        return set(), 0
+        return set(), []
 
     monkeypatch.setattr(NuitkaCompiler, "_compile_files", classmethod(fake_compile_files))
     monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(lambda cmd, **kw: (0, "", "")))
@@ -3539,9 +3539,9 @@ def test_compile_src_ccache_false_skips_ensure_ccache(tmp_path: Path, monkeypatc
 
     captured: list[Path | None] = []
 
-    def fake_compile_files(cls: Any, *args: Any, **kwargs: Any) -> tuple[set[Path], int]:
+    def fake_compile_files(cls: Any, *args: Any, **kwargs: Any) -> tuple[set[Path], list[Path]]:
         captured.append(kwargs.get("ccache_exe"))
-        return set(), 0
+        return set(), []
 
     monkeypatch.setattr(NuitkaCompiler, "_compile_files", classmethod(fake_compile_files))
 
@@ -3569,8 +3569,9 @@ def test_compile_with_stamp_passes_ccache_to_compile_src(tmp_path: Path, monkeyp
 
     captured_ccache: list[bool] = []
 
-    def fake_compile_src(cls: Any, *args: Any, **kwargs: Any) -> None:
+    def fake_compile_src(cls: Any, *args: Any, **kwargs: Any) -> list[str]:
         captured_ccache.append(kwargs.get("ccache", False))
+        return []
 
     def fake_ensure_env(cls: Any, *args: Any, **kwargs: Any) -> str:
         return "4.1.3"
@@ -3828,10 +3829,10 @@ def test_parse_parallel_timeout_warns_on_slow_worker(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """``_parse_parallel`` 整体超时后 warning 提示，已处理结果保留.
+    """``_parse_parallel`` 整体超时后 warning 提示，未完成 future 被 cancel（iter-138 改 submit+as_completed）.
 
-    用 fake ``ProcessPoolExecutor`` 替代真实进程池，其 ``map`` 抛 ``TimeoutError``
-    模拟超时。验证 warning 日志输出（不验证部分结果——fake map 不返回任何结果）。
+    用 fake ``as_completed`` 抛 ``TimeoutError`` 模拟超时。验证 warning 日志输出
+    与未完成 future 的 cancel 调用（fake future 的 ``done()`` 返回 False 触发 cancel）。
     """
     from concurrent.futures import TimeoutError as FuturesTimeoutError
 
@@ -3843,6 +3844,19 @@ def test_parse_parallel_timeout_warns_on_slow_worker(
         (tmp_path / f"mod_{i}.py").write_text(f"x = {i}\n", encoding="utf-8")
     py_files = sorted(tmp_path.glob("*.py"))
 
+    cancel_calls: list[bool] = []
+
+    class _FakeFuture:
+        def done(self) -> bool:
+            return False
+
+        def cancel(self) -> bool:
+            cancel_calls.append(True)
+            return True
+
+        def result(self) -> tuple[list[str], list[str], dict[str, frozenset[str]], list[tuple[str, str]]]:
+            return [], [], {}, []
+
     class _FakePool:
         def __init__(self, *args: object, **kw: object) -> None:
             pass
@@ -3853,24 +3867,35 @@ def test_parse_parallel_timeout_warns_on_slow_worker(
         def __exit__(self, *args: object) -> bool:
             return False
 
-        def map(self, *args: object, **kw: object) -> object:
-            raise FuturesTimeoutError("simulated timeout")
+        def submit(self, fn: object, *args: object) -> _FakeFuture:
+            return _FakeFuture()
 
     monkeypatch.setattr(analyzer, "ProcessPoolExecutor", _FakePool)
 
+    def fake_as_completed(futures: object, timeout: float | None = None) -> object:
+        raise FuturesTimeoutError("simulated timeout")
+
+    monkeypatch.setattr(analyzer, "as_completed", fake_as_completed)
+
     all_imports: list[str] = []
+    all_stdlib: list[str] = []
     all_submodules: dict[str, set[str]] = {}
+    all_errors: list[tuple[str, str]] = []
 
     with caplog.at_level(logging.WARNING, logger="fspack.analyzer"):
-        _parse_parallel(py_files, all_imports, all_submodules)
+        _parse_parallel(py_files, all_imports, all_stdlib, all_submodules, all_errors)
 
     # 超时 warning
     timeout_logs = [r for r in caplog.records if "超时" in r.message]
     assert len(timeout_logs) == 1
     assert "AST 并行解析" in timeout_logs[0].message
-    # 超时后 imports/submodules 为空（fake map 抛异常未返回结果）
+    # 5 个 future 都被 cancel（done() 返回 False）
+    assert len(cancel_calls) == 5
+    # 超时后 imports/submodules/errors 为空（fake as_completed 抛异常未返回结果）
     assert all_imports == []
+    assert all_stdlib == []
     assert all_submodules == {}
+    assert all_errors == []
 
 
 def test_parse_parallel_normal_completes_without_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -3886,12 +3911,16 @@ def test_parse_parallel_normal_completes_without_timeout(tmp_path: Path, monkeyp
     monkeypatch.setattr(analyzer, "_PARSE_TOTAL_TIMEOUT", 60.0)
 
     all_imports: list[str] = []
+    all_stdlib: list[str] = []
     all_submodules: dict[str, set[str]] = {}
+    all_errors: list[tuple[str, str]] = []
 
-    _parse_parallel(py_files, all_imports, all_submodules)
+    _parse_parallel(py_files, all_imports, all_stdlib, all_submodules, all_errors)
 
-    # 5 个文件都应解析到 os import
-    assert all_imports.count("os") == 5
+    # 5 个文件都应解析到 os import（worker 已分离到 all_stdlib）
+    assert all_stdlib.count("os") == 5
+    assert all_imports == []
+    assert all_errors == []
 
 
 def test_parse_parallel_timeout_constant_default() -> None:
@@ -3899,6 +3928,204 @@ def test_parse_parallel_timeout_constant_default() -> None:
     from fspack.analyzer import _PARSE_TOTAL_TIMEOUT
 
     assert _PARSE_TOTAL_TIMEOUT == 300.0
+
+
+def test_parse_parallel_uses_initializer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``_parse_parallel`` 用 ``initializer`` 预加载 ``_STDLIB`` 传给 worker（iter-134）."""
+    from fspack import analyzer
+    from fspack.analyzer import _STDLIB, _init_parse_worker, _parse_parallel
+
+    for i in range(5):
+        (tmp_path / f"mod_{i}.py").write_text("x = 0\n", encoding="utf-8")
+    py_files = sorted(tmp_path.glob("*.py"))
+
+    captured: dict[str, object] = {}
+
+    class _FakeFuture:
+        def done(self) -> bool:
+            return True
+
+        def cancel(self) -> bool:
+            return False
+
+        def result(self) -> tuple[list[str], list[str], dict[str, frozenset[str]], list[tuple[str, str]]]:
+            return [], [], {}, []
+
+    class _Pool:
+        def __init__(self, *args: object, **kw: object) -> None:
+            captured.update(kw)
+
+        def __enter__(self) -> _Pool:
+            return self
+
+        def __exit__(self, *args: object) -> bool:
+            return False
+
+        def submit(self, fn: object, *args: object) -> _FakeFuture:
+            return _FakeFuture()
+
+    monkeypatch.setattr(analyzer, "ProcessPoolExecutor", _Pool)
+    monkeypatch.setattr(analyzer, "as_completed", lambda futures, timeout=None: iter(futures))
+    _parse_parallel(py_files, [], [], {}, [])
+
+    assert captured.get("initializer") is _init_parse_worker
+    assert captured.get("initargs") == (_STDLIB,)
+
+
+def test_parse_parallel_interleave_and_submit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``_parse_parallel`` 调用 ``_interleave_by_size`` 且对每个文件 submit 一个 future（iter-138 改 submit）.
+
+    iter-134 原检查 ``chunksize`` 参数，iter-138 改用 ``submit`` + ``as_completed``
+    后无 ``chunksize``，改为验证 ``submit`` 调用次数等于文件数。
+    """
+    import os
+
+    from fspack import analyzer
+    from fspack.analyzer import _parse_parallel
+
+    for i in range(20):
+        (tmp_path / f"mod_{i}.py").write_text("x = 0\n", encoding="utf-8")
+    py_files = sorted(tmp_path.glob("*.py"))
+
+    interleave_calls: list[tuple[int, int]] = []
+
+    def fake_interleave(files: list[Path], num_chunks: int) -> list[Path]:
+        interleave_calls.append((len(files), num_chunks))
+        return list(files)
+
+    monkeypatch.setattr(analyzer, "_interleave_by_size", fake_interleave)
+
+    submit_calls: list[str] = []
+
+    class _FakeFuture:
+        def done(self) -> bool:
+            return True
+
+        def cancel(self) -> bool:
+            return False
+
+        def result(self) -> tuple[list[str], list[str], dict[str, frozenset[str]], list[tuple[str, str]]]:
+            return [], [], {}, []
+
+    class _Pool:
+        def __init__(self, *args: object, **kw: object) -> None:
+            pass
+
+        def __enter__(self) -> _Pool:
+            return self
+
+        def __exit__(self, *args: object) -> bool:
+            return False
+
+        def submit(self, fn: object, *args: object) -> _FakeFuture:
+            # args[0] 是文件路径 str
+            submit_calls.append(args[0] if args else "")
+            return _FakeFuture()
+
+    monkeypatch.setattr(analyzer, "ProcessPoolExecutor", _Pool)
+    monkeypatch.setattr(analyzer, "as_completed", lambda futures, timeout=None: iter(futures))
+    _parse_parallel(py_files, [], [], {}, [])
+
+    cpu = os.cpu_count() or 4
+    assert interleave_calls == [(20, cpu * 4)]
+    # 20 个文件每个 submit 一次（submit 替代 map+chunksize）
+    assert len(submit_calls) == 20
+
+
+def test_parse_parallel_partial_timeout_aggregates_completed_results(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``_parse_parallel`` 部分 worker 超时时，已完成 worker 的结果仍被聚合（iter-138）.
+
+    ``map(timeout=)`` 在首个 future 卡死时丢弃后续已完成结果；``submit`` + ``as_completed``
+    按完成顺序 yield，超时前已完成的 future 结果被聚合，未完成的被 cancel。
+    """
+    from concurrent.futures import TimeoutError as FuturesTimeoutError
+
+    from fspack import analyzer
+    from fspack.analyzer import _parse_parallel
+
+    for i in range(5):
+        (tmp_path / f"mod_{i}.py").write_text(f"x = {i}\n", encoding="utf-8")
+    py_files = sorted(tmp_path.glob("*.py"))
+
+    completed_results: list[tuple[list[str], list[str], dict[str, frozenset[str]], list[tuple[str, str]]]] = [
+        (["numpy"], ["os"], {}, []),
+        (["requests"], ["sys"], {}, []),
+        (["flask"], [], {}, []),
+    ]
+
+    class _DoneFuture:
+        def __init__(self, result: object) -> None:
+            self._result = result
+
+        def done(self) -> bool:
+            return True
+
+        def cancel(self) -> bool:
+            return False
+
+        def result(self) -> object:
+            return self._result
+
+    class _PendingFuture:
+        def done(self) -> bool:
+            return False
+
+        def cancel(self) -> bool:
+            return True
+
+    futures_chain: list[object] = [
+        _DoneFuture(completed_results[0]),
+        _DoneFuture(completed_results[1]),
+        _DoneFuture(completed_results[2]),
+        _PendingFuture(),
+        _PendingFuture(),
+    ]
+
+    class _FakePool:
+        def __init__(self, *args: object, **kw: object) -> None:
+            pass
+
+        def __enter__(self) -> _FakePool:
+            return self
+
+        def __exit__(self, *args: object) -> bool:
+            return False
+
+        def submit(self, fn: object, *args: object) -> object:
+            return futures_chain.pop(0)
+
+    monkeypatch.setattr(analyzer, "ProcessPoolExecutor", _FakePool)
+
+    def fake_as_completed(futures: object, timeout: float | None = None) -> object:
+        # 前 3 个已完成的 yield，然后抛 TimeoutError 模拟后 2 个超时
+        futures_list = list(futures)  # type: ignore[arg-type]
+        yield from futures_list[:3]
+        raise FuturesTimeoutError("partial timeout")
+
+    monkeypatch.setattr(analyzer, "as_completed", fake_as_completed)
+
+    all_imports: list[str] = []
+    all_stdlib: list[str] = []
+    all_submodules: dict[str, set[str]] = {}
+    all_errors: list[tuple[str, str]] = []
+
+    _parse_parallel(py_files, all_imports, all_stdlib, all_submodules, all_errors)
+
+    # 已完成的 3 个 future 结果被聚合（关键改进：map(timeout=) 会丢失这些结果）
+    assert "numpy" in all_imports
+    assert "requests" in all_imports
+    assert "flask" in all_imports
+    assert "os" in all_stdlib
+    assert "sys" in all_stdlib
 
 
 # ---- _precompile_pyc compileall 超时防护测试（iter-127） ----
@@ -3945,6 +4172,238 @@ def test_precompile_pyc_timeout_constant_default() -> None:
     from fspack.packaging.pyc import _COMPILEALL_TIMEOUT
 
     assert _COMPILEALL_TIMEOUT == 300.0
+
+
+# ---- iter-137: 并发验证 + 失败文件列表测试 ----
+
+
+def test_individual_import_test_concurrent_handles_multiple_modules(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_individual_import_test 并发处理多个模块，仍正确返回可加载集合（iter-137 并发化）."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+
+    # mod0/mod1 可加载，mod2/mod3 崩溃
+    monkeypatch.setattr(
+        "fspack.packaging.nuitka.subprocess.run",
+        _IndividualRunner({"mod0", "mod1"}),
+    )
+
+    result = NuitkaCompiler._individual_import_test(
+        tmp_path / "python.exe",
+        [tmp_path],
+        ["mod0", "mod1", "mod2", "mod3"],
+    )
+    assert result == {"mod0", "mod1"}
+
+
+def test_individual_import_test_empty_modules_returns_empty(tmp_path: Path) -> None:
+    """_individual_import_test 空模块列表直接返回空集合，不启动线程池."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+
+    result = NuitkaCompiler._individual_import_test(tmp_path / "python.exe", [tmp_path], [])
+    assert result == set()
+
+
+def test_collect_py_files_skips_failed_files(tmp_path: Path) -> None:
+    """_collect_py_files 带 skip_files 跳过上次失败的文件（iter-137）."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "good.py").write_text("x = 1")
+    (src / "bad.py").write_text("y = 2")
+    (src / "sub").mkdir()
+    (src / "sub" / "nested.py").write_text("z = 3")
+
+    # skip_files 用相对 src_dir 的 POSIX 路径
+    skip = frozenset({"bad.py", "sub/nested.py"})
+    collected = NuitkaCompiler._collect_py_files(src, entry_rels=None, skip_files=skip)
+    collected_names = {p.relative_to(src).as_posix() for p in collected}
+    assert collected_names == {"good.py"}
+
+
+def test_collect_py_files_skip_files_none_preserves_all(tmp_path: Path) -> None:
+    """skip_files=None 时不跳过任何文件（向后兼容）."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "a.py").write_text("")
+    (src / "b.py").write_text("")
+
+    collected = NuitkaCompiler._collect_py_files(src, entry_rels=None, skip_files=None)
+    assert len(collected) == 2
+
+
+def test_load_failed_files_missing_returns_empty(tmp_path: Path) -> None:
+    """_load_failed_files 文件不存在返回空 frozenset."""
+    from fspack.packaging.nuitka.compile import _load_failed_files
+
+    assert _load_failed_files(tmp_path) == frozenset()
+
+
+def test_load_failed_files_valid_list(tmp_path: Path) -> None:
+    """_load_failed_files 读取合法 JSON 列表."""
+    from fspack.packaging.nuitka.compile import _load_failed_files
+
+    (tmp_path / ".nuitka_failed_files.json").write_text('["a.py", "sub/b.py"]', encoding="utf-8")
+    result = _load_failed_files(tmp_path)
+    assert result == frozenset({"a.py", "sub/b.py"})
+
+
+def test_load_failed_files_corrupt_json_deletes_file(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """_load_failed_files 内容损坏（非法 JSON）删除文件并返回空（与 _load_hash_index 策略一致）."""
+    from fspack.packaging.nuitka.compile import _failed_files_path, _load_failed_files
+
+    path = _failed_files_path(tmp_path)
+    path.write_text("not a json", encoding="utf-8")
+    with caplog.at_level("WARNING", logger="fspack.packaging.nuitka"):
+        result = _load_failed_files(tmp_path)
+    assert result == frozenset()
+    assert not path.exists(), "损坏的失败文件列表应被删除"
+    assert any("失败文件列表损坏" in r.message for r in caplog.records)
+
+
+def test_load_failed_files_non_list_deletes_file(tmp_path: Path) -> None:
+    """_load_failed_files 顶层非 list 删除文件并返回空."""
+    from fspack.packaging.nuitka.compile import _load_failed_files
+
+    (tmp_path / ".nuitka_failed_files.json").write_text('{"key": "val"}', encoding="utf-8")
+    result = _load_failed_files(tmp_path)
+    assert result == frozenset()
+
+
+def test_load_failed_files_strips_non_str_entries(tmp_path: Path) -> None:
+    """_load_failed_files 剔除非 str 条目（保留 str 条目）."""
+    from fspack.packaging.nuitka.compile import _load_failed_files
+
+    (tmp_path / ".nuitka_failed_files.json").write_text('["a.py", 123, null, "b.py"]', encoding="utf-8")
+    result = _load_failed_files(tmp_path)
+    assert result == frozenset({"a.py", "b.py"})
+
+
+def test_save_failed_files_writes_json(tmp_path: Path) -> None:
+    """_save_failed_files 写入 JSON 列表."""
+    from fspack.packaging.nuitka.compile import _failed_files_path, _load_failed_files, _save_failed_files
+
+    _save_failed_files(tmp_path, ["a.py", "sub/b.py"])
+    path = _failed_files_path(tmp_path)
+    assert path.is_file()
+    # 回读校验
+    assert _load_failed_files(tmp_path) == frozenset({"a.py", "sub/b.py"})
+
+
+def test_save_failed_files_empty_list_overwrites(tmp_path: Path) -> None:
+    """_save_failed_files 空列表也写入，覆盖上次失败记录."""
+    from fspack.packaging.nuitka.compile import _failed_files_path, _save_failed_files
+
+    path = _failed_files_path(tmp_path)
+    path.write_text('["old.py"]', encoding="utf-8")
+    _save_failed_files(tmp_path, [])
+    assert path.read_text(encoding="utf-8") == "[]"
+
+
+def test_compile_with_stamp_writes_failed_files_after_compile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """compile_with_stamp 编译后将失败文件列表写入 .nuitka_failed_files.json（iter-137）."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("print('hi')")
+    (src / "broken.py").write_text("syntax error")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    cache_root = tmp_path / "nuitka_cache"
+
+    monkeypatch.setattr(NuitkaCompiler, "ensure_env", classmethod(lambda cls, *a, **kw: "4.1.3"))
+    fake_py = tmp_path / "fake_python.exe"
+    fake_py.write_text("")
+    monkeypatch.setattr(NuitkaCompiler, "_ensure_build_python", classmethod(lambda cls, *a, **kw: fake_py))
+    # compile_src 返回失败文件列表
+    monkeypatch.setattr(NuitkaCompiler, "compile_src", classmethod(lambda cls, *a, **kw: ["broken.py"]))
+
+    st = StageRecorder("Nuitka 编译")
+    NuitkaCompiler.compile_with_stamp(
+        src, dist, runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), cache_root, stage=st
+    )
+
+    failed_file = dist / ".nuitka_failed_files.json"
+    assert failed_file.is_file(), "失败文件列表应被写入"
+    assert "broken.py" in failed_file.read_text(encoding="utf-8")
+
+
+def test_compile_with_stamp_reads_failed_files_and_passes_to_compile_src(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """compile_with_stamp stamp 不命中时读取上次失败文件列表，传给 compile_src 的 skip_files（iter-137）."""
+    from fspack.packaging.nuitka.compile import _failed_files_path
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("print('hi')")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    # 预置上次失败文件列表
+    _failed_files_path(dist).write_text('["broken.py"]', encoding="utf-8")
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    cache_root = tmp_path / "nuitka_cache"
+
+    monkeypatch.setattr(NuitkaCompiler, "ensure_env", classmethod(lambda cls, *a, **kw: "4.1.3"))
+    fake_py = tmp_path / "fake_python.exe"
+    fake_py.write_text("")
+    monkeypatch.setattr(NuitkaCompiler, "_ensure_build_python", classmethod(lambda cls, *a, **kw: fake_py))
+
+    captured_skip: list[frozenset[str] | None] = []
+
+    def fake_compile_src(cls: Any, *a: Any, **kw: Any) -> list[str]:
+        captured_skip.append(kw.get("skip_files"))
+        return []
+
+    monkeypatch.setattr(NuitkaCompiler, "compile_src", classmethod(fake_compile_src))
+
+    st = StageRecorder("Nuitka 编译")
+    NuitkaCompiler.compile_with_stamp(
+        src, dist, runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), cache_root, stage=st
+    )
+
+    assert captured_skip, "compile_src 应被调用"
+    assert captured_skip[0] == frozenset({"broken.py"}), "应传入上次失败文件列表"
+
+
+def test_compile_with_stamp_cache_hit_does_not_read_failed_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """stamp 命中时跳过整个 Nuitka，不读取失败文件列表（无意义）."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("print('hi')")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    cache_root = tmp_path / "nuitka_cache"
+
+    # 预置 stamp 命中
+    nuitka_ver = nuitka_version_for("3.11.9")
+    stamp_key = NuitkaCompiler._stamp_key(src, nuitka_ver, "3.11.9")
+    NuitkaCompiler._stamp_path(dist).write_text(stamp_key, encoding="utf-8")
+
+    compile_called = {"yes": False}
+
+    def fake_compile_src(cls: Any, *a: Any, **kw: Any) -> list[str]:
+        compile_called["yes"] = True
+        return []
+
+    monkeypatch.setattr(NuitkaCompiler, "compile_src", classmethod(fake_compile_src))
+
+    st = StageRecorder("Nuitka 编译")
+    NuitkaCompiler.compile_with_stamp(
+        src, dist, runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), cache_root, stage=st
+    )
+
+    assert not compile_called["yes"], "stamp 命中时不应调用 compile_src"
 
 
 def test_precompile_pyc_normal_no_timeout_writes_stamp(

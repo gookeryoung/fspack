@@ -22,10 +22,15 @@ from __future__ import annotations
 
 import logging
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 # 共享 logger 名：测试用 caplog.at_level(..., logger="fspack.packaging.nuitka") 锁定
 _logger = logging.getLogger("fspack.packaging.nuitka")
+
+# 逐个验证并发数上限：subprocess 释放 GIL，线程并行启动多个 python 子进程。
+# 与 _MAX_COMPILE_WORKERS 一致（4），平衡并行收益与 Windows 资源限制。
+_MAX_VERIFY_WORKERS = 4
 
 
 class NuitkaVerify:
@@ -201,17 +206,30 @@ class NuitkaVerify:
         用于 :meth:`_batch_import_test` 崩溃时定位损坏的 .pyd。每个模块独立 subprocess，
         单个模块崩溃不影响其他模块测试。开销 O(N) subprocess 启动，仅在批量测试崩溃时触发。
 
+        **并发优化**（iter-137）：用 :class:`ThreadPoolExecutor` 并发启动 subprocess，
+        ``max_workers = min(len(modules), :data:`_MAX_VERIFY_WORKERS`)``。
+        subprocess 释放 GIL，线程并行启动多个 python 子进程。50 个损坏 .pyd 场景
+        从串行 ~5s 降到并发 ~1.25s。
+
         ``search_roots`` 支持多个包根，测试脚本会把所有根加入 sys.path。
         """
         path_inserts = ";".join(f"sys.path.insert(0, r'{root}')" for root in search_roots)
         importable: set[str] = set()
-        for mod in module_names:
+        if not module_names:
+            return importable
+
+        def _test_one(mod: str) -> str | None:
             test_code = f"import sys; {path_inserts}\nimport importlib\nimportlib.import_module({mod!r})\n"
             result = subprocess.run(
                 [str(py_exe), "-c", test_code],
                 capture_output=True,
                 check=False,
             )
-            if result.returncode == 0:
-                importable.add(mod)
+            return mod if result.returncode == 0 else None
+
+        max_workers = min(len(module_names), _MAX_VERIFY_WORKERS)
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            for mod in pool.map(_test_one, module_names):
+                if mod is not None:
+                    importable.add(mod)
         return importable

@@ -40,6 +40,38 @@ def _make_tar(path: Path, members: list[tuple[str, bytes]]) -> None:
             tf.addfile(info, io.BytesIO(data))
 
 
+def _make_malicious_tar(path: Path, members: list[tuple[str, str]]) -> None:
+    """生成含恶意条目的 tar.gz，members 为 (name, type) 元组.
+
+    type ∈ {'file', 'symlink', 'hardlink', 'char'}：
+    - ``file``：普通文件（用于构造路径穿越/绝对路径测试）
+    - ``symlink``：符号链接（linkname 指向 /etc/passwd）
+    - ``hardlink``：硬链接（linkname 指向 python/bin/python3.11）
+    - ``char``：字符设备文件
+    """
+    with tarfile.open(path, "w:gz") as tf:
+        for name, mtype in members:
+            info = tarfile.TarInfo(name=name)
+            if mtype == "symlink":
+                info.type = tarfile.SYMTYPE
+                info.linkname = "/etc/passwd"
+                tf.addfile(info, None)
+            elif mtype == "hardlink":
+                info.type = tarfile.LNKTYPE
+                info.linkname = "python/bin/python3.11"
+                tf.addfile(info, None)
+            elif mtype == "char":
+                info.type = tarfile.CHRTYPE
+                info.devmajor = 1
+                info.devminor = 3
+                tf.addfile(info, None)
+            else:  # file
+                info.type = tarfile.REGTYPE
+                data = b"x"
+                info.size = len(data)
+                tf.addfile(info, io.BytesIO(data))
+
+
 # --- embed python 测试 ---
 
 
@@ -141,6 +173,49 @@ def test_extract_embed_bad_zip_unlink_failure_warns(
     ):
         extract_embed(bad, tmp_path / "runtime")
     assert any("删除损坏的 embed zip 失败" in r.message for r in caplog.records)
+
+
+def test_extract_embed_rejects_path_traversal(tmp_path: Path) -> None:
+    """zip 含 ``..`` 路径穿越条目应被预检拒绝，归档删除避免下次使用."""
+    zip_path = tmp_path / "mal.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("../../etc/passwd", b"root")
+    with pytest.raises(EmbedError, match="路径穿越"):
+        extract_embed(zip_path, tmp_path / "runtime")
+    assert not zip_path.exists(), "含恶意条目的 embed zip 应被删除"
+
+
+def test_extract_embed_rejects_absolute_path(tmp_path: Path) -> None:
+    """zip 含 Unix 绝对路径条目应被预检拒绝."""
+    zip_path = tmp_path / "mal.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("/etc/passwd", b"root")
+    with pytest.raises(EmbedError, match="绝对路径"):
+        extract_embed(zip_path, tmp_path / "runtime")
+    assert not zip_path.exists()
+
+
+def test_extract_embed_rejects_windows_drive(tmp_path: Path) -> None:
+    """zip 含 Windows 盘符路径（``C:foo``）应被预检拒绝."""
+    zip_path = tmp_path / "mal.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("C:evil.txt", b"x")
+    with pytest.raises(EmbedError, match="盘符"):
+        extract_embed(zip_path, tmp_path / "runtime")
+    assert not zip_path.exists()
+
+
+def test_extract_embed_rejects_symlink(tmp_path: Path) -> None:
+    """zip 含符号链接条目（Unix 模式 S_IFLNK）应被预检拒绝."""
+    zip_path = tmp_path / "mal.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        info = zipfile.ZipInfo("evil_link")
+        # 0o120777 = S_IFLNK | 0o777，external_attr 高 16 位存 Unix st_mode
+        info.external_attr = 0o120777 << 16
+        zf.writestr(info, "")
+    with pytest.raises(EmbedError, match="符号链接"):
+        extract_embed(zip_path, tmp_path / "runtime")
+    assert not zip_path.exists()
 
 
 def test_write_pth_content(tmp_path: Path) -> None:
@@ -344,6 +419,60 @@ def test_extract_standalone_bad_tar_unlink_failure_warns(
     with caplog.at_level("WARNING", logger="fspack.packaging.runtime"), pytest.raises(EmbedError, match="tarball 损坏"):
         extract_standalone(bad, tmp_path / "runtime")
     assert any("删除损坏的 python-build-standalone tarball 失败" in r.message for r in caplog.records)
+
+
+def test_extract_standalone_rejects_path_traversal(tmp_path: Path) -> None:
+    """tar 含 ``..`` 路径穿越条目应被预检拒绝，归档删除避免下次使用."""
+    tar = tmp_path / "mal.tar.gz"
+    _make_malicious_tar(tar, [("../../etc/passwd", "file")])
+    with pytest.raises(EmbedError, match="路径穿越"):
+        extract_standalone(tar, tmp_path / "runtime")
+    assert not tar.exists(), "含恶意条目的 tarball 应被删除"
+
+
+def test_extract_standalone_rejects_absolute_path(tmp_path: Path) -> None:
+    """tar 含 Unix 绝对路径条目应被预检拒绝."""
+    tar = tmp_path / "mal.tar.gz"
+    _make_malicious_tar(tar, [("/etc/passwd", "file")])
+    with pytest.raises(EmbedError, match="绝对路径"):
+        extract_standalone(tar, tmp_path / "runtime")
+    assert not tar.exists()
+
+
+def test_extract_standalone_rejects_windows_drive(tmp_path: Path) -> None:
+    """tar 含 Windows 盘符路径（``C:foo``）应被预检拒绝."""
+    tar = tmp_path / "mal.tar.gz"
+    _make_malicious_tar(tar, [("C:evil.txt", "file")])
+    with pytest.raises(EmbedError, match="盘符"):
+        extract_standalone(tar, tmp_path / "runtime")
+    assert not tar.exists()
+
+
+def test_extract_standalone_rejects_symlink(tmp_path: Path) -> None:
+    """tar 含符号链接条目（linkname 指向 /etc/passwd）应被预检拒绝."""
+    tar = tmp_path / "mal.tar.gz"
+    _make_malicious_tar(tar, [("evil_link", "symlink")])
+    with pytest.raises(EmbedError, match="链接条目"):
+        extract_standalone(tar, tmp_path / "runtime")
+    assert not tar.exists()
+
+
+def test_extract_standalone_rejects_hardlink(tmp_path: Path) -> None:
+    """tar 含硬链接条目应被预检拒绝（防硬链接攻击覆盖 runtime_dir 内文件）."""
+    tar = tmp_path / "mal.tar.gz"
+    _make_malicious_tar(tar, [("evil_link", "hardlink")])
+    with pytest.raises(EmbedError, match="链接条目"):
+        extract_standalone(tar, tmp_path / "runtime")
+    assert not tar.exists()
+
+
+def test_extract_standalone_rejects_device_file(tmp_path: Path) -> None:
+    """tar 含字符设备文件条目应被预检拒绝（防解压特殊文件触发内核行为）."""
+    tar = tmp_path / "mal.tar.gz"
+    _make_malicious_tar(tar, [("evil_dev", "char")])
+    with pytest.raises(EmbedError, match="设备文件"):
+        extract_standalone(tar, tmp_path / "runtime")
+    assert not tar.exists()
 
 
 def test_ensure_standalone_skips_when_python_present(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -929,3 +929,54 @@ def test_builder_import_does_not_load_console() -> None:
     )
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, check=False)
     assert result.returncode == 0, "import fspack.builder 不应加载 fspack.console/fspack.packaging.profile"
+
+
+def test_pipeline_module_no_top_level_heavy_imports() -> None:
+    """源码基线：pipeline/__init__.py 顶部不导入 fspack.console/fspack.progress/fspack.packaging.profile.
+
+    守护 iter-124/135 pipeline/__init__.py 顶部轻量化：``fspack.console`` 单例
+    （~17ms）、``fspack.progress`` 的 ``BuildTracker``（连锁 rich.progress/rich.table
+    ~12ms）、``fspack.packaging.profile`` 的 ``ProfileContext``（连锁 fspack.console）
+    全部移到 ``build``/``_execute_build``/``_print_build_plan`` 函数内延迟导入，
+    ``BuildTracker``/``ProfileContext`` 类型注解仅在 TYPE_CHECKING 块内（运行时不执行）。
+    子进程级守护见 :func:`test_builder_import_does_not_load_console`/
+    :func:`test_builder_import_does_not_load_progress`，本测试为源码级防回退。
+    """
+    import inspect
+    import re
+
+    from fspack.packaging import pipeline
+
+    source = inspect.getsource(pipeline)
+    # 顶部导入区锚点：第一个函数定义 ``def resolve_project_info``
+    top_section = source.split("def resolve_project_info")[0]
+    # 移除 TYPE_CHECKING 块内容（仅类型注解，运行时不执行）
+    top_runtime = re.sub(r"if TYPE_CHECKING:.*?(?=\n\n|\n[^\s])", "", top_section, flags=re.DOTALL)
+    assert "from fspack.console import" not in top_runtime
+    assert "import fspack.console" not in top_runtime
+    assert "from fspack.progress import" not in top_runtime
+    assert "import fspack.progress" not in top_runtime
+    assert "from fspack.packaging.profile import" not in top_runtime
+    assert "import fspack.packaging.profile" not in top_runtime
+
+
+def test_downloader_module_no_top_level_threading_import() -> None:
+    """源码基线：wheels/downloader.py 顶部不导入 threading.
+
+    守护 iter-135 downloader.py 顶部轻量化：``threading`` 移到 ``_stream_subprocess``
+    函数内延迟导入，保持模块顶部零 stdlib 副作用约定（与 net.py/runtime.py 等热路径
+    模块一致）。虽然 site.py 启动期已加载 threading（无运行时性能收益），但保持
+    顶部轻量约定有助于源码可读性与静态分析一致性。``StageRecorder`` 在 TYPE_CHECKING
+    块内仅为类型注解，运行时不执行，不在守护范围。
+    """
+    import inspect
+    import re
+
+    from fspack.packaging.wheels import downloader
+
+    source = inspect.getsource(downloader)
+    # 顶部导入区锚点：第一个函数定义（``def _find_pip_python`` 之前的所有全局代码）
+    top_section = source.split("\ndef ")[0]
+    # 移除 TYPE_CHECKING 块内容（仅类型注解，运行时不执行）
+    top_runtime = re.sub(r"if TYPE_CHECKING:.*?(?=\n\n|\n[^\s])", "", top_section, flags=re.DOTALL)
+    assert "import threading" not in top_runtime
