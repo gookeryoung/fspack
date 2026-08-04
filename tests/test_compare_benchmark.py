@@ -404,3 +404,352 @@ class TestMainExitCode:
         ts = cur.stat().st_mtime + 100
         os.utime(cur, (ts, ts))
         assert cb.main(["--bench-dir", str(tmp_path), "--threshold", "25"]) == 0
+
+
+class TestMatchCategory:
+    """_match_category 类别匹配."""
+
+    def test_core_category_matched(self) -> None:
+        """test_perf_baseline.py 的 10 个核心测试匹配 core 类别."""
+        for name in (
+            "test_collect_imports_and_submodules_baseline",
+            "test_analyze_dependencies_baseline",
+            "test_classify_entry_baseline",
+            "test_slim_unpack_baseline",
+            "test_source_fingerprint_baseline",
+            "test_project_info_from_dir_baseline",
+            "test_project_info_from_dir_cached_baseline",
+            "test_generate_wrapper_source_baseline",
+            "test_ensure_env_cache_hit_baseline",
+            "test_wheel_download_cache_hit_baseline",
+        ):
+            cat = cb._match_category(name)
+            assert cat is not None
+            assert cat.name == "core"
+            assert cat.threshold == 10.0
+
+    def test_build_perf_category_matched(self) -> None:
+        """test_build_perf_baseline.py 的 4 个测试匹配 build_perf 类别."""
+        for name in (
+            "test_small_project_cold_cache_baseline",
+            "test_small_project_warm_cache_baseline",
+            "test_medium_project_cold_cache_baseline",
+            "test_medium_project_warm_cache_baseline",
+        ):
+            cat = cb._match_category(name)
+            assert cat is not None
+            assert cat.name == "build_perf"
+            assert cat.threshold == 25.0
+
+    def test_nuitka_compile_category_matched(self) -> None:
+        """test_nuitka_compile_baseline.py 的 4 个测试匹配 nuitka_compile 类别."""
+        for name in (
+            "test_serial_compile_baseline",
+            "test_parallel_compile_baseline",
+            "test_ccache_hit_baseline",
+            "test_ccache_miss_baseline",
+        ):
+            cat = cb._match_category(name)
+            assert cat is not None
+            assert cat.name == "nuitka_compile"
+            assert cat.threshold == 10.0
+
+    def test_wheel_download_category_matched(self) -> None:
+        """test_wheel_download_baseline.py 的 4 个测试匹配 wheel_download 类别."""
+        for name in (
+            "test_pip_parallel_download_baseline",
+            "test_uv_parallel_download_baseline",
+            "test_cache_hit_baseline",
+            "test_cold_download_baseline",
+        ):
+            cat = cb._match_category(name)
+            assert cat is not None
+            assert cat.name == "wheel_download"
+            assert cat.threshold == 10.0
+
+    def test_entry_startup_category_matched(self) -> None:
+        """test_entry_startup_baseline.py 的 4 个测试匹配 entry_startup 类别."""
+        for name in (
+            "test_default_startup_baseline",
+            "test_lazy_import_startup_baseline",
+            "test_no_site_startup_baseline",
+            "test_no_site_lazy_combined_baseline",
+        ):
+            cat = cb._match_category(name)
+            assert cat is not None
+            assert cat.name == "entry_startup"
+            assert cat.threshold == 15.0
+
+    def test_unknown_test_no_match(self) -> None:
+        """未知测试名不匹配任何类别."""
+        assert cb._match_category("test_unknown_baseline") is None
+        assert cb._match_category("t1") is None
+
+    def test_no_collision_between_cache_hit_tests(self) -> None:
+        """test_cache_hit_baseline（wheel_download）与 test_wheel_download_cache_hit_baseline
+        （core）分别匹配到不同类别，验证正则无歧义."""
+        assert cb._match_category("test_cache_hit_baseline").name == "wheel_download"
+        assert cb._match_category("test_wheel_download_cache_hit_baseline").name == "core"
+
+    def test_custom_categories(self) -> None:
+        """自定义类别列表覆盖默认."""
+        custom = (
+            cb.BenchmarkCategory(
+                name="custom",
+                pattern=r"^test_custom_.*",
+                threshold=5.0,
+                description="custom",
+            ),
+        )
+        cat = cb._match_category("test_custom_foo", custom)
+        assert cat is not None
+        assert cat.name == "custom"
+        # 不在自定义列表中的测试不匹配
+        assert cb._match_category("test_serial_compile_baseline", custom) is None
+
+    def test_empty_categories_returns_none(self) -> None:
+        """空类别列表对任何测试都不匹配."""
+        assert cb._match_category("test_anything", ()) is None
+
+
+class TestCompareWithCategories:
+    """compare 按类别阈值判定退化."""
+
+    def _write_bench_file(self, path: Path, entries: list[tuple[str, float]], mtime_offset: float = 0.0) -> None:
+        """写一个 pytest-benchmark JSON 文件."""
+        data: dict[str, Any] = {
+            "benchmarks": [
+                {"name": n, "stats": {"median": m, "min": m, "mean": m, "stddev": 0, "rounds": 20}} for n, m in entries
+            ]
+        }
+        path.write_text(json.dumps(data), encoding="utf-8")
+        if mtime_offset:
+            import os
+
+            ts = path.stat().st_mtime + mtime_offset
+            os.utime(path, (ts, ts))
+
+    def test_category_threshold_applied(self, tmp_path: Path) -> None:
+        """nuitka_compile 测试退化 12% 触发退化（类别阈值 10%），全局阈值 25% 不触发."""
+        # 历史：test_serial_compile_baseline median=0.5
+        self._write_bench_file(
+            tmp_path / "001_hist.json",
+            [("test_serial_compile_baseline", 0.500)],
+            mtime_offset=-100,
+        )
+        # 当前：median=0.56，退化 12%
+        self._write_bench_file(
+            tmp_path / "002_cur.json",
+            [("test_serial_compile_baseline", 0.560)],
+            mtime_offset=0,
+        )
+        # 用默认类别（nuitka_compile 阈值 10%）
+        report = cb.compare(tmp_path, threshold=25.0)
+        assert report.regressions == 1
+        row = report.rows[0]
+        assert row.is_regression is True
+        assert row.category == "nuitka_compile"
+        assert row.threshold == 10.0
+        assert row.delta_pct == pytest.approx(12.0, abs=0.1)
+
+    def test_category_threshold_not_triggered(self, tmp_path: Path) -> None:
+        """nuitka_compile 测试退化 8% 不触发退化（类别阈值 10%）。"""
+        self._write_bench_file(
+            tmp_path / "001_hist.json",
+            [("test_serial_compile_baseline", 0.500)],
+            mtime_offset=-100,
+        )
+        self._write_bench_file(
+            tmp_path / "002_cur.json",
+            [("test_serial_compile_baseline", 0.540)],
+            mtime_offset=0,
+        )
+        report = cb.compare(tmp_path, threshold=25.0)
+        assert report.regressions == 0
+        row = report.rows[0]
+        assert row.is_regression is False
+        assert row.category == "nuitka_compile"
+        assert row.threshold == 10.0
+
+    def test_build_perf_category_higher_threshold(self, tmp_path: Path) -> None:
+        """build_perf 测试退化 20% 不触发退化（类别阈值 25%），即使全局阈值 10% 也不影响."""
+        self._write_bench_file(
+            tmp_path / "001_hist.json",
+            [("test_small_project_cold_cache_baseline", 0.005)],
+            mtime_offset=-100,
+        )
+        self._write_bench_file(
+            tmp_path / "002_cur.json",
+            [("test_small_project_cold_cache_baseline", 0.006)],
+            mtime_offset=0,
+        )
+        # 全局阈值设为 10%，但 build_perf 类别阈值 25% 应优先
+        report = cb.compare(tmp_path, threshold=10.0)
+        assert report.regressions == 0
+        row = report.rows[0]
+        assert row.category == "build_perf"
+        assert row.threshold == 25.0
+        # 退化 20% < 25% 类别阈值
+        assert row.delta_pct == pytest.approx(20.0, abs=0.1)
+        assert row.is_regression is False
+
+    def test_unmatched_test_uses_global_threshold(self, tmp_path: Path) -> None:
+        """未匹配类别的测试用全局 threshold."""
+        self._write_bench_file(tmp_path / "001_hist.json", [("test_unknown_baseline", 0.100)], mtime_offset=-100)
+        self._write_bench_file(tmp_path / "002_cur.json", [("test_unknown_baseline", 0.130)], mtime_offset=0)
+        # 全局阈值 25%，退化 30% 触发
+        report = cb.compare(tmp_path, threshold=25.0)
+        assert report.regressions == 1
+        row = report.rows[0]
+        assert row.category == ""
+        assert row.threshold == 25.0
+        assert row.is_regression is True
+
+    def test_no_categories_disables_grouping(self, tmp_path: Path) -> None:
+        """categories=None 禁用类别分组，所有测试用全局 threshold."""
+        self._write_bench_file(
+            tmp_path / "001_hist.json",
+            [("test_serial_compile_baseline", 0.500)],
+            mtime_offset=-100,
+        )
+        # 退化 12%，全局阈值 25% 不触发，类别阈值 10% 会触发
+        self._write_bench_file(
+            tmp_path / "002_cur.json",
+            [("test_serial_compile_baseline", 0.560)],
+            mtime_offset=0,
+        )
+        # 传 None 禁用类别
+        report = cb.compare(tmp_path, threshold=25.0, categories=None)
+        assert report.regressions == 0
+        row = report.rows[0]
+        assert row.category == ""
+        assert row.threshold == 25.0
+        assert row.is_regression is False
+
+    def test_empty_categories_disables_grouping(self, tmp_path: Path) -> None:
+        """categories=() 等价于 None，禁用类别分组."""
+        self._write_bench_file(
+            tmp_path / "001_hist.json",
+            [("test_serial_compile_baseline", 0.500)],
+            mtime_offset=-100,
+        )
+        self._write_bench_file(
+            tmp_path / "002_cur.json",
+            [("test_serial_compile_baseline", 0.560)],
+            mtime_offset=0,
+        )
+        report = cb.compare(tmp_path, threshold=25.0, categories=())
+        assert report.regressions == 0
+        assert report.rows[0].category == ""
+        assert report.rows[0].threshold == 25.0
+
+    def test_first_run_row_has_category(self, tmp_path: Path) -> None:
+        """首次运行的测试也记录类别信息."""
+        self._write_bench_file(
+            tmp_path / "001.json",
+            [("test_serial_compile_baseline", 0.500)],
+        )
+        report = cb.compare(tmp_path, threshold=25.0)
+        assert report.no_history == 1
+        row = report.rows[0]
+        assert row.is_first_run is True
+        assert row.category == "nuitka_compile"
+        assert row.threshold == 10.0
+
+    def test_mixed_categories_in_one_report(self, tmp_path: Path) -> None:
+        """同一报告中多个类别的测试各自用对应阈值."""
+        # build_perf（25%）+ nuitka_compile（10%）+ 未知（全局 25%）
+        hist = [
+            ("test_small_project_warm_cache_baseline", 0.003),
+            ("test_serial_compile_baseline", 0.500),
+            ("test_unknown_baseline", 0.100),
+        ]
+        cur = [
+            # build_perf 退化 20% < 25%，不触发
+            ("test_small_project_warm_cache_baseline", 0.0036),
+            # nuitka_compile 退化 12% > 10%，触发
+            ("test_serial_compile_baseline", 0.560),
+            # 未知退化 30% > 25%，触发
+            ("test_unknown_baseline", 0.130),
+        ]
+        self._write_bench_file(tmp_path / "001_hist.json", hist, mtime_offset=-100)
+        self._write_bench_file(tmp_path / "002_cur.json", cur, mtime_offset=0)
+        report = cb.compare(tmp_path, threshold=25.0)
+        assert report.regressions == 2
+        # 按写入顺序检查
+        rows_by_name = {r.name: r for r in report.rows}
+        assert rows_by_name["test_small_project_warm_cache_baseline"].is_regression is False
+        assert rows_by_name["test_serial_compile_baseline"].is_regression is True
+        assert rows_by_name["test_unknown_baseline"].is_regression is True
+
+
+class TestMainCategoryArgs:
+    """main 类别相关 CLI 参数."""
+
+    def test_list_categories_exit_zero(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """--list-categories 列出类别后 exit 0."""
+        assert cb.main(["--list-categories"]) == 0
+        out = capsys.readouterr().out
+        assert "build_perf" in out
+        assert "nuitka_compile" in out
+        assert "wheel_download" in out
+        assert "entry_startup" in out
+        assert "core" in out
+
+    def test_no_categories_uses_global_threshold(self, tmp_path: Path) -> None:
+        """--no-categories 禁用类别分组，用全局阈值."""
+        data_hist = {
+            "benchmarks": [
+                {
+                    "name": "test_serial_compile_baseline",
+                    "stats": {"median": 0.5, "min": 0.5, "mean": 0.5, "stddev": 0, "rounds": 20},
+                }
+            ]
+        }
+        data_cur = {
+            "benchmarks": [
+                {
+                    "name": "test_serial_compile_baseline",
+                    "stats": {"median": 0.56, "min": 0.56, "mean": 0.56, "stddev": 0, "rounds": 20},
+                }
+            ]
+        }
+        (tmp_path / "001.json").write_text(json.dumps(data_hist), encoding="utf-8")
+        import os
+
+        cur = tmp_path / "002.json"
+        cur.write_text(json.dumps(data_cur), encoding="utf-8")
+        ts = cur.stat().st_mtime + 100
+        os.utime(cur, (ts, ts))
+        # 退化 12%，全局阈值 25% 不触发，但若类别启用（10%）会触发
+        assert cb.main(["--bench-dir", str(tmp_path), "--no-categories", "--threshold", "25"]) == 0
+        # 不带 --no-categories 时类别启用，退化 12% > 10% 触发
+        assert cb.main(["--bench-dir", str(tmp_path), "--threshold", "25"]) == 1
+
+    def test_category_regression_exit_one(self, tmp_path: Path) -> None:
+        """类别阈值触发的退化 exit 1，且输出含类别信息."""
+        data_hist = {
+            "benchmarks": [
+                {
+                    "name": "test_serial_compile_baseline",
+                    "stats": {"median": 0.5, "min": 0.5, "mean": 0.5, "stddev": 0, "rounds": 20},
+                }
+            ]
+        }
+        data_cur = {
+            "benchmarks": [
+                {
+                    "name": "test_serial_compile_baseline",
+                    "stats": {"median": 0.60, "min": 0.60, "mean": 0.60, "stddev": 0, "rounds": 20},
+                }
+            ]
+        }
+        (tmp_path / "001.json").write_text(json.dumps(data_hist), encoding="utf-8")
+        import os
+
+        cur = tmp_path / "002.json"
+        cur.write_text(json.dumps(data_cur), encoding="utf-8")
+        ts = cur.stat().st_mtime + 100
+        os.utime(cur, (ts, ts))
+        # 退化 20% > 10% 类别阈值
+        assert cb.main(["--bench-dir", str(tmp_path), "--threshold", "25"]) == 1

@@ -20,6 +20,7 @@ fspack
    :caption: 指南
 
    integration
+   performance
 
 .. toctree::
    :maxdepth: 2

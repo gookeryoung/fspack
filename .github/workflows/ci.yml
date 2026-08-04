@@ -75,9 +75,12 @@ jobs:
   # ===== 性能基准监控：仅 push to main 触发，PR 不触发 =====
   # 运行 pytest-benchmark 基线测试，保存结果并与历史最佳基准对比。
   # 对比逻辑见 scripts/compare_benchmark.py：扫描所有历史 JSON，按测试名
-  # 找最小 median 作为最佳基准，当前运行与最佳对比，median 超过最佳 25%
-  # 视为退化（exit 1）。与上一次基线对比相比，最佳基准过滤了机器抖动导致的
-  # 慢运行，减少误报。
+  # 找最小 median 作为最佳基准，当前运行与最佳对比。
+  # 按基线类别分组设阈值（iter-145）：确定性测试（mock sleep StdDev <1%）
+  # 用 10% 严格阈值，I/O 抖动测试（build_perf StdDev 5-27%）用 25% 宽松阈值，
+  # subprocess 测试（entry_startup StdDev 5-8%）用 15%。--threshold 25 仅作
+  # 未匹配类别测试的全局兜底。系统性退化（多测试同步大幅退化）判定为机器
+  # 负载波动不阻断 CI。
   benchmark:
     name: Benchmark gate
     runs-on: ubuntu-latest
