@@ -3001,7 +3001,9 @@ def test_compile_files_parallel_max_workers_capped(
 
     class CapturingTPE(real_tpe):
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            captured_max_workers.append(kwargs.get("max_workers", args[0] if args else None))
+            mw = kwargs.get("max_workers") or (args[0] if args else None)
+            if mw is not None:
+                captured_max_workers.append(mw)
             super().__init__(*args, **kwargs)
 
     monkeypatch.setattr("fspack.packaging.nuitka.compile.ThreadPoolExecutor", CapturingTPE)
