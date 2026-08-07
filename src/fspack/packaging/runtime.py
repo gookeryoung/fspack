@@ -145,7 +145,12 @@ def _validate_tar_member(member: tarfile.TarInfo) -> None:
     """PEP 706 ``data`` filter 等价检查（用于 Python 3.11 及以下手动实现）.
 
     拒绝：绝对路径（Unix ``/`` 或 Windows 盘符 ``C:``）、路径穿越（``..`` 段）、
-    符号链接、硬链接、设备文件（字符/块设备）。
+    设备文件（字符/块设备）。
+
+    对于符号链接/硬链接：仅拒绝 ``linkname`` 为绝对路径、Windows 盘符或路径穿越
+    的链接，允许相对路径且不穿越的安全链接（与 PEP 706 ``data`` filter 行为
+    一致）。python-build-standalone 官方 tarball 含 ``python/bin/2to3`` 等指向
+    ``python3.11`` 的相对符号链接，属合法条目不应拒绝。
 
     Python 3.12+ 使用内置 ``tarfile.data_filter``，本函数仅在低版本生效。
     tarball 来自网络下载（镜像站），预检防止恶意条目逃逸 ``runtime_dir``。
@@ -158,7 +163,13 @@ def _validate_tar_member(member: tarfile.TarInfo) -> None:
     if ".." in name.split("/"):
         raise EmbedError(f"python-build-standalone tarball 含路径穿越条目: {member.name}")
     if member.issym() or member.islnk():
-        raise EmbedError(f"python-build-standalone tarball 含链接条目: {member.name}")
+        linkname = member.linkname.replace("\\", "/")
+        if linkname.startswith("/"):
+            raise EmbedError(f"python-build-standalone tarball 含绝对路径链接: {member.name} -> {member.linkname}")
+        if len(linkname) >= 2 and linkname[1] == ":":
+            raise EmbedError(f"python-build-standalone tarball 含盘符链接: {member.name} -> {member.linkname}")
+        if ".." in linkname.split("/"):
+            raise EmbedError(f"python-build-standalone tarball 含路径穿越链接: {member.name} -> {member.linkname}")
     if member.isdev():
         raise EmbedError(f"python-build-standalone tarball 含设备文件条目: {member.name}")
 

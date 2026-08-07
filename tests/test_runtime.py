@@ -40,25 +40,34 @@ def _make_tar(path: Path, members: list[tuple[str, bytes]]) -> None:
             tf.addfile(info, io.BytesIO(data))
 
 
-def _make_malicious_tar(path: Path, members: list[tuple[str, str]]) -> None:
-    """生成含恶意条目的 tar.gz，members 为 (name, type) 元组.
+def _make_malicious_tar(
+    path: Path,
+    members: list[tuple[str, str]] | list[tuple[str, str, str]],
+) -> None:
+    """生成含恶意条目的 tar.gz，members 为 ``(name, type)`` 或 ``(name, type, linkname)``.
 
     type ∈ {'file', 'symlink', 'hardlink', 'char'}：
     - ``file``：普通文件（用于构造路径穿越/绝对路径测试）
-    - ``symlink``：符号链接（linkname 指向 /etc/passwd）
-    - ``hardlink``：硬链接（linkname 指向 python/bin/python3.11）
+    - ``symlink``：符号链接（``linkname`` 默认 ``/etc/passwd``）
+    - ``hardlink``：硬链接（``linkname`` 默认 ``python/bin/python3.11``）
     - ``char``：字符设备文件
+
+    linkname 可选，用于自定义链接目标以测试相对/绝对/穿越路径：
+    PEP 706 ``data`` filter 仅拒绝绝对路径或路径穿越的链接，相对路径安全链接
+    应放行（python-build-standalone 官方 tarball 含 ``python/bin/2to3`` 等相对链接）。
     """
     with tarfile.open(path, "w:gz") as tf:
-        for name, mtype in members:
+        for entry in members:
+            name, mtype = entry[0], entry[1]
+            linkname = entry[2] if len(entry) > 2 else None
             info = tarfile.TarInfo(name=name)
             if mtype == "symlink":
                 info.type = tarfile.SYMTYPE
-                info.linkname = "/etc/passwd"
+                info.linkname = linkname if linkname is not None else "/etc/passwd"
                 tf.addfile(info, None)
             elif mtype == "hardlink":
                 info.type = tarfile.LNKTYPE
-                info.linkname = "python/bin/python3.11"
+                info.linkname = linkname if linkname is not None else "python/bin/python3.11"
                 tf.addfile(info, None)
             elif mtype == "char":
                 info.type = tarfile.CHRTYPE
@@ -449,21 +458,74 @@ def test_extract_standalone_rejects_windows_drive(tmp_path: Path) -> None:
 
 
 def test_extract_standalone_rejects_symlink(tmp_path: Path) -> None:
-    """tar 含符号链接条目（linkname 指向 /etc/passwd）应被预检拒绝."""
+    """tar 含绝对路径符号链接（linkname 指向 /etc/passwd）应被预检拒绝.
+
+    PEP 706 ``data`` filter 仅拒绝绝对路径或路径穿越的链接，相对路径安全链接
+    应放行；本测试构造绝对路径符号链接验证拦截。
+    """
     tar = tmp_path / "mal.tar.gz"
     _make_malicious_tar(tar, [("evil_link", "symlink")])
-    with pytest.raises(EmbedError, match="链接条目"):
+    with pytest.raises(EmbedError, match="绝对路径链接"):
+        extract_standalone(tar, tmp_path / "runtime")
+    assert not tar.exists()
+
+
+def test_extract_standalone_rejects_traversal_symlink(tmp_path: Path) -> None:
+    """tar 含路径穿越符号链接（linkname 含 ``..`` 段）应被预检拒绝."""
+    tar = tmp_path / "mal.tar.gz"
+    _make_malicious_tar(tar, [("evil_link", "symlink", "../../etc/passwd")])
+    with pytest.raises(EmbedError, match="路径穿越链接"):
+        extract_standalone(tar, tmp_path / "runtime")
+    assert not tar.exists()
+
+
+def test_extract_standalone_rejects_windows_drive_symlink(tmp_path: Path) -> None:
+    """tar 含 Windows 盘符符号链接（linkname 如 ``C:evil``）应被预检拒绝."""
+    tar = tmp_path / "mal.tar.gz"
+    _make_malicious_tar(tar, [("evil_link", "symlink", "C:evil")])
+    with pytest.raises(EmbedError, match="盘符链接"):
         extract_standalone(tar, tmp_path / "runtime")
     assert not tar.exists()
 
 
 def test_extract_standalone_rejects_hardlink(tmp_path: Path) -> None:
-    """tar 含硬链接条目应被预检拒绝（防硬链接攻击覆盖 runtime_dir 内文件）."""
+    """tar 含路径穿越硬链接应被预检拒绝（防硬链接穿越覆盖 runtime_dir 内文件）."""
     tar = tmp_path / "mal.tar.gz"
-    _make_malicious_tar(tar, [("evil_link", "hardlink")])
-    with pytest.raises(EmbedError, match="链接条目"):
+    _make_malicious_tar(tar, [("evil_link", "hardlink", "../../etc/passwd")])
+    with pytest.raises(EmbedError, match="路径穿越链接"):
         extract_standalone(tar, tmp_path / "runtime")
     assert not tar.exists()
+
+
+def test_extract_standalone_allows_relative_symlink() -> None:
+    """相对路径符号链接应放行：python-build-standalone 官方 tarball 含
+    ``python/bin/2to3`` 等指向 ``python3.11`` 的合法相对符号链接.
+
+    PEP 706 ``data`` filter 仅拒绝绝对路径或路径穿越的链接，相对路径安全链接
+    通过。直接验证 ``_validate_tar_member`` 不抛异常，避免依赖符号链接解压
+    权限（Windows 需开发者模式）。
+    """
+    from fspack.packaging.runtime import _validate_tar_member
+
+    info = tarfile.TarInfo(name="python/bin/2to3")
+    info.type = tarfile.SYMTYPE
+    info.linkname = "python3.11"
+    _validate_tar_member(info)  # 不应抛异常
+
+
+def test_extract_standalone_allows_relative_hardlink() -> None:
+    """相对路径硬链接应放行：python-build-standalone tarball 内部硬链接
+    指向同归档内其他文件（如 ``python/bin/python3`` -> ``python3.11``）.
+
+    PEP 706 ``data`` filter 仅拒绝绝对路径或路径穿越的链接，相对路径安全
+    硬链接通过。
+    """
+    from fspack.packaging.runtime import _validate_tar_member
+
+    info = tarfile.TarInfo(name="python/bin/python3")
+    info.type = tarfile.LNKTYPE
+    info.linkname = "python3.11"
+    _validate_tar_member(info)  # 不应抛异常
 
 
 def test_extract_standalone_rejects_device_file(tmp_path: Path) -> None:
