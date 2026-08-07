@@ -128,7 +128,7 @@ iter-117~125 完成结构优化与懒加载主题（`import fspack` 从 ~55ms �
   (2) 缓存命中 vs 冷下载对比；(3) 加入 CI benchmark job
 - [x] **iter-144 启动时间基线**：(1) entry wrapper 启动耗时基线（用 `python -X importtime`
   解析）；(2) lazy-import 启用 vs 关闭对比；(3) `--no-site` 启用 vs 关闭对比
-- [ ] **iter-145 CI 性能门禁固化**：(1) `.github/workflows/ci.yml` benchmark job 扩展，
+- [x] **iter-145 CI 性能门禁固化**：(1) `.github/workflows/ci.yml` benchmark job 扩展，
   覆盖 iter-141~144 新基线；(2) `scripts/compare_benchmark.py` 支持按基线类别分组对比；
   (3) 文档 `docs/performance.md` 性能基线对比与更新指南；(4) iter-126~145 全量回归与
   基线快照 `0126_iter145-final.json`
