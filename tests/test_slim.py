@@ -1490,6 +1490,74 @@ class TestSlimUnpack:
         assert (dest / "PySide2" / "qml" / "QtQuick.2" / "qmldir").is_file()
         assert (dest / "PySide2" / "qml" / "QtQml" / "Models.2" / "qmldir").is_file()
 
+    def test_qt_qml_svg_auto_binding(self, tmp_path: Path) -> None:
+        """QML 项目自动绑定 QtSvg：Qml 在闭包中时 qsvg.dll 与 Qt5Svg.dll 都保留.
+
+        回归测试（req-50）：QML 的 ``Image { source: "*.svg" }`` 通过
+        imageformats/qsvg.dll 加载 SVG，qsvg.dll C 层依赖 Qt5Svg.dll/Qt6Svg.dll。
+        QML 无 ``import QtSvg`` 语法，AST 无法发现 SVG 依赖。fspack 在
+        ``expand_closure`` 中检测到 Qml 时自动加入 Svg，使 qsvg.dll 与
+        Qt5Svg.dll 都保留，无需用户显式声明。
+        """
+        whl = tmp_path / "wh" / "PySide2-5.15.2.1-cp39-none-win_amd64.whl"
+        whl.parent.mkdir()
+        _make_wheel(
+            whl,
+            {
+                "PySide2/__init__.py": b"",
+                "PySide2/QtCore.pyd": b"core",
+                "PySide2/QtQml.pyd": b"qml",
+                "PySide2/QtQuick.pyd": b"quick",
+                "PySide2/Qt5Core.dll": b"c",
+                "PySide2/Qt5Gui.dll": b"g",
+                "PySide2/Qt5Svg.dll": b"svg-dll",
+                "PySide2/plugins/imageformats/qsvg.dll": b"svg-plugin",
+                "PySide2/plugins/imageformats/qjpeg.dll": b"jpeg-plugin",
+                "PySide2/qml/QtQuick.2/qmldir": b"qml",
+            },
+        )
+        dest = tmp_path / "sp"
+        # 仅声明 Qml/Quick，expand_closure 自动加入 Svg
+        count = slim_unpack([whl], dest, {"PySide2": frozenset({"QtCore", "Qml", "Quick"})})
+        assert count == 1
+        # Qml 触发 expand_closure 加入 Svg → Qt5Svg.dll 保留
+        assert (dest / "PySide2" / "Qt5Svg.dll").is_file()
+        # Svg 在闭包 → qsvg.dll 保留
+        assert (dest / "PySide2" / "plugins" / "imageformats" / "qsvg.dll").is_file()
+        # 非 svg 插件仍始终保留
+        assert (dest / "PySide2" / "plugins" / "imageformats" / "qjpeg.dll").is_file()
+
+    def test_qt_widgets_no_svg_strips_qsvg(self, tmp_path: Path) -> None:
+        """非 QML 项目不用 SVG 时剥离 qsvg.dll 与 Qt5Svg.dll.
+
+        回归测试：Widgets 项目不自动加入 Svg，qsvg.dll 与 Qt5Svg.dll 都剥离，
+        避免"插件保留但依赖 DLL 被剥离"的矛盾。用户需 SVG 可显式 import QtSvg。
+        """
+        whl = tmp_path / "wh" / "PySide2-5.15.2.1-cp39-none-win_amd64.whl"
+        whl.parent.mkdir()
+        _make_wheel(
+            whl,
+            {
+                "PySide2/__init__.py": b"",
+                "PySide2/QtCore.pyd": b"core",
+                "PySide2/QtWidgets.pyd": b"widgets",
+                "PySide2/Qt5Core.dll": b"c",
+                "PySide2/Qt5Gui.dll": b"g",
+                "PySide2/Qt5Svg.dll": b"svg-dll",
+                "PySide2/plugins/imageformats/qsvg.dll": b"svg-plugin",
+                "PySide2/plugins/imageformats/qjpeg.dll": b"jpeg-plugin",
+            },
+        )
+        dest = tmp_path / "sp"
+        count = slim_unpack([whl], dest, {"PySide2": frozenset({"QtCore", "Widgets"})})
+        assert count == 1
+        # Widgets 不触发 Svg → Qt5Svg.dll 剥离
+        assert not (dest / "PySide2" / "Qt5Svg.dll").exists()
+        # Svg 不在闭包 → qsvg.dll 剥离
+        assert not (dest / "PySide2" / "plugins" / "imageformats" / "qsvg.dll").exists()
+        # 非 svg 插件仍保留
+        assert (dest / "PySide2" / "plugins" / "imageformats" / "qjpeg.dll").is_file()
+
     def test_qt_auxiliary_dll_with_deps_kept(self, tmp_path: Path) -> None:
         """闭包含 Multimedia/Qml/Quick 时 FFmpeg/QML ABI/opengl32sw DLL 保留."""
         whl = tmp_path / "wh" / "PySide6-6.5.0-cp39-none-win_amd64.whl"
