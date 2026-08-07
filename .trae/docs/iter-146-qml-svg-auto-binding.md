@@ -1,4 +1,4 @@
-# iter-146: QML 项目自动绑定 QtSvg 支持
+# iter-146: QML 项目自动绑定 QtSvg + QtWidgets 始终保留
 
 ## 需求清单
 
@@ -8,20 +8,25 @@
       但依赖 DLL 不在"的矛盾；非 SVG 项目剥离 `qsvg.dll` 省体积
 - [x] 其他 imageformats 插件（qjpeg/qgif/qico 等）仍始终保留，基础图片格式
       支持不受影响
+- [x] QtWidgets 始终保留不再按需裁剪：任何 Qt 模块在闭包中时自动加入 `Widgets`，
+      避免 QML 的 Controls 1.x/Dialogs 插件因 `Qt5Widgets.dll` 缺失加载失败
 - [x] 全套门禁通过（ruff/format/pyrefly/pytest/coverage ≥ 95%）
 
 ## 迭代目标
 
-修复 QML 项目打包后 SVG 图像加载失败问题。QML 的 `Image { source: "*.svg" }`
-通过 imageformats 插件加载 SVG，但 QML 无 `import QtSvg` 语法，AST 无法发现
-SVG 依赖，导致 `Qt5Svg.dll`/`Qt6Svg.dll` 被剥离，`qsvg.dll` 运行时加载失败。
+修复 QML 项目打包后运行失败的两个问题：
+1. SVG 图像加载失败：`Image { source: "*.svg" }` 通过 imageformats 插件加载 SVG，
+   但 QML 无 `import QtSvg` 语法，`Qt5Svg.dll`/`Qt6Svg.dll` 被剥离。
+2. `qtquickcontrolsplugin.dll` 加载失败：QtQuick.Controls 1.x/Dialogs 插件 C 层
+   依赖 `Qt5Widgets.dll`，但 `Widgets` 不在闭包被剥离，导致
+   `plugin cannot be loaded for module QtQuick.Controls` 错误。
 
 ## 改动文件清单
 
 - `src/fspack/slim/qt.py`（修改）：
-  - `QtSlimSpec.expand_closure`：`Qml` 在闭包中时自动加入 `Svg`，使 SVG 模块
-    DLL 随之保留。这是运行时策略（非 C 层 DLL 链接依赖），放在 `expand_closure`
-    而非 `_qt_module_closure`，保持职责分层。
+  - `QtSlimSpec.expand_closure`：
+    - 任何 Qt 模块在闭包中时自动加入 `Widgets`（QtWidgets 始终保留）
+    - `Qml` 在闭包中时自动加入 `Svg`（QML 项目 SVG 支持）
   - `QtSlimSpec.classify_entry`：`plugins/imageformats/qsvg*.dll` 按 `Svg` 子模块
     选择性保留，仅当 `Svg` 在 `keep_subs` 时归 `shared`，否则归 `exclude`。
     其余 imageformats 插件仍始终保留。
@@ -62,6 +67,17 @@ SVG 依赖，导致 `Qt5Svg.dll`/`Qt6Svg.dll` 被剥离，`qsvg.dll` 运行时�
 QML 项目无法显式声明 SVG 依赖（无 `import QtSvg` 语法），必须自动处理。
 Widgets 项目可以显式 `import QtSvg` 或 `--keep-module PySide2:Svg`，不自动加
 Svg 可避免所有 Qt 项目都带上 SVG 模块（约 200-300KB）。
+
+### 决策 4：QtWidgets 始终保留不再按需裁剪
+
+用户反馈 QML 项目打包后 `qtquickcontrolsplugin.dll`（QtQuick.Controls 1.x 插件）
+加载失败，根因是该插件 C 层依赖 `Qt5Widgets.dll`，但 `Widgets` 不在闭包被剥离。
+QtQuick.Dialogs（FileDialog/ColorDialog 等）内部 import Controls 1.x，是 Qt5 QML
+常用模块。用户要求"QtWidgets 是最基本的依赖，一律不剥离"。
+
+实现：`expand_closure` 中 `if subs: subs.add("Widgets")`，任何 Qt 模块在闭包中时
+自动加入 `Widgets`。体积代价 `Qt5Widgets.dll` ~5MB，QML 项目本身较大可接受。
+空闭包（无 Qt 模块在用）不加 Widgets，不影响纯非 Qt 项目。
 
 ## 代码实现情况
 
