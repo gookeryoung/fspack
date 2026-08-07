@@ -8,6 +8,7 @@ facade 模块：编排 :mod:`fspack.slim.qt_helpers`（文件名归一化与判�
 
 - 基础依赖白名单：``__init__.py``、``_*.py``、``pyside2.abi3.dll``、VC++ 运行时、
   ``plugins/platforms``、``plugins/imageformats``、``plugins/styles`` 等基础插件
+  （``imageformats/qsvg*.dll`` 例外：依赖 ``Svg`` 子模块，仅 ``Svg`` 在闭包内时保留）
 - 子模块动态扩展：根据源码 import 的子模块（如 ``PySide2.QtMultimedia``），
   保留对应 ``.pyd`` 与 ``Qt5Xxx.dll``/``Qt6Xxx.dll``，并按依赖映射保留
   相关 plugins（如 ``plugins/mediaservice``）与 resources
@@ -92,7 +93,15 @@ class QtSlimSpec(SlimSpec):
 
         与基类约定不同：此处返回 ``subs`` 自身（已在 :func:`_qt_module_closure`
         中就地扩展），调用方据此直接 ``subs.update(...)`` 累积闭包结果。
+
+        QML 项目自动加入 ``Svg``：QML 无 ``import QtSvg`` 语法（QtSvg 是 C++
+        模块），但 ``Image { source: "*.svg" }`` 通过 imageformats 插件加载
+        SVG，``plugins/imageformats/qsvg.dll`` 保留需 ``Qt5Svg.dll``/
+        ``Qt6Svg.dll`` 配套。故 ``Qml`` 在闭包中时自动加入 ``Svg``，使 SVG
+        模块 DLL 随之保留，无需用户显式声明。
         """
+        if "Qml" in subs:
+            subs.add("Svg")
         closure = _qt_module_closure(subs)
         subs.update(closure)
         return subs
@@ -125,7 +134,9 @@ class QtSlimSpec(SlimSpec):
         - 子目录 ``examples``/``translations``/``include``/``metatypes``/
           ``QtAsyncio`` 等 → exclude；``lib/cmake/`` 三级子目录剥离（cmake 配置），
           ``lib/`` 其他内容保留（PySide2 ``lib/fonts/`` 含 Qt 内嵌字体）
-        - ``plugins/<subdir>/<files>`` → 按依赖映射保留/剥离，未知子目录剥离
+        - ``plugins/<subdir>/<files>`` → 按依赖映射保留/剥离，未知子目录剥离；
+          ``imageformats/qsvg*.dll`` 例外：依赖 ``Svg`` 子模块，仅 ``Svg`` 在闭包
+          内时保留（避免插件保留但 ``Qt5Svg.dll``/``Qt6Svg.dll`` 被剥离）
         - ``resources/`` → 仅 WebEngine 相关子模块时保留；内部含 ``.debug.`` 子串
           的文件（``*.debug.pak``/``*.debug.bin``）是 DevTools 调试资源，始终剥离
         - ``qml/`` → 仅 Qml/Quick 相关子模块时保留
@@ -198,6 +209,14 @@ class QtSlimSpec(SlimSpec):
             if deps is None:
                 # 未知 plugins 子目录，白名单制剥离
                 return ("exclude", None)
+            # imageformats 中的 qsvg*.dll 是 SVG 图片格式插件，C 层依赖
+            # Qt5Svg.dll/Qt6Svg.dll，按 Svg 子模块选择性保留；其余 imageformats
+            # 插件（qjpeg/qgif/qico 等）无外部 Qt DLL 依赖，始终保留。避免
+            # "qsvg.dll 保留但 Qt5Svg.dll 被剥离"导致插件加载失败。
+            if plugin_type == "imageformats":
+                filename = parts[-1].lower()
+                if filename.startswith("qsvg"):
+                    return ("shared", None) if "Svg" in keep_subs else ("exclude", None)
             if not deps:
                 # 空依赖集合 = 基础功能，始终保留
                 return ("shared", None)

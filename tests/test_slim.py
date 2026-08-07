@@ -70,8 +70,26 @@ class TestClassifyEntry:
         assert classify_entry("PySide2/plugins/platforms/qwindows.dll", "PySide2") == ("shared", None)
 
     def test_subdir_imageformats(self) -> None:
-        """plugins/imageformats 始终保留."""
-        assert classify_entry("PySide2/plugins/imageformats/qsvg.dll", "PySide2") == ("shared", None)
+        """plugins/imageformats 非 svg 插件始终保留."""
+        assert classify_entry("PySide2/plugins/imageformats/qjpeg.dll", "PySide2") == ("shared", None)
+
+    def test_subdir_imageformats_qsvg_without_dep_excluded(self) -> None:
+        """plugins/imageformats/qsvg.dll 无 Svg 依赖时剥离.
+
+        回归测试：qsvg.dll C 层依赖 Qt5Svg.dll/Qt6Svg.dll，若 Svg 不在闭包则
+        剥离 qsvg.dll，避免"插件保留但依赖 DLL 被剥离"导致加载失败。
+        """
+        assert classify_entry("PySide2/plugins/imageformats/qsvg.dll", "PySide2") == ("exclude", None)
+
+    def test_subdir_imageformats_qsvg_with_dep_kept(self) -> None:
+        """plugins/imageformats/qsvg.dll 有 Svg 依赖时保留."""
+        result = classify_entry("PySide2/plugins/imageformats/qsvg.dll", "PySide2", {"Svg"})
+        assert result == ("shared", None)
+
+    def test_subdir_imageformats_qsvg6_with_dep_kept(self) -> None:
+        """plugins/imageformats/qsvg6.dll（Qt6 命名）有 Svg 依赖时保留."""
+        result = classify_entry("PySide6/plugins/imageformats/qsvg6.dll", "PySide6", {"Svg"})
+        assert result == ("shared", None)
 
     def test_subdir_mediaservice_no_dep(self) -> None:
         """plugins/mediaservice 无 Multimedia 依赖时剥离."""
@@ -509,6 +527,38 @@ class TestQtModuleClosure:
         once = _qt_module_closure({"Widgets"})
         twice = _qt_module_closure(once)
         assert once == twice
+
+    def test_qml_closure_does_not_include_svg(self) -> None:
+        """``_qt_module_closure`` 是纯 C 层 DLL 依赖闭包，Qml 不含 Svg.
+
+        Qml → Svg 是运行时策略（imageformats/qsvg.dll 依赖 Qt5Svg.dll），
+        不是 C 层 DLL 链接依赖（Qt5Qml.dll 不链接 Qt5Svg.dll），故不在此函数中处理。
+        """
+        from fspack.slim.qt import _qt_module_closure
+
+        result = _qt_module_closure({"Qml"})
+        assert "Svg" not in result
+
+    def test_expand_closure_qml_includes_svg(self) -> None:
+        """QML 项目自动加入 Svg：QML 无 import QtSvg 语法但常加载 SVG 图像.
+
+        回归测试：QML 的 ``Image { source: "*.svg" }`` 通过 imageformats/qsvg.dll
+        加载 SVG，qsvg.dll C 层依赖 Qt5Svg.dll/Qt6Svg.dll。Qml 在闭包中时
+        ``expand_closure`` 自动加入 Svg，使 SVG 模块 DLL 随之保留。
+        """
+        from fspack.slim.qt import QtSlimSpec
+
+        result = QtSlimSpec.expand_closure({"Qml"})
+        assert "Svg" in result
+        # Svg 闭包（Gui/Core）也应随之加入
+        assert {"Svg", "Gui", "Core"}.issubset(result)
+
+    def test_expand_closure_widgets_excludes_svg(self) -> None:
+        """非 QML 项目不自动加入 Svg，需用户显式 import QtSvg."""
+        from fspack.slim.qt import QtSlimSpec
+
+        result = QtSlimSpec.expand_closure({"Widgets"})
+        assert "Svg" not in result
 
 
 class TestQtDllClassification:
