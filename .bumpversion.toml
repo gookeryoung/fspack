@@ -1,5 +1,5 @@
 [tool.bumpversion]
-current_version = "0.3.21"
+current_version = "0.3.22"
 commit = true
 exclude = ["template/*"]
 message = "chore: 更新版本 {current_version} → {new_version}"
