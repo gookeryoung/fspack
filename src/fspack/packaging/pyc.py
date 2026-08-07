@@ -391,6 +391,78 @@ def _pyc_stamp_key(
     return f"{src_fp}|{sp_fp}|{strip_py}|{optimize}|{sp_optimize}"
 
 
+def _run_compileall(py_exe: Path, target_dir: Path, optimize: int, stage: StageRecorder) -> bool:
+    """运行单次 compileall 编译 target_dir，成功返回 True，失败返回 False.
+
+    失败（超时或非零退出码）时记录 warning 与 ``stage.set_detail``，不抛异常。
+    ``returncode != 0`` 时调 ``stage.processed()``（与原逻辑一致：有编译活动但失败）；
+    超时不调（完全无编译活动）。调用方根据返回值决定是否继续编译下一个目录。
+
+    提取为辅助函数以降低 :func:`_precompile_pyc` 分支数（PLR0912）。
+    """
+    try:
+        result = subprocess.run(
+            [
+                str(py_exe),
+                "-m",
+                "compileall",
+                str(target_dir),
+                "-q",
+                "-j",
+                "0",
+                "-o",
+                str(optimize),
+            ],
+            check=False,
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=_COMPILEALL_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        # 超时：subprocess.run 内部已 kill 子进程。不写 stamp 下次重试（iter-127
+        # 引入，iter-128 统一为"失败不缓存"策略：returncode != 0 与超时都不写 stamp）。
+        _logger.warning(
+            "compileall 超时（%ds），跳过本次预编译，下次构建重试",
+            int(_COMPILEALL_TIMEOUT),
+        )
+        stage.set_detail(f"compileall 超时（{int(_COMPILEALL_TIMEOUT)}s），跳过")
+        return False
+    if result.returncode != 0:
+        _logger.warning("compileall 失败 (%s): %s", target_dir, result.stderr.strip())
+        stage.processed()
+        # 编译失败不写 stamp：让下次构建重试，避免失败的编译被 stamp 跳过
+        # 导致用户长期运行未编译的 .py。iter-128 引入（与 iter-127 超时分支
+        # 一致的"失败不缓存"策略）。
+        stage.set_detail(f"compileall 失败（{target_dir.name} 退出码 {result.returncode}），跳过 stamp")
+        return False
+    return True
+
+
+def _strip_compiled_py(  # noqa: PLR0913
+    src_dir: Path,
+    site_packages: Path,
+    entry_rels: frozenset[str],
+    optimize: int,
+    sp_optimize: int,
+    py_version: str,
+) -> int:
+    """剥离 src 与 site-packages 的非 ``__init__.py`` 源码，返回剥离总数.
+
+    src 用 ``optimize``、site-packages 用 ``sp_optimize`` 匹配 .pyc 文件名后缀
+    （``cpython-{ver}.opt-{N}.pyc``）。``entry_rels`` 仅对 src 生效（入口文件在
+    src 下，需保留 ``.py`` 供 ``runpy`` 定位模块）。
+
+    提取为辅助函数以降低 :func:`_precompile_pyc` 分支数（PLR0912）。
+    """
+    stripped = 0
+    if src_dir.is_dir():
+        stripped += _strip_py_sources([src_dir], entry_rels, optimize=optimize, py_version=py_version)
+    if site_packages.is_dir():
+        stripped += _strip_py_sources([site_packages], frozenset(), optimize=sp_optimize, py_version=py_version)
+    return stripped
+
+
 def _precompile_pyc(  # noqa: PLR0913
     dist_dir: Path,
     runtime_dir: Path,
@@ -472,41 +544,7 @@ def _precompile_pyc(  # noqa: PLR0913
     for d, opt in ((src_dir, optimize), (site_packages, sp_optimize)):
         if not d.is_dir():
             continue
-        try:
-            result = subprocess.run(
-                [
-                    str(py_exe),
-                    "-m",
-                    "compileall",
-                    str(d),
-                    "-q",
-                    "-j",
-                    "0",
-                    "-o",
-                    str(opt),
-                ],
-                check=False,
-                capture_output=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=_COMPILEALL_TIMEOUT,
-            )
-        except subprocess.TimeoutExpired:
-            # 超时：subprocess.run 内部已 kill 子进程。不写 stamp 下次重试（iter-127
-            # 引入，iter-128 统一为"失败不缓存"策略：returncode != 0 与超时都不写 stamp）。
-            _logger.warning(
-                "compileall 超时（%ds），跳过本次预编译，下次构建重试",
-                int(_COMPILEALL_TIMEOUT),
-            )
-            stage.set_detail(f"compileall 超时（{int(_COMPILEALL_TIMEOUT)}s），跳过")
-            return
-        if result.returncode != 0:
-            _logger.warning("compileall 失败 (%s): %s", d, result.stderr.strip())
-            stage.processed()
-            # 编译失败不写 stamp：让下次构建重试，避免失败的编译被 stamp 跳过
-            # 导致用户长期运行未编译的 .py。iter-128 引入（与 iter-127 超时分支
-            # 一致的"失败不缓存"策略）。
-            stage.set_detail(f"compileall 失败（{d.name} 退出码 {result.returncode}），跳过 stamp")
+        if not _run_compileall(py_exe, d, opt, stage):
             return
         compiled += 1
     if compiled:
@@ -519,12 +557,9 @@ def _precompile_pyc(  # noqa: PLR0913
     # 分别剥离 src 与 site-packages：entry_rels 仅对 src 生效（入口文件在 src 下），
     # site-packages 无入口文件故传空集合。src 与 site-packages 用各自的 optimize
     # 级别匹配 .pyc 文件名后缀（cpython-{ver}.opt-{N}.pyc）。
-    stripped = 0
-    if strip_py:
-        if src_dir.is_dir():
-            stripped += _strip_py_sources([src_dir], entry_rels, optimize=optimize, py_version=py_version)
-        if site_packages.is_dir():
-            stripped += _strip_py_sources([site_packages], frozenset(), optimize=sp_optimize, py_version=py_version)
+    stripped = (
+        _strip_compiled_py(src_dir, site_packages, entry_rels, optimize, sp_optimize, py_version) if strip_py else 0
+    )
     if stripped:
         stage.skip(stripped)
         stage.set_detail(f"编译 {compiled} 目录，剥离 {stripped} 个 .py")

@@ -1511,6 +1511,28 @@ def test_precompile_pyc_optimize_passes_o_flag(tmp_path: Path, monkeypatch: pyte
     assert sp_cmd[sp_cmd.index("-o") + 1] == "1"
 
 
+def test_pyc_stamp_key_includes_sp_optimize(tmp_path: Path) -> None:
+    """_pyc_stamp_key 纳入 sp_optimize，切换 site-packages 优化级别时强制重编译.
+
+    site-packages 用 ``min(optimize, 1)`` 降级（保留 docstring），老 stamp（无
+    sp_optimize 字段）自然失效，避免旧的剥离 docstring 的 .pyc 被加载触发
+    第三方库 C 扩展兼容问题（numpy ``add_docstring`` 等）。
+    """
+    from fspack.builder import _pyc_stamp_key
+
+    sp = tmp_path / "sp"
+    sp.mkdir()
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("")
+    # 同 optimize 不同 sp_optimize 产生不同 key
+    key_sp0 = _pyc_stamp_key(src, sp, strip_py=False, optimize=2, sp_optimize=0)
+    key_sp1 = _pyc_stamp_key(src, sp, strip_py=False, optimize=2, sp_optimize=1)
+    assert key_sp0 != key_sp1
+    # 默认 sp_optimize=0
+    assert _pyc_stamp_key(src, sp, strip_py=False, optimize=2) == key_sp0
+
+
 def test_precompile_pyc_optimize_default_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """optimize 默认 0，compileall 命令含 `-o 0`."""
     runtime = tmp_path / "runtime"
