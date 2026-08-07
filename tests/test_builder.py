@@ -1148,7 +1148,7 @@ class _CompileCompleted:
 
 
 def test_precompile_pyc_windows_calls_compileall(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Windows 目标用 runtime/python.exe 单次调 compileall 同时编译 src 与 site-packages."""
+    """Windows 目标用 runtime/python.exe 拆分两次调 compileall 分别编译 src 与 site-packages."""
     runtime = tmp_path / "runtime"
     runtime.mkdir(parents=True, exist_ok=True)
     (runtime / "python.exe").write_bytes(b"")
@@ -1163,13 +1163,15 @@ def test_precompile_pyc_windows_calls_compileall(tmp_path: Path, monkeypatch: py
     st = StageRecorder("预编译字节码")
     _precompile_pyc(dist, runtime, "3.11.9", Platform.WINDOWS, strip_py=False, stage=st)
 
-    # 合并为单次 compileall 调用，同时编译 src 与 site-packages
-    assert len(captured) == 1
-    cmd = captured[0]
-    assert "compileall" in cmd
-    assert str(dist / "src") in cmd
-    assert str(runtime / "Lib" / "site-packages") in cmd
-    assert str(runtime / "python.exe") in cmd[0]
+    # 拆分为两次 compileall 调用：src 与 site-packages 分别编译
+    # （src 用 optimize，site-packages 用 min(optimize,1) 保留 docstring）
+    assert len(captured) == 2
+    for cmd in captured:
+        assert "compileall" in cmd
+        assert str(runtime / "python.exe") in cmd[0]
+    # 第一次编译 src，第二次编译 site-packages
+    assert str(dist / "src") in captured[0]
+    assert str(runtime / "Lib" / "site-packages") in captured[1]
 
 
 def test_precompile_pyc_linux_uses_python3_bin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1501,10 +1503,12 @@ def test_precompile_pyc_optimize_passes_o_flag(tmp_path: Path, monkeypatch: pyte
     st = StageRecorder("预编译字节码")
     _precompile_pyc(dist, runtime, "3.11.9", Platform.WINDOWS, strip_py=False, stage=st, optimize=2)
 
-    # 每次 compileall 调用都含 `-o 2`
-    for cmd in captured:
-        assert "-o" in cmd
-        assert cmd[cmd.index("-o") + 1] == "2"
+    # 拆分两次调用：src 用 optimize=2，site-packages 降级到 1（保留 docstring）
+    assert len(captured) == 2
+    src_cmd = next(cmd for cmd in captured if str(dist / "src") in cmd)
+    assert src_cmd[src_cmd.index("-o") + 1] == "2"
+    sp_cmd = next(cmd for cmd in captured if str(runtime / "Lib" / "site-packages") in cmd)
+    assert sp_cmd[sp_cmd.index("-o") + 1] == "1"
 
 
 def test_precompile_pyc_optimize_default_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

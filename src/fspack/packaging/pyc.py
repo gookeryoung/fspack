@@ -366,21 +366,29 @@ def _pyc_stamp_path(dist_dir: Path) -> Path:
     return dist_dir / ".pyc_stamp"
 
 
-def _pyc_stamp_key(src_dir: Path, site_packages: Path, strip_py: bool, optimize: int = 0) -> str:
-    """计算预编译 stamp 键：src 指纹 + site-packages 指纹 + strip_py + optimize.
+def _pyc_stamp_key(
+    src_dir: Path,
+    site_packages: Path,
+    strip_py: bool,
+    optimize: int = 0,
+    sp_optimize: int = 0,
+) -> str:
+    """计算预编译 stamp 键：src 指纹 + site-packages 指纹 + strip_py + optimize + sp_optimize.
 
     ``copy_source`` 在预编译前已将 ``.py`` 同步到 ``dist/src``（``strip_py`` 模式下
     也会重新复制），故 ``src_fp`` 始终反映完整源码状态，无需特殊处理 ``strip_py``
     的 ``.py`` 缺失场景。stamp 键在检查与写入时复用，避免重复计算指纹。
 
-    ``optimize`` 纳入 stamp 键：切换 ``--pyc-optimize`` 时强制重编译，避免旧的
-    optimize=0 .pyc 被运行时加载而无法享受 -OO 优化。
+    ``optimize`` 与 ``sp_optimize`` 均纳入 stamp 键：src 与 site-packages 分别用不同
+    optimize 级别编译（site-packages 用 ``min(optimize, 1)`` 保留 docstring，见
+    :func:`_precompile_pyc`），切换任一级别时强制重编译对应目录。老 stamp（无
+    ``sp_optimize`` 字段）自然失效触发全量重编译，避免旧的剥离 docstring 的 .pyc 被加载。
     """
     from fspack.analyzer import source_fingerprint
 
     src_fp = source_fingerprint(src_dir) if src_dir.is_dir() else ""
     sp_fp = _site_packages_fingerprint(site_packages)
-    return f"{src_fp}|{sp_fp}|{strip_py}|{optimize}"
+    return f"{src_fp}|{sp_fp}|{strip_py}|{optimize}|{sp_optimize}"
 
 
 def _precompile_pyc(  # noqa: PLR0913
@@ -399,23 +407,33 @@ def _precompile_pyc(  # noqa: PLR0913
     用 runtime 自身的 python 调用 ``compileall``，保证 ABI 一致。生成
     ``__pycache__/{name}.cpython-{ver}.pyc``，运行时默认加载。
 
-    ``optimize`` 控制 ``compileall -o`` 级别（CPython ``compile()`` 的 ``optimize``
+    ``optimize`` 控制 src 的 ``compileall -o`` 级别（CPython ``compile()`` 的 ``optimize``
     参数）：
 
     - ``0``（默认）：保留 docstring 与 assert，最大兼容性
     - ``1``：剥离 assert，保留 docstring（``-O``）
     - ``2``：剥离 assert 与 docstring（``-OO``），体积减少 5-15%，启动提速 5-10%
 
+    **site-packages 降级**：site-packages 始终用 ``min(optimize, 1)`` 编译，保留 docstring。
+    第三方库（numpy/pytorch/scipy 等）的 C 扩展常依赖 ``__doc__`` 为 str 的假设——
+    典型如 numpy ``_core/overrides.py`` 的 ``add_docstring(implementation,
+    dispatcher.__doc__)`` 在 ``__doc__`` 被 ``-OO`` 剥离为 None 时报错
+    ``TypeError: argument docstring of add_docstring should be a str``
+    （numpy issue #13248 长期未修复）。optimize=2 剥离 docstring 会触发此类兼容
+    问题，故 site-packages 降级到 1；optimize=0/1 时与 src 一致。
+
     参考 rimsort 等 Nuitka 打包产物：本机代码无 docstring 开销；fspack 通过
-    ``-o 2`` 编译可缩小与 Nuitka 的执行速度差距。注意 ``-OO`` 会移除 ``__doc__``
-    属性，依赖文档字符串的程序（如 Sphinx 运行时）应使用 ``0`` 或 ``1``。
+    对 src 用 ``-o 2`` 编译可缩小与 Nuitka 的执行速度差距（site-packages 因降级
+    保留 docstring，体积与启动略增，但避免兼容问题）。注意 ``-OO`` 会移除
+    ``__doc__`` 属性，依赖文档字符串的程序（如 Sphinx 运行时）应使用 ``0`` 或 ``1``。
 
     ``strip_py=True`` 时额外删除非 ``__init__.py`` 的 ``.py`` 源码（保留包标识，
     避免 PEP 420 命名空间包导致 ``.pyc`` 不被加载）。``entry_rels`` 中的入口文件
-    跳过剥离（入口包装器需 ``.py`` 存在以供 ``runpy`` 定位）。
+    跳过剥离（入口包装器需 ``.py`` 存在以供 ``runpy`` 定位）。src 与 site-packages
+    分别用各自的 optimize 级别迁移 ``.pyc`` 到 legacy 布局。
 
     重复构建时用 ``dist/.pyc_stamp``（src 指纹 + site-packages 指纹 + strip_py +
-    optimize）跳过 compileall，避免 subprocess 启动与文件遍历开销。
+    optimize + sp_optimize）跳过 compileall，避免 subprocess 启动与文件遍历开销。
     """
     if target is Platform.WINDOWS:
         py_exe = runtime_dir / "python.exe"
@@ -430,8 +448,13 @@ def _precompile_pyc(  # noqa: PLR0913
         stage.set_detail("runtime python 未就绪，跳过")
         return
 
+    # site-packages 降级到 min(optimize, 1)：保留 docstring 避免第三方库 C 扩展因
+    # __doc__ 为 None 报错（numpy add_docstring 等，issue #13248 长期未修复）。
+    # optimize=2 仅用于 src 享受 -OO 优化；optimize=0/1 时 sp_optimize 与 optimize 一致。
+    sp_optimize = min(optimize, 1)
+
     # stamp 检查：命中则跳过 compileall，stamp_key 留待未命中时写入
-    stamp_key = _pyc_stamp_key(src_dir, site_packages, strip_py, optimize)
+    stamp_key = _pyc_stamp_key(src_dir, site_packages, strip_py, optimize, sp_optimize)
     stamp = _pyc_stamp_path(dist_dir)
     try:
         if stamp.is_file() and stamp.read_text(encoding="utf-8") == stamp_key:
@@ -441,23 +464,26 @@ def _precompile_pyc(  # noqa: PLR0913
     except OSError:
         pass
 
-    targets = [d for d in (src_dir, site_packages) if d.is_dir()]
+    # 分别编译 src 与 site-packages：src 用 optimize，site-packages 用 sp_optimize。
+    # 拆分两次 compileall 调用（而非合并），因 compileall 仅接受单个 -o 级别，
+    # src 与 site-packages 需不同 optimize 级别。每次 subprocess 启动 ~50-100ms，
+    # 多一次调用可接受（构建期一次性开销）。
     compiled = 0
-    if targets:
-        # 合并多目录为单次 compileall 调用，减少 subprocess 启动开销（~50-100ms/次）
-        # compileall 支持多位置参数：python -m compileall dir1 dir2 -q -j 0 -o N
+    for d, opt in ((src_dir, optimize), (site_packages, sp_optimize)):
+        if not d.is_dir():
+            continue
         try:
             result = subprocess.run(
                 [
                     str(py_exe),
                     "-m",
                     "compileall",
-                    *[str(d) for d in targets],
+                    str(d),
                     "-q",
                     "-j",
                     "0",
                     "-o",
-                    str(optimize),
+                    str(opt),
                 ],
                 check=False,
                 capture_output=True,
@@ -475,21 +501,30 @@ def _precompile_pyc(  # noqa: PLR0913
             stage.set_detail(f"compileall 超时（{int(_COMPILEALL_TIMEOUT)}s），跳过")
             return
         if result.returncode != 0:
-            _logger.warning("compileall 失败: %s", result.stderr.strip())
+            _logger.warning("compileall 失败 (%s): %s", d, result.stderr.strip())
             stage.processed()
             # 编译失败不写 stamp：让下次构建重试，避免失败的编译被 stamp 跳过
             # 导致用户长期运行未编译的 .py。iter-128 引入（与 iter-127 超时分支
             # 一致的"失败不缓存"策略）。
-            stage.set_detail(f"compileall 失败（退出码 {result.returncode}），跳过 stamp")
+            stage.set_detail(f"compileall 失败（{d.name} 退出码 {result.returncode}），跳过 stamp")
             return
-        compiled = len(targets)
+        compiled += 1
+    if compiled:
         stage.processed()
 
     # 写 stamp（编译成功后、strip 前写入，存编译前的 src_fp）
     stamp.parent.mkdir(parents=True, exist_ok=True)
     stamp.write_text(stamp_key, encoding="utf-8")
 
-    stripped = _strip_py_sources(targets, entry_rels, optimize=optimize, py_version=py_version) if strip_py else 0
+    # 分别剥离 src 与 site-packages：entry_rels 仅对 src 生效（入口文件在 src 下），
+    # site-packages 无入口文件故传空集合。src 与 site-packages 用各自的 optimize
+    # 级别匹配 .pyc 文件名后缀（cpython-{ver}.opt-{N}.pyc）。
+    stripped = 0
+    if strip_py:
+        if src_dir.is_dir():
+            stripped += _strip_py_sources([src_dir], entry_rels, optimize=optimize, py_version=py_version)
+        if site_packages.is_dir():
+            stripped += _strip_py_sources([site_packages], frozenset(), optimize=sp_optimize, py_version=py_version)
     if stripped:
         stage.skip(stripped)
         stage.set_detail(f"编译 {compiled} 目录，剥离 {stripped} 个 .py")
