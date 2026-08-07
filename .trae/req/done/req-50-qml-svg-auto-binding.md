@@ -16,18 +16,18 @@ QML 项目打包后运行时 SVG 图像加载失败，定位为缺少 QtSvg 支�
 
 ## 需求清单
 
-- [ ] QML 项目（`Qml` 在闭包中）自动把 `Svg` 加入依赖闭包，使 `Qt5Svg.dll`/
+- [x] QML 项目（`Qml` 在闭包中）自动把 `Svg` 加入依赖闭包，使 `Qt5Svg.dll`/
       `Qt6Svg.dll` 随之保留，无需用户显式 `import QtSvg`
-- [ ] `plugins/imageformats/qsvg*.dll` 按 `Svg` 子模块选择性保留，消除"插件在
+- [x] `plugins/imageformats/qsvg*.dll` 按 `Svg` 子模块选择性保留，消除"插件在
       但依赖 DLL 不在"的矛盾；非 SVG 项目剥离 `qsvg.dll` 省体积
-- [ ] 其他 imageformats 插件（qjpeg/qgif/qico 等）仍始终保留，基础图片格式
+- [x] 其他 imageformats 插件（qjpeg/qgif/qico 等）仍始终保留，基础图片格式
       支持不受影响
-- [ ] 全套门禁通过（ruff/format/pyrefly/pytest/coverage ≥ 95%）
+- [x] 全套门禁通过（ruff/format/pyrefly/pytest/coverage ≥ 95%）
 
 ## 验收标准
 
-- `_qt_module_closure({"Qml"})` 结果含 `Svg`
-- `QtSlimSpec.expand_closure({"Qml"})` 结果含 `Svg`
+- `_qt_module_closure({"Qml"})` 结果不含 `Svg`（纯 C 层依赖，Qml 不链接 Svg）
+- `QtSlimSpec.expand_closure({"Qml"})` 结果含 `Svg`（运行时策略在此层注入）
 - `classify_entry("PySide2/plugins/imageformats/qsvg.dll", "PySide2", {"Svg"})`
   返回 `("shared", None)`
 - `classify_entry("PySide2/plugins/imageformats/qsvg.dll", "PySide2")`（无 Svg）

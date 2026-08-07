@@ -26,6 +26,7 @@ v0.2.7（未发布）
 - fix: ``fsp init`` 模板 ``requires-python`` 增加 Python 上限版本约束 ``<3.12``（PySide2 模板保持已有的 ``<3.11`` 不变），避免生成的项目在 3.12+ 环境因依赖兼容性问题无法安装
 - feat(pyside2-qml-dashboard): 新增 WSL 管理仪表盘 QML 示例项目
 - fix(slim): 补全 Qt QML/Quick 模块依赖映射，修复 QML 项目运行时 DLL 缺失
+- fix(slim): QML 项目自动绑定 QtSvg 支持。QML 无 ``import QtSvg`` 语法但 ``Image { source: "*.svg" }`` 通过 imageformats 插件加载 SVG，fspack 检测到 ``Qml`` 在闭包中时自动加入 ``Svg`` 子模块，使 ``Qt5Svg.dll``/``Qt6Svg.dll`` 与 ``plugins/imageformats/qsvg.dll`` 都保留，无需用户显式声明；非 QML 项目不用 SVG 时剥离 ``qsvg.dll`` 与 ``Qt5Svg.dll``，消除"插件保留但依赖 DLL 被剥离"的矛盾
 - fix(slim): 修复 PySide6 6.6+ 拆分 wheel（pyside6_essentials/addons）全量解压问题；``_detect_top_pkg`` 回退匹配使 QtSlimSpec 识别拆分 wheel 的 ``PySide6`` 顶层目录，共享主包 keep_subs；补全 WebEngineCore/WebEngineWidgets 的 Quick/QuickWidgets/PrintSupport 依赖与 Quick 的 OpenGL/QmlMeta 依赖（dumpbin 验证 C 层 DLL 导入表）
 - fix: Nuitka 编译用心跳线程与流式输出显示进度，避免长时间无输出被误认为卡死；``--jobs=1`` 限制 C 编译并行度
 - fix: ``tarfile.extractall`` 加 PEP 706 ``filter="data"`` 过滤器（Python 3.12+），消除 DeprecationWarning 并阻止路径穿越（runtime.py 与 nuitka.py 两处）

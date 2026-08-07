@@ -560,6 +560,22 @@ class TestQtModuleClosure:
         result = QtSlimSpec.expand_closure({"Widgets"})
         assert "Svg" not in result
 
+    def test_expand_closure_always_includes_widgets(self) -> None:
+        """QtWidgets 始终保留：任何 Qt 模块在闭包中时自动加入 Widgets.
+
+        回归测试：QML 的 Controls 1.x/Dialogs 插件 C 层依赖 Qt5Widgets.dll/
+        Qt6Widgets.dll，qml 目录整体保留须保留 Widgets 配套。即使纯 Core 项目
+        也保留 Widgets，避免 qml 插件加载失败。
+        """
+        from fspack.slim.qt import QtSlimSpec
+
+        # 仅 Core 也保留 Widgets
+        assert "Widgets" in QtSlimSpec.expand_closure({"Core"})
+        # 仅 Qml 也保留 Widgets
+        assert "Widgets" in QtSlimSpec.expand_closure({"Qml"})
+        # 空闭包不加 Widgets（无 Qt 模块在用）
+        assert "Widgets" not in QtSlimSpec.expand_closure(set())
+
 
 class TestQtDllClassification:
     """Qt5/Qt6*.dll 文件名与 Qt 子模块名归一化."""
@@ -722,9 +738,9 @@ class TestSlimUnpack:
         assert (dest / "PySide2" / "QtGui.pyd").is_file()
         assert (dest / "PySide2" / "Qt5Core.dll").is_file()
         assert (dest / "PySide2" / "Qt5Gui.dll").is_file()
-        # QtWidgets 未在保留集合中 → .pyd 与 Qt5Widgets.dll 均剥离
-        assert not (dest / "PySide2" / "QtWidgets.pyd").exists()
-        assert not (dest / "PySide2" / "Qt5Widgets.dll").exists()
+        # QtWidgets 始终保留（expand_closure 自动加入，Controls 1.x/Dialogs 插件依赖）
+        assert (dest / "PySide2" / "QtWidgets.pyd").is_file()
+        assert (dest / "PySide2" / "Qt5Widgets.dll").is_file()
 
     def test_unparseable_wheel_full_unpack(self, tmp_path: Path) -> None:
         whl = tmp_path / "wh" / "not-a-wheel.whl"
@@ -1511,19 +1527,22 @@ class TestSlimUnpack:
                 "PySide2/Qt5Core.dll": b"c",
                 "PySide2/Qt5Gui.dll": b"g",
                 "PySide2/Qt5Svg.dll": b"svg-dll",
+                "PySide2/Qt5Widgets.dll": b"widgets-dll",
                 "PySide2/plugins/imageformats/qsvg.dll": b"svg-plugin",
                 "PySide2/plugins/imageformats/qjpeg.dll": b"jpeg-plugin",
                 "PySide2/qml/QtQuick.2/qmldir": b"qml",
             },
         )
         dest = tmp_path / "sp"
-        # 仅声明 Qml/Quick，expand_closure 自动加入 Svg
+        # 仅声明 Qml/Quick，expand_closure 自动加入 Svg 与 Widgets
         count = slim_unpack([whl], dest, {"PySide2": frozenset({"QtCore", "Qml", "Quick"})})
         assert count == 1
         # Qml 触发 expand_closure 加入 Svg → Qt5Svg.dll 保留
         assert (dest / "PySide2" / "Qt5Svg.dll").is_file()
         # Svg 在闭包 → qsvg.dll 保留
         assert (dest / "PySide2" / "plugins" / "imageformats" / "qsvg.dll").is_file()
+        # QtWidgets 始终保留 → Qt5Widgets.dll 保留（Controls 1.x/Dialogs 插件依赖）
+        assert (dest / "PySide2" / "Qt5Widgets.dll").is_file()
         # 非 svg 插件仍始终保留
         assert (dest / "PySide2" / "plugins" / "imageformats" / "qjpeg.dll").is_file()
 

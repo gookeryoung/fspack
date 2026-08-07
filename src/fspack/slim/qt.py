@@ -94,12 +94,18 @@ class QtSlimSpec(SlimSpec):
         与基类约定不同：此处返回 ``subs`` 自身（已在 :func:`_qt_module_closure`
         中就地扩展），调用方据此直接 ``subs.update(...)`` 累积闭包结果。
 
-        QML 项目自动加入 ``Svg``：QML 无 ``import QtSvg`` 语法（QtSvg 是 C++
-        模块），但 ``Image { source: "*.svg" }`` 通过 imageformats 插件加载
-        SVG，``plugins/imageformats/qsvg.dll`` 保留需 ``Qt5Svg.dll``/
-        ``Qt6Svg.dll`` 配套。故 ``Qml`` 在闭包中时自动加入 ``Svg``，使 SVG
-        模块 DLL 随之保留，无需用户显式声明。
+        - **QtWidgets 始终保留**：QtWidgets 是 Qt GUI 基础依赖，QML 的
+          Controls 1.x/Dialogs 插件（``qtquickcontrolsplugin.dll``/
+          ``dialogplugin.dll``）C 层依赖 ``Qt5Widgets.dll``/``Qt6Widgets.dll``，
+          qml 目录整体保留须保留 Widgets 配套。故任何 Qt 模块在闭包中时自动
+          加入 ``Widgets``，避免插件保留但依赖 DLL 被剥离。
+        - **QML 项目自动加入 ``Svg``**：QML 无 ``import QtSvg`` 语法（QtSvg 是
+          C++ 模块），但 ``Image { source: "*.svg" }`` 通过 imageformats 插件
+          加载 SVG，``plugins/imageformats/qsvg.dll`` 保留需 ``Qt5Svg.dll``/
+          ``Qt6Svg.dll`` 配套。故 ``Qml`` 在闭包中时自动加入 ``Svg``。
         """
+        if subs:
+            subs.add("Widgets")
         if "Qml" in subs:
             subs.add("Svg")
         closure = _qt_module_closure(subs)
