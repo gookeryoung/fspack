@@ -315,7 +315,7 @@ fspack 内置多层性能优化：
 - **wheel 并行下载**：``uv`` 解析精确版本后用 ``ThreadPoolExecutor`` 并行
   ``pip download --no-deps``，失败包自动 sdist 回退构建
 - **Win7 兼容**：Python 3.9+ 注入 api-ms-win-core-path 替代 DLL，支持在 Win7/Win2008R2 运行
-- **国内镜像**：默认清华源 PyPI 与 embed python 镜像，``--mirror`` 切换（aliyun/huawei/tsinghua）
+- **国内镜像**：默认阿里云源 PyPI 与 embed python 镜像，``--mirror`` 切换（aliyun/huawei/tsinghua）
 - **彩色进度显示**：rich 驱动的步骤进度（> 准备运行时 / √ 构建完成），
   错误/警告/一般消息颜色区分，``-v`` 开启 DEBUG 日志
 

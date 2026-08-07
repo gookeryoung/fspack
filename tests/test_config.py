@@ -40,13 +40,13 @@ _EXAMPLES = ProjectTemplate.root_dir()
 # --- 镜像源测试 ---
 
 
-def test_default_mirror_is_tsinghua() -> None:
-    assert DEFAULT_MIRROR == "tsinghua"
+def test_default_mirror_is_aliyun() -> None:
+    assert DEFAULT_MIRROR == "aliyun"
     assert {"huawei", "aliyun", "tsinghua"} <= set(MIRRORS)
 
 
 def test_get_mirror_default() -> None:
-    assert get_mirror().name == "清华"
+    assert get_mirror().name == "阿里云"
 
 
 def test_get_mirror_by_name() -> None:

@@ -81,7 +81,7 @@ MIRRORS: dict[str, MirrorConfig] = {
     ),
 }
 
-DEFAULT_MIRROR = "tsinghua"
+DEFAULT_MIRROR = "aliyun"
 
 
 def get_mirror(name: str | None = None) -> MirrorConfig:

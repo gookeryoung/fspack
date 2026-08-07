@@ -43,7 +43,7 @@ def _add_build_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser
     # choices 刻意不写：避免 build_parser() 构建期导入 fspack.config（~20ms）；
     # 合法性由 _resolve_mirror 在执行期校验（退出码与 argparse 一致为 2）。
     # 镜像键列表与 config.models.MIRRORS 同步维护（有测试守护）。
-    p.add_argument("--mirror", default=None, metavar="MIRROR", help="镜像源（huawei/aliyun/tsinghua，默认 tsinghua）")
+    p.add_argument("--mirror", default=None, metavar="MIRROR", help="镜像源（huawei/aliyun/tsinghua，默认 aliyun）")
     p.add_argument("--py-version", default=None, help="embed python 版本，如 3.11.9")
     p.add_argument("--target", default=None, choices=["windows", "linux", "macos"], help="目标平台（默认当前平台）")
     p.add_argument(
@@ -283,7 +283,7 @@ def _add_package_subparser(sub: argparse._SubParsersAction[argparse.ArgumentPars
     """添加 package/p 子命令：生成发行包."""
     p = sub.add_parser("package", aliases=["p"], help="生成发行包")
     p.add_argument("project", nargs="?", default=".", help="项目目录")
-    p.add_argument("--mirror", default=None, metavar="MIRROR", help="镜像源（huawei/aliyun/tsinghua，默认 tsinghua）")
+    p.add_argument("--mirror", default=None, metavar="MIRROR", help="镜像源（huawei/aliyun/tsinghua，默认 aliyun）")
     p.add_argument("--py-version", default=None, help="embed python 版本，如 3.11.9")
     p.add_argument("--target", default=None, choices=["windows", "linux", "macos"], help="目标平台（默认当前平台）")
     p.add_argument(

@@ -249,7 +249,7 @@ fsp b [project] [--mirror <name>] [--py-version <ver>] [--target <platform>]
 | 选项 | 说明 |
 |------|------|
 | `project` | 项目目录，默认当前目录 |
-| `--mirror` | 镜像源（aliyun/huawei/tsinghua），默认 tsinghua |
+| `--mirror` | 镜像源（aliyun/huawei/tsinghua），默认 aliyun |
 | `--py-version` | Python 版本，默认 3.11.9（Windows）/ 3.11.10（Linux） |
 | `--target` | 目标平台（windows/linux），默认当前平台 |
 | `--keep-module` | 显式保留子模块（如 `PySide2.QtGui`），可重复 |
