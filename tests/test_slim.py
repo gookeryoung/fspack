@@ -1883,6 +1883,40 @@ class TestNumpySlimSpec:
         # numpy/tests/（复数）是真正的测试代码，仍剥离
         assert NumpySlimSpec.classify_entry("numpy/tests/test_core.py", "numpy", set()) == ("exclude", None)
 
+    def test_classify_numpy_core_tests_runtime_files_kept(self) -> None:
+        """numpy/_core/tests/ 下运行时必需文件不剥离（numpy.testing 运行时依赖）.
+
+        ``_natype.py`` 定义 pandas NA 兼容占位对象 pd_NA，
+        ``numpy.testing._private.utils`` 运行时执行
+        ``from numpy._core.tests._natype import pd_NA``；``_locales.py`` 同为
+        运行时可能依赖。两者不能被 :attr:`SlimSpec.NESTED_TEST_DIRS` 的
+        ``"tests"`` 嵌套规则误剥离，否则 scipy 等依赖 numpy 2.x 的项目打包后
+        ``import scipy`` 触发 ``numpy.testing`` 导入失败。
+        """
+        from fspack.slim.libs import NumpySlimSpec
+
+        # _natype.py / _locales.py 归 shared 保留，不被嵌套 tests 规则剥离
+        assert NumpySlimSpec.classify_entry("numpy/_core/tests/_natype.py", "numpy", set()) == ("shared", None)
+        assert NumpySlimSpec.classify_entry("numpy/_core/tests/_locales.py", "numpy", set()) == ("shared", None)
+
+    def test_classify_numpy_core_tests_real_tests_stripped(self) -> None:
+        """numpy/_core/tests/ 下 test_*.py 是真测试，仍剥离（仅豁免运行时必需文件）."""
+        from fspack.slim.libs import NumpySlimSpec
+
+        for filename in (
+            "test_numerictypes.py",
+            "test_multiarray.py",
+            "test_umath.py",
+            "test_overrides.py",
+        ):
+            assert NumpySlimSpec.classify_entry(f"numpy/_core/tests/{filename}", "numpy", set()) == ("exclude", None), (
+                f"{filename} 应当剥离"
+            )
+        # _core/tests/ 目录自身条目仍剥离
+        assert NumpySlimSpec.classify_entry("numpy/_core/tests/dummy.py", "numpy", set()) == ("exclude", None)
+        # _core/tests/ 嵌套子目录文件仍剥离
+        assert NumpySlimSpec.classify_entry("numpy/_core/tests/sub/deep.py", "numpy", set()) == ("exclude", None)
+
     def test_classify_top_pyd_as_submodule(self) -> None:
         """numpy 顶层 .pyd 分类：``_`` 前缀私有 C 扩展归 shared 始终保留。
 

@@ -50,6 +50,15 @@ class NumpySlimSpec(SlimSpec):
         }
     )
 
+    # numpy/_core/tests/ 下运行时必需的非测试文件（其余 test_*.py 是真测试，仍剥离）：
+    # - _natype.py：定义 pandas NA 兼容占位对象 pd_NA，numpy.testing._private.utils
+    #   运行时执行 ``from numpy._core.tests._natype import pd_NA``，是 numpy.testing
+    #   断言工具的运行时依赖，并非测试代码
+    # - _locales.py：运行时可能被依赖
+    # 见 :meth:`classify_entry` 豁免逻辑，避免被 :attr:`SlimSpec.NESTED_TEST_DIRS`
+    # 的 ``"tests"`` 嵌套规则误剥离
+    _CORE_TESTS_RUNTIME_FILES: frozenset[str] = frozenset({"_natype.py", "_locales.py"})
+
     @classmethod
     @override
     def match(cls, whl_pkg: str) -> bool:
@@ -64,15 +73,29 @@ class NumpySlimSpec(SlimSpec):
         top_pkg: str,
         keep_subs: set[str],
     ) -> tuple[str, str | None]:
-        """numpy 条目分类：保留 ``testing`` 子目录，其余委托 :meth:`_default_classify`。
+        """numpy 条目分类：保留 ``testing`` 子目录与 ``_core/tests/`` 运行时必需文件，
+        其余委托 :meth:`_default_classify`。
 
         ``numpy/testing/`` 是 ``numpy.testing`` 公共 API 模块（非测试代码），
         scipy 通过 ``from numpy import *`` 触发 ``numpy.__getattr__("testing")``
         导入，不能被 ``COMMON_EXCLUDE_SUBDIRS`` 的 ``"testing"`` 剥离。
         ``numpy/tests/``（复数）是真正的测试代码，仍由通用规则剥离。
+
+        ``numpy/_core/tests/`` 下的 ``_natype.py``/``_locales.py`` 是 numpy.testing
+        运行时依赖（``numpy.testing._private.utils`` 执行
+        ``from numpy._core.tests._natype import pd_NA``），不能被嵌套 tests 规则
+        （:attr:`SlimSpec.NESTED_TEST_DIRS`）剥离；同目录其余 ``test_*.py`` 是真测试，仍剥离。
         """
         parts = entry.split("/")
         if len(parts) >= 2 and parts[0] == top_pkg and parts[1] == "testing":
+            return ("shared", None)
+        if (
+            len(parts) == 4
+            and parts[0] == top_pkg
+            and parts[1] == "_core"
+            and parts[2] == "tests"
+            and parts[3] in cls._CORE_TESTS_RUNTIME_FILES
+        ):
             return ("shared", None)
         return cls._default_classify(entry, top_pkg, keep_subs, cls._EXTRA_EXCLUDES)
 
