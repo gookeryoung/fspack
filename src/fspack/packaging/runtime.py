@@ -147,10 +147,19 @@ def _validate_tar_member(member: tarfile.TarInfo) -> None:
     拒绝：绝对路径（Unix ``/`` 或 Windows 盘符 ``C:``）、路径穿越（``..`` 段）、
     设备文件（字符/块设备）。
 
-    对于符号链接/硬链接：仅拒绝 ``linkname`` 为绝对路径、Windows 盘符或路径穿越
-    的链接，允许相对路径且不穿越的安全链接（与 PEP 706 ``data`` filter 行为
-    一致）。python-build-standalone 官方 tarball 含 ``python/bin/2to3`` 等指向
-    ``python3.11`` 的相对符号链接，属合法条目不应拒绝。
+    对于符号链接/硬链接：仅拒绝 ``linkname`` 为绝对路径、Windows 盘符或解析后
+    逃逸 tarball 根目录的链接，允许相对路径且不穿越的安全链接（与 PEP 706
+    ``data`` filter 行为一致）。python-build-standalone 官方 tarball 含两类
+    合法相对链接：
+
+    1. ``python/bin/2to3 -> python3.11``（同目录别名，不含 ``..``）；
+    2. ``python/share/terminfo/1/1178 -> ../a/adm1178``（ncurses terminfo 数据库
+       按字母分目录组织，跨目录别名通过 ``..`` 指向父目录的兄弟子目录，
+       解析后为 ``python/share/terminfo/a/adm1178`` 仍在 tarball 根内）。
+
+    正确判断穿越：将 ``linkname`` 与 ``member.name`` 所在目录拼接后逐段规范化，
+    若 ``stack`` 为空时仍遇 ``..`` 即真正逃逸根目录；而非简单禁止 ``..`` 段
+    （会误拒 terminfo 别名）。
 
     Python 3.12+ 使用内置 ``tarfile.data_filter``，本函数仅在低版本生效。
     tarball 来自网络下载（镜像站），预检防止恶意条目逃逸 ``runtime_dir``。
@@ -168,8 +177,22 @@ def _validate_tar_member(member: tarfile.TarInfo) -> None:
             raise EmbedError(f"python-build-standalone tarball 含绝对路径链接: {member.name} -> {member.linkname}")
         if len(linkname) >= 2 and linkname[1] == ":":
             raise EmbedError(f"python-build-standalone tarball 含盘符链接: {member.name} -> {member.linkname}")
-        if ".." in linkname.split("/"):
-            raise EmbedError(f"python-build-standalone tarball 含路径穿越链接: {member.name} -> {member.linkname}")
+        # 解析链接目标是否逃逸 tarball 根目录：与 member.name 所在目录拼接后
+        # 逐段规范化（``.`` 跳过，``..`` 弹栈，空栈时仍遇 ``..`` 即穿越根）。
+        base = name.rsplit("/", 1)[0] if "/" in name else ""
+        combined = f"{base}/{linkname}" if base else linkname
+        stack: list[str] = []
+        for seg in combined.split("/"):
+            if seg in {"", "."}:
+                continue
+            if seg == "..":
+                if not stack:
+                    raise EmbedError(
+                        f"python-build-standalone tarball 含路径穿越链接: {member.name} -> {member.linkname}"
+                    )
+                stack.pop()
+            else:
+                stack.append(seg)
     if member.isdev():
         raise EmbedError(f"python-build-standalone tarball 含设备文件条目: {member.name}")
 

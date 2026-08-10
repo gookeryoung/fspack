@@ -528,6 +528,51 @@ def test_extract_standalone_allows_relative_hardlink() -> None:
     _validate_tar_member(info)  # 不应抛异常
 
 
+def test_extract_standalone_allows_terminfo_alias_symlink() -> None:
+    """含 ``..`` 但解析后仍在根内的相对符号链接应放行.
+
+    python-build-standalone 官方 tarball 含 ncurses terminfo 数据库别名链接
+    ``python/share/terminfo/1/1178 -> ../a/adm1178``：terminfo 按字母分目录
+    组织，跨目录别名通过 ``..`` 指向父目录的兄弟子目录，解析后为
+    ``python/share/terminfo/a/adm1178`` 仍在 tarball 根内。
+
+    早期实现简单禁止 ``..`` 段误拒此类链接，导致 Linux 打包失败。
+    """
+    from fspack.packaging.runtime import _validate_tar_member
+
+    info = tarfile.TarInfo(name="python/share/terminfo/1/1178")
+    info.type = tarfile.SYMTYPE
+    info.linkname = "../a/adm1178"
+    _validate_tar_member(info)  # 不应抛异常
+
+
+def test_extract_standalone_allows_terminfo_alias_hardlink() -> None:
+    """含 ``..`` 但解析后仍在根内的相对硬链接应放行（与符号链接语义一致）."""
+    from fspack.packaging.runtime import _validate_tar_member
+
+    info = tarfile.TarInfo(name="python/share/terminfo/1/1178")
+    info.type = tarfile.LNKTYPE
+    info.linkname = "../a/adm1178"
+    _validate_tar_member(info)  # 不应抛异常
+
+
+def test_extract_standalone_rejects_symlink_escaping_root() -> None:
+    """``..`` 段超过所在目录深度、真正逃逸根的符号链接应被拒绝.
+
+    与 terminfo 别名 ``python/share/terminfo/1/1178 -> ../a/adm1178`` 区分：
+    本用例 ``python/bin/evil -> ../../../etc/passwd``，从 ``python/bin`` 出发
+    仅 2 层深度，linkname 含 3 个 ``..``，第 3 个 ``..`` 时栈已空 →
+    真正逃逸根，应拒绝。
+    """
+    from fspack.packaging.runtime import _validate_tar_member
+
+    info = tarfile.TarInfo(name="python/bin/evil")
+    info.type = tarfile.SYMTYPE
+    info.linkname = "../../../etc/passwd"
+    with pytest.raises(EmbedError, match="路径穿越链接"):
+        _validate_tar_member(info)
+
+
 def test_extract_standalone_rejects_device_file(tmp_path: Path) -> None:
     """tar 含字符设备文件条目应被预检拒绝（防解压特殊文件触发内核行为）."""
     tar = tmp_path / "mal.tar.gz"
