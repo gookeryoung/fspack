@@ -16,6 +16,7 @@ import logging
 from pathlib import Path
 from typing import Sequence
 
+from fspack._util.fsutil import atomic_write_text
 from fspack._util.jsoncache import load_json_dict
 
 __all__ = [
@@ -87,9 +88,9 @@ def _save_deps_cache(cache_dir: Path, key: str, wheels: Sequence[Path]) -> None:
     """
     cache_file = cache_dir / f".deps-{key}.json"
     try:
-        cache_file.write_text(
+        atomic_write_text(
+            cache_file,
             json.dumps({"wheels": [w.name for w in wheels]}, ensure_ascii=False),
-            encoding="utf-8",
         )
     except OSError as e:
         _logger.warning("写入依赖解析缓存失败: %s", e)

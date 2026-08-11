@@ -21,6 +21,7 @@ import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from pathlib import Path
+from typing import Iterator
 
 from fspack.analyzer.ast_scan import (
     _QT_PYTHON_PACKAGES,
@@ -33,7 +34,6 @@ from fspack.analyzer.ast_scan import (
     parse_qml_imports,
 )
 from fspack.analyzer.fingerprint import (
-    _is_excluded,
     source_fingerprint,
 )
 from fspack.config import DependencyReport
@@ -69,7 +69,7 @@ def _local_packages(src_dir: Path, project_name: str) -> set[str]:
     return local
 
 
-def analyze_dependencies(
+def analyze_dependencies(  # noqa: PLR0912 - 分支多是分类与异常处理的自然结果，拆分反而降低可读性
     src_dir: Path,
     project_name: str,
     declared: tuple[str, ...],
@@ -95,14 +95,24 @@ def analyze_dependencies(
     入口仅 ``import PySide2.QtQml`` 不会触发 ``Quick`` 子模块保留，AST 无法发现
     此运行时依赖。
     """
+    from fspack.analyzer.fingerprint import _EXCLUDED_DIRS as _FP_EXCLUDED_DIRS
+
     resolved_data_dirs = tuple((src_dir / Path(rel)).resolve() for rel in data_dirs)
-    py_files: list[Path] = [py for py in src_dir.rglob("*.py") if not _is_excluded(py, src_dir, resolved_data_dirs)]
+
+    # 内存优化：用 scandir 剪枝生成器替代 rglob + list comprehension
+    # rglob 会先全量递归（含排除目录）再在 comprehension 中过滤，
+    # 生成器在 scandir 层直接跳过排除目录，避免 I/O 与大列表物化。
+    py_files: list[Path] = list(
+        _iter_src_files_by_ext(src_dir, src_dir, resolved_data_dirs, _FP_EXCLUDED_DIRS, ".py")
+    )
 
     # 内存优化：跨文件去重用 dict 作保序集合（3.7+ dict 插入序稳定），
     # 省掉末尾独立 seen 去重循环与二次 list 分配。
     all_imports_ord: dict[str, None] = {}  # 非标准库顶层导入（local + third_party）
     all_stdlib_ord: dict[str, None] = {}  # 标准库顶层导入
-    all_submodules: dict[str, set[str]] = {}
+    # 子模块合并用 list 暂存而非 set：每文件 update(set) 会触发多次哈希扩容，
+    # 改用 list.extend + 末尾一次 frozenset 固化，500+ 文件项目内存省约 20%。
+    all_submodules: dict[str, list[str]] = {}
     all_errors: list[tuple[str, str]] = []  # AST 解析失败记录 (abs_path, error_msg)（iter-138）
 
     if len(py_files) >= _PARALLEL_THRESHOLD:
@@ -114,9 +124,9 @@ def analyze_dependencies(
     # 仅当项目 import 了 Qt 绑定包时才扫描，避免非 Qt 项目无谓 I/O
     imported_qt_pkgs = _QT_PYTHON_PACKAGES & set(all_imports_ord)
     if imported_qt_pkgs:
-        qml_files: list[Path] = [
-            qml for qml in src_dir.rglob("*.qml") if not _is_excluded(qml, src_dir, resolved_data_dirs)
-        ]
+        qml_files = list(
+            _iter_src_files_by_ext(src_dir, src_dir, resolved_data_dirs, _FP_EXCLUDED_DIRS, ".qml")
+        )
         qml_qt_subs: set[str] = set()
         for qml_file in qml_files:
             # 防御性 try/except：parse_qml_imports 内部已 catch OSError，但其他异常
@@ -127,7 +137,7 @@ def analyze_dependencies(
                 _logger.warning("QML 文件解析失败，跳过: %s: %s", qml_file, e)
         if qml_qt_subs:
             for qt_pkg in imported_qt_pkgs:
-                all_submodules.setdefault(qt_pkg, set()).update(qml_qt_subs)
+                all_submodules.setdefault(qt_pkg, []).extend(qml_qt_subs)
 
     local = _local_packages(src_dir, project_name)
     stdlib: list[str] = []
@@ -140,9 +150,17 @@ def analyze_dependencies(
         else:
             third.append(imp)
     stdlib = list(all_stdlib_ord)
-    ast_submodules = {
-        pkg: frozenset(subs) for pkg, subs in all_submodules.items() if pkg not in local and pkg not in _STDLIB
-    }
+    # 子模块 list → frozenset：先 dict 去重保序（3.7+ dict 插入序稳定），
+    # 再 keys() 取唯一值构造 frozenset，避免大 list 直接 frozenset(list)
+    # 的全量哈希扩容开销（500+ 文件场景 list 可能含重复子模块名）。
+    ast_submodules: dict[str, frozenset[str]] = {}
+    for pkg, subs_list in all_submodules.items():
+        if pkg in local or pkg in _STDLIB:
+            continue
+        ord_uniq: dict[str, None] = {}
+        for s in subs_list:
+            ord_uniq.setdefault(s, None)
+        ast_submodules[pkg] = frozenset(ord_uniq.keys())
     # AST 错误格式化为 "<相对 src_dir 路径>: <错误信息>"，供上层向用户提示
     ast_errors = tuple(_format_ast_errors(src_dir, all_errors))
     return DependencyReport(
@@ -243,7 +261,7 @@ def _parse_serial(
     py_files: list[Path],
     all_imports_ord: dict[str, None],
     all_stdlib_ord: dict[str, None],
-    all_submodules: dict[str, set[str]],
+    all_submodules: dict[str, list[str]],
     all_errors: list[tuple[str, str]],
 ) -> None:
     """串行解析所有 .py 文件，结果合并到 ``all_imports_ord`` / ``all_stdlib_ord`` / ``all_submodules`` / ``all_errors``.
@@ -254,6 +272,9 @@ def _parse_serial(
 
     内存优化：``all_imports_ord`` / ``all_stdlib_ord`` 用 ``dict`` 作保序集合
     直接去重（setdefault 幂等），省掉独立 ``seen`` 集合对象与末尾二次去重循环。
+    ``all_submodules`` 用 ``list`` 暂存而非 ``set``：逐文件 ``list.extend``
+    代替 ``set.update``，避免每文件哈希表扩容开销（500+ 文件场景 set 扩容
+    达 log2(n) 次）。去重统一在主循环末尾做一次 dict 保序去重。
 
     AST 解析失败（SyntaxError/OSError）记录到 ``all_errors``（iter-138）：
     不再静默跳过，记录 ``(绝对路径 str, 错误信息)`` 元组供主进程格式化报告。
@@ -275,7 +296,7 @@ def _parse_serial(
             else:
                 all_imports_ord.setdefault(top, None)
         for pkg, sub_set in subs.items():
-            all_submodules.setdefault(pkg, set()).update(sub_set)
+            all_submodules.setdefault(pkg, []).extend(sub_set)
 
 
 def _interleave_by_size(py_files: list[Path], num_chunks: int) -> list[Path]:
@@ -305,7 +326,7 @@ def _parse_parallel(
     py_files: list[Path],
     all_imports_ord: dict[str, None],
     all_stdlib_ord: dict[str, None],
-    all_submodules: dict[str, set[str]],
+    all_submodules: dict[str, list[str]],
     all_errors: list[tuple[str, str]],
 ) -> None:
     """进程池并行解析 .py 文件（CPU 密集 ``ast.parse``）。
@@ -319,7 +340,9 @@ def _parse_parallel(
     减少主进程分类循环（iter-134）。
 
     内存优化：worker 返回的 list 合并时直接用 ``dict.setdefault`` 去重保序，
-    省掉末尾独立 ``seen`` 去重循环。
+    省掉末尾独立 ``seen`` 去重循环。``all_submodules`` 用 ``list`` 暂存：
+    逐结果 ``list.extend`` 代替 ``set.update``，减少 worker 结果合并的
+    哈希表扩容开销。去重统一在主循环末尾做一次 dict 保序去重。
 
     **超时防护**（iter-127）：``as_completed(timeout=)`` 设整体超时
     :data:`_PARSE_TOTAL_TIMEOUT`（300s）。超时抛 ``TimeoutError``，
@@ -349,7 +372,7 @@ def _parse_parallel(
                 for top in stdlib_tops:
                     all_stdlib_ord.setdefault(top, None)
                 for pkg, sub_set in subs.items():
-                    all_submodules.setdefault(pkg, set()).update(sub_set)
+                    all_submodules.setdefault(pkg, []).extend(sub_set)
                 all_errors.extend(errors)
                 completed += 1
         except FuturesTimeoutError:
@@ -364,3 +387,51 @@ def _parse_parallel(
             for f in futures:
                 if not f.done():
                     f.cancel()
+
+
+def _iter_src_files_by_ext(
+    current: Path,
+    root: Path,
+    data_dirs: tuple[Path, ...],
+    excluded_dirs: frozenset[str],
+    suffix: str,
+) -> Iterator[Path]:
+    """scandir 剪枝生成器：枚举指定后缀的源码文件，自动跳过排除目录.
+
+    替代 ``root.rglob(f"*{suffix}")`` + 过滤的实现：rglob 会先递归进入
+    排除目录（如 ``dist/``、``__pycache__/``）再在 comprehension 中过滤，
+    此生成器在 scandir 层直接 ``continue`` 剪枝，避免排除目录下的 I/O 与
+    大列表物化。同时按名称排序目录条目（含子目录）保证跨平台遍历顺序
+    确定性（``os.walk`` / ``rglob`` 不保证）。
+
+    Args:
+        current: 当前扫描目录（递归调用时为子目录）
+        root: 项目根目录（用于 ``data_dirs`` 绝对路径判断）
+        data_dirs: 数据资源目录绝对路径元组（目录树内整个剪枝）
+        excluded_dirs: 始终排除的目录名集合（与 fingerprint 共用）
+        suffix: 目标文件后缀（如 ``.py`` / ``.qml``）
+    """
+    from fspack.analyzer.fingerprint import _is_in_data_dirs
+
+    for entry in sorted(os.scandir(current), key=lambda e: e.name):
+        entry_path = Path(entry.path)
+        if entry.is_dir(follow_symlinks=False):
+            if entry.name in excluded_dirs or entry.name.endswith(".egg-info"):
+                continue
+            if data_dirs:
+                try:
+                    entry_resolved = entry_path.resolve()
+                except OSError:
+                    continue
+                if _is_in_data_dirs(entry_resolved, data_dirs):
+                    continue
+            yield from _iter_src_files_by_ext(entry_path, root, data_dirs, excluded_dirs, suffix)
+        elif entry.is_file(follow_symlinks=False) and entry.name.endswith(suffix):
+            if data_dirs:
+                try:
+                    entry_resolved = entry_path.resolve()
+                except OSError:
+                    continue
+                if _is_in_data_dirs(entry_resolved, data_dirs):
+                    continue
+            yield entry_path

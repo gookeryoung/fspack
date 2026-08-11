@@ -3861,7 +3861,7 @@ def test_parse_parallel_timeout_warns_on_slow_worker(
 
     all_imports_ord: dict[str, None] = {}
     all_stdlib_ord: dict[str, None] = {}
-    all_submodules: dict[str, set[str]] = {}
+    all_submodules: dict[str, list[str]] = {}
     all_errors: list[tuple[str, str]] = []
 
     with caplog.at_level(logging.WARNING, logger="fspack.analyzer"):
@@ -3894,7 +3894,7 @@ def test_parse_parallel_normal_completes_without_timeout(tmp_path: Path, monkeyp
 
     all_imports_ord: dict[str, None] = {}
     all_stdlib_ord: dict[str, None] = {}
-    all_submodules: dict[str, set[str]] = {}
+    all_submodules: dict[str, list[str]] = {}
     all_errors: list[tuple[str, str]] = []
 
     _parse_parallel(py_files, all_imports_ord, all_stdlib_ord, all_submodules, all_errors)
@@ -4097,7 +4097,7 @@ def test_parse_parallel_partial_timeout_aggregates_completed_results(
 
     all_imports_ord: dict[str, None] = {}
     all_stdlib_ord: dict[str, None] = {}
-    all_submodules: dict[str, set[str]] = {}
+    all_submodules: dict[str, list[str]] = {}
     all_errors: list[tuple[str, str]] = []
 
     _parse_parallel(py_files, all_imports_ord, all_stdlib_ord, all_submodules, all_errors)
