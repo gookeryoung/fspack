@@ -25,11 +25,15 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from fspack.config import MirrorConfig, is_offline, nuitka_version_for
 from fspack.exceptions import NuitkaError
 from fspack.platform import Platform
 from fspack.progress import StageRecorder
+
+if TYPE_CHECKING:
+    from fspack.packaging.nuitka.protocol import NuitkaCompilerProtocol
 
 # 共享 logger 名：测试用 caplog.at_level(..., logger="fspack.packaging.nuitka") 锁定
 _logger = logging.getLogger("fspack.packaging.nuitka")
@@ -212,7 +216,7 @@ class NuitkaEnv:
         return result.returncode == 0
 
     @classmethod
-    def _ensure_pip_available(cls, python_exe: str) -> None:
+    def _ensure_pip_available(cls: type[NuitkaCompilerProtocol], python_exe: str) -> None:
         """确保构建机 python 有 pip 模块，缺则两轮自救，仍缺才 raise.
 
         nuitka 4.x 在 PyPI 只发布 sdist，需要 pip 从 sdist 构建_wheel 再解压。
@@ -246,7 +250,7 @@ class NuitkaEnv:
 
     @classmethod
     def ensure_env(
-        cls,
+        cls: type[NuitkaCompilerProtocol],
         cache_root: Path,
         py_version: str,
         target: Platform,

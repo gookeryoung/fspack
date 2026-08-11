@@ -69,7 +69,7 @@ def _local_packages(src_dir: Path, project_name: str) -> set[str]:
     return local
 
 
-def analyze_dependencies(  # noqa: PLR0912
+def analyze_dependencies(
     src_dir: Path,
     project_name: str,
     declared: tuple[str, ...],
@@ -98,19 +98,21 @@ def analyze_dependencies(  # noqa: PLR0912
     resolved_data_dirs = tuple((src_dir / Path(rel)).resolve() for rel in data_dirs)
     py_files: list[Path] = [py for py in src_dir.rglob("*.py") if not _is_excluded(py, src_dir, resolved_data_dirs)]
 
-    all_imports: list[str] = []  # 非标准库顶层导入（local + third_party）
-    all_stdlib: list[str] = []  # 标准库顶层导入（worker/串行已分离）
+    # 内存优化：跨文件去重用 dict 作保序集合（3.7+ dict 插入序稳定），
+    # 省掉末尾独立 seen 去重循环与二次 list 分配。
+    all_imports_ord: dict[str, None] = {}  # 非标准库顶层导入（local + third_party）
+    all_stdlib_ord: dict[str, None] = {}  # 标准库顶层导入
     all_submodules: dict[str, set[str]] = {}
     all_errors: list[tuple[str, str]] = []  # AST 解析失败记录 (abs_path, error_msg)（iter-138）
 
     if len(py_files) >= _PARALLEL_THRESHOLD:
-        _parse_parallel(py_files, all_imports, all_stdlib, all_submodules, all_errors)
+        _parse_parallel(py_files, all_imports_ord, all_stdlib_ord, all_submodules, all_errors)
     else:
-        _parse_serial(py_files, all_imports, all_stdlib, all_submodules, all_errors)
+        _parse_serial(py_files, all_imports_ord, all_stdlib_ord, all_submodules, all_errors)
 
     # 扫描 QML 文件提取 QtQuick 等 QML 运行时依赖（AST 无法发现）
     # 仅当项目 import 了 Qt 绑定包时才扫描，避免非 Qt 项目无谓 I/O
-    imported_qt_pkgs = _QT_PYTHON_PACKAGES & set(all_imports)
+    imported_qt_pkgs = _QT_PYTHON_PACKAGES & set(all_imports_ord)
     if imported_qt_pkgs:
         qml_files: list[Path] = [
             qml for qml in src_dir.rglob("*.qml") if not _is_excluded(qml, src_dir, resolved_data_dirs)
@@ -131,23 +133,13 @@ def analyze_dependencies(  # noqa: PLR0912
     stdlib: list[str] = []
     third: list[str] = []
     local_imports: list[str] = []
-    seen: set[str] = set()
-    # all_imports 已由 worker/串行分离掉标准库，此处仅需区分 local vs third_party
-    for imp in all_imports:
-        if imp in seen:
-            continue
-        seen.add(imp)
+    # all_imports/all_stdlib 已在收集阶段通过 dict 去重保序，此处无需二次 seen 去重
+    for imp in all_imports_ord:
         if imp in local:
             local_imports.append(imp)
         else:
             third.append(imp)
-    # 标准库导入去重保序（worker/串行已分离，主进程无需再分类）
-    seen_std: set[str] = set()
-    for imp in all_stdlib:
-        if imp in seen_std:
-            continue
-        seen_std.add(imp)
-        stdlib.append(imp)
+    stdlib = list(all_stdlib_ord)
     ast_submodules = {
         pkg: frozenset(subs) for pkg, subs in all_submodules.items() if pkg not in local and pkg not in _STDLIB
     }
@@ -249,16 +241,19 @@ def _parse_file_worker(py: str) -> tuple[list[str], list[str], dict[str, frozens
 
 def _parse_serial(
     py_files: list[Path],
-    all_imports: list[str],
-    all_stdlib: list[str],
+    all_imports_ord: dict[str, None],
+    all_stdlib_ord: dict[str, None],
     all_submodules: dict[str, set[str]],
     all_errors: list[tuple[str, str]],
 ) -> None:
-    """串行解析所有 .py 文件，结果合并到 ``all_imports`` / ``all_stdlib`` / ``all_submodules`` / ``all_errors``.
+    """串行解析所有 .py 文件，结果合并到 ``all_imports_ord`` / ``all_stdlib_ord`` / ``all_submodules`` / ``all_errors``.
 
-    用模块级 :data:`_STDLIB` 将顶层导入分离为标准库（``all_stdlib``）与非标准库
-    （``all_imports``），与 :func:`_parse_file_worker` 的 worker 分离逻辑一致，
+    用模块级 :data:`_STDLIB` 将顶层导入分离为标准库（``all_stdlib_ord``）与非标准库
+    （``all_imports_ord``），与 :func:`_parse_file_worker` 的 worker 分离逻辑一致，
     使主进程分类循环仅需区分 local vs third_party。
+
+    内存优化：``all_imports_ord`` / ``all_stdlib_ord`` 用 ``dict`` 作保序集合
+    直接去重（setdefault 幂等），省掉独立 ``seen`` 集合对象与末尾二次去重循环。
 
     AST 解析失败（SyntaxError/OSError）记录到 ``all_errors``（iter-138）：
     不再静默跳过，记录 ``(绝对路径 str, 错误信息)`` 元组供主进程格式化报告。
@@ -276,9 +271,9 @@ def _parse_serial(
         tops, subs = collect_imports_and_submodules(tree)
         for top in tops:
             if top in _STDLIB:
-                all_stdlib.append(top)
+                all_stdlib_ord.setdefault(top, None)
             else:
-                all_imports.append(top)
+                all_imports_ord.setdefault(top, None)
         for pkg, sub_set in subs.items():
             all_submodules.setdefault(pkg, set()).update(sub_set)
 
@@ -308,8 +303,8 @@ def _interleave_by_size(py_files: list[Path], num_chunks: int) -> list[Path]:
 
 def _parse_parallel(
     py_files: list[Path],
-    all_imports: list[str],
-    all_stdlib: list[str],
+    all_imports_ord: dict[str, None],
+    all_stdlib_ord: dict[str, None],
     all_submodules: dict[str, set[str]],
     all_errors: list[tuple[str, str]],
 ) -> None:
@@ -322,6 +317,9 @@ def _parse_parallel(
     ``ProcessPoolExecutor`` 用 ``initializer=_init_parse_worker`` 在 worker
     启动时预加载 :data:`_STDLIB` 到 worker 全局，worker 内分离标准库导入，
     减少主进程分类循环（iter-134）。
+
+    内存优化：worker 返回的 list 合并时直接用 ``dict.setdefault`` 去重保序，
+    省掉末尾独立 ``seen`` 去重循环。
 
     **超时防护**（iter-127）：``as_completed(timeout=)`` 设整体超时
     :data:`_PARSE_TOTAL_TIMEOUT`（300s）。超时抛 ``TimeoutError``，
@@ -346,8 +344,10 @@ def _parse_parallel(
         try:
             for future in as_completed(futures, timeout=_PARSE_TOTAL_TIMEOUT):
                 non_stdlib_tops, stdlib_tops, subs, errors = future.result()
-                all_imports.extend(non_stdlib_tops)
-                all_stdlib.extend(stdlib_tops)
+                for top in non_stdlib_tops:
+                    all_imports_ord.setdefault(top, None)
+                for top in stdlib_tops:
+                    all_stdlib_ord.setdefault(top, None)
                 for pkg, sub_set in subs.items():
                     all_submodules.setdefault(pkg, set()).update(sub_set)
                 all_errors.extend(errors)
@@ -358,7 +358,7 @@ def _parse_parallel(
                 "AST 并行解析超时（%ds），%d/%d 个文件未完成，依赖分析可能不完整",
                 int(_PARSE_TOTAL_TIMEOUT),
                 pending,
-                len(py_files),
+                len(futures),
             )
             # 取消未完成的 future（已运行的无法取消，避免新任务启动）
             for f in futures:

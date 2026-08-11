@@ -27,10 +27,14 @@ import sys
 import tarfile
 import zipfile
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from fspack.config import is_offline
 from fspack.platform import Platform
 from fspack.progress import StageRecorder
+
+if TYPE_CHECKING:
+    from fspack.packaging.nuitka.protocol import NuitkaCompilerProtocol
 
 # 共享 logger 名：测试用 caplog.at_level(..., logger="fspack.packaging.nuitka") 锁定
 _logger = logging.getLogger("fspack.packaging.nuitka")
@@ -58,7 +62,7 @@ class NuitkaCcache:
 
     @classmethod
     def _ensure_ccache(  # noqa: PLR0911
-        cls,
+        cls: type[NuitkaCompilerProtocol],
         cache_root: Path,
         target: Platform,
         stage: StageRecorder,

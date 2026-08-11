@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import enum
 import fnmatch
+import functools
 import logging
 import re
 from dataclasses import dataclass, field, replace
@@ -168,6 +169,9 @@ class BuildDefaults:
     # 关闭构建结束后的 SBOM 生成：默认输出 SPDX 2.3 兼容 JSON
     # 到 dist/release/<name>-<version>-sbom.json
     no_sbom: bool | None = None
+    # 关闭构建结束后的 manifest 生成：默认输出产物清单 JSON
+    # 到 dist/release/<name>-<version>-manifest.json
+    no_manifest: bool | None = None
     # Windows 代码签名证书路径：未指定时跳过 signtool 签名。
     # 配置层仅作为 CLI --sign-exe-certificate 的回退默认值
     sign_exe_certificate: str | None = None
@@ -221,6 +225,28 @@ class SlimRules:
 DEFAULT_SLIM_RULES = SlimRules()
 
 
+@functools.lru_cache(maxsize=64)
+def _project_info_from_dir_cached(
+    resolved_dir_str: str,
+    py_version: str | None,
+    mtime_ns: int,  # noqa: ARG001 - 作为 lru_cache 失效键，函数体内无需访问
+) -> ProjectInfo:
+    """按 (项目目录, py_version, pyproject.toml mtime) 缓存 ProjectInfo.
+
+    lru_cache 不缓存异常（parse_project 抛错时不会污染缓存），同一目录
+    pyproject.toml 未变动时命中缓存，避免二次解析 TOML / AST 扫描。
+    maxsize=64 应对 doctor/bench 模式下多模板项目批量构建场景。
+    """
+    from fspack.config.parsing import parse_project
+
+    return parse_project(Path(resolved_dir_str), py_version)
+
+
+def _clear_project_info_cache() -> None:
+    """清空 ProjectInfo 缓存（测试/调试/变更 pyproject 后手动失效）."""
+    _project_info_from_dir_cached.cache_clear()
+
+
 @dataclass(frozen=True)
 class ProjectInfo:
     """解析后的项目元信息."""
@@ -260,11 +286,19 @@ class ProjectInfo:
 
     @classmethod
     def from_dir(cls, project_dir: Path, py_version: str | None = None) -> ProjectInfo:
-        """从项目目录解析 pyproject.toml 并构造实例（委托 :func:`parse_project`）."""
-        # 延迟导入打破 config.models ↔ config.parsing 循环依赖
-        from fspack.config.parsing import parse_project
+        """从项目目录解析 pyproject.toml 并构造实例（按 mtime 缓存）.
 
-        return parse_project(project_dir, py_version)
+        读取 ``pyproject.toml`` 的 ``st_mtime_ns`` 作为失效键：同一目录
+        文件未变动时直接命中 lru_cache，避免重复 TOML 解析 + AST 扫描。
+        文件不存在时 ``mtime_ns=0``，交给 :func:`parse_project` 抛
+        :class:`ProjectError`（lru_cache 不缓存异常）。
+        """
+        resolved = Path(project_dir).resolve()
+        try:
+            mtime_ns = (resolved / "pyproject.toml").stat().st_mtime_ns
+        except OSError:
+            mtime_ns = 0
+        return _project_info_from_dir_cached(str(resolved), py_version, mtime_ns)
 
     @property
     def exe_name(self) -> str:
@@ -409,6 +443,8 @@ class BuildOptions:
     require_hashes: bool = False
     # 关闭构建结束后的 SBOM 生成：默认输出 SPDX 2.3 兼容 JSON
     no_sbom: bool = False
+    # 关闭构建结束后的 manifest 生成：默认输出产物清单 JSON
+    no_manifest: bool = False
     # Windows 代码签名证书路径：非 None 时调用 signtool 签名 exe 与安装包
     sign_exe_certificate: Path | None = None
     # Windows 代码签名证书密码：与 sign_exe_certificate 配套
@@ -449,6 +485,7 @@ def build_options_from_defaults(defaults: BuildDefaults) -> BuildOptions:
         lazy_imports=defaults.lazy_imports,
         require_hashes=defaults.require_hashes if defaults.require_hashes is not None else base.require_hashes,
         no_sbom=defaults.no_sbom if defaults.no_sbom is not None else base.no_sbom,
+        no_manifest=defaults.no_manifest if defaults.no_manifest is not None else base.no_manifest,
         sign_exe_certificate=(
             Path(defaults.sign_exe_certificate) if defaults.sign_exe_certificate else base.sign_exe_certificate
         ),

@@ -1,13 +1,15 @@
-"""构建流水线编排入口：``build`` 主入口 + 阶段函数 re-export + 公共辅助.
+"""构建流水线编排入口：``build`` 主入口 + 重导出.
 
-本模块从 :mod:`fspack.builder` 抽离，``builder.py`` 通过 re-export 保持公开 API 不变。
-按职责拆分到两个模块：
+按职责拆分到子模块（公开 API / 测试 patch 路径保持不变）：
 
-- :mod:`fspack.packaging.pipeline`（本模块）：``build``/``_execute_build``/``resolve_project_info``
-  /``clean_dist``/``_print_build_plan`` 入口与编排，``_KEEP_NSI`` 常量
-- :mod:`fspack.packaging.pipeline.stages`：阶段函数实现（``_prepare_runtime``/
-  ``_analyze_dependencies``/``_download_dependencies``/``_compile_user_sources``/
-  ``_build_entry_loaders``）+ ``BuildContext`` + 依赖缓存 + icon 解析 + wheel 解压
+- :mod:`fspack.packaging.pipeline.stages`（re-export 门面）：阶段函数实现，
+  继续拆分为 :mod:`context` / :mod:`runtime_stage` / :mod:`deps_stage` /
+  :mod:`compile_stage` 四个聚焦模块
+- :mod:`fspack.packaging.pipeline.dist_helpers`：dist 半成品检测、失败诊断
+  标记、clean_dist 清理（180+ 行）
+- :mod:`fspack.packaging.pipeline.plan_printer`：dry-run 打包计划打印（120+ 行）
+- 本模块：``build`` / ``_execute_build`` / ``resolve_project_info`` 主编排 +
+  显式导入运行时依赖用于 monkeypatch 路径兼容
 
 显式 ``import`` 运行时依赖（``write_pth``/``copy_source``/``compile_loader``/
 ``download_embed``/``extract_embed``/``download_standalone``/``extract_standalone``/
@@ -37,11 +39,37 @@ from fspack.config import (
     embed_cache_dir,
     resolve_py_version,
 )
-from fspack.packaging.loader import compile_loader  # noqa: F401
-from fspack.packaging.log_file import LogFormat, setup_log_file, teardown_log_file
 
-# re-export 阶段函数与 BuildContext：保持 fspack.packaging.pipeline.<fn> patch 路径兼容
-from fspack.packaging.pipeline.stages import (
+# ---------------------------------------------------------------------------
+# dist 辅助 + 计划打印（从独立子模块导入，名字绑定到本模块供 monkeypatch）
+# ---------------------------------------------------------------------------
+from fspack.packaging.pipeline.dist_helpers import (
+    _BUILD_FAILED,
+    _KEEP_NSI,
+    _NUITKA_STAMP,
+    _PYC_STAMP,
+    _clean_dist_dir,
+    _handle_dist_incomplete,
+    _load_build_failure,
+    _remove_build_failure,
+    _save_build_failure,
+    clean_dist,
+)
+
+# _print_build_plan 延迟加载：避免顶层加载 fspack.console 模块（rich 控制台），
+# import fspack.builder 时不应触发 console / profile 模块加载。
+# 通过 __getattr__ 惰性解析 + build() 内 dry-run 分支首次使用时绑定全局。
+_PRINT_BUILD_PLAN_NAME = "_print_build_plan"
+
+# ---------------------------------------------------------------------------
+# stages 层阶段函数 re-export：保持 fspack.packaging.pipeline.<fn> patch 路径兼容
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# 显式导入运行时依赖：兼容测试 monkeypatch.setattr("fspack.packaging.pipeline.<func>", ...)
+# ---------------------------------------------------------------------------
+from fspack.packaging.loader import compile_loader  # noqa: E402,F401
+from fspack.packaging.log_file import LogFormat, setup_log_file, teardown_log_file  # noqa: E402
+from fspack.packaging.pipeline.stages import (  # noqa: E402
     _DEFAULT_ICON,  # noqa: F401
     BuildContext,
     _analyze_binary_dependencies,
@@ -64,18 +92,16 @@ from fspack.packaging.pipeline.stages import (
     fspack_wheel_cache_dir,
     unpack_wheels,
 )
-
-# 显式导入运行时依赖：兼容测试 monkeypatch.setattr("fspack.packaging.pipeline.<func>", ...)
-from fspack.packaging.runtime import (  # noqa: F401
+from fspack.packaging.runtime import (  # noqa: E402,F401
     download_embed,
     download_standalone,
     extract_embed,
     extract_standalone,
     write_pth,
 )
-from fspack.packaging.sync import copy_source
-from fspack.packaging.wheels import download_wheels  # noqa: F401
-from fspack.platform import Platform, detect_platform
+from fspack.packaging.sync import copy_source  # noqa: E402
+from fspack.packaging.wheels import download_wheels  # noqa: E402,F401
+from fspack.platform import Platform, detect_platform  # noqa: E402
 
 if TYPE_CHECKING:
     # BuildTracker 仅用于 _execute_build 签名类型注解（``from __future__ import
@@ -88,7 +114,14 @@ if TYPE_CHECKING:
     from fspack.progress import BuildTracker
 
 __all__ = [
+    "_BUILD_FAILED",
+    "_KEEP_NSI",
+    "_NUITKA_STAMP",
+    "_PYC_STAMP",
     "BuildContext",
+    "DependencyReport",
+    "_clean_dist_dir",
+    "_load_build_failure",
     "build",
     "clean_dist",
     "default_icon_path",
@@ -183,7 +216,13 @@ def build(  # noqa: PLR0913
     target = target or detect_platform()
     dist = dist_dir or project_dir / "dist"
     cache = embed_cache or embed_cache_dir()
-    cfg = BuildConfig(project_dir=project_dir, dist_dir=dist, embed_cache_dir=cache, mirror=mirror, target=target)
+    cfg = BuildConfig(
+        project_dir=project_dir,
+        dist_dir=dist,
+        embed_cache_dir=cache,
+        mirror=mirror,
+        target=target,
+    )
 
     # dist 半成品检测：dist 已存在且含构建产物但缺少 stamp 文件，或存在
     # .build_failed 标记时，按 auto_clean 决定自动清理或告警。
@@ -256,6 +295,11 @@ def _execute_build(  # noqa: PLR0912, PLR0913
 
     由 :func:`build` 调用，分离日志文件生命周期管理（``try/finally``）与
     构建逻辑，便于阅读与维护。
+
+    注意：本函数内部调用的阶段函数与辅助（``_prepare_runtime``、
+    ``compile_loader``、``write_pth`` 等）都通过本模块**全局名字**解析，因此
+    测试 monkeypatch ``fspack.packaging.pipeline.*`` 路径时能生效。切勿改为
+    从子模块直接导入绑定到局部名字，否则 patch 不生效。
     """
     with tracker.stage("解析项目") as st:
         info = resolve_project_info(project_dir, py_version, target)
@@ -277,8 +321,12 @@ def _execute_build(  # noqa: PLR0912, PLR0913
 
     # dry-run 模式：仅解析项目 + 分析依赖，打印计划后返回
     if dry_run:
+        # 首次使用时才加载 plan_printer（触发 fspack.console rich 导入）
+        from fspack.packaging.pipeline.plan_printer import _print_build_plan as _pbp
+
+        globals()[_PRINT_BUILD_PLAN_NAME] = _pbp
         report = _analyze_dependencies(ctx, save_cache=False)
-        _print_build_plan(ctx, report)
+        _pbp(ctx, report)
         return info
 
     site_packages = _prepare_runtime(ctx)
@@ -352,6 +400,21 @@ def _execute_build(  # noqa: PLR0912, PLR0913
                 _logger.warning("SBOM 生成失败，跳过: %s", e)
                 st.set_detail("生成失败")
 
+    # manifest 产物清单生成（默认启用，--no-manifest 关闭）：扫描 dist 下
+    # 所有文件按分类记录大小/SHA256，生成 JSON 到 dist/release/。版本间
+    # 可通过 ``fsp manifest diff`` 对比差异。失败不阻断构建。
+    if not opts.no_manifest:
+        from fspack.packaging.manifest import generate_manifest
+
+        with tracker.stage("生成产物清单") as st:
+            try:
+                manifest_path = generate_manifest(cfg.dist_dir, info)
+                st.processed(1)
+                st.set_detail(manifest_path.name)
+            except OSError as e:
+                _logger.warning("manifest 生成失败，跳过: %s", e)
+                st.set_detail("生成失败")
+
     # 延迟导入：console 触发 fspack.console 加载（含 rich.console/rich.logging/
     # rich.theme ~17ms）。仅在构建完成输出 summary 时加载。注意 _execute_build
     # 内 spinner（L277）已连锁加载 fspack.console，此 import 为显式自包含。
@@ -371,316 +434,11 @@ def _execute_build(  # noqa: PLR0912, PLR0913
     return info
 
 
-# 清理 dist 时保留的 NSIS 脚本文件名（便于改代码后重新打包分发）
-_KEEP_NSI = "installer.nsi"
+def __getattr__(name: str):
+    """模块级惰性属性：``_print_build_plan`` 仅在首次访问时导入 plan_printer."""
+    if name == _PRINT_BUILD_PLAN_NAME:
+        from fspack.packaging.pipeline.plan_printer import _print_build_plan
 
-# 构建失败标记文件：构建异常时写入，下次 fsp b 检测到时提示用户
-_BUILD_FAILED = ".build_failed"
-
-# 编译阶段产出的 stamp 文件名：存在即说明上次构建至少完成到编译阶段
-_PYC_STAMP = ".pyc_stamp"
-_NUITKA_STAMP = ".nuitka_compile_stamp"
-
-
-def _has_dist_artifacts(dist_dir: Path) -> bool:
-    """dist 目录是否含构建产物（子目录或 .exe，排除 NSI/诊断文件）."""
-    return any(
-        p.name not in (_KEEP_NSI, _BUILD_FAILED) and (p.is_dir() or p.suffix == ".exe") for p in dist_dir.iterdir()
-    )
-
-
-def _has_build_stamps(dist_dir: Path) -> bool:
-    """dist 目录是否含编译 stamp 文件（说明上次构建至少完成到编译阶段）."""
-    return (dist_dir / _PYC_STAMP).is_file() or (dist_dir / _NUITKA_STAMP).is_file()
-
-
-def _handle_dist_incomplete(dist_dir: Path, auto_clean: bool) -> None:
-    """检测 dist 半成品并按 auto_clean 决定自动清理或告警.
-
-    iter-140 引入：替代 iter-128 的 ``_warn_dist_incomplete``，扩展支持
-    ``.build_failed`` 标记检测与 ``--auto-clean`` 自动清理。
-
-    检测条件（任一即视为半成品）：
-
-    - dist 含构建产物但缺少编译 stamp 文件（中断/失败的构建残留）
-    - dist 含 ``.build_failed`` 标记（上次构建异常退出）
-
-    ``auto_clean=True`` 时调用 :func:`clean_dist` 清空 dist（不保留诊断文件，
-    全新开始）。``auto_clean=False`` 时仅告警，提示用户 ``fsp c`` 或
-    ``fsp b --auto-clean``。
-
-    ``.build_failed`` 存在时额外输出失败阶段与错误信息，便于用户定位问题。
-    """
-    if not dist_dir.is_dir():
-        return
-
-    failed_info = _load_build_failure(dist_dir)
-    has_artifacts = _has_dist_artifacts(dist_dir)
-    has_stamps = _has_build_stamps(dist_dir)
-
-    if failed_info:
-        from fspack.console import console
-
-        stage = failed_info.get("stage", "未知")
-        error = failed_info.get("error", "")
-        timestamp = failed_info.get("timestamp", "")
-        console.warn(f"上次构建失败（{timestamp}）：阶段 [{stage}]")
-        if error:
-            console.rich.print(f"  错误: {error}")
-
-    is_incomplete = (has_artifacts and not has_stamps) or failed_info is not None
-    if not is_incomplete:
-        return
-
-    if auto_clean:
-        _logger.info("auto-clean: 清理 dist 残留: %s", dist_dir)
-        _clean_dist_dir(dist_dir, keep_diagnostics=False)
-    else:
-        _logger.warning(
-            "dist 目录含上次构建的残留: %s，建议执行 `fsp c` 清理或 `fsp b --auto-clean` 自动清理后重新构建。",
-            dist_dir,
-        )
-
-
-def _save_build_failure(dist_dir: Path, tracker: BuildTracker, exc: Exception) -> None:
-    """构建异常时写入 ``dist/.build_failed`` JSON 记录失败信息.
-
-    iter-140 引入：供下次 ``fsp b`` 检测并提示用户。记录内容：
-
-    - ``stage``：失败时最后完成的阶段名（从 ``tracker.records`` 取末尾）
-    - ``error``：异常类型与消息（截断到 500 字符避免文件过大）
-    - ``timestamp``：ISO 格式时间戳
-
-    dist 目录不存在时跳过（构建可能在创建 dist 前失败）。写入失败 best-effort
-    （OSError 不阻断异常传播）。
-    """
-    import json
-    from datetime import datetime
-
-    from fspack._util.fsutil import atomic_write_text
-
-    if not dist_dir.is_dir():
-        return
-
-    records = tracker.records
-    stage = records[-1].name if records else "未知"
-    error_msg = f"{type(exc).__name__}: {exc}"
-    if len(error_msg) > 500:
-        error_msg = error_msg[:497] + "..."
-
-    data = {
-        "stage": stage,
-        "error": error_msg,
-        "timestamp": datetime.now().isoformat(timespec="seconds"),
-    }
-    try:
-        atomic_write_text(dist_dir / _BUILD_FAILED, json.dumps(data, ensure_ascii=False, indent=2))
-    except OSError as e:
-        _logger.warning("写入 .build_failed 失败: %s", e)
-
-
-def _load_build_failure(dist_dir: Path) -> dict[str, str] | None:
-    """读取 ``dist/.build_failed`` JSON，返回失败信息 dict.
-
-    文件不存在或解析失败返回 None（不阻断构建流程）。读取 → 解析 → 根 dict
-    校验的公共骨架委托 :func:`fspack._util.jsoncache.load_json_dict`
-    （``delete_on_corrupt=False``：诊断文件不删除）；值统一转 ``str`` 为本函数外壳。
-    """
-    from fspack._util.jsoncache import load_json_dict
-
-    path = dist_dir / _BUILD_FAILED
-    data = load_json_dict(path, delete_on_corrupt=False, logger=_logger)
-    if data is None:
-        return None
-    return {k: str(v) for k, v in data.items()}
-
-
-def _remove_build_failure(dist_dir: Path) -> None:
-    """构建成功后删除 ``.build_failed`` 标记（如存在）."""
-    path = dist_dir / _BUILD_FAILED
-    if path.is_file():
-        try:
-            path.unlink()
-        except OSError as e:
-            _logger.warning("删除 .build_failed 失败: %s", e)
-
-
-def _clean_dist_dir(dist_dir: Path, *, keep_diagnostics: bool) -> None:
-    """清空 dist 目录，按 keep_diagnostics 决定是否保留诊断文件.
-
-    :param keep_diagnostics: True 时保留 ``installer.nsi`` 与 ``.build_failed``
-        （供 ``fsp c`` 使用，用户排查后保留诊断信息）；False 时全清（供
-        ``--auto-clean`` 使用，全新开始构建）。
-    """
-    import shutil
-
-    if not dist_dir.is_dir():
-        return
-
-    keep_names: list[str] = [_KEEP_NSI]
-    if keep_diagnostics:
-        keep_names.append(_BUILD_FAILED)
-
-    preserved: dict[str, str] = {}
-    for name in keep_names:
-        path = dist_dir / name
-        if path.is_file():
-            try:
-                preserved[name] = path.read_text(encoding="utf-8")
-                _logger.info("保留: %s", path)
-            except OSError:
-                pass
-
-    shutil.rmtree(dist_dir)
-    dist_dir.mkdir(parents=True, exist_ok=True)
-    for name, content in preserved.items():
-        try:
-            (dist_dir / name).write_text(content, encoding="utf-8")
-        except OSError as e:
-            _logger.warning("恢复 %s 失败: %s", name, e)
-    _logger.info("已清理: %s", dist_dir)
-
-
-def clean_dist(project: Path) -> None:
-    """清理项目下的 dist 目录，保留 ``installer.nsi`` 与 ``.build_failed``.
-
-    ``fsp c`` 的实现（iter-140 扩展）：
-
-    - ``installer.nsi``：NSIS 脚本，保留便于改代码后 ``fsp p --no-build`` 重打包
-    - ``.build_failed``：失败诊断标记，保留便于用户排查上次构建失败原因
-
-    全清场景（``fsp b --auto-clean``）调用 :func:`_clean_dist_dir` 并传
-    ``keep_diagnostics=False``。
-    """
-    dist = Path(project) / "dist"
-    if not dist.is_dir():
-        _logger.info("无 dist 目录可清理: %s", dist)
-        return
-    _clean_dist_dir(dist, keep_diagnostics=True)
-
-
-def _print_build_plan(ctx: BuildContext, report: DependencyReport) -> None:  # noqa: PLR0912
-    """打印打包计划（``--dry-run`` 模式），不执行任何写操作.
-
-    输出内容：
-
-    - 项目基本信息：名称、版本、入口类型、入口数
-    - 目标平台与 Python 版本
-    - runtime 来源：Windows=embed python / Linux=python-build-standalone
-    - loader 编译器：Windows=mingw-w64 / Linux=gcc
-    - 缓存目录路径
-    - 依赖分析：声明依赖数、AST 发现第三方数、未声明依赖（missing）数
-    - 镜像源配置
-    - 构建选项摘要（Nuitka/ccache/pyc_strip/no_site 等）
-    """
-    # 延迟导入：dry-run 路径不经过 _execute_build 的 spinner 加载，需独立加载
-    # fspack.console（含 rich.console/rich.logging/rich.theme ~17ms）。
-    from rich.table import Table
-
-    from fspack.console import console
-
-    info = ctx.info
-    target = ctx.cfg.target
-
-    console.step("打包计划（dry-run，不执行实际构建）")
-
-    # 基本信息
-    basic_table = Table(title="项目信息", show_lines=False)
-    basic_table.add_column("字段", style="cyan", no_wrap=True)
-    basic_table.add_column("值", style="white")
-    basic_table.add_row("项目名", info.name)
-    basic_table.add_row("版本", info.version)
-    basic_table.add_row("应用类型", info.app_type.value)
-    entries = info.all_entries
-    if len(entries) > 1:
-        basic_table.add_row("入口数", f"{len(entries)} (多入口)")
-        for ep in entries:
-            basic_table.add_row(f"  - {ep.name}", f"{ep.module}.py ({ep.app_type.value})")
-    else:
-        basic_table.add_row("入口", f"{info.entry_module}.py")
-    basic_table.add_row("目标平台", target.value)
-    basic_table.add_row("Python 版本", info.py_version)
-    runtime_source = "embed python" if target is Platform.WINDOWS else "python-build-standalone"
-    basic_table.add_row("runtime 来源", runtime_source)
-    if target is Platform.WINDOWS:
-        loader_compiler = "mingw-w64"
-    elif target is Platform.MACOS:
-        loader_compiler = "clang"
-    else:
-        loader_compiler = "gcc"
-    basic_table.add_row("loader 编译器", loader_compiler)
-    basic_table.add_row("缓存目录", str(ctx.cfg.embed_cache_dir.parent))
-    basic_table.add_row("镜像源", f"{ctx.cfg.mirror.name} ({ctx.cfg.mirror.pypi_index})")
-    console.rich.print(basic_table)
-
-    # 依赖分析
-    console.rich.print()
-    dep_table = Table(title="依赖分析", show_lines=False)
-    dep_table.add_column("类别", style="cyan", no_wrap=True)
-    dep_table.add_column("数量", justify="right")
-    dep_table.add_column("详情")
-    dep_table.add_row("声明依赖", str(len(info.dependencies)), ", ".join(info.dependencies) or "(无)")
-    if ctx.opts.extras:
-        dep_table.add_row(
-            "启用 extras",
-            str(len(ctx.opts.extras)),
-            ", ".join(sorted(ctx.opts.extras)),
-        )
-        dep_table.add_row(
-            "扩展后依赖",
-            str(len(report.declared)),
-            ", ".join(report.declared) or "(无)",
-        )
-    dep_table.add_row(
-        "AST 第三方",
-        str(len(report.ast_third_party)),
-        ", ".join(sorted(report.ast_third_party)) or "(无)",
-    )
-    dep_table.add_row(
-        "未声明 (missing)",
-        str(len(report.missing)),
-        ", ".join(report.missing) if report.missing else "(无)",
-    )
-    dep_table.add_row("AST 标准库", str(len(report.ast_stdlib)), "(已识别)")
-    dep_table.add_row("AST 本地模块", str(len(report.ast_local)), "(已识别)")
-    console.rich.print(dep_table)
-
-    # 私有包源
-    if info.extra_index_urls or info.find_links:
-        console.rich.print()
-        src_table = Table(title="私有包源", show_lines=False)
-        src_table.add_column("类型", style="cyan", no_wrap=True)
-        src_table.add_column("路径")
-        for url in info.extra_index_urls:
-            src_table.add_row("extra-index-url", url)
-        for link in info.find_links:
-            src_table.add_row("find-links", link)
-        console.rich.print(src_table)
-
-    # 构建选项
-    console.rich.print()
-    opts_table = Table(title="构建选项", show_lines=False)
-    opts_table.add_column("选项", style="cyan", no_wrap=True)
-    opts_table.add_column("值", justify="center")
-    opts_table.add_row("Nuitka 编译", "启用" if ctx.opts.nuitka else "关闭")
-    if ctx.opts.nuitka:
-        opts_table.add_row("ccache", "启用" if ctx.opts.ccache else "关闭")
-        if ctx.opts.nuitka_packages:
-            opts_table.add_row("nuitka-packages", ", ".join(ctx.opts.nuitka_packages))
-    opts_table.add_row("字节码预编译", "关闭" if ctx.opts.no_pyc else "启用")
-    opts_table.add_row("pyc 优化级别", str(ctx.opts.pyc_optimize))
-    opts_table.add_row("剥离 .py (pyc_strip)", "启用" if ctx.opts.pyc_strip else "关闭")
-    opts_table.add_row("标准库精简", "关闭" if ctx.opts.no_stdlib_trim else "启用")
-    opts_table.add_row("禁用 site.py", "是" if ctx.opts.no_site else "否")
-    if ctx.opts.keep_modules:
-        opts_table.add_row("显式保留模块", ", ".join(sorted(ctx.opts.keep_modules)))
-    console.rich.print(opts_table)
-
-    # 汇总
-    console.rich.print()
-    wheel_count = len(info.dependencies)
-    console.success(
-        f"打包计划就绪：{info.name} {info.version} → {target.value} / Python {info.py_version} / "
-        f"{len(entries)} 入口 / {wheel_count} 声明依赖"
-    )
-    console.rich.print("[dim]以上为 dry-run 预览，未执行任何下载/编译/复制。去掉 --dry-run 执行实际构建。[/]")
+        globals()[_PRINT_BUILD_PLAN_NAME] = _print_build_plan
+        return _print_build_plan
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

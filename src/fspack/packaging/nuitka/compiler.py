@@ -32,6 +32,7 @@ from __future__ import annotations
 from fspack.packaging.nuitka.ccache import NuitkaCcache
 from fspack.packaging.nuitka.compile import NuitkaCompile
 from fspack.packaging.nuitka.env import NuitkaEnv
+from fspack.packaging.nuitka.progress import NuitkaProgress
 from fspack.packaging.nuitka.standalone import NuitkaStandalone
 from fspack.packaging.nuitka.strip import NuitkaStrip
 from fspack.packaging.nuitka.verify import NuitkaVerify
@@ -39,18 +40,22 @@ from fspack.packaging.nuitka.verify import NuitkaVerify
 __all__ = ["NuitkaCompiler"]
 
 
-class NuitkaCompiler(NuitkaEnv, NuitkaStandalone, NuitkaCcache, NuitkaStrip, NuitkaCompile, NuitkaVerify):
-    """Nuitka 编译器 facade（多继承自 env/standalone/ccache/strip/compile/verify 六个 mixin）.
+class NuitkaCompiler(
+    NuitkaEnv, NuitkaStandalone, NuitkaCcache, NuitkaStrip, NuitkaProgress, NuitkaCompile, NuitkaVerify
+):
+    """Nuitka 编译器 facade（多继承自七个 mixin）.
 
     所有方法为 staticmethod/classmethod，无实例状态。按 MRO 顺序
     ``NuitkaCompiler → NuitkaEnv → NuitkaStandalone → NuitkaCcache → NuitkaStrip →
-    NuitkaCompile → NuitkaVerify → object`` 派发 ``cls.`` 调用到对应 mixin。
+    NuitkaProgress → NuitkaCompile → NuitkaVerify → object`` 派发 ``cls.`` 调用
+    到对应 mixin。
 
     **MRO 顺序设计**：``NuitkaStrip`` 必须在 ``NuitkaCompile`` 前面，否则
     ``NuitkaCompile`` 类内的 ``_strip_compiled_sources`` / ``_cleanup_build_dirs``
     stub 会覆盖 ``NuitkaStrip`` 的真实实现。同理 ``NuitkaStandalone`` /
-    ``NuitkaCcache`` 必须在 ``NuitkaCompile`` 前面，避免 ``_ensure_build_python``
-    / ``_ensure_ccache`` stub 覆盖真实实现。
+    ``NuitkaCcache`` / ``NuitkaProgress`` 必须在 ``NuitkaCompile`` 前面，
+    避免 ``_ensure_build_python`` / ``_ensure_ccache`` /
+    ``_stream_compile`` / ``_compile_files`` stub 或缺失覆盖真实实现。
 
     nuitka 装到本地缓存 ``~/.fspack/cache/nuitka/<py_version>/site-packages/``，
     不污染 ``dist/runtime`` 发行产物。编译时用 **standalone python**（非 embed runtime）

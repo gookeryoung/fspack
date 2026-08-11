@@ -86,6 +86,7 @@ _BUILD_DEFAULT_KEYS: dict[str, str] = {
     "analyze_deps": "analyze_deps",
     "require_hashes": "require_hashes",
     "no_sbom": "no_sbom",
+    "no_manifest": "no_manifest",
     "open_browser": "open_browser",
 }
 

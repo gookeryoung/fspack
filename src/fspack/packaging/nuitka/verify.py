@@ -24,6 +24,10 @@ import logging
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fspack.packaging.nuitka.protocol import NuitkaCompilerProtocol
 
 # 共享 logger 名：测试用 caplog.at_level(..., logger="fspack.packaging.nuitka") 锁定
 _logger = logging.getLogger("fspack.packaging.nuitka")
@@ -63,7 +67,7 @@ class NuitkaVerify:
 
     @classmethod
     def _verify_compiled_modules(
-        cls,
+        cls: type[NuitkaCompilerProtocol],
         py_exe: Path,
         compiled_files: set[Path],
     ) -> tuple[set[Path], list[Path]]:

@@ -27,11 +27,15 @@ import shutil
 import sys
 import tarfile
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from fspack.config import KNOWN_STANDALONE_VERSIONS
 from fspack.exceptions import NuitkaError
 from fspack.platform import Platform
 from fspack.progress import StageRecorder
+
+if TYPE_CHECKING:
+    from fspack.packaging.nuitka.protocol import NuitkaCompilerProtocol
 
 # 共享 logger 名：测试用 caplog.at_level(..., logger="fspack.packaging.nuitka") 锁定
 _logger = logging.getLogger("fspack.packaging.nuitka")
@@ -72,7 +76,7 @@ class NuitkaStandalone:
 
     @classmethod
     def _ensure_build_python(
-        cls,
+        cls: type[NuitkaCompilerProtocol],
         cache_root: Path,
         py_version: str,
         target: Platform,
@@ -151,7 +155,7 @@ class NuitkaStandalone:
 
     @classmethod
     def _download_standalone_python(
-        cls,
+        cls: type[NuitkaCompilerProtocol],
         build_python_dir: Path,
         standalone_version: str,
         stage: StageRecorder,
@@ -193,7 +197,7 @@ class NuitkaStandalone:
 
     @classmethod
     def _extract_standalone_python(
-        cls,
+        cls: type[NuitkaCompilerProtocol],
         archive_path: Path,
         build_python_dir: Path,
         standalone_version: str,

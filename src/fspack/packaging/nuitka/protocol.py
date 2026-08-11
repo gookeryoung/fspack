@@ -254,3 +254,94 @@ class NuitkaCompilerProtocol(Protocol):
     ) -> None:
         """整合 ensure_env + standalone python + stamp 缓存 + compile_src 的入口."""
         ...
+
+    # ==== NuitkaEnv 提供的辅助（pip/C 编译器检查 + ensure_pip 子步骤）====
+
+    @staticmethod
+    def _check_c_compiler(target: Platform) -> None:
+        """检查目标平台 C 编译器是否可用，不可用则抛 NuitkaError."""
+        ...
+
+    @staticmethod
+    def _has_pip(python_exe: str) -> bool:
+        """检查 python 解释器是否有可用的 pip 模块."""
+        ...
+
+    @staticmethod
+    def _try_ensurepip(python_exe: str) -> bool:
+        """第一轮自救：``python -m ensurepip --default-pip`` 安装 pip."""
+        ...
+
+    @staticmethod
+    def _try_uv_install_pip() -> bool:
+        """第二轮自救：``uv pip install pip`` 安装 pip 到当前 venv."""
+        ...
+
+    @classmethod
+    def _ensure_pip_available(cls, python_exe: str) -> None:
+        """确保构建机 python 有 pip 模块，缺失则两轮自救，仍失败则抛异常."""
+        ...
+
+    # ==== NuitkaStandalone 提供的辅助（缓存目录推导 + 下载/解压）====
+
+    @staticmethod
+    def _build_python_cache_dir(cache_root: Path, py_version: str) -> Path:
+        """返回 standalone python 缓存目录：``cache_root / py_version``."""
+        ...
+
+    @staticmethod
+    def _build_python_exe(build_python_dir: Path, py_version: str, target: Platform) -> Path:
+        """返回 standalone python 可执行文件路径."""
+        ...
+
+    @classmethod
+    def _download_standalone_python(
+        cls,
+        build_python_dir: Path,
+        standalone_version: str,
+        stage: StageRecorder,
+    ) -> Path:
+        """下载 python-build-standalone tarball 到缓存目录，返回归档路径."""
+        ...
+
+    @classmethod
+    def _extract_standalone_python(
+        cls,
+        archive_path: Path,
+        build_python_dir: Path,
+        standalone_version: str,
+    ) -> None:
+        """解压 standalone python 并提升内层目录到缓存根."""
+        ...
+
+    # ==== NuitkaCcache 提供的辅助（下载解压）====
+
+    @staticmethod
+    def _download_and_extract_ccache(url: str, ccache_dir: Path, target: Platform) -> None:
+        """下载 ccache 归档并解压二进制到 ``ccache_dir``."""
+        ...
+
+    # ==== NuitkaVerify 提供的辅助（包根推导 + 批量/逐个导入测试）====
+
+    @staticmethod
+    def _find_package_root(py_file: Path) -> Path:
+        """推导 .py 文件所在包的根目录（无 ``__init__.py`` 的祖先目录）."""
+        ...
+
+    @staticmethod
+    def _batch_import_test(
+        py_exe: Path,
+        search_roots: list[Path],
+        module_names: list[str],
+    ) -> set[str] | None:
+        """一次 subprocess 批量测试模块可加载性，崩溃时返回 None."""
+        ...
+
+    @staticmethod
+    def _individual_import_test(
+        py_exe: Path,
+        search_roots: list[Path],
+        module_names: list[str],
+    ) -> set[str]:
+        """逐个模块 subprocess 测试可加载性，返回可加载模块集合."""
+        ...

@@ -83,6 +83,14 @@ def main(argv: list[str] | None = None) -> None:
         _run_cache(ns)
         return
 
+    # manifest 子命令：diff 动作没有 project 参数（直接读传入的 manifest JSON 路径），
+    # 必须在访问 ns.project 之前分发；generate 动作则需要 project
+    if command in ("manifest", "m"):
+        from fspack.cli_cmds_manifest import _run_manifest
+
+        _run_manifest(ns)
+        return
+
     project = Path(ns.project).resolve()
     if command in ("build", "b"):
         if ns.recursive:
@@ -161,6 +169,7 @@ def _run_build(project: Path, ns: argparse.Namespace) -> None:
         lazy_imports=_parse_lazy_imports(ns.lazy_imports, base.lazy_imports),
         require_hashes=ns.require_hashes or base.require_hashes,
         no_sbom=ns.no_sbom or base.no_sbom,
+        no_manifest=getattr(ns, "no_manifest", False) or base.no_manifest,
         open_browser=ns.open_browser or base.open_browser,
     )
     log_file = Path(ns.log_file).resolve() if ns.log_file else None

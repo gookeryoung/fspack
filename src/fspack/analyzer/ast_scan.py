@@ -342,49 +342,48 @@ def collect_imports_and_submodules(tree: ast.AST) -> tuple[list[str], dict[str, 
     :func:`collect_submodule_imports` 一致。合并单次遍历避免对同一棵 AST
     走两遍的开销（大项目数百 .py 文件时收益明显）。
 
+    内存优化：顶层导入去重用 ``dict`` 作保序集合（3.7+ ``dict`` 插入序稳定），
+    省掉独立 ``set`` 对象；子模块收集阶段用 ``list`` 暂存子模块名，末尾一次
+    ``frozenset`` 固化，避免 ``set`` 中间对象逐次 add 的哈希表扩容开销。
+
     只需顶层导入（如 :func:`infer_app_type`）或只需子模块的场景应直接用
     对应的独立函数，避免多余计算。
     """
-    top_result: list[str] = []
-    top_seen: set[str] = set()
-    sub_result: dict[str, set[str]] = {}
+    top_ord: dict[str, None] = {}
+    sub_result: dict[str, list[str]] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 parts = alias.name.split(".")
-                _push(parts[0], top_result, top_seen)
+                top_ord.setdefault(parts[0], None)
                 if len(parts) >= 2:
-                    sub_result.setdefault(parts[0], set()).add(parts[1])
+                    sub_result.setdefault(parts[0], []).append(parts[1])
         elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
             parts = node.module.split(".")
-            _push(parts[0], top_result, top_seen)
+            top_ord.setdefault(parts[0], None)
             if len(parts) >= 2:
-                sub_result.setdefault(parts[0], set()).add(parts[1])
+                sub_result.setdefault(parts[0], []).append(parts[1])
             elif len(parts) == 1:
                 for alias in node.names:
                     if alias.name != "*":
-                        sub_result.setdefault(parts[0], set()).add(alias.name)
-    return top_result, {pkg: frozenset(subs) for pkg, subs in sub_result.items()}
+                        sub_result.setdefault(parts[0], []).append(alias.name)
+    return list(top_ord.keys()), {pkg: frozenset(subs) for pkg, subs in sub_result.items()}
 
 
 def collect_imports(tree: ast.AST) -> list[str]:
-    """收集 AST 中所有 import 的顶层模块名，去重保序."""
-    result: list[str] = []
-    seen: set[str] = set()
+    """收集 AST 中所有 import 的顶层模块名，去重保序.
+
+    内存优化：用 ``dict`` 作保序集合（3.7+ ``dict`` 插入序稳定），同时承担
+    "已见集合"与"结果保序"两份职责，省掉独立 ``set`` + ``list`` 双结构对象。
+    """
+    ord_dict: dict[str, None] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                _push(alias.name.split(".")[0], result, seen)
+                ord_dict.setdefault(alias.name.split(".")[0], None)
         elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-            _push(node.module.split(".")[0], result, seen)
-    return result
-
-
-def _push(top: str, result: list[str], seen: set[str]) -> None:
-    """将顶层模块名添加到结果列表，去重保序."""
-    if top and top not in seen:
-        seen.add(top)
-        result.append(top)
+            ord_dict.setdefault(node.module.split(".")[0], None)
+    return list(ord_dict.keys())
 
 
 def collect_submodule_imports(tree: ast.AST) -> dict[str, frozenset[str]]:
@@ -397,20 +396,23 @@ def collect_submodule_imports(tree: ast.AST) -> dict[str, frozenset[str]]:
       不匹配任何 wheel 文件时自然忽略）
 
     相对导入（``level > 0``）与星号导入（``*``）跳过。
+
+    内存优化：子模块收集阶段用 ``list`` 暂存，末尾一次 ``frozenset`` 固化，
+    省掉 ``set`` 中间对象逐次 add 的哈希表扩容开销。
     """
-    result: dict[str, set[str]] = {}
+    result: dict[str, list[str]] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 parts = alias.name.split(".")
                 if len(parts) >= 2:
-                    result.setdefault(parts[0], set()).add(parts[1])
+                    result.setdefault(parts[0], []).append(parts[1])
         elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
             parts = node.module.split(".")
             if len(parts) >= 2:
-                result.setdefault(parts[0], set()).add(parts[1])
+                result.setdefault(parts[0], []).append(parts[1])
             elif len(parts) == 1:
                 for alias in node.names:
                     if alias.name != "*":
-                        result.setdefault(parts[0], set()).add(alias.name)
+                        result.setdefault(parts[0], []).append(alias.name)
     return {pkg: frozenset(subs) for pkg, subs in result.items()}

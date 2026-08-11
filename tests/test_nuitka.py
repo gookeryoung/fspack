@@ -3859,13 +3859,13 @@ def test_parse_parallel_timeout_warns_on_slow_worker(
 
     monkeypatch.setattr(analyzer, "as_completed", fake_as_completed)
 
-    all_imports: list[str] = []
-    all_stdlib: list[str] = []
+    all_imports_ord: dict[str, None] = {}
+    all_stdlib_ord: dict[str, None] = {}
     all_submodules: dict[str, set[str]] = {}
     all_errors: list[tuple[str, str]] = []
 
     with caplog.at_level(logging.WARNING, logger="fspack.analyzer"):
-        _parse_parallel(py_files, all_imports, all_stdlib, all_submodules, all_errors)
+        _parse_parallel(py_files, all_imports_ord, all_stdlib_ord, all_submodules, all_errors)
 
     # 超时 warning
     timeout_logs = [r for r in caplog.records if "超时" in r.message]
@@ -3874,8 +3874,8 @@ def test_parse_parallel_timeout_warns_on_slow_worker(
     # 5 个 future 都被 cancel（done() 返回 False）
     assert len(cancel_calls) == 5
     # 超时后 imports/submodules/errors 为空（fake as_completed 抛异常未返回结果）
-    assert all_imports == []
-    assert all_stdlib == []
+    assert all_imports_ord == {}
+    assert all_stdlib_ord == {}
     assert all_submodules == {}
     assert all_errors == []
 
@@ -3892,16 +3892,16 @@ def test_parse_parallel_normal_completes_without_timeout(tmp_path: Path, monkeyp
     # 设较长 timeout 确保正常完成
     monkeypatch.setattr(analyzer, "_PARSE_TOTAL_TIMEOUT", 60.0)
 
-    all_imports: list[str] = []
-    all_stdlib: list[str] = []
+    all_imports_ord: dict[str, None] = {}
+    all_stdlib_ord: dict[str, None] = {}
     all_submodules: dict[str, set[str]] = {}
     all_errors: list[tuple[str, str]] = []
 
-    _parse_parallel(py_files, all_imports, all_stdlib, all_submodules, all_errors)
+    _parse_parallel(py_files, all_imports_ord, all_stdlib_ord, all_submodules, all_errors)
 
-    # 5 个文件都应解析到 os import（worker 已分离到 all_stdlib）
-    assert all_stdlib.count("os") == 5
-    assert all_imports == []
+    # 5 个文件都 import os（dict 去重保序，"os" 只出现一次）
+    assert "os" in all_stdlib_ord
+    assert all_imports_ord == {}
     assert all_errors == []
 
 
@@ -3951,7 +3951,7 @@ def test_parse_parallel_uses_initializer(
 
     monkeypatch.setattr(analyzer, "ProcessPoolExecutor", _Pool)
     monkeypatch.setattr(analyzer, "as_completed", lambda futures, timeout=None: iter(futures))
-    _parse_parallel(py_files, [], [], {}, [])
+    _parse_parallel(py_files, {}, {}, {}, [])
 
     assert captured.get("initializer") is _init_parse_worker
     assert captured.get("initargs") == (_STDLIB,)
@@ -4012,7 +4012,7 @@ def test_parse_parallel_interleave_and_submit(
 
     monkeypatch.setattr(analyzer, "ProcessPoolExecutor", _Pool)
     monkeypatch.setattr(analyzer, "as_completed", lambda futures, timeout=None: iter(futures))
-    _parse_parallel(py_files, [], [], {}, [])
+    _parse_parallel(py_files, {}, {}, {}, [])
 
     cpu = os.cpu_count() or 4
     assert interleave_calls == [(20, cpu * 4)]
@@ -4095,19 +4095,19 @@ def test_parse_parallel_partial_timeout_aggregates_completed_results(
 
     monkeypatch.setattr(analyzer, "as_completed", fake_as_completed)
 
-    all_imports: list[str] = []
-    all_stdlib: list[str] = []
+    all_imports_ord: dict[str, None] = {}
+    all_stdlib_ord: dict[str, None] = {}
     all_submodules: dict[str, set[str]] = {}
     all_errors: list[tuple[str, str]] = []
 
-    _parse_parallel(py_files, all_imports, all_stdlib, all_submodules, all_errors)
+    _parse_parallel(py_files, all_imports_ord, all_stdlib_ord, all_submodules, all_errors)
 
     # 已完成的 3 个 future 结果被聚合（关键改进：map(timeout=) 会丢失这些结果）
-    assert "numpy" in all_imports
-    assert "requests" in all_imports
-    assert "flask" in all_imports
-    assert "os" in all_stdlib
-    assert "sys" in all_stdlib
+    assert "numpy" in all_imports_ord
+    assert "requests" in all_imports_ord
+    assert "flask" in all_imports_ord
+    assert "os" in all_stdlib_ord
+    assert "sys" in all_stdlib_ord
 
 
 # ---- _precompile_pyc compileall 超时防护测试（iter-127） ----
