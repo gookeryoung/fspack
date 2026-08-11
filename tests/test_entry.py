@@ -174,7 +174,7 @@ def test_generate_wrapper_source_top_level_mode() -> None:
     顶层模式须显式将 ``_SRC_DIR`` 加入 ``sys.path``：``runpy.run_path`` 对文件
     路径不自动把脚本目录加入 ``sys.path``（与 ``python script.py`` 不同），不
     显式注入会导致 ``import module_c`` 等本地绝对导入 ``ModuleNotFoundError``
-    （cli_complex_py314 模板回归根因）。
+    （cli_complex 模板回归根因）。
     """
     source = EntryWrapper.generate_wrapper_source("app", None, "app.py")
     assert "fspack 生成的入口包装器（app）" in source

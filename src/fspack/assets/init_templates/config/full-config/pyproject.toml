@@ -1,0 +1,11 @@
+[project]
+name = "$project_name"
+version = "0.1.0"
+description = "$description"
+requires-python = ">=3.8,<3.12"
+
+[tool.fspack]
+pyc_strip = true
+pyc_optimize = 2
+no_stdlib_trim = true
+exclude = ["tests", "docs", ".github"]

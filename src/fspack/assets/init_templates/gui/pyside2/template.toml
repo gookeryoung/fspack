@@ -1,0 +1,6 @@
+id = "pyside2"
+name = "PySide2 桌面 GUI"
+description = "PySide2 QMainWindow 主窗口示例"
+category = "gui"
+app_type = "gui"
+dependencies = ["PySide2"]

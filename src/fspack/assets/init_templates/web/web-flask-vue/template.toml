@@ -1,0 +1,6 @@
+id = "web-flask-vue"
+name = "Flask + Vue 前后端分离"
+description = "Flask API + Vue 3 前端，wrapper 自动挂载静态文件与开浏览器"
+category = "web"
+app_type = "web"
+dependencies = ["flask"]

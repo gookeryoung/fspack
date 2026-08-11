@@ -1,0 +1,33 @@
+[project]
+name = "$project_name"
+version = "0.1.0"
+description = "$description"
+requires-python = ">=3.8,<3.12"
+
+[tool.fspack]
+# 构建默认值（CLI 标志可覆盖）
+nuitka = false
+pyc_strip = true
+pyc_optimize = 2
+no_site = false
+no_pyc = false
+no_stdlib_trim = true
+ccache = false
+
+# 图标（相对项目目录的路径，未设置时用默认 app.ico）
+# icon = "assets/app.ico"
+
+# 额外排除目录/文件模式（合并到内置排除规则）
+exclude = ["tests", "docs", ".github"]
+
+# 私有 PyPI 服务器（可选）
+# extra-index-urls = ["https://pypi.example.com/simple"]
+# find-links = ["./local-wheels"]
+
+# Nuitka 编译的第三方包（可选，需配合 nuitka = true）
+# nuitka_packages = ["numpy"]
+
+# 多入口声明（可选，键为 exe 名，值为入口脚本路径）
+# [tool.fspack.entries]
+# cli = "src/cli.py"
+# gui = "src/gui.py"

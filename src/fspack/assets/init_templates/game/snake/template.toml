@@ -1,0 +1,6 @@
+id = "snake"
+name = "贪吃蛇游戏"
+description = "Pygame 贪吃蛇完整游戏（方向键控制）"
+category = "game"
+app_type = "gui"
+dependencies = ["pygame"]

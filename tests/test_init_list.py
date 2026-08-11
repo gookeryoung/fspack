@@ -66,7 +66,7 @@ def test_prompt_template_selection_tty_returns_second_template(monkeypatch: pyte
     from fspack.templates import Template, TemplateFile, list_templates
     from fspack.templates import registry as registry_mod
 
-    # 临时注入第二个模板
+    # 临时注入第二个模板：monkeypatch _load_all 在原模板基础上追加自定义模板
     extra_template = Template(
         id="zzz-custom",
         name="Custom",
@@ -74,17 +74,14 @@ def test_prompt_template_selection_tty_returns_second_template(monkeypatch: pyte
         category="cli",
         files=(TemplateFile(rel_path="main.py", content="pass\n"),),
     )
-    original = registry_mod._TEMPLATES
-    registry_mod._TEMPLATES = (*original, extra_template)
-    try:
-        templates = list_templates()
-        custom_index = next(i for i, t in enumerate(templates, 1) if t.id == "zzz-custom")
-        monkeypatch.setattr("sys.stdin.isatty", lambda: True)
-        monkeypatch.setattr("rich.prompt.IntPrompt.ask", staticmethod(lambda *a, **kw: custom_index))
-        result = prompt_template_selection()
-        assert result == "zzz-custom"
-    finally:
-        registry_mod._TEMPLATES = original
+    original_load_all = registry_mod._load_all
+    monkeypatch.setattr(registry_mod, "_load_all", lambda: (*original_load_all(), extra_template))
+    templates = list_templates()
+    custom_index = next(i for i, t in enumerate(templates, 1) if t.id == "zzz-custom")
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("rich.prompt.IntPrompt.ask", staticmethod(lambda *a, **kw: custom_index))
+    result = prompt_template_selection()
+    assert result == "zzz-custom"
 
 
 def test_prompt_template_selection_empty_registry_returns_helloworld(
@@ -93,13 +90,9 @@ def test_prompt_template_selection_empty_registry_returns_helloworld(
     """空模板注册表 → 返回 helloworld 默认值（防御性回退）."""
     from fspack.templates import registry as registry_mod
 
-    original = registry_mod._TEMPLATES
-    registry_mod._TEMPLATES = ()
-    try:
-        result = prompt_template_selection()
-        assert result == "helloworld"
-    finally:
-        registry_mod._TEMPLATES = original
+    monkeypatch.setattr(registry_mod, "_load_all", lambda: ())
+    result = prompt_template_selection()
+    assert result == "helloworld"
 
 
 # ---- CLI --list 分发 ----

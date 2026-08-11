@@ -1,0 +1,6 @@
+id = "typer"
+name = "typer CLI 框架"
+description = "typer 类型驱动 CLI 示例"
+category = "cli"
+app_type = "cli"
+dependencies = ["typer"]

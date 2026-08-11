@@ -1,0 +1,6 @@
+id = "rich"
+name = "rich 终端美化"
+description = "rich 彩色表格与 markup 示例"
+category = "cli"
+app_type = "cli"
+dependencies = ["rich"]

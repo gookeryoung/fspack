@@ -1,0 +1,6 @@
+id = "helloworld"
+name = "Hello World"
+description = "最小 Hello World 示例，验证基础流水线"
+category = "cli"
+app_type = "cli"
+dependencies = []

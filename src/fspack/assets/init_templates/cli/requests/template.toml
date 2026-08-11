@@ -1,0 +1,6 @@
+id = "requests"
+name = "requests HTTP 客户端"
+description = "requests HTTP GET 请求示例"
+category = "cli"
+app_type = "cli"
+dependencies = ["requests"]

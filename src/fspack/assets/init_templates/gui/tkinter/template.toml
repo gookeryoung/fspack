@@ -1,0 +1,6 @@
+id = "tkinter"
+name = "tkinter 标准库 GUI"
+description = "tkinter 标准库 GUI 示例，无第三方依赖"
+category = "gui"
+app_type = "gui"
+dependencies = []

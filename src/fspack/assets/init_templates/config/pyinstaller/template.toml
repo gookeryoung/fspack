@@ -1,0 +1,6 @@
+id = "pyinstaller"
+name = "PyInstaller 兼容配置"
+description = "完整 [tool.fspack] 配置示例，适合从 PyInstaller 迁移"
+category = "config"
+app_type = "cli"
+dependencies = []

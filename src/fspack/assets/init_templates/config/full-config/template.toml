@@ -1,0 +1,6 @@
+id = "full-config"
+name = "完整配置最佳实践"
+description = "完整项目结构：[tool.fspack] 配置 + README + tests + .gitignore"
+category = "config"
+app_type = "cli"
+dependencies = []

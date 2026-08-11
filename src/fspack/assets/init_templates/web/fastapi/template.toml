@@ -1,0 +1,6 @@
+id = "fastapi"
+name = "FastAPI Web 服务"
+description = "FastAPI 路由与 uvicorn 启动示例"
+category = "web"
+app_type = "cli"
+dependencies = ["fastapi", "uvicorn"]

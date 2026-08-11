@@ -1,0 +1,6 @@
+id = "flask"
+name = "Flask Web 服务"
+description = "Flask 路由与 JSON 响应示例"
+category = "web"
+app_type = "cli"
+dependencies = ["flask"]

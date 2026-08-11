@@ -1,0 +1,6 @@
+id = "pygame"
+name = "Pygame 游戏骨架"
+description = "Pygame 窗口与事件循环骨架示例"
+category = "game"
+app_type = "gui"
+dependencies = ["pygame"]

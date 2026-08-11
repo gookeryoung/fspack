@@ -1,0 +1,6 @@
+id = "numpy"
+name = "NumPy 数值计算"
+description = "NumPy 数组运算与统计示例"
+category = "sci"
+app_type = "cli"
+dependencies = ["numpy"]

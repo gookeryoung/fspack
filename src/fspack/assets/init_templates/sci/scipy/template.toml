@@ -1,0 +1,6 @@
+id = "scipy"
+name = "SciPy 科学计算"
+description = "SciPy 线性方程组求解示例"
+category = "sci"
+app_type = "cli"
+dependencies = ["numpy", "scipy"]

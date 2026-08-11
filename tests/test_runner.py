@@ -270,7 +270,7 @@ def test_run_run_linux_native(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
 # --- 多入口 _select_entry 测试 ---
 
 
-def _make_multi_entry_py310_info() -> ProjectInfo:
+def _make_multi_entry_info() -> ProjectInfo:
     """构造多入口 ProjectInfo 用于 _select_entry 测试."""
     ep1 = EntryPoint(name="cli", module="cli", file=Path("cli.py"), app_type=AppType.CLI)
     ep2 = EntryPoint(name="gui", module="gui", file=Path("gui.py"), app_type=AppType.GUI)
@@ -294,7 +294,7 @@ def test_select_entry_default_prefers_gui(tmp_path: Path, caplog: pytest.LogCapt
     entries=(cli=CLI, gui=GUI, web=CLI)，默认应选 gui（GUI 优先于 CLI），
     而非首个入口 cli。
     """
-    info = _make_multi_entry_py310_info()
+    info = _make_multi_entry_info()
     with caplog.at_level("INFO", logger="fspack.runner"):
         ep = _select_entry(info, None)
     assert ep.name == "gui"
@@ -304,14 +304,14 @@ def test_select_entry_default_prefers_gui(tmp_path: Path, caplog: pytest.LogCapt
 
 def test_select_entry_by_name() -> None:
     """--entry 按名匹配返回对应入口."""
-    info = _make_multi_entry_py310_info()
+    info = _make_multi_entry_info()
     assert _select_entry(info, "gui").name == "gui"
     assert _select_entry(info, "web").name == "web"
 
 
 def test_select_entry_not_found() -> None:
     """--entry 未匹配时报错列出可用入口."""
-    info = _make_multi_entry_py310_info()
+    info = _make_multi_entry_info()
     with pytest.raises(FspackError, match="未找到入口: missing"):
         _select_entry(info, "missing")
 
@@ -377,7 +377,7 @@ def _make_multi_gui_entry_info() -> ProjectInfo:
 
 def test_default_entry_prefers_gui_over_cli() -> None:
     """多入口混合 CLI/GUI 时 default_entry 选 GUI（即使 GUI 非首入口）."""
-    info = _make_multi_entry_py310_info()
+    info = _make_multi_entry_info()
     assert info.default_entry.name == "gui"
     assert info.default_entry.app_type is AppType.GUI
 
@@ -410,7 +410,7 @@ def test_default_entry_single_project_returns_only_entry() -> None:
     assert info.default_entry.app_type is AppType.GUI
 
 
-def test_run_run_multi_entry_py310_select(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_run_run_multi_entry_select(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """fspack r --entry gui 运行对应入口的 exe."""
     (tmp_path / "pyproject.toml").write_text(
         '[project]\nname = "multi"\nversion = "0.1"\n\n[tool.fspack.entries]\ncli = "cli.py"\ngui = "gui.py"\n'

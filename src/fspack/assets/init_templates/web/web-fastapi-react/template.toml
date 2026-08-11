@@ -1,0 +1,6 @@
+id = "web-fastapi-react"
+name = "FastAPI + React 前后端分离"
+description = "FastAPI API + React 前端，wrapper 自动挂载静态文件与开浏览器"
+category = "web"
+app_type = "web"
+dependencies = ["fastapi", "uvicorn"]

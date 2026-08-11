@@ -34,19 +34,19 @@ def test_root_dir_points_to_assets_templates() -> None:
 
 
 def test_list_all_returns_sorted() -> None:
-    """list_all 返回非空列表，按 id 排序."""
+    """list_all 返回非空列表，按分类+id 排序."""
     templates = ProjectTemplate.list_all()
     assert len(templates) > 0
-    ids = [t.id for t in templates]
-    assert ids == sorted(ids)
+    keys = [(t.category, t.id) for t in templates]
+    assert keys == sorted(keys)
 
 
 def test_list_all_has_known_entries() -> None:
     """列表中包含已知的模板项目（迁移自 examples/）."""
     ids = {t.id for t in ProjectTemplate.list_all()}
-    assert "cli_helloworld_pyall" in ids
-    assert "pyside2_qml_dashboard_py38" in ids
-    assert "sci_numpy_py38" in ids
+    assert "cli_helloworld" in ids
+    assert "pyside2_qml_dashboard" in ids
+    assert "sci_numpy" in ids
 
 
 def test_list_all_metadata_complete() -> None:
@@ -78,8 +78,8 @@ def test_list_all_when_root_missing_returns_empty(monkeypatch: pytest.MonkeyPatc
 def test_list_all_skips_non_dir_entries(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """list_all 跳过根目录下的非目录条目（如 README.md 文件）."""
     (tmp_path / "README.md").write_text("not a template", encoding="utf-8")
-    (tmp_path / "valid_tpl").mkdir()
-    (tmp_path / "valid_tpl" / "pyproject.toml").write_text(
+    (tmp_path / "cli" / "valid_tpl").mkdir(parents=True)
+    (tmp_path / "cli" / "valid_tpl" / "pyproject.toml").write_text(
         '[project]\nname = "valid_tpl"\nversion = "0.1.0"\n', encoding="utf-8"
     )
     monkeypatch.setattr(ProjectTemplate, "root_dir", classmethod(lambda cls: tmp_path))
@@ -89,9 +89,9 @@ def test_list_all_skips_non_dir_entries(monkeypatch: pytest.MonkeyPatch, tmp_pat
 
 def test_list_all_skips_dir_without_pyproject(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """list_all 跳过无 pyproject.toml 的目录（from_dir 返回 None 的项被过滤）."""
-    (tmp_path / "no_pyproject").mkdir()
-    (tmp_path / "has_pyproject").mkdir()
-    (tmp_path / "has_pyproject" / "pyproject.toml").write_text(
+    (tmp_path / "cli" / "no_pyproject").mkdir(parents=True)
+    (tmp_path / "cli" / "has_pyproject").mkdir(parents=True)
+    (tmp_path / "cli" / "has_pyproject" / "pyproject.toml").write_text(
         '[project]\nname = "has_pyproject"\nversion = "0.1.0"\n', encoding="utf-8"
     )
     monkeypatch.setattr(ProjectTemplate, "root_dir", classmethod(lambda cls: tmp_path))
@@ -101,10 +101,12 @@ def test_list_all_skips_dir_without_pyproject(monkeypatch: pytest.MonkeyPatch, t
 
 def test_list_all_skips_dir_with_invalid_toml(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """list_all 跳过 pyproject.toml 解析失败的目录（不抛异常）."""
-    (tmp_path / "broken").mkdir()
-    (tmp_path / "broken" / "pyproject.toml").write_text("[project\nname = 'x'\n", encoding="utf-8")
-    (tmp_path / "good").mkdir()
-    (tmp_path / "good" / "pyproject.toml").write_text('[project]\nname = "good"\nversion = "0.1.0"\n', encoding="utf-8")
+    (tmp_path / "cli" / "broken").mkdir(parents=True)
+    (tmp_path / "cli" / "broken" / "pyproject.toml").write_text("[project\nname = 'x'\n", encoding="utf-8")
+    (tmp_path / "cli" / "good").mkdir(parents=True)
+    (tmp_path / "cli" / "good" / "pyproject.toml").write_text(
+        '[project]\nname = "good"\nversion = "0.1.0"\n', encoding="utf-8"
+    )
     monkeypatch.setattr(ProjectTemplate, "root_dir", classmethod(lambda cls: tmp_path))
     templates = ProjectTemplate.list_all()
     assert [t.id for t in templates] == ["good"]
@@ -115,17 +117,17 @@ def test_list_all_skips_dir_with_invalid_toml(monkeypatch: pytest.MonkeyPatch, t
 
 def test_from_id_existing() -> None:
     """from_id 返回已知模板，元数据正确."""
-    tpl = ProjectTemplate.from_id("cli_helloworld_pyall")
+    tpl = ProjectTemplate.from_id("cli_helloworld")
     assert tpl is not None
-    assert tpl.id == "cli_helloworld_pyall"
-    assert tpl.name == "cli_helloworld_pyall"
+    assert tpl.id == "cli_helloworld"
+    assert tpl.name == "cli_helloworld"
     assert tpl.requires_python == ">=3.8"
     assert tpl.dependencies == ()
 
 
 def test_from_id_pyside2_qml() -> None:
-    """pyside2_qml_dashboard_py38 模板含 requires-python <3.11 约束与 pyside2 依赖."""
-    tpl = ProjectTemplate.from_id("pyside2_qml_dashboard_py38")
+    """pyside2_qml_dashboard 模板含 requires-python <3.11 约束与 pyside2 依赖."""
+    tpl = ProjectTemplate.from_id("pyside2_qml_dashboard")
     assert tpl is not None
     assert "<3.11" in tpl.requires_python
     assert any("pyside2" in d.lower() for d in tpl.dependencies)
@@ -228,7 +230,7 @@ def test_from_dir_app_type_defaults_to_cli(tmp_path: Path) -> None:
 
 def test_project_template_is_frozen() -> None:
     """ProjectTemplate 是 frozen dataclass，不可变."""
-    tpl = ProjectTemplate.from_id("cli_helloworld_pyall")
+    tpl = ProjectTemplate.from_id("cli_helloworld")
     assert tpl is not None
     with pytest.raises(AttributeError):
         tpl.id = "modified"  # type: ignore[misc]

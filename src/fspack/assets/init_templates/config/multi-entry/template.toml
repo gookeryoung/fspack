@@ -1,0 +1,6 @@
+id = "multi-entry"
+name = "多入口项目（CLI + GUI）"
+description = "[tool.fspack.entries] 多入口声明，CLI + tkinter GUI 双入口"
+category = "config"
+app_type = "cli"
+dependencies = []

@@ -1,4 +1,0 @@
-[project]
-name = "web_app_pyall"
-version = "0.1.0"
-dependencies = ["flask"]

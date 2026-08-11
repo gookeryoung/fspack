@@ -1,0 +1,6 @@
+id = "matplotlib"
+name = "Matplotlib 图表"
+description = "Matplotlib 正弦波图表示例"
+category = "sci"
+app_type = "gui"
+dependencies = ["matplotlib"]

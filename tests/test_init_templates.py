@@ -516,3 +516,77 @@ def test_init_project_web_flask_vue(tmp_path: Path) -> None:
     assert (target / "frontend" / "index.html").is_file()
     pyproject = (target / "pyproject.toml").read_text(encoding="utf-8")
     assert 'web-static-dirs = ["frontend"]' in pyproject
+
+
+# ---- 加载器错误处理与边界场景 ----
+
+
+def test_load_template_without_template_toml_returns_none(tmp_path: Path) -> None:
+    """无 template.toml 的目录返回 None（跳过无效模板）."""
+    from fspack.templates.registry import _load_template
+
+    tpl_dir = tmp_path / "no_manifest"
+    tpl_dir.mkdir()
+    (tpl_dir / "main.py").write_text('print("hi")', encoding="utf-8")
+    assert _load_template(tpl_dir) is None
+
+
+def test_load_template_with_invalid_toml_returns_none(tmp_path: Path) -> None:
+    """template.toml 解析失败返回 None（不抛异常）."""
+    from fspack.templates.registry import _load_template
+
+    tpl_dir = tmp_path / "bad_toml"
+    tpl_dir.mkdir()
+    (tpl_dir / "template.toml").write_text("invalid [toml", encoding="utf-8")
+    (tpl_dir / "main.py").write_text('print("hi")', encoding="utf-8")
+    assert _load_template(tpl_dir) is None
+
+
+def test_load_template_without_source_files_returns_none(tmp_path: Path) -> None:
+    """有 template.toml 但无源文件的目录返回 None."""
+    from fspack.templates.registry import _load_template
+
+    tpl_dir = tmp_path / "empty_tpl"
+    tpl_dir.mkdir()
+    (tpl_dir / "template.toml").write_text(
+        'id = "empty"\nname = "Empty"\ndescription = ""\ncategory = "cli"\n',
+        encoding="utf-8",
+    )
+    assert _load_template(tpl_dir) is None
+
+
+def test_load_all_skips_non_category_directories(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """_load_all 跳过非分类目录（如 README.md 文件、非分类名目录）."""
+    from fspack.templates import registry as registry_mod
+
+    # 构造 tmp_path/cli/helloworld/ 有效模板 + tmp_path/non_category/xxx/ 非分类
+    cli_dir = tmp_path / "cli"
+    cli_dir.mkdir()
+    tpl_dir = cli_dir / "helloworld"
+    tpl_dir.mkdir()
+    (tpl_dir / "template.toml").write_text(
+        'id = "helloworld"\nname = "Hello"\ndescription = ""\ncategory = "cli"\n',
+        encoding="utf-8",
+    )
+    (tpl_dir / "main.py").write_text('print("hi")', encoding="utf-8")
+    # 非分类目录
+    other_dir = tmp_path / "non_category"
+    other_dir.mkdir()
+    (other_dir / "xxx").mkdir()
+    monkeypatch.setattr(registry_mod, "_templates_root", lambda: tmp_path)
+    templates = registry_mod._load_all()
+    assert len(templates) == 1
+    assert templates[0].id == "helloworld"
+
+
+def test_load_all_when_root_missing_returns_empty(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """_templates_root 指向不存在路径时返回空元组."""
+    from fspack.templates import registry as registry_mod
+
+    monkeypatch.setattr(registry_mod, "_templates_root", lambda: tmp_path / "nonexistent")
+    assert registry_mod._load_all() == ()
+
+
+def test_get_template_nonexistent_returns_none() -> None:
+    """get_template 对不存在的 id 返回 None."""
+    assert get_template("nonexistent_template_xyz") is None

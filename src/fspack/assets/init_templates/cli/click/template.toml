@@ -1,0 +1,6 @@
+id = "click"
+name = "click CLI 框架"
+description = "click 命令组与子命令示例"
+category = "cli"
+app_type = "cli"
+dependencies = ["click"]

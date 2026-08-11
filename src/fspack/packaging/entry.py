@@ -276,7 +276,7 @@ else:
     # runpy.run_path 对文件路径不自动把脚本目录加入 sys.path
     # （_run_module_code 仅修改 sys.argv[0] 与 sys.modules），需显式注入
     # _SRC_DIR，否则 `import module_c`/`from pkg.mod import f` 等顶层绝对
-    # 导入找不到本地模块（cli_complex_py314 等模板的 ModuleNotFoundError 根因）。
+    # 导入找不到本地模块（cli_complex 等模板的 ModuleNotFoundError 根因）。
     if _SRC_DIR not in sys.path:
         sys.path.insert(0, _SRC_DIR)
     runpy.run_path(os.path.join(_SRC_DIR, _ENTRY_REL), run_name="__main__")

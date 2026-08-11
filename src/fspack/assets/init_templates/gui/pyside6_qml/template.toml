@@ -1,0 +1,6 @@
+id = "pyside6-qml"
+name = "PySide6 + QML"
+description = "PySide6 QQmlApplicationEngine + QML 声明式界面示例"
+category = "gui"
+app_type = "gui"
+dependencies = ["PySide6"]
