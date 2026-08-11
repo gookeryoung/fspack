@@ -685,7 +685,7 @@ if __name__ == "__main__":
 # ---- 前后端分离 Web 模板（AppType.WEB）----
 #
 # 与 flask/fastapi 模板区别：app_type="web"（关闭控制台 + 自动开浏览器），
-# pyproject.toml 含 [tool.fspack] web-static-dirs = ["dist"]，前端构建产物
+# pyproject.toml 含 [tool.fspack] web-static-dirs = ["frontend"]，前端构建产物
 # dist/ 目录由 wrapper 注入 Flask static_folder / FastAPI StaticFiles serve。
 # 入口仅定义 API 路由，静态文件 serve 由 fspack wrapper monkey-patch 注入。
 
@@ -755,7 +755,7 @@ dependencies = [
 ]
 
 [tool.fspack]
-web-static-dirs = ["dist"]
+web-static-dirs = ["frontend"]
 """
 
 # web-fastapi-react 模板 pyproject.toml：fastapi + uvicorn 依赖 + [tool.fspack] web-static-dirs
@@ -770,7 +770,7 @@ dependencies = [
 ]
 
 [tool.fspack]
-web-static-dirs = ["dist"]
+web-static-dirs = ["frontend"]
 """
 
 # Vue 3 前端示例：CDN 引入 Vue，fetch 调用后端 /api/hello
@@ -1300,7 +1300,7 @@ _TEMPLATES: tuple[Template, ...] = (
         files=(
             TemplateFile(rel_path="pyproject.toml", content=_WEB_FLASK_VUE_PYPROJECT),
             TemplateFile(rel_path="$entry_module.py", content=_WEB_FLASK_VUE_ENTRY),
-            TemplateFile(rel_path="dist/index.html", content=_WEB_VUE_INDEX),
+            TemplateFile(rel_path="frontend/index.html", content=_WEB_VUE_INDEX),
         ),
     ),
     Template(
@@ -1313,7 +1313,7 @@ _TEMPLATES: tuple[Template, ...] = (
         files=(
             TemplateFile(rel_path="pyproject.toml", content=_WEB_FASTAPI_REACT_PYPROJECT),
             TemplateFile(rel_path="$entry_module.py", content=_WEB_FASTAPI_REACT_ENTRY),
-            TemplateFile(rel_path="dist/index.html", content=_WEB_REACT_INDEX),
+            TemplateFile(rel_path="frontend/index.html", content=_WEB_REACT_INDEX),
         ),
     ),
     # ---- 配置示例模板 ----

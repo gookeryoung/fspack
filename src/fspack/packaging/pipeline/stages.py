@@ -523,6 +523,10 @@ def _build_one_loader(  # noqa: PLR0913
     wrapper_name = f"_entry_{ep.name}.py"
     wrapper_path = ctx.cfg.dist_dir / wrapper_name
     open_browser = ctx.opts.open_browser or ep.app_type is AppType.WEB
+    # web_static_dirs 是相对项目目录的路径（如 "frontend"），copy_source 复制到
+    # dist/src/ 下，wrapper 运行时以 _DIST_DIR 为基准解析，需加 "src/" 前缀
+    # 使其指向 dist/src/frontend（前端构建产物的实际位置）。
+    web_static_dirs = tuple(f"src/{d}" for d in ctx.info.web_static_dirs)
     wrapper_path.write_text(
         EntryWrapper.generate_wrapper_source(
             ep.name,
@@ -531,7 +535,7 @@ def _build_one_loader(  # noqa: PLR0913
             pkg_root_rel,
             has_tkinter=has_tkinter,
             lazy_imports=ctx.opts.lazy_imports,
-            web_static_dirs=ctx.info.web_static_dirs,
+            web_static_dirs=web_static_dirs,
             open_browser=open_browser,
         ),
         encoding="utf-8",

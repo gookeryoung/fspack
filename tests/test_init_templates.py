@@ -483,21 +483,21 @@ def test_web_fastapi_react_template_dependencies() -> None:
     assert tpl.dependencies == ("fastapi", "uvicorn")
 
 
-def test_web_separated_templates_contain_dist_index_html() -> None:
-    """前后端分离 Web 模板含 dist/index.html 前端入口文件."""
+def test_web_separated_templates_contain_frontend_index_html() -> None:
+    """前后端分离 Web 模板含 frontend/index.html 前端入口文件."""
     for tpl_id in WEB_SEPARATED_TEMPLATE_IDS:
         tpl = get_template(tpl_id)
         assert tpl is not None, f"模板 {tpl_id!r} 不存在"
         rel_paths = [f.rel_path for f in tpl.files]
-        assert "dist/index.html" in rel_paths, f"{tpl_id} 缺少 dist/index.html"
+        assert "frontend/index.html" in rel_paths, f"{tpl_id} 缺少 frontend/index.html"
 
 
 def test_web_separated_templates_pyproject_contains_web_static_dirs() -> None:
-    """前后端分离 Web 模板 pyproject.toml 含 web-static-dirs = ['dist']."""
+    """前后端分离 Web 模板 pyproject.toml 含 web-static-dirs = ['frontend']."""
     for tpl_id in WEB_SEPARATED_TEMPLATE_IDS:
         rendered = _render_template_files(tpl_id)
         pyproject = rendered[Path("pyproject.toml")]
-        assert 'web-static-dirs = ["dist"]' in pyproject, f"{tpl_id} pyproject 缺少 web-static-dirs"
+        assert 'web-static-dirs = ["frontend"]' in pyproject, f"{tpl_id} pyproject 缺少 web-static-dirs"
 
 
 def test_web_separated_template_entry_script_syntax_valid() -> None:
@@ -513,6 +513,6 @@ def test_init_project_web_flask_vue(tmp_path: Path) -> None:
     """init_project 用 web-flask-vue 模板创建项目."""
     target = init_project("wf-app", template_id="web-flask-vue", directory=tmp_path)
     assert (target / "wf_app.py").is_file()
-    assert (target / "dist" / "index.html").is_file()
+    assert (target / "frontend" / "index.html").is_file()
     pyproject = (target / "pyproject.toml").read_text(encoding="utf-8")
-    assert 'web-static-dirs = ["dist"]' in pyproject
+    assert 'web-static-dirs = ["frontend"]' in pyproject
