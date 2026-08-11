@@ -1398,6 +1398,48 @@ def test_parse_project_exclude_empty_string_element_raises(tmp_path: Path) -> No
         parse_project(tmp_path)
 
 
+# --- data-dirs 配置测试 ---
+
+
+def test_parse_project_no_data_dirs_returns_empty(tmp_path: Path) -> None:
+    """无 [tool.fspack] data-dirs 配置时 data_dirs 为空元组（默认行为不变）."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    info = parse_project(tmp_path)
+    assert info.data_dirs == ()
+
+
+def test_parse_project_with_data_dirs(tmp_path: Path) -> None:
+    """[tool.fspack] data-dirs 配置解析为路径元组."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n'
+        '[tool.fspack]\ndata-dirs = ["src/fspack/assets/templates", "data/projects"]\n'
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    info = parse_project(tmp_path)
+    assert info.data_dirs == ("src/fspack/assets/templates", "data/projects")
+
+
+def test_parse_project_data_dirs_not_list_raises(tmp_path: Path) -> None:
+    """data-dirs 非列表时报错."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\ndata-dirs = "templates"\n'
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    with pytest.raises(ProjectError, match="data-dirs 必须是字符串列表"):
+        parse_project(tmp_path)
+
+
+def test_parse_project_data_dirs_empty_string_element_raises(tmp_path: Path) -> None:
+    """data-dirs 元素为空字符串时报错."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\ndata-dirs = [""]\n'
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    with pytest.raises(ProjectError, match="data-dirs 元素必须是非空字符串"):
+        parse_project(tmp_path)
+
+
 def test_parse_project_no_build_defaults_returns_all_none(tmp_path: Path) -> None:
     """无 [tool.fspack] 构建默认值时 build_defaults 所有字段为 None."""
     from fspack.config import BuildDefaults

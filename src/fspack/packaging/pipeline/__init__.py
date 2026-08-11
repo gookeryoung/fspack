@@ -306,7 +306,12 @@ def _execute_build(  # noqa: PLR0912, PLR0913
 
         src_dst = cfg.dist_dir / "src"
         with spinner(f"复制 {info.name} 源码"):
-            copy_source(project_dir, src_dst, extra_excludes=info.exclude_dirs)
+            copy_source(
+                project_dir,
+                src_dst,
+                extra_excludes=info.exclude_dirs,
+                data_dirs=info.data_dirs,
+            )
 
     _compile_user_sources(ctx, src_dst)
 

@@ -446,6 +446,7 @@ def _strip_compiled_py(  # noqa: PLR0913
     optimize: int,
     sp_optimize: int,
     py_version: str,
+    data_dirs: tuple[Path, ...] = (),
 ) -> int:
     """剥离 src 与 site-packages 的非 ``__init__.py`` 源码，返回剥离总数.
 
@@ -453,11 +454,16 @@ def _strip_compiled_py(  # noqa: PLR0913
     （``cpython-{ver}.opt-{N}.pyc``）。``entry_rels`` 仅对 src 生效（入口文件在
     src 下，需保留 ``.py`` 供 ``runpy`` 定位模块）。
 
+    ``data_dirs`` 为 src 下的数据资源目录绝对路径列表，其下 ``.py`` 不剥离
+    （视为完整资源，如 fspack 的 ``assets/templates/`` 含项目模板源码）。
+
     提取为辅助函数以降低 :func:`_precompile_pyc` 分支数（PLR0912）。
     """
     stripped = 0
     if src_dir.is_dir():
-        stripped += _strip_py_sources([src_dir], entry_rels, optimize=optimize, py_version=py_version)
+        stripped += _strip_py_sources(
+            [src_dir], entry_rels, optimize=optimize, py_version=py_version, data_dirs=data_dirs
+        )
     if site_packages.is_dir():
         stripped += _strip_py_sources([site_packages], frozenset(), optimize=sp_optimize, py_version=py_version)
     return stripped
@@ -473,6 +479,7 @@ def _precompile_pyc(  # noqa: PLR0913
     stage: StageRecorder,
     optimize: int = 0,
     entry_rels: frozenset[str] = frozenset(),
+    data_dirs: tuple[Path, ...] = (),
 ) -> None:
     """预编译 src 与 site-packages 的 .py 为 .pyc，加速首次启动.
 
@@ -556,8 +563,11 @@ def _precompile_pyc(  # noqa: PLR0913
     # 分别剥离 src 与 site-packages：entry_rels 仅对 src 生效（入口文件在 src 下），
     # site-packages 无入口文件故传空集合。src 与 site-packages 用各自的 optimize
     # 级别匹配 .pyc 文件名后缀（cpython-{ver}.opt-{N}.pyc）。
+    # data_dirs 仅对 src 生效（site-packages 无数据资源目录），其下 .py 不剥离。
     stripped = (
-        _strip_compiled_py(src_dir, site_packages, entry_rels, optimize, sp_optimize, py_version) if strip_py else 0
+        _strip_compiled_py(src_dir, site_packages, entry_rels, optimize, sp_optimize, py_version, data_dirs)
+        if strip_py
+        else 0
     )
     if stripped:
         stage.skip(stripped)
@@ -572,6 +582,7 @@ def _strip_py_sources(
     *,
     optimize: int = 0,
     py_version: str = "",
+    data_dirs: tuple[Path, ...] = (),
 ) -> int:
     """删除 targets 中非 ``__init__.py`` 的 ``.py`` 源码，返回剥离数量.
 
@@ -588,6 +599,11 @@ def _strip_py_sources(
     这些文件会被跳过：入口包装器用 ``runpy.run_module``/``run_path`` 调用用户代码，
     需 ``.py`` 存在才能被 ``find_spec`` 定位（``__pycache__`` 下的 ``.pyc`` 不在
     ``FileFinder`` 搜索范围，``.pyd`` 模块无 Python 字节码无法被 ``runpy`` 执行）。
+
+    ``data_dirs`` 为数据资源目录绝对路径元组（如 ``dist/src/fspack/assets/templates``），
+    其下 ``.py`` 不剥离：这些目录树视为完整资源原样保留（如 fspack 的项目模板源码），
+    下游 ``fsp doctor --test`` 复制后需 ``.py`` 存在才能构建。``data_dirs`` 仅对
+    ``targets[0]``（src）生效，site-packages 无数据资源目录。
     """
     # 推导 .pyc 文件名后缀：cpython-{major}{minor}[-opt-N]
     if py_version:
@@ -602,6 +618,9 @@ def _strip_py_sources(
     for d in targets:
         for py in d.rglob("*.py"):
             if py.name == "__init__.py":
+                continue
+            # data_dirs 内的 .py 不剥离（数据资源目录，原样保留）
+            if _is_in_data_dirs(py, data_dirs):
                 continue
             try:
                 rel = py.relative_to(d).as_posix()
@@ -627,3 +646,22 @@ def _strip_py_sources(
             py.unlink()
             stripped += 1
     return stripped
+
+
+def _is_in_data_dirs(path: Path, data_dirs: tuple[Path, ...]) -> bool:
+    """判断 ``path`` 是否位于任一 ``data_dirs`` 目录树内（含 data-dir 自身）.
+
+    ``Path.is_relative_to`` 是 Python 3.9+，fspack 支持 3.8，用 try/except
+    :class:`ValueError` 兼容。``data_dirs`` 为空时直接返回 ``False``（热路径短路）。
+    """
+    if not data_dirs:
+        return False
+    for d in data_dirs:
+        if path == d:
+            return True
+        try:
+            path.relative_to(d)
+            return True
+        except ValueError:
+            continue
+    return False

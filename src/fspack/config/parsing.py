@@ -160,6 +160,9 @@ def _parse_project_cached(
 
     # [tool.fspack] exclude：额外排除目录/文件模式（合并到 copy_source 内置 _EXCLUDE）
     exclude_dirs = _parse_exclude_dirs(fspack_cfg.get("exclude"))
+    # [tool.fspack] data-dirs：原样保留的数据资源目录树（相对项目目录的 POSIX 路径），
+    # copy_source 对其跳过元数据/文档排除，_strip_py_sources 跳过其下 .py 剥离。
+    data_dirs = _parse_data_dirs(fspack_cfg.get("data-dirs"))
     # [tool.fspack] 构建默认值：CLI 标志覆盖
     build_defaults = _parse_build_defaults(fspack_cfg)
     # [tool.fspack] 私有包源：extra-index-urls / find-links 透传给 pip/uv
@@ -191,6 +194,7 @@ def _parse_project_cached(
                 entries=merged,
                 icon=icon_path,
                 exclude_dirs=exclude_dirs,
+                data_dirs=data_dirs,
                 build_defaults=build_defaults,
                 extra_index_urls=extra_index_urls,
                 find_links=find_links,
@@ -211,6 +215,7 @@ def _parse_project_cached(
         requires_python=requires_python,
         icon=icon_path,
         exclude_dirs=exclude_dirs,
+        data_dirs=data_dirs,
         build_defaults=build_defaults,
         extra_index_urls=extra_index_urls,
         find_links=find_links,
@@ -379,6 +384,16 @@ def _merge_entries(
 def _parse_exclude_dirs(value: object) -> tuple[str, ...]:
     """解析 ``[tool.fspack] exclude`` 配置为排除模式元组（空元素报错）."""
     return _parse_string_list_cfg(value, "exclude", reject_empty=True)
+
+
+def _parse_data_dirs(value: object) -> tuple[str, ...]:
+    """解析 ``[tool.fspack] data-dirs`` 配置为目录路径元组（空元素报错）。
+
+    路径为相对项目目录的 POSIX 风格字符串（如 ``src/fspack/assets/templates``），
+    运行时由 :func:`copy_source`/``_strip_py_sources`` 解析为绝对路径并据此跳过
+    元数据/文档排除与 ``.py`` 剥离。空列表表示无数据资源目录（默认行为不变）。
+    """
+    return _parse_string_list_cfg(value, "data-dirs", reject_empty=True)
 
 
 def _parse_optional_dependencies(value: object) -> dict[str, tuple[str, ...]]:

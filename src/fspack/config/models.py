@@ -228,6 +228,11 @@ class ProjectInfo:
     entries: tuple[EntryPoint, ...] = ()
     icon: Path | None = None
     exclude_dirs: tuple[str, ...] = ()
+    # 数据资源目录（相对项目目录的 POSIX 路径）：原样保留目录树，
+    # copy_source 对其跳过元数据/文档排除（pyproject.toml/*.md/uv.lock 等），
+    # _strip_py_sources 跳过其下 .py 剥离。用于含子项目作为资源的场景
+    # （如 fspack 自身的 src/fspack/assets/templates/ 含完整项目模板）。
+    data_dirs: tuple[str, ...] = ()
     build_defaults: BuildDefaults = field(default_factory=BuildDefaults)
     extra_index_urls: tuple[str, ...] = ()
     find_links: tuple[str, ...] = ()

@@ -15,10 +15,10 @@ from typing import Callable, Iterator
 
 _logger = logging.getLogger(__name__)
 
-# dist/src 仅保留应用运行所需源码与资源，剥离所有开发期文件。
-# 向后兼容策略：未在下方显式列出的文件默认保留，避免误删项目特有运行时资源。
-# LICENSE 不排除：分发产物保留许可证文件满足 MIT/GPL 等开源协议「随附 LICENSE」要求。
-_EXCLUDE = shutil.ignore_patterns(
+# 始终排除的模式：构建产物、Python 缓存、虚拟环境、覆盖率、工具缓存、版本控制、
+# IDE 配置、fspack 自身目录、凭证、CI/CD、测试目录。
+# data-dirs 内的目录树也应用这些模式（如 assets/templates/ 下的 __pycache__ 也应排除）。
+_EXCLUDE_ALWAYS = shutil.ignore_patterns(
     # 构建产物与 Python 缓存
     "dist",
     "build",
@@ -54,6 +54,14 @@ _EXCLUDE = shutil.ignore_patterns(
     # 凭证与敏感信息（rule-11 安全要求：.env 须排除避免泄漏到 dist）
     ".env",
     ".env.*",
+    # CI/CD
+    ".github",
+)
+
+# 元数据/工具配置/文档模式：默认排除（应用运行时不需要），data-dirs 内保留
+# （data-dirs 内的目录树视为完整资源，如 fspack 的 assets/templates/ 含完整项目模板，
+# 其内的 pyproject.toml/README.md/uv.lock 等是模板必需文件，必须保留）。
+_EXCLUDE_METADATA = shutil.ignore_patterns(
     # Python 项目元数据（打包阶段已解析完毕，运行时不再需要）
     ".python-version",
     "pyproject.toml",
@@ -75,8 +83,6 @@ _EXCLUDE = shutil.ignore_patterns(
     ".readthedocs.yaml",
     "Makefile",
     ".copier-answers.yml",
-    # CI/CD
-    ".github",
     # 文档（应用运行时不需要）
     "*.md",
     "*.rst",
@@ -84,26 +90,122 @@ _EXCLUDE = shutil.ignore_patterns(
 )
 
 
-def copy_source(project_dir: Path, src_dst: Path, extra_excludes: tuple[str, ...] = ()) -> None:
+def _merge_ignore_fns(
+    *fns: Callable[..., set[str]],
+) -> Callable[..., set[str]]:
+    """合并多个 ignore 函数为并集返回的单一函数.
+
+    ``shutil.ignore_patterns`` 返回的函数签名 ``（directory, names) -> set[str]``，
+    合并后对同一 ``(directory, names)`` 取所有函数返回集的并集。
+    """
+
+    def combined(directory: str, names: list[str]) -> set[str]:
+        result: set[str] = set()
+        for fn in fns:
+            result |= fn(directory, names)
+        return result
+
+    return combined
+
+
+# 完整排除集：始终排除 + 元数据排除（默认行为，向后兼容）。
+# 等价于原单一 _EXCLUDE，拆分为两层以支持 data-dirs 选择性跳过元数据排除。
+_EXCLUDE = _merge_ignore_fns(_EXCLUDE_ALWAYS, _EXCLUDE_METADATA)
+
+
+def copy_source(
+    project_dir: Path,
+    src_dst: Path,
+    extra_excludes: tuple[str, ...] = (),
+    data_dirs: tuple[str, ...] = (),
+) -> None:
     """将项目源码同步到 dist/src，剥离开发期文件.
 
     保留应用运行所需源码与资源（``.py``/数据文件/``LICENSE`` 等），
     排除构建产物、缓存、虚拟环境、工具配置、项目元数据（
     ``pyproject.toml``/``.python-version``/``uv.lock`` 等）、
     凭证（``.env``）、文档（``*.md``/``*.rst``/``docs``）与测试代码（``tests``）。
-    详见 ``_EXCLUDE`` 模式列表。
+    详见 ``_EXCLUDE_ALWAYS``/``_EXCLUDE_METADATA`` 模式列表。
 
     ``extra_excludes`` 为 ``[tool.fspack] exclude`` 配置的额外排除模式，
     合并到内置 ``_EXCLUDE`` 中（如排除 ``examples`` 目录）。
 
+    ``data_dirs`` 为 ``[tool.fspack] data-dirs`` 配置的数据资源目录树（相对
+    ``project_dir`` 的 POSIX 路径，如 ``src/fspack/assets/templates``）。
+    这些目录树内的元数据/文档文件（``pyproject.toml``/``*.md``/``uv.lock`` 等）
+    不被排除，仅应用 ``_EXCLUDE_ALWAYS``（构建产物/缓存/IDE 等）。
+    用于含子项目作为资源的场景（如 fspack 自身的 ``assets/templates/`` 含完整
+    项目模板，其 ``pyproject.toml``/``README.md`` 是模板必需文件，不能剥离）。
+
     增量同步：``src_dst`` 已存在时保留 ``__pycache__`` 目录以复用 ``.pyc`` 缓存，
     仅删除源码中已不存在的文件、覆盖复制新增/改动的文件（``copy2`` 保留 mtime）。
     """
-    ignore_fn = _merge_excludes(_EXCLUDE, extra_excludes) if extra_excludes else _EXCLUDE
+    ignore_fn = _build_ignore_fn(project_dir, extra_excludes, data_dirs)
     if src_dst.exists():
         _sync_tree(project_dir, src_dst, ignore_fn)
     else:
         shutil.copytree(project_dir, src_dst, ignore=ignore_fn)
+
+
+def _build_ignore_fn(
+    project_dir: Path,
+    extra_excludes: tuple[str, ...],
+    data_dirs: tuple[str, ...],
+) -> Callable[..., set[str]]:
+    """构造 ignore 函数：data-dirs 内只应用 _EXCLUDE_ALWAYS，外应用完整 _EXCLUDE.
+
+    data-dirs 解析为绝对路径前缀集合，ignore 函数对每个 ``directory`` 判断是否
+    在任一 data-dir 内（前缀匹配），是则跳过 ``_EXCLUDE_METADATA``。
+
+    ``extra_excludes`` 始终应用（用户显式排除优先级最高，不论是否在 data-dirs 内）。
+    """
+    extra_fn = shutil.ignore_patterns(*extra_excludes) if extra_excludes else None
+    if not data_dirs:
+        # 无 data-dirs：返回完整 _EXCLUDE（已含 _ALWAYS + _METADATA）+ extra
+        if extra_fn is None:
+            return _EXCLUDE
+
+        def full_ignore(directory: str, names: list[str]) -> set[str]:
+            return _EXCLUDE(directory, names) | extra_fn(directory, names)
+
+        return full_ignore
+
+    # 预解析 data-dirs 为绝对路径，避免每个 directory 调用时重复 resolve
+    project_dir_abs = project_dir.resolve()
+    data_dir_abs: list[Path] = []
+    for rel in data_dirs:
+        # data-dirs 配置为 POSIX 路径（如 "src/fspack/assets/templates"），
+        # Path() 跨平台接受正斜杠，resolve 后与 directory 比较前缀
+        abs_path = (project_dir_abs / Path(rel)).resolve()
+        data_dir_abs.append(abs_path)
+
+    def ignore_fn(directory: str, names: list[str]) -> set[str]:
+        excluded = _EXCLUDE_ALWAYS(directory, names)
+        # 判断 directory 是否在任一 data-dir 内（含 data-dir 自身）。
+        # Path.is_relative_to 是 3.9+，fspack 支持 3.8，用 try/except ValueError 兼容。
+        dir_path = Path(directory)
+        try:
+            dir_resolved = dir_path.resolve()
+        except OSError:
+            dir_resolved = dir_path
+        in_data = False
+        for d in data_dir_abs:
+            if dir_resolved == d:
+                in_data = True
+                break
+            try:
+                dir_resolved.relative_to(d)
+                in_data = True
+                break
+            except ValueError:
+                continue
+        if not in_data:
+            excluded |= _EXCLUDE_METADATA(directory, names)
+        if extra_fn is not None:
+            excluded |= extra_fn(directory, names)
+        return excluded
+
+    return ignore_fn
 
 
 def _merge_excludes(base: Callable[..., set[str]], extra: tuple[str, ...]) -> Callable[..., set[str]]:

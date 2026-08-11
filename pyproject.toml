@@ -83,6 +83,10 @@ exclude = [
 [tool.fspack]
 # 自身打包配置：排除开发期模板与 GitHub Actions 模板，启用 .pyc 剥离优化
 exclude = [".trae"]
+# 数据资源目录：原样保留 assets/templates 下完整项目模板（pyproject.toml/README.md/
+# uv.lock/.python-version 等），copy_source 跳过元数据/文档排除，pyc_strip 跳过其下
+# .py 剥离。fsp doctor --test 复制模板到临时目录构建时需要这些文件齐全。
+data-dirs = ["src/fspack/assets/templates"]
 pyc_strip = true
 no_site = true
 

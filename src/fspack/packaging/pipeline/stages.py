@@ -375,6 +375,11 @@ def _compile_user_sources(ctx: BuildContext, src_dst: Path) -> None:
     入口文件跳过编译与剥离：入口包装器用 ``runpy.run_module``/``run_path`` 调用
     用户代码，需 ``.py`` 存在才能被 ``find_spec`` 定位（``.pyd`` 无字节码无法被
     ``runpy`` 执行，``__pycache__`` 下的 ``.pyc`` 不在 ``FileFinder`` 搜索范围）。
+
+    ``[tool.fspack] data-dirs`` 配置的数据资源目录树（``ctx.info.data_dirs``）
+    传递给 ``_precompile_pyc``，其下 ``.py`` 不被剥离：这些目录视为完整资源原样
+    保留（如 fspack 的 ``assets/templates/`` 含项目模板源码，下游 ``fsp doctor
+    --test`` 复制后需 ``.py`` 存在才能构建）。
     """
     target = ctx.cfg.target
     # 入口文件相对 src 的 POSIX 路径集合：Nuitka 编译与 pyc_strip 剥离均跳过这些文件
@@ -403,8 +408,16 @@ def _compile_user_sources(ctx: BuildContext, src_dst: Path) -> None:
     # 交叉构建时（构建机平台 ≠ 目标平台）runtime python 无法执行，跳过预编译。
     # Nuitka 模式下 src 已编译为 .pyd，compileall 会跳过（找不到 .py 不生成 .pyc），
     # site-packages 仍按 pyc_optimize 编译，故本步保留不跳过。
+    # data_dirs 解析为 dist/src 下的绝对路径，传递给 _precompile_pyc 跳过其下 .py 剥离。
     if not ctx.opts.no_pyc and target is detect_platform():
         with ctx.tracker.stage("预编译字节码") as st:
+            # data_dirs 配置为相对项目目录的 POSIX 路径（如 src/fspack/assets/templates），
+            # 解析为 dist/src 下的绝对路径：project_dir/src/fspack/assets/templates →
+            # dist/src/src/fspack/assets/templates（src_dst 即 dist/src）。
+            # 仅解析存在的目录，避免传不存在的路径（无副作用但增加判断开销）。
+            resolved_data_dirs = tuple(
+                src_dst / Path(rel) for rel in ctx.info.data_dirs if (src_dst / Path(rel)).is_dir()
+            )
             _precompile_pyc(
                 ctx.cfg.dist_dir,
                 ctx.runtime_dir,
@@ -414,6 +427,7 @@ def _compile_user_sources(ctx: BuildContext, src_dst: Path) -> None:
                 stage=st,
                 optimize=ctx.opts.pyc_optimize,
                 entry_rels=entry_rels,
+                data_dirs=resolved_data_dirs,
             )
 
 

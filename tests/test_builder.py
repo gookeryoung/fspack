@@ -1438,6 +1438,55 @@ def test_strip_py_sources_optimize_level_matches_pyc(tmp_path: Path) -> None:
     assert (src / "mod.py").is_file()  # .py 保留
 
 
+def test_strip_py_sources_skips_data_dirs(tmp_path: Path) -> None:
+    """``data_dirs`` 内的 .py 不剥离（数据资源目录原样保留）.
+
+    模拟 fspack 自身打包：``src/fspack/assets/templates/<each>/helloworld.py``
+    是项目模板源码，``fsp doctor --test`` 复制后需 .py 存在才能 build。
+    """
+    from fspack.builder import _strip_py_sources
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "__init__.py").write_text("")
+    (src / "app.py").write_text("print('app')")
+    # 模拟 assets/templates/cli_helloworld_pyall/helloworld.py
+    tpl_dir = src / "fspack" / "assets" / "templates" / "cli_helloworld_pyall"
+    tpl_dir.mkdir(parents=True)
+    (tpl_dir / "helloworld.py").write_text("def main():\n    print('hi')\n")
+    # 为两个 .py 都生成 .pyc（确保 PEP 3147 迁移条件满足，区别仅在 data_dirs 跳过）
+    _make_pyc_file(src / "app.py", "3.11", optimize=0)
+    _make_pyc_file(tpl_dir / "helloworld.py", "3.11", optimize=0)
+
+    data_dirs = (tpl_dir.resolve(),)
+    stripped = _strip_py_sources([src], py_version="3.11.9", optimize=0, data_dirs=data_dirs)
+
+    # 仅 app.py 被剥离，helloworld.py 保留
+    assert stripped == 1
+    assert not (src / "app.py").exists()
+    assert (src / "app.pyc").is_file()  # app.pyc 迁移到 legacy 布局
+    assert (tpl_dir / "helloworld.py").is_file()  # data_dirs 内保留 .py
+    # data_dirs 内的 __pycache__/.pyc 不迁移（.py 未删除）
+    pycache_files: list[Path] = list((tpl_dir / "__pycache__").glob("*.pyc"))
+    assert pycache_files  # __pycache__ 下 .pyc 仍在
+
+
+def test_strip_py_sources_data_dirs_empty_default_behavior(tmp_path: Path) -> None:
+    """``data_dirs`` 为空时与不传一致：所有非 __init__.py/.pyc 缺失的 .py 都剥离."""
+    from fspack.builder import _strip_py_sources
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "__init__.py").write_text("")
+    (src / "mod.py").write_text("x = 1")
+    _make_pyc_file(src / "mod.py", "3.11", optimize=0)
+
+    stripped = _strip_py_sources([src], py_version="3.11.9", optimize=0, data_dirs=())
+
+    assert stripped == 1
+    assert not (src / "mod.py").exists()
+
+
 def test_precompile_pyc_python_missing_skips(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """runtime python 未就绪时跳过 compileall，不调 subprocess."""
     runtime = tmp_path / "runtime"
@@ -1921,6 +1970,85 @@ def test_copy_source_extra_excludes_merged_with_builtin(tmp_path: Path) -> None:
     assert (dst / "app.py").is_file()
     assert not (dst / "dist").exists()
     assert not (dst / "custom_excl").exists()
+
+
+def test_copy_source_data_dirs_keeps_metadata_in_data_dirs(tmp_path: Path) -> None:
+    """data_dirs 内的元数据/文档文件保留（pyproject.toml/README.md/uv.lock 等）.
+
+    模拟 fspack 自身打包场景：``src/fspack/assets/templates/<each>/`` 是完整
+    项目模板，其内的 ``pyproject.toml``/``README.md``/``uv.lock`` 是模板必需
+    文件，必须原样保留供 ``fsp doctor --test`` 复制后构建。
+    """
+    src = tmp_path / "proj"
+    src.mkdir()
+    (src / "app.py").write_text("print('hi')")
+    # 模拟 assets/templates/cli_helloworld_pyall/ 完整项目模板
+    tpl = src / "src" / "fspack" / "assets" / "templates" / "cli_helloworld_pyall"
+    tpl.mkdir(parents=True)
+    (tpl / "pyproject.toml").write_text('[project]\nname = "cli-helloworld"\n')
+    (tpl / "helloworld.py").write_text("def main():\n    print('hi')\n")
+    (tpl / "README.md").write_text("# cli-helloworld\n")
+    (tpl / "uv.lock").write_text("version = 1\n")
+    (tpl / ".python-version").write_text("3.11\n")
+    # 项目根目录的元数据文件仍应被剥离
+    (src / "pyproject.toml").write_text('[project]\nname = "app"\n')
+    (src / "README.md").write_text("# app\n")
+    dst = tmp_path / "out" / "src"
+
+    copy_source(src, dst, data_dirs=("src/fspack/assets/templates",))
+    # data_dirs 内的元数据/文档文件保留
+    assert (dst / "src" / "fspack" / "assets" / "templates" / "cli_helloworld_pyall" / "pyproject.toml").is_file()
+    assert (dst / "src" / "fspack" / "assets" / "templates" / "cli_helloworld_pyall" / "README.md").is_file()
+    assert (dst / "src" / "fspack" / "assets" / "templates" / "cli_helloworld_pyall" / "uv.lock").is_file()
+    assert (dst / "src" / "fspack" / "assets" / "templates" / "cli_helloworld_pyall" / ".python-version").is_file()
+    # 应用源码保留
+    assert (dst / "app.py").is_file()
+    assert (dst / "src" / "fspack" / "assets" / "templates" / "cli_helloworld_pyall" / "helloworld.py").is_file()
+    # 项目根目录的元数据文件仍被剥离（data_dirs 只保护子树内的元数据）
+    assert not (dst / "pyproject.toml").exists()
+    assert not (dst / "README.md").exists()
+
+
+def test_copy_source_data_dirs_still_excludes_build_artifacts(tmp_path: Path) -> None:
+    """data_dirs 内仍排除构建产物/缓存/IDE 等（_EXCLUDE_ALWAYS 始终生效）."""
+    src = tmp_path / "proj"
+    src.mkdir()
+    (src / "app.py").write_text("print('hi')")
+    tpl = src / "assets" / "templates" / "demo"
+    tpl.mkdir(parents=True)
+    (tpl / "pyproject.toml").write_text('[project]\nname = "demo"\n')
+    (tpl / "main.py").write_text("print('demo')\n")
+    # 构建产物与缓存：data_dirs 内仍应排除
+    (tpl / "__pycache__").mkdir()
+    (tpl / "__pycache__" / "main.cpython-311.pyc").write_text("x")
+    (tpl / "dist").mkdir()
+    (tpl / "dist" / "junk.txt").write_text("x")
+    (tpl / ".venv").mkdir()
+    (tpl / ".venv" / "pyvenv.cfg").write_text("x")
+    dst = tmp_path / "out" / "src"
+
+    copy_source(src, dst, data_dirs=("assets/templates",))
+    # 元数据保留（data_dirs 保护）
+    assert (dst / "assets" / "templates" / "demo" / "pyproject.toml").is_file()
+    # 构建产物/缓存排除（_EXCLUDE_ALWAYS 始终生效）
+    assert not (dst / "assets" / "templates" / "demo" / "__pycache__").exists()
+    assert not (dst / "assets" / "templates" / "demo" / "dist").exists()
+    assert not (dst / "assets" / "templates" / "demo" / ".venv").exists()
+
+
+def test_copy_source_data_dirs_empty_keeps_default_behavior(tmp_path: Path) -> None:
+    """data_dirs 为空时行为与不传一致：元数据/文档照常剥离（向后兼容）."""
+    src = tmp_path / "proj"
+    src.mkdir()
+    (src / "app.py").write_text("print('hi')")
+    (src / "pyproject.toml").write_text('[project]\nname = "app"\n')
+    (src / "README.md").write_text("# app\n")
+    dst = tmp_path / "out" / "src"
+
+    copy_source(src, dst, data_dirs=())
+    assert (dst / "app.py").is_file()
+    assert not (dst / "pyproject.toml").exists()
+    assert not (dst / "README.md").exists()
 
 
 # ---- 依赖分析缓存 ----
