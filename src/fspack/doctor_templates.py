@@ -34,7 +34,7 @@ from fspack.doctor_envs import _dir_size, _format_size
 from fspack.doctor_models import TemplateBuildResult, TemplateRunResult
 
 if TYPE_CHECKING:
-    from fspack.templates.project_template import ProjectTemplate
+    from fspack.templates.registry import Template
 
 __all__ = [
     "_build_debug_cmd",
@@ -242,14 +242,14 @@ def _run_template(
 
 
 def _build_single_template(  # pragma: no cover
-    template: ProjectTemplate,
+    template: Template,
     work_dir: Path,
     *,
     bench: bool = False,
 ) -> TemplateBuildResult:
     """构建单个模板项目，返回结果.
 
-    :param template: 项目模板
+    :param template: 项目模板（统一 :class:`Template`，含 ``dir`` 字段用于 ``copytree``）
     :param work_dir: 临时工作目录（构建在此目录下的子目录进行）
     :param bench: ``True`` 时启用 ``profile=True``，输出详细性能报告
     """

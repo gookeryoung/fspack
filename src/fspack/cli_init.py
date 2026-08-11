@@ -116,9 +116,9 @@ def init_project(
     7. 写入文件（``mkdir parents=True`` + ``write_text``）
     8. 打印创建成功提示与下一步命令
     """
-    template = get_template(template_id)
+    template = get_template(template_id, role="init")
     if template is None:
-        available = ", ".join(t.id for t in list_templates())
+        available = ", ".join(t.id for t in list_templates(role="init"))
         raise ValueError(f"未知模板 id: {template_id!r}，可用模板: {available}")
 
     # Win7 兼容性检查：FastAPI 等模板依赖 pydantic-core，Win7 无法运行
@@ -186,7 +186,7 @@ def print_template_list() -> None:
 
           ...
     """
-    templates = list_templates()
+    templates = list_templates(role="init")
     console.step(f"可用项目模板（共 {len(templates)} 个）")
     console.rich.print()
     current_category = ""
@@ -224,7 +224,7 @@ def prompt_template_selection() -> str:
 
         请选择模板 [1-N] (默认 1):
     """
-    templates = list_templates()
+    templates = list_templates(role="init")
     if not templates:
         _logger.warning("无可用模板，使用 helloworld")
         return "helloworld"

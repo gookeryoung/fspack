@@ -144,8 +144,8 @@ def test_init_project_pyside2(tmp_path: Path) -> None:
     pyproject = (target / "pyproject.toml").read_text(encoding="utf-8")
     assert 'name = "my-gui"' in pyproject
     assert '"PySide2"' in pyproject
-    # PySide2 不支持 Python 3.11+，模板约束 requires-python
-    assert 'requires-python = ">=3.8,<3.11"' in pyproject
+    # PySide2 不支持 Python 3.10+，模板约束 requires-python
+    assert 'requires-python = ">=3.8,<3.10"' in pyproject
     entry = (target / "my_gui.py").read_text(encoding="utf-8")
     assert "from PySide2.QtWidgets" in entry
     assert "QMainWindow" in entry
@@ -164,9 +164,9 @@ def test_init_project_tkinter(tmp_path: Path) -> None:
 def test_init_project_pyside2_qml(tmp_path: Path) -> None:
     """init_project 用 pyside2-qml 模板创建项目，含 main.qml 文件."""
     target = init_project("qml-app", template_id="pyside2-qml", directory=tmp_path)
-    # PySide2 不支持 Python 3.11+，模板约束 requires-python
+    # PySide2 不支持 Python 3.10+，模板约束 requires-python
     pyproject = (target / "pyproject.toml").read_text(encoding="utf-8")
-    assert 'requires-python = ">=3.8,<3.11"' in pyproject
+    assert 'requires-python = ">=3.8,<3.10"' in pyproject
     # 入口脚本
     entry = (target / "qml_app.py").read_text(encoding="utf-8")
     assert "QQmlApplicationEngine" in entry
@@ -433,9 +433,9 @@ def test_init_project_full_config(tmp_path: Path) -> None:
 
 
 def test_template_count_final() -> None:
-    """模板总数 = 24（6 CLI + 6 GUI + 2 game + 3 sci + 4 web + 3 config）."""
-    templates = list_templates()
-    assert len(templates) == 24, f"应有 24 个模板，实际 {len(templates)}"
+    """init 模板总数 = 24（6 CLI + 6 GUI + 2 game + 3 sci + 4 web + 3 config）."""
+    templates = list_templates(role="init")
+    assert len(templates) == 24, f"应有 24 个 init 模板，实际 {len(templates)}"
     # 分类统计
     categories: dict[str, int] = {}
     for tpl in templates:
@@ -573,17 +573,20 @@ def test_load_all_skips_non_category_directories(monkeypatch: pytest.MonkeyPatch
     other_dir = tmp_path / "non_category"
     other_dir.mkdir()
     (other_dir / "xxx").mkdir()
-    monkeypatch.setattr(registry_mod, "_templates_root", lambda: tmp_path)
+    monkeypatch.setattr(registry_mod, "_init_templates_root", lambda: tmp_path)
+    # doctor 模板根目录指向不存在路径，避免污染测试
+    monkeypatch.setattr(registry_mod, "_doctor_templates_root", lambda: tmp_path / "nonexistent_doctor")
     templates = registry_mod._load_all()
     assert len(templates) == 1
     assert templates[0].id == "helloworld"
 
 
 def test_load_all_when_root_missing_returns_empty(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """_templates_root 指向不存在路径时返回空元组."""
+    """两个模板根目录都不存在时返回空元组."""
     from fspack.templates import registry as registry_mod
 
-    monkeypatch.setattr(registry_mod, "_templates_root", lambda: tmp_path / "nonexistent")
+    monkeypatch.setattr(registry_mod, "_init_templates_root", lambda: tmp_path / "nonexistent")
+    monkeypatch.setattr(registry_mod, "_doctor_templates_root", lambda: tmp_path / "nonexistent_doctor")
     assert registry_mod._load_all() == ()
 
 

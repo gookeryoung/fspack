@@ -126,10 +126,10 @@ def test_from_id_existing() -> None:
 
 
 def test_from_id_pyside2_qml() -> None:
-    """pyside2_qml_dashboard 模板含 requires-python <3.11 约束与 pyside2 依赖."""
+    """pyside2_qml_dashboard 模板含 requires-python <3.10 约束与 pyside2 依赖."""
     tpl = ProjectTemplate.from_id("pyside2_qml_dashboard")
     assert tpl is not None
-    assert "<3.11" in tpl.requires_python
+    assert "<3.10" in tpl.requires_python
     assert any("pyside2" in d.lower() for d in tpl.dependencies)
 
 

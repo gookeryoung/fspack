@@ -95,7 +95,7 @@ def test_project_info_from_dir_with_explicit_py_version(tmp_path: Path) -> None:
 def test_project_info_from_dir_pyside2_app() -> None:
     """from_dir 解析 GUI 示例并读取 requires-python 约束."""
     info = ProjectInfo.from_dir(_EXAMPLES / "gui" / "pyside2_app")
-    assert info.requires_python == ">=3.8,<3.11"
+    assert info.requires_python == ">=3.8,<3.10"
     assert info.app_type is AppType.GUI
 
 
@@ -253,7 +253,7 @@ def test_parse_project_helloworld() -> None:
 def test_parse_project_pyside2app_requires_python() -> None:
     """pyside2app 示例的 requires-python 约束正确解析."""
     info = parse_project(_EXAMPLES / "gui" / "pyside2_app")
-    assert info.requires_python == ">=3.8,<3.11"
+    assert info.requires_python == ">=3.8,<3.10"
     assert info.app_type is AppType.GUI
 
 
@@ -514,10 +514,10 @@ def test_resolve_py_version_complex_specifier(tmp_path: Path) -> None:
 
 
 def test_resolve_py_version_pyside2app_example() -> None:
-    """pyside2app 示例：.python-version=3.10 + requires-python<3.11 解析到 3.10.11（Windows embed）."""
+    """pyside2app 示例：.python-version=3.9 + requires-python<3.10 解析到 3.9.13（Windows embed）."""
     info = parse_project(_EXAMPLES / "gui" / "pyside2_app")
     resolved = resolve_py_version(_EXAMPLES / "gui" / "pyside2_app", None, info.requires_python)
-    assert resolved == "3.10.11"
+    assert resolved == "3.9.13"
 
 
 # --- _satisfies PEP 440 规范符匹配测试 ---
