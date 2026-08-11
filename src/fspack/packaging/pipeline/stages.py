@@ -287,14 +287,14 @@ def _analyze_dependencies(ctx: BuildContext, *, save_cache: bool = True) -> Depe
             ctx.opts.extras,
             ctx.info.name,
         )
-        fingerprint = source_fingerprint(project_dir)
+        fingerprint = source_fingerprint(project_dir, ctx.info.data_dirs)
         report = _dep_cache_load(ctx.cfg.dist_dir, fingerprint, expanded_deps)
         if report is not None:
             st.hit_cache()
             ast_count = len(report.ast_third_party)
             st.set_detail(f"缓存命中，AST {ast_count} 个第三方")
         else:
-            report = DependencyReport.from_src(project_dir, ctx.info.name, expanded_deps)
+            report = DependencyReport.from_src(project_dir, ctx.info.name, expanded_deps, ctx.info.data_dirs)
             if save_cache:
                 _dep_cache_save(ctx.cfg.dist_dir, fingerprint, report)
             if report.missing:

@@ -320,14 +320,24 @@ class DependencyReport:
     ast_errors: tuple[str, ...] = ()
 
     @classmethod
-    def from_src(cls, src_dir: Path, project_name: str, declared: tuple[str, ...]) -> DependencyReport:
+    def from_src(
+        cls,
+        src_dir: Path,
+        project_name: str,
+        declared: tuple[str, ...],
+        data_dirs: tuple[str, ...] = (),
+    ) -> DependencyReport:
         """扫描源码目录构造依赖分析报告。
+
+        ``data_dirs`` 为 ``[tool.fspack] data-dirs`` 配置的数据资源目录树（相对
+        ``src_dir`` 的 POSIX 路径），其下 ``.py`` 是模板/前端产物等数据资源，
+        不应被 AST 扫描误判为项目依赖。
 
         惰性导入 :func:`fspack.analyzer.analyze_dependencies` 打破 config ↔ analyzer 循环依赖。
         """
         from fspack.analyzer import analyze_dependencies
 
-        return analyze_dependencies(src_dir, project_name, declared)
+        return analyze_dependencies(src_dir, project_name, declared, data_dirs)
 
     @property
     def missing(self) -> tuple[str, ...]:

@@ -179,6 +179,70 @@ def test_analyze_dependencies_excludes_cache_and_tool_dirs(tmp_path: Path) -> No
     assert r.ast_third_party == ()
 
 
+def test_analyze_dependencies_excludes_data_dirs(tmp_path: Path) -> None:
+    """data-dirs 配置的数据资源目录树不应被扫描，避免模板/前端产物误报依赖.
+
+    模拟 fspack 打包自身场景：src/fspack/assets/init_templates/ 下的 tkinter
+    模板含 ``import tkinter``，但这是模板数据资源而非项目自身依赖，应被排除。
+    用 ``init_templates`` 路径而非 ``templates``（后者已在 ``_EXCLUDED_DIRS`` 中）。
+    """
+    (tmp_path / "main.py").write_text("import os\n")
+    # 模拟 data-dirs：src/fspack/assets/init_templates/gui/tkinter/
+    data_dir = tmp_path / "src" / "fspack" / "assets" / "init_templates" / "gui" / "tkinter"
+    data_dir.mkdir(parents=True)
+    (data_dir / "entry.py").write_text("import tkinter as tk\nfrom tkinter import ttk\nimport PySide2\n")
+
+    # 不传 data_dirs → tkinter/PySide2 被误扫到（init_templates 不在 _EXCLUDED_DIRS）
+    r_no_exclude = analyze_dependencies(tmp_path, "main", ())
+    assert "tkinter" in r_no_exclude.ast_stdlib
+    assert "PySide2" in r_no_exclude.ast_third_party
+
+    # 传 data_dirs → 数据资源目录被排除
+    r_excluded = analyze_dependencies(
+        tmp_path,
+        "main",
+        (),
+        data_dirs=("src/fspack/assets/init_templates",),
+    )
+    assert "tkinter" not in r_excluded.ast_stdlib
+    assert "PySide2" not in r_excluded.ast_third_party
+    assert r_excluded.ast_third_party == ()
+
+
+def test_source_fingerprint_excludes_data_dirs(tmp_path: Path) -> None:
+    """source_fingerprint 传入 data_dirs 后排除数据资源目录，与 AST 扫描一致.
+
+    指纹必须与 AST 扫描使用相同的排除逻辑，否则 data-dirs 内 .py 变化会
+    导致缓存键变化但 AST 结果不变（缓存命中后跳过扫描，浪费），或反之
+    （缓存未命中但 .py 未变，重复扫描）。
+    用 ``assets/init_templates`` 路径（不在 ``_EXCLUDED_DIRS`` 中）验证。
+    """
+    from fspack.analyzer import source_fingerprint
+
+    (tmp_path / "main.py").write_text("import os\n")
+    data_dir = tmp_path / "assets" / "init_templates"
+    data_dir.mkdir(parents=True)
+    (data_dir / "tpl.py").write_text("import tkinter\n")
+
+    # 不排除 data-dirs 的指纹（init_templates 不在 _EXCLUDED_DIRS，会被扫描）
+    fp_no_exclude = source_fingerprint(tmp_path)
+    # 排除 data-dirs 的指纹
+    fp_excluded = source_fingerprint(tmp_path, data_dirs=("assets/init_templates",))
+
+    # 两者不同（data-dirs 内 .py 被排除后指纹不同）
+    assert fp_no_exclude != fp_excluded
+
+    # 修改 data-dirs 内 .py 后，排除指纹不变（证明被排除）
+    # 用不同字节数内容确保 size 变化（避免 mtime 精度问题）
+    (data_dir / "tpl.py").write_text("import PySide2 as ps2\nimport asyncio\n")
+    fp_after_change = source_fingerprint(tmp_path, data_dirs=("assets/init_templates",))
+    assert fp_excluded == fp_after_change
+
+    # 但不排除的指纹会变（size 变化触发指纹变化）
+    fp_no_exclude_after = source_fingerprint(tmp_path)
+    assert fp_no_exclude != fp_no_exclude_after
+
+
 def test_analyze_dependencies_submodules(tmp_path: Path) -> None:
     """第三方包的子模块 import 被收集到 ast_submodules."""
     (tmp_path / "main.py").write_text("from PySide2.QtCore import QTimer\nfrom PySide2.QtWidgets import QApplication\n")

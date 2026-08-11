@@ -67,11 +67,21 @@ def _local_packages(src_dir: Path, project_name: str) -> set[str]:
     return local
 
 
-def analyze_dependencies(src_dir: Path, project_name: str, declared: tuple[str, ...]) -> DependencyReport:  # noqa: PLR0912
+def analyze_dependencies(  # noqa: PLR0912
+    src_dir: Path,
+    project_name: str,
+    declared: tuple[str, ...],
+    data_dirs: tuple[str, ...] = (),
+) -> DependencyReport:
     """扫描 src_dir 下所有 .py 与 .qml，分类 import 为标准库/本地/第三方。
 
     自动排除 dist/build/.venv 等构建产物与缓存目录，避免扫描到已解包的
     embed python 或 python-build-standalone 标准库源码导致误报依赖。
+
+    ``data_dirs`` 为 ``[tool.fspack] data-dirs`` 配置的数据资源目录树（相对
+    ``src_dir`` 的 POSIX 路径），其下 ``.py`` 是模板/前端产物等数据资源，
+    不应被 AST 扫描误判为项目依赖（如 fspack 打包自身时，``assets/init_templates``
+    下的 tkinter 模板不应让 fspack 依赖 tkinter）。
 
     文件数超过 :data:`_PARALLEL_THRESHOLD` 时使用 :class:`ProcessPoolExecutor`
     并行解析（CPU 密集 ``ast.parse``），大项目显著提速。小项目走串行路径
@@ -83,7 +93,8 @@ def analyze_dependencies(src_dir: Path, project_name: str, declared: tuple[str, 
     入口仅 ``import PySide2.QtQml`` 不会触发 ``Quick`` 子模块保留，AST 无法发现
     此运行时依赖。
     """
-    py_files: list[Path] = [py for py in src_dir.rglob("*.py") if not _is_excluded(py, src_dir)]
+    resolved_data_dirs = tuple((src_dir / Path(rel)).resolve() for rel in data_dirs)
+    py_files: list[Path] = [py for py in src_dir.rglob("*.py") if not _is_excluded(py, src_dir, resolved_data_dirs)]
 
     all_imports: list[str] = []  # 非标准库顶层导入（local + third_party）
     all_stdlib: list[str] = []  # 标准库顶层导入（worker/串行已分离）
@@ -99,7 +110,9 @@ def analyze_dependencies(src_dir: Path, project_name: str, declared: tuple[str, 
     # 仅当项目 import 了 Qt 绑定包时才扫描，避免非 Qt 项目无谓 I/O
     imported_qt_pkgs = _QT_PYTHON_PACKAGES & set(all_imports)
     if imported_qt_pkgs:
-        qml_files: list[Path] = [qml for qml in src_dir.rglob("*.qml") if not _is_excluded(qml, src_dir)]
+        qml_files: list[Path] = [
+            qml for qml in src_dir.rglob("*.qml") if not _is_excluded(qml, src_dir, resolved_data_dirs)
+        ]
         qml_qt_subs: set[str] = set()
         for qml_file in qml_files:
             # 防御性 try/except：parse_qml_imports 内部已 catch OSError，但其他异常
