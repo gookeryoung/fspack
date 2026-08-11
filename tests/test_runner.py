@@ -288,13 +288,18 @@ def _make_multi_entry_py310_info() -> ProjectInfo:
     )
 
 
-def test_select_entry_default_returns_first(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    """多入口未指定 --entry 时返回首个入口并日志提示."""
+def test_select_entry_default_prefers_gui(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """多入口未指定 --entry 时按 GUI 优先选默认入口并日志提示.
+
+    entries=(cli=CLI, gui=GUI, web=CLI)，默认应选 gui（GUI 优先于 CLI），
+    而非首个入口 cli。
+    """
     info = _make_multi_entry_py310_info()
     with caplog.at_level("INFO", logger="fspack.runner"):
         ep = _select_entry(info, None)
-    assert ep.name == "cli"
+    assert ep.name == "gui"
     assert "未指定 --entry" in caplog.text
+    assert "使用默认入口" in caplog.text
 
 
 def test_select_entry_by_name() -> None:
@@ -327,6 +332,82 @@ def test_select_entry_single_project_no_warn(tmp_path: Path, caplog: pytest.LogC
         ep = _select_entry(info, None)
     assert ep.name == "app"
     assert "未指定 --entry" not in caplog.text
+
+
+# --- ProjectInfo.default_entry 测试 ---
+
+
+def _make_same_type_multi_entry_info() -> ProjectInfo:
+    """构造同类型（全 CLI）多入口 ProjectInfo 用于字母排序测试."""
+    return ProjectInfo(
+        name="same",
+        version="0.1",
+        src_dir=Path(),
+        entry_module="zebra",
+        entry_file=Path("zebra.py"),
+        app_type=AppType.CLI,
+        dependencies=(),
+        py_version="3.10.11",
+        entries=(
+            EntryPoint(name="zebra", module="zebra", file=Path("zebra.py"), app_type=AppType.CLI),
+            EntryPoint(name="alpha", module="alpha", file=Path("alpha.py"), app_type=AppType.CLI),
+            EntryPoint(name="mango", module="mango", file=Path("mango.py"), app_type=AppType.CLI),
+        ),
+    )
+
+
+def _make_multi_gui_entry_info() -> ProjectInfo:
+    """构造多 GUI 入口 ProjectInfo 用于 GUI 内字母排序测试."""
+    return ProjectInfo(
+        name="guis",
+        version="0.1",
+        src_dir=Path(),
+        entry_module="zgui",
+        entry_file=Path("zgui.py"),
+        app_type=AppType.GUI,
+        dependencies=(),
+        py_version="3.10.11",
+        entries=(
+            EntryPoint(name="zgui", module="zgui", file=Path("zgui.py"), app_type=AppType.GUI),
+            EntryPoint(name="agui", module="agui", file=Path("agui.py"), app_type=AppType.GUI),
+            EntryPoint(name="mgui", module="mgui", file=Path("mgui.py"), app_type=AppType.GUI),
+        ),
+    )
+
+
+def test_default_entry_prefers_gui_over_cli() -> None:
+    """多入口混合 CLI/GUI 时 default_entry 选 GUI（即使 GUI 非首入口）."""
+    info = _make_multi_entry_py310_info()
+    assert info.default_entry.name == "gui"
+    assert info.default_entry.app_type is AppType.GUI
+
+
+def test_default_entry_alphabetical_within_same_type() -> None:
+    """同类型多入口按名字母序选第一个（CLI 内 alpha < mango < zebra）."""
+    info = _make_same_type_multi_entry_info()
+    assert info.default_entry.name == "alpha"
+
+
+def test_default_entry_alphabetical_within_gui() -> None:
+    """多 GUI 入口按名字母序选第一个（agui < mgui < zgui）."""
+    info = _make_multi_gui_entry_info()
+    assert info.default_entry.name == "agui"
+
+
+def test_default_entry_single_project_returns_only_entry() -> None:
+    """单入口项目 default_entry 返回唯一入口（自身）."""
+    info = ProjectInfo(
+        name="solo",
+        version="0.1",
+        src_dir=Path(),
+        entry_module="solo",
+        entry_file=Path("solo.py"),
+        app_type=AppType.GUI,
+        dependencies=(),
+        py_version="3.11.9",
+    )
+    assert info.default_entry.name == "solo"
+    assert info.default_entry.app_type is AppType.GUI
 
 
 def test_run_run_multi_entry_py310_select(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

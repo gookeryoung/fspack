@@ -62,15 +62,17 @@ def run(
 def _select_entry(info: ProjectInfo, entry: str | None) -> EntryPoint:
     """从项目入口中选择要运行的入口。
 
-    ``entry=None`` 时返回首个入口（多入口项目日志提示可指定 ``--entry``）；
-    ``entry`` 非空时按名匹配，未找到则报错列出可用入口。
+    ``entry=None`` 时按 GUI 优先、同类型按字母排序选默认入口
+    （见 :attr:`ProjectInfo.default_entry`）；``entry`` 非空时按名匹配，
+    未找到则报错列出可用入口。
     """
     all_entries = info.all_entries
     if entry is None:
+        ep = info.default_entry
         if len(all_entries) > 1:
-            names = ", ".join(ep.name for ep in all_entries)
-            _logger.info("多入口项目未指定 --entry，使用首个入口 %s（可用: %s）", all_entries[0].name, names)
-        return all_entries[0]
+            names = ", ".join(e.name for e in all_entries)
+            _logger.info("多入口项目未指定 --entry，使用默认入口 %s（可用: %s）", ep.name, names)
+        return ep
     for ep in all_entries:
         if ep.name == entry:
             return ep

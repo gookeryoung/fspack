@@ -265,6 +265,21 @@ class ProjectInfo:
             return self.entries
         return (EntryPoint(name=self.name, module=self.entry_module, file=self.entry_file, app_type=self.app_type),)
 
+    @property
+    def default_entry(self) -> EntryPoint:
+        """默认入口：GUI 优先于 CLI，同类型按入口名字母排序。
+
+        未显式指定入口时（如 ``fsp r`` 不带 ``--entry``、``fsp doctor --test``
+        运行验证），按 GUI 优先、同类型按名字母序选第一个，保证选择稳定
+        可预期。单入口项目返回唯一入口。
+
+        排序键 ``(0 if GUI else 1, name)``：GUI 排前，同类型内按 ``name``
+        升序。``AppType`` 枚举定义序 CLI 在前 GUI 在后，不能直接用枚举值
+        排序，须显式让 GUI 优先。
+        """
+        entries = self.all_entries
+        return min(entries, key=lambda ep: (0 if ep.app_type is AppType.GUI else 1, ep.name))
+
 
 @dataclass(frozen=True)
 class DependencyReport:

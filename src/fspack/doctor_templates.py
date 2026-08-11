@@ -290,9 +290,10 @@ def _build_single_template(  # pragma: no cover
     entry_count = len(list(dist_dir.glob("*.exe"))) if dist_dir.is_dir() else 0
 
     # 构建成功后解析项目入口：多入口项目产出的 exe 名是 [tool.fspack.entries]
-    # 的键（如 cli/gui/web），不等于 template.name。用 ProjectInfo.all_entries[0]
-    # 取首个入口名（与 `fsp r` 默认行为一致），避免多入口项目跳过运行验证。
-    entry_name = ProjectInfo.from_dir(proj_dir).all_entries[0].name
+    # 的键（如 cli/gui/web），不等于 template.name。用 ProjectInfo.default_entry
+    # 取默认入口名（GUI 优先、同类型按字母排序，与 `fsp r` 默认行为一致），
+    # 避免多入口项目跳过运行验证。
+    entry_name = ProjectInfo.from_dir(proj_dir).default_entry.name
 
     # 运行验证：优先用 debug 模式（embed python + wrapper），模拟 `fsp r --debug`：
     # console 子系统 stdout 可见，wrapper 设置 Qt 插件路径、Tcl/Tk 环境变量、
