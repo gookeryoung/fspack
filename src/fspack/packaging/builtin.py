@@ -81,11 +81,14 @@ class TkinterBundler:
 
     @classmethod
     def ensure(cls, runtime_dir: Path, version: str, cache_dir: Path, stage: StageRecorder) -> None:
-        """确保 tkinter 在 runtime 中可用（缓存优先）。
+        """确保 tkinter 在 runtime 中可用（缓存优先，损坏自动恢复）。
 
         1. 检查 ``runtime/Lib/tkinter/__init__.py`` 是否已存在 → 命中跳过
-        2. 检查 ``cache/tkinter/tkinter-{standalone_ver}.zip`` 是否已缓存 → 解压到 runtime
-        3. 下载 Windows standalone tarball → 提取 tkinter → 生成缓存 zip → 解压到 runtime
+        2. 检查 ``cache/tkinter/tkinter-{standalone_ver}.zip`` 是否已缓存 → 解压到 runtime；
+           若 zip 损坏（``BadZipFile``）删除后走下载分支重建
+        3. 下载 Windows standalone tarball → 提取 tkinter → 生成缓存 zip → 解压到 runtime；
+           若 tarball 损坏（``EOFError``/``ReadError``）删除并重新下载重试一次；
+           离线模式下损坏直接抛 :class:`BuiltinError` 提示用户删除缓存
 
         ``version`` 为 embed python 版本（如 3.11.9），但 python-build-standalone release
         只含该 minor 最新补丁（如 3.11.15）。``_tkinter.pyd`` 在同一 minor 内 ABI 兼容
@@ -112,9 +115,14 @@ class TkinterBundler:
         if cache_zip.is_file():
             stage.set_detail("从缓存解压 tkinter")
             _logger.info("tkinter 打包: 从缓存解压 %s", cache_zip.name)
-            cls._unpack_tkinter_zip(cache_zip, runtime_dir)
-            stage.processed(1)
-            return
+            try:
+                cls._unpack_tkinter_zip(cache_zip, runtime_dir)
+                stage.processed(1)
+                return
+            except zipfile.BadZipFile as e:
+                # 缓存 zip 损坏，删除后落到 tarball 下载分支重建
+                _logger.warning("tkinter 缓存 zip 损坏，删除并重建: %s", e)
+                cache_zip.unlink(missing_ok=True)
 
         # 下载 Windows standalone tarball
         standalone_windows_cache = cache_dir / "standalone-windows"
@@ -140,7 +148,23 @@ class TkinterBundler:
 
         # 从 tarball 提取 tkinter 组件，生成缓存 zip
         _logger.info("tkinter 打包: 从 tarball 提取 tkinter 组件")
-        zip_data = cls._build_tkinter_zip(tarball_path)
+        try:
+            zip_data = cls._build_tkinter_zip(tarball_path)
+        except (EOFError, tarfile.ReadError) as e:
+            # tarball 损坏（gzip 流提前结束等），删除缓存并重新下载重试一次
+            _logger.warning("standalone tarball 损坏，删除并重新下载: %s", e)
+            tarball_path.unlink(missing_ok=True)
+            if is_offline():
+                raise BuiltinError(
+                    f"离线模式下 standalone tarball 缓存损坏: {tarball_path.name}，"
+                    f"请删除 {tarball_path} 后重新运行或取消 FSPACK_OFFLINE 环境变量"
+                ) from e
+            url = cls.standalone_windows_url(standalone_ver, STANDALONE_RELEASE_TAG)
+            _logger.info("tkinter 打包: 重新下载 Windows standalone 构建 %s", standalone_ver)
+            downloader = Downloader()
+            downloader.download(url, tarball_path, stage=stage, label=f"standalone-windows {standalone_ver}")
+            zip_data = cls._build_tkinter_zip(tarball_path)
+
         cache_zip.write_bytes(zip_data)
         stage.processed(1)
         stage.set_detail("tkinter")

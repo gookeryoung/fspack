@@ -283,3 +283,106 @@ def test_ensure_reuses_cached_tarball(tmp_path: Path, monkeypatch: pytest.Monkey
     # tarball 缓存命中时 stage.hit_cache 被调用
     record = rec._finalize()
     assert record.cache_hit == 1
+
+
+def test_ensure_rebuilds_when_cache_zip_corrupt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """缓存 zip 损坏（BadZipFile）→ 删除损坏 zip，走下载分支重建.
+
+    模拟 cache_zip 存在但内容非 zip（写入垃圾字节），ensure 应捕获
+    zipfile.BadZipFile，删除损坏 zip，继续走 tarball 下载分支重建缓存。
+    """
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    cache_dir = tmp_path / "cache"
+    tkinter_cache = cache_dir / "tkinter"
+    tkinter_cache.mkdir(parents=True)
+    # 写入损坏的 cache_zip（非 zip 字节）
+    cache_zip = tkinter_cache / "tkinter-3.11.15.zip"
+    cache_zip.write_bytes(b"not a zip file")
+
+    # 准备 fake tarball 供重新下载使用
+    fake_tar = tmp_path / "fake.tar.gz"
+    _make_tkinter_tarball(fake_tar)
+
+    def fake_download(self: object, url: str, dest: Path, **kwargs: object) -> int:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(fake_tar.read_bytes())
+        return fake_tar.stat().st_size
+
+    monkeypatch.setattr("fspack.packaging.builtin.Downloader.download", fake_download)
+
+    rec = StageRecorder("test")
+    TkinterBundler.ensure(runtime, "3.11.9", cache_dir, stage=rec)
+
+    # runtime 已补充 tkinter（说明走完了重建流程）
+    assert (runtime / "Lib" / "tkinter" / "__init__.py").is_file()
+    # 损坏的 cache_zip 被覆盖为有效 zip
+    with zipfile.ZipFile(cache_zip, "r") as zf:
+        assert "Lib/tkinter/__init__.py" in zf.namelist()
+
+
+def test_ensure_redownloads_when_tarball_corrupt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """standalone tarball 损坏（EOFError）→ 删除损坏 tarball，重新下载重试.
+
+    模拟 tarball 缓存存在但 gzip 流损坏（写入截断的 gzip），ensure 应捕获
+    EOFError/tarfile.ReadError，删除损坏 tarball，重新下载并重试一次。
+    """
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    cache_dir = tmp_path / "cache"
+    standalone_cache = cache_dir / "standalone-windows"
+    standalone_cache.mkdir(parents=True)
+    tarball_name = TkinterBundler.standalone_windows_tarball_name("3.11.15", STANDALONE_RELEASE_TAG)
+    tarball_path = standalone_cache / tarball_name
+    # 写入损坏的 tarball（截断的 gzip 头，触发 EOFError）
+    tarball_path.write_bytes(b"\x1f\x8b\x08\x00" + b"\x00" * 100)
+
+    # 准备 fake tarball 供重新下载使用
+    fake_tar = tmp_path / "fake.tar.gz"
+    _make_tkinter_tarball(fake_tar)
+
+    download_count = {"count": 0}
+
+    def fake_download(self: object, url: str, dest: Path, **kwargs: object) -> int:
+        download_count["count"] += 1
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(fake_tar.read_bytes())
+        return fake_tar.stat().st_size
+
+    monkeypatch.setattr("fspack.packaging.builtin.Downloader.download", fake_download)
+
+    rec = StageRecorder("test")
+    TkinterBundler.ensure(runtime, "3.11.9", cache_dir, stage=rec)
+
+    # 重新下载被调用一次
+    assert download_count["count"] == 1
+    # runtime 已补充 tkinter
+    assert (runtime / "Lib" / "tkinter" / "__init__.py").is_file()
+    # 损坏的 tarball 被覆盖为有效 tarball
+    with tarfile.open(tarball_path, "r:gz") as tf:
+        assert any(m.name.endswith("/tkinter/__init__.py") for m in tf.getmembers())
+
+
+def test_ensure_offline_tarball_corrupt_raises_builtin_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """离线模式下 tarball 损坏 → 抛 BuiltinError 提示用户删除缓存.
+
+    离线模式无法重新下载，损坏时直接报错并提示解决路径。
+    """
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    cache_dir = tmp_path / "cache"
+    standalone_cache = cache_dir / "standalone-windows"
+    standalone_cache.mkdir(parents=True)
+    tarball_name = TkinterBundler.standalone_windows_tarball_name("3.11.15", STANDALONE_RELEASE_TAG)
+    tarball_path = standalone_cache / tarball_name
+    # 写入损坏的 tarball
+    tarball_path.write_bytes(b"\x1f\x8b\x08\x00" + b"\x00" * 100)
+
+    monkeypatch.setattr("fspack.packaging.builtin.is_offline", lambda: True)
+
+    rec = StageRecorder("test")
+    with pytest.raises(BuiltinError, match="离线模式下 standalone tarball 缓存损坏"):
+        TkinterBundler.ensure(runtime, "3.11.9", cache_dir, stage=rec)
+
+    # 损坏的 tarball 已被删除（便于用户下次在线模式重新下载）
+    assert not tarball_path.exists()
