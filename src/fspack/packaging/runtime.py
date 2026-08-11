@@ -438,9 +438,8 @@ class EmbedRuntime(RuntimeDownloader):
     @classmethod
     @override
     def post_extract(cls, runtime_dir: Path, version: str) -> None:  # noqa: ARG003 # 抽象方法签名要求，embed 不需要 version
-        """创建 site-packages 目录。"""
-        site_packages = runtime_dir / "Lib" / "site-packages"
-        site_packages.mkdir(parents=True, exist_ok=True)
+        """解压后钩子（site-packages 已移至 dist 层级，由 pipeline 创建，此处无操作）."""
+        return None
 
 
 class StandaloneRuntime(RuntimeDownloader):
@@ -542,7 +541,9 @@ def ensure_embed(  # noqa: PLR0913
 ) -> Path:
     """确保 runtime_dir 内有可用 embed python，返回 runtime_dir。
 
-    重复构建时若 python3X.dll 已存在则跳过下载与解压，但仍保证 site-packages 目录就绪。
+    重复构建时若 python3X.dll 已存在则跳过下载与解压。site-packages 已移至
+    ``dist/site-packages``（与 runtime 平级），由 :func:`_prepare_runtime` 创建，
+    本函数不再负责创建。
     """
     dll_marker = EmbedRuntime.marker_path(runtime_dir, version)
     if dll_marker.is_file():
@@ -627,7 +628,8 @@ def write_pth(
     """在 runtime 目录生成 python3X._pth，控制 sys.path。
 
     _pth 必须与 python311.dll 同目录（dist/runtime/），路径相对 runtime 解析：
-    python311.zip 标准库、Lib\\site-packages 第三方依赖、..\\src 用户源码。
+    python311.zip 标准库、..\\site-packages 第三方依赖（与 runtime 平级的
+    dist/site-packages）、..\\src 用户源码。
 
     ``enable_site=False`` 时省略 ``import site`` 行，启动时跳过 ``site.py``
     执行（约节省 20-30ms）。wrapper 已显式 ``sys.path.insert`` site-packages，
@@ -644,7 +646,7 @@ def write_pth(
     lines = [
         f"{pyxy}.zip",
         ".",
-        "Lib\\site-packages",
+        "..\\site-packages",
         "..\\src",
         *extra_paths,
     ]

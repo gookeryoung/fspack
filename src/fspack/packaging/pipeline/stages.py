@@ -234,7 +234,7 @@ def _prepare_standalone_runtime(ctx: BuildContext, *, macos_arch: str | None = N
             extract_standalone(tar_path, ctx.runtime_dir)
             st.processed(1)
             st.set_detail("python-build-standalone")
-    return ctx.runtime_dir / "python" / "lib" / f"python{major}.{minor}" / "site-packages"
+    return ctx.cfg.dist_dir / "site-packages"
 
 
 def _prepare_windows_runtime(ctx: BuildContext) -> Path:
@@ -258,7 +258,7 @@ def _prepare_windows_runtime(ctx: BuildContext) -> Path:
             extract_embed(zip_path, ctx.runtime_dir)
             st.processed(1)
             st.set_detail("embed python")
-    return ctx.runtime_dir / "Lib" / "site-packages"
+    return ctx.cfg.dist_dir / "site-packages"
 
 
 def _analyze_dependencies(ctx: BuildContext, *, save_cache: bool = True) -> DependencyReport:

@@ -85,12 +85,12 @@ def _make_dist_info(
 
 
 def _make_dist_with_site_packages(tmp_path: Path) -> tuple[Path, Path]:
-    """构造含 Windows embed 风格 site-packages 的 dist 目录.
+    """构造含 site-packages 的 dist 目录.
 
     返回 (dist_dir, site_packages_dir)。
     """
     dist = tmp_path / "dist"
-    site_packages = dist / "runtime" / "Lib" / "site-packages"
+    site_packages = dist / "site-packages"
     site_packages.mkdir(parents=True)
     return dist, site_packages
 
@@ -157,7 +157,7 @@ def test_collect_sbom_no_site_packages_returns_empty_packages(tmp_path: Path) ->
     """无 site-packages 目录时不崩溃，packages 为空列表."""
     dist = tmp_path / "dist"
     dist.mkdir()
-    # 不创建 runtime/Lib/site-packages
+    # 不创建 site-packages
     info = _make_info(tmp_path)
 
     sbom = collect_sbom(dist, info)
@@ -193,27 +193,6 @@ def test_collect_sbom_skips_non_dist_info_dirs(tmp_path: Path) -> None:
     packages = sbom["packages"]
     assert len(packages) == 1
     assert packages[0]["name"] == "rich"
-
-
-def test_collect_sbom_linux_standalone_site_packages(tmp_path: Path) -> None:
-    """Linux standalone 风格 site-packages 路径也能被识别."""
-    dist = tmp_path / "dist"
-    site_packages = dist / "runtime" / "python" / "lib" / "python3.11" / "site-packages"
-    site_packages.mkdir(parents=True)
-    _make_dist_info(
-        site_packages,
-        "click",
-        "8.1.0",
-        metadata="License: BSD-3-Clause\n",
-        record_entries=[("click/__init__.py", b"x = 1\n")],
-    )
-    info = _make_info(tmp_path)
-
-    sbom = collect_sbom(dist, info)
-
-    packages = sbom["packages"]
-    assert len(packages) == 1
-    assert packages[0]["name"] == "click"
 
 
 # ---- generate_sbom 文件生成测试 ----

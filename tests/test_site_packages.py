@@ -16,19 +16,10 @@ from fspack.packaging.site_packages import find_site_packages, normalize_pkg_nam
 # ---- 辅助函数 ----
 
 
-def _make_dist_with_runtime(tmp_path: Path) -> Path:
-    """创建含 Windows embed runtime 的 dist 目录（runtime/Lib/site-packages）."""
+def _make_dist_with_site_packages(tmp_path: Path) -> Path:
+    """创建含 site-packages 的 dist 目录（dist/site-packages，与 runtime 平级）."""
     dist = tmp_path / "dist"
-    sp = dist / "runtime" / "Lib" / "site-packages"
-    sp.mkdir(parents=True)
-    (sp / "python311.dll").write_bytes(b"dll content")
-    return dist
-
-
-def _make_dist_with_linux_runtime(tmp_path: Path) -> Path:
-    """创建含 Linux standalone runtime 的 dist 目录（runtime/python/lib/python3.X/site-packages）."""
-    dist = tmp_path / "dist"
-    sp = dist / "runtime" / "python" / "lib" / "python3.11" / "site-packages"
+    sp = dist / "site-packages"
     sp.mkdir(parents=True)
     (sp / "pkg1.py").write_text("x = 1\n")
     return dist
@@ -37,22 +28,13 @@ def _make_dist_with_linux_runtime(tmp_path: Path) -> Path:
 # ---- find_site_packages ----
 
 
-def test_find_site_packages_windows_embed(tmp_path: Path) -> None:
-    """Windows embed python: dist/runtime/Lib/site-packages."""
-    dist = _make_dist_with_runtime(tmp_path)
+def test_find_site_packages_unified(tmp_path: Path) -> None:
+    """site-packages 统一平铺到 dist/site-packages（与 runtime 平级）."""
+    dist = _make_dist_with_site_packages(tmp_path)
     sp = find_site_packages(dist)
     assert sp is not None
     assert sp.name == "site-packages"
-    assert sp.parent.name == "Lib"
-
-
-def test_find_site_packages_linux_standalone(tmp_path: Path) -> None:
-    """Linux standalone: dist/runtime/python/lib/python<X.Y>/site-packages."""
-    dist = _make_dist_with_linux_runtime(tmp_path)
-    sp = find_site_packages(dist)
-    assert sp is not None
-    assert sp.name == "site-packages"
-    assert "python3.11" in sp.parent.name
+    assert sp.parent == dist
 
 
 def test_find_site_packages_not_found(tmp_path: Path) -> None:
@@ -66,8 +48,8 @@ def test_find_site_packages_not_found(tmp_path: Path) -> None:
 def test_find_site_packages_skips_non_dir_match(tmp_path: Path) -> None:
     """glob 命中文件而非目录时跳过，继续查找下一个模式."""
     dist = tmp_path / "dist"
-    # runtime/Lib/site-packages 是文件而非目录
-    fake_sp = dist / "runtime" / "Lib" / "site-packages"
+    # dist/site-packages 是文件而非目录
+    fake_sp = dist / "site-packages"
     fake_sp.parent.mkdir(parents=True)
     fake_sp.write_text("not a directory")
     assert find_site_packages(dist) is None

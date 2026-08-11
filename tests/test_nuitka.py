@@ -1360,25 +1360,6 @@ def test_cleanup_build_dirs_handles_rmtree_oserror(
     assert any("清理 .build 目录失败" in r.message for r in caplog.records)
 
 
-# ---- _site_packages_dir 测试 ----
-
-
-def test_site_packages_dir_windows() -> None:
-    """Windows: runtime/Lib/site-packages."""
-    from fspack.packaging.nuitka import NuitkaCompiler
-
-    result = NuitkaCompiler._site_packages_dir(Path("/r"), "3.11.9", Platform.WINDOWS)
-    assert result == Path("/r/Lib/site-packages")
-
-
-def test_site_packages_dir_linux() -> None:
-    """Linux: runtime/python/lib/python{major}.{minor}/site-packages."""
-    from fspack.packaging.nuitka import NuitkaCompiler
-
-    result = NuitkaCompiler._site_packages_dir(Path("/r"), "3.11.9", Platform.LINUX)
-    assert result == Path("/r/python/lib/python3.11/site-packages")
-
-
 # ---- compile_packages 边缘场景测试 ----
 
 
@@ -2748,7 +2729,7 @@ def test_compile_with_stamp_passes_nuitka_packages_to_compile_packages(
     monkeypatch.setattr(NuitkaCompiler, "compile_src", classmethod(lambda cls, *a, **kw: []))
 
     # 创建 site-packages 目录使 compile_with_stamp 进入 compile_packages 分支
-    (runtime / "Lib" / "site-packages").mkdir(parents=True)
+    (dist / "site-packages").mkdir(parents=True)
 
     captured_pkgs: list[tuple[str, ...]] = []
 

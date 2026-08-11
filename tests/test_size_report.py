@@ -35,8 +35,8 @@ from fspack.packaging.size_report import (
 def _make_dist_with_runtime(tmp_path: Path) -> Path:
     """创建含 runtime/src/site-packages 的最小 dist 目录."""
     dist = tmp_path / "dist"
-    # runtime + Lib/site-packages
-    sp = dist / "runtime" / "Lib" / "site-packages"
+    # site-packages 与 runtime 平级
+    sp = dist / "site-packages"
     sp.mkdir(parents=True)
     (sp / "python311.dll").write_bytes(b"dll content")  # 11 bytes
     # src 目录
@@ -45,18 +45,6 @@ def _make_dist_with_runtime(tmp_path: Path) -> Path:
     (src / "app.py").write_text("print('hi')\n")
     # 其他文件（exe）
     (dist / "app.exe").write_bytes(b"exe content")  # 11 bytes
-    return dist
-
-
-def _make_dist_with_linux_runtime(tmp_path: Path) -> Path:
-    """创建含 Linux standalone runtime 的 dist 目录."""
-    dist = tmp_path / "dist"
-    sp = dist / "runtime" / "python" / "lib" / "python3.11" / "site-packages"
-    sp.mkdir(parents=True)
-    (sp / "pkg1.py").write_text("x = 1\n")
-    bin_dir = dist / "runtime" / "python" / "bin"
-    bin_dir.mkdir(parents=True)
-    (bin_dir / "python3.11").write_text("#!/bin/sh\n")
     return dist
 
 
@@ -250,7 +238,7 @@ def test_collect_size_report_totals(tmp_path: Path) -> None:
 def test_collect_size_report_top_packages_sorted(tmp_path: Path) -> None:
     """site-packages Top N 包按体积降序排序."""
     dist = _make_dist_with_runtime(tmp_path)
-    sp = dist / "runtime" / "Lib" / "site-packages"
+    sp = dist / "site-packages"
     _make_dist_info(sp, "big", "1.0.0", {"big/__init__.py": b"x" * 1000})
     _make_dist_info(sp, "small", "1.0.0", {"small/__init__.py": b"x" * 10})
     report = collect_size_report(dist, top_n=2)
@@ -262,7 +250,7 @@ def test_collect_size_report_top_packages_sorted(tmp_path: Path) -> None:
 def test_collect_size_report_top_n_limit(tmp_path: Path) -> None:
     """top_n 限制返回包数量."""
     dist = _make_dist_with_runtime(tmp_path)
-    sp = dist / "runtime" / "Lib" / "site-packages"
+    sp = dist / "site-packages"
     for i in range(5):
         _make_dist_info(sp, f"pkg{i}", "1.0.0", {f"pkg{i}/__init__.py": b"x" * (i + 1) * 10})
     report = collect_size_report(dist, top_n=3)
@@ -284,7 +272,7 @@ def test_collect_size_report_other_category(tmp_path: Path) -> None:
 def test_print_size_report_renders_tables(tmp_path: Path) -> None:
     """print_size_report 渲染类别分布与 Top N 表格."""
     dist = _make_dist_with_runtime(tmp_path)
-    sp = dist / "runtime" / "Lib" / "site-packages"
+    sp = dist / "site-packages"
     _make_dist_info(sp, "rich", "13.0.0", {"rich/__init__.py": b"x" * 100})
 
     with console.rich.capture() as capture:

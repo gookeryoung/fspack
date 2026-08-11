@@ -71,7 +71,7 @@ def _mock_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     monkeypatch.setattr(
         "fspack.packaging.pipeline._prepare_runtime",
-        lambda ctx: ctx.cfg.dist_dir / "runtime" / "Lib" / "site-packages",
+        lambda ctx: ctx.cfg.dist_dir / "site-packages",
     )
     monkeypatch.setattr("fspack.packaging.pipeline._analyze_dependencies", lambda ctx, **kw: _empty_report())
     monkeypatch.setattr("fspack.packaging.pipeline._download_dependencies", lambda *a, **kw: False)

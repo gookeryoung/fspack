@@ -393,7 +393,7 @@ def test_build_with_profile_outputs_report(tmp_path: Path, monkeypatch: pytest.M
     # mock 写操作避免实际下载
     monkeypatch.setattr(
         "fspack.packaging.pipeline._prepare_runtime",
-        lambda ctx: ctx.cfg.dist_dir / "runtime" / "Lib" / "site-packages",
+        lambda ctx: ctx.cfg.dist_dir / "site-packages",
     )
     monkeypatch.setattr("fspack.packaging.pipeline._analyze_dependencies", lambda ctx, **kw: _empty_report())
     monkeypatch.setattr("fspack.packaging.pipeline._download_dependencies", lambda *a, **kw: False)
@@ -426,7 +426,7 @@ def test_build_without_profile_no_report(tmp_path: Path, monkeypatch: pytest.Mon
 
     monkeypatch.setattr(
         "fspack.packaging.pipeline._prepare_runtime",
-        lambda ctx: ctx.cfg.dist_dir / "runtime" / "Lib" / "site-packages",
+        lambda ctx: ctx.cfg.dist_dir / "site-packages",
     )
     monkeypatch.setattr("fspack.packaging.pipeline._analyze_dependencies", lambda ctx, **kw: _empty_report())
     monkeypatch.setattr("fspack.packaging.pipeline._download_dependencies", lambda *a, **kw: False)

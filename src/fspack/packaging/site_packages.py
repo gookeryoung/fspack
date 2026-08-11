@@ -19,22 +19,16 @@ from pathlib import Path
 __all__ = ["SITE_PACKAGES_GLOBS", "find_site_packages", "normalize_pkg_name"]
 
 # site-packages 目录的 glob 模式（相对 dist 目录）：
-# - Windows embed python: runtime/Lib/site-packages
-# - Linux/macOS standalone python: runtime/python/lib/python<X.Y>/site-packages
-SITE_PACKAGES_GLOBS: tuple[str, ...] = (
-    "runtime/Lib/site-packages",
-    "runtime/python/lib/python*/site-packages",
-)
+# 统一平铺到 dist/site-packages（与 dist/runtime 平级，避免层级过深）
+SITE_PACKAGES_GLOBS: tuple[str, ...] = ("site-packages",)
 
 
 def find_site_packages(dist_dir: Path) -> Path | None:
     """在 dist 目录下定位 site-packages 目录，找不到返回 None.
 
     按 :data:`SITE_PACKAGES_GLOBS` 中的 glob 模式依次查找，返回首个存在且
-    为目录的匹配项。覆盖两种 runtime 布局：
-
-    - Windows embed python：``dist/runtime/Lib/site-packages``
-    - Linux/macOS standalone python：``dist/runtime/python/lib/python<X.Y>/site-packages``
+    为目录的匹配项。site-packages 统一平铺到 ``dist/site-packages``（与
+    ``dist/runtime`` 平级）。
     """
     for pattern in SITE_PACKAGES_GLOBS:
         for sp in dist_dir.glob(pattern):

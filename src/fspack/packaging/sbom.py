@@ -91,9 +91,9 @@ class SbomPackage:
 def collect_sbom(dist_dir: Path, info: ProjectInfo) -> dict[str, Any]:
     """扫描 dist 目录收集 SBOM 数据，返回 SPDX 2.3 兼容字典.
 
-    扫描 ``dist/runtime/Lib/site-packages`` 或 ``dist/runtime/python/lib/python*/site-packages``
-    下的所有 ``*.dist-info`` 目录，提取依赖元信息。每个包计算整体 SHA256（基于
-    RECORD 列出文件的内容拼接哈希），license 从 METADATA 解析。
+    扫描 ``dist/site-packages`` 下的所有 ``*.dist-info`` 目录，提取依赖元信息。
+    每个包计算整体 SHA256（基于 RECORD 列出文件的内容拼接哈希），license 从
+    METADATA 解析。
 
     Args:
         dist_dir: dist 根目录（``dist/``）

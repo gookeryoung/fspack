@@ -236,11 +236,6 @@ class NuitkaCompilerProtocol(Protocol):
         """计算 Nuitka 编译 stamp 键."""
         ...
 
-    @staticmethod
-    def _site_packages_dir(runtime_dir: Path, py_version: str, target: Platform) -> Path:
-        """推导 runtime 的 site-packages 路径."""
-        ...
-
     @classmethod
     def compile_with_stamp(  # noqa: PLR0913
         cls,

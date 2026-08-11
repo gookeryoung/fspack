@@ -109,7 +109,7 @@ def _make_minimal_dist(
         wrapper 文件路径 ``dist/_entry_app.py``.
     """
     # 模拟 numpy 包：__init__.py sleep 50ms 模拟重量级 init
-    numpy_init = dist_dir / "runtime" / "Lib" / "site-packages" / "numpy" / "__init__.py"
+    numpy_init = dist_dir / "site-packages" / "numpy" / "__init__.py"
     numpy_init.parent.mkdir(parents=True, exist_ok=True)
     numpy_init.write_text(
         f"import time\ntime.sleep({_NUMPY_INIT_SLEEP})\n",

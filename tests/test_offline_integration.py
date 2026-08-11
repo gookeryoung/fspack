@@ -85,9 +85,9 @@ def test_build_offline_wheel_cache_miss_raises_dependency_error(
     runtime_dir = proj / "dist" / "runtime"
     runtime_dir.mkdir(parents=True)
     (runtime_dir / "python311.dll").write_bytes(b"")
-    (runtime_dir / "python311._pth").write_text("Lib/site-packages\n", encoding="utf-8")
+    (runtime_dir / "python311._pth").write_text("..\\site-packages\n", encoding="utf-8")
     # 让 site-packages 存在但不包含 pypdf，触发 wheel 下载
-    site_packages = runtime_dir / "Lib" / "site-packages"
+    site_packages = proj / "dist" / "site-packages"
     site_packages.mkdir(parents=True)
 
     # mock _run_pip 返回 None（模拟 --no-index 失败，缓存未命中）
@@ -264,7 +264,7 @@ def test_build_offline_wheel_cache_miss_raises_dependency_error_linux(
     python_bin.mkdir(parents=True)
     (python_bin / "python3.11").write_bytes(b"")
     # site-packages 存在但不包含 pypdf，触发 wheel 下载
-    site_packages = runtime_dir / "lib" / "python3.11" / "site-packages"
+    site_packages = proj / "dist" / "site-packages"
     site_packages.mkdir(parents=True)
 
     monkeypatch.setattr("fspack.packaging.wheels.downloader._run_pip", lambda *a, **kw: None)

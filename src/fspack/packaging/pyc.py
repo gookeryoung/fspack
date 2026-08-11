@@ -509,11 +509,10 @@ def _precompile_pyc(  # noqa: PLR0913
     """
     if target is Platform.WINDOWS:
         py_exe = runtime_dir / "python.exe"
-        site_packages = runtime_dir / "Lib" / "site-packages"
     else:
         major, minor = py_version.split(".")[:2]
         py_exe = runtime_dir / "python" / "bin" / f"python{major}.{minor}"
-        site_packages = runtime_dir / "python" / "lib" / f"python{major}.{minor}" / "site-packages"
+    site_packages = dist_dir / "site-packages"
     src_dir = dist_dir / "src"
     if not py_exe.is_file():
         _logger.warning("预编译跳过: runtime python 未就绪 %s", py_exe)

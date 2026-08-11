@@ -65,17 +65,11 @@ if sys.stdin is None:
 _DIST_DIR = os.path.dirname(os.path.abspath(__file__))
 _RUNTIME_DIR = os.path.join(_DIST_DIR, "runtime")
 
-# site-packages 路径按平台构造：
-#   Windows embed python → runtime/Lib/site-packages
-#   Linux standalone python → runtime/python/lib/python3.X/site-packages
+# site-packages 平铺到 dist/site-packages（与 runtime 平级，避免层级过深）。
 # 显式加入 sys.path 是因为 Linux standalone 在 PYTHONHOME 模式下默认不启用
 # site-packages（site.py 不会被自动调用），不显式添加会导致 rich 等
 # 第三方依赖 ModuleNotFoundError。
-_SITE_PACKAGES = os.path.join(_RUNTIME_DIR, "Lib", "site-packages")
-if not os.path.isdir(_SITE_PACKAGES):
-    _candidates = glob.glob(os.path.join(_RUNTIME_DIR, "python", "lib", "python3.*", "site-packages"))
-    if _candidates:
-        _SITE_PACKAGES = _candidates[0]
+_SITE_PACKAGES = os.path.join(_DIST_DIR, "site-packages")
 if os.path.isdir(_SITE_PACKAGES) and _SITE_PACKAGES not in sys.path:
     sys.path.insert(0, _SITE_PACKAGES)
 

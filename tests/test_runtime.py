@@ -232,7 +232,7 @@ def test_write_pth_content(tmp_path: Path) -> None:
     assert pth == tmp_path / "runtime" / "python311._pth"
     content = pth.read_text(encoding="utf-8")
     assert "python311.zip" in content
-    assert "Lib\\site-packages" in content
+    assert "..\\site-packages" in content
     assert "..\\src" in content
     assert "import site" in content
 
@@ -249,7 +249,7 @@ def test_write_pth_disable_site(tmp_path: Path) -> None:
     assert "import site" not in content
     # 标准库与 site-packages 路径仍存在
     assert "python311.zip" in content
-    assert "Lib\\site-packages" in content
+    assert "..\\site-packages" in content
 
 
 def test_write_pth_enable_site_default(tmp_path: Path) -> None:
@@ -268,7 +268,8 @@ def test_ensure_embed_skips_when_dll_present(
     monkeypatch.setattr("fspack.packaging.runtime.download_embed", lambda *a, **k: called.__setitem__("download", True))
     ensure_embed("3.11.9", mirror, tmp_path / "cache", runtime)
     assert not called["download"]
-    assert (runtime / "Lib" / "site-packages").is_dir()
+    # site-packages 已移至 dist 层级，由 pipeline 创建，ensure_embed 不再创建
+    assert not (runtime / "Lib" / "site-packages").exists()
 
 
 def test_ensure_embed_downloads_when_missing(
@@ -281,7 +282,8 @@ def test_ensure_embed_downloads_when_missing(
     monkeypatch.setattr("fspack.packaging.runtime.download_embed", lambda *a, **k: zip_path)
     ensure_embed("3.11.9", mirror, tmp_path / "cache", runtime)
     assert (runtime / "python311.dll").is_file()
-    assert (runtime / "Lib" / "site-packages").is_dir()
+    # site-packages 已移至 dist 层级，由 pipeline 创建，ensure_embed 不再创建
+    assert not (runtime / "Lib" / "site-packages").exists()
 
 
 # --- python-build-standalone 测试 ---

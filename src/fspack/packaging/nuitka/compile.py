@@ -833,18 +833,6 @@ class NuitkaCompile:
         pkg_part = ",".join(nuitka_packages) if nuitka_packages else ""
         return f"{nuitka_version}|{py_version}|{src_fp}|{entry_part}|{pkg_part}"
 
-    @staticmethod
-    def _site_packages_dir(runtime_dir: Path, py_version: str, target: Platform) -> Path:
-        """推导 runtime 的 site-packages 路径.
-
-        Windows: ``runtime/Lib/site-packages``
-        Linux: ``runtime/python/lib/python{major}.{minor}/site-packages``
-        """
-        if target is Platform.WINDOWS:
-            return runtime_dir / "Lib" / "site-packages"
-        major, minor = py_version.split(".")[:2]
-        return runtime_dir / "python" / "lib" / f"python{major}.{minor}" / "site-packages"
-
     @classmethod
     def compile_with_stamp(  # noqa: PLR0913
         cls: type[NuitkaCompilerProtocol],
@@ -972,7 +960,7 @@ class NuitkaCompile:
 
         # 编译用户指定的第三方包（site-packages 中的纯 Python 包）
         if nuitka_packages:
-            site_packages = cls._site_packages_dir(runtime_dir, py_version, target)
+            site_packages = dist_dir / "site-packages"
             if site_packages.is_dir():
                 cls.compile_packages(
                     site_packages,

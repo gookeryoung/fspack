@@ -212,7 +212,7 @@ def test_build_skips_runtime_when_already_prepared_windows(tmp_path: Path, monke
     runtime_dir = proj / "dist" / "runtime"
     runtime_dir.mkdir(parents=True)
     (runtime_dir / "python311.dll").write_bytes(b"")
-    (runtime_dir / "Lib" / "site-packages").mkdir(parents=True)
+    (runtime_dir.parent / "site-packages").mkdir(parents=True)
 
     download_called = False
     extract_called = False
@@ -253,7 +253,7 @@ def test_build_skips_runtime_when_already_prepared_linux(tmp_path: Path, monkeyp
     pybin = runtime_dir / "python" / "bin"
     pybin.mkdir(parents=True)
     (pybin / "python3.11").write_text("")
-    (runtime_dir / "python" / "lib" / "python3.11" / "site-packages").mkdir(parents=True)
+    (runtime_dir.parent / "site-packages").mkdir(parents=True)
 
     download_called = False
     extract_called = False
@@ -406,7 +406,7 @@ def test_build_forwards_keep_modules(tmp_path: Path, monkeypatch: pytest.MonkeyP
         lambda zip_path, runtime_dir: (
             runtime_dir.mkdir(parents=True, exist_ok=True),
             (runtime_dir / "python311.dll").write_bytes(b""),
-            (runtime_dir / "Lib" / "site-packages").mkdir(parents=True, exist_ok=True),
+            (runtime_dir.parent / "site-packages").mkdir(parents=True, exist_ok=True),
         )[-1],
     )
     monkeypatch.setattr(
@@ -450,7 +450,7 @@ def test_build_orchestration_helloworld(tmp_path: Path, monkeypatch: pytest.Monk
     def fake_extract_embed(zip_path: object, runtime_dir: Path) -> None:
         runtime_dir.mkdir(parents=True, exist_ok=True)
         (runtime_dir / "python311.dll").write_bytes(b"")
-        (runtime_dir / "Lib" / "site-packages").mkdir(parents=True, exist_ok=True)
+        (runtime_dir.parent / "site-packages").mkdir(parents=True, exist_ok=True)
         calls["extract"] = True
 
     monkeypatch.setattr("fspack.packaging.pipeline.stages.download_embed", lambda v, m, c, **kw: tmp_path / "fake.zip")
@@ -513,7 +513,7 @@ def test_build_orchestration_with_deps(tmp_path: Path, monkeypatch: pytest.Monke
         lambda zip_path, runtime_dir: (
             runtime_dir.mkdir(parents=True, exist_ok=True),
             (runtime_dir / "python311.dll").write_bytes(b""),
-            (runtime_dir / "Lib" / "site-packages").mkdir(parents=True, exist_ok=True),
+            (runtime_dir.parent / "site-packages").mkdir(parents=True, exist_ok=True),
         )[-1],
     )
     downloaded: dict[str, bool] = {}
@@ -555,7 +555,7 @@ def test_build_prefers_declared_over_ast(tmp_path: Path, monkeypatch: pytest.Mon
         lambda zip_path, runtime_dir: (
             runtime_dir.mkdir(parents=True, exist_ok=True),
             (runtime_dir / "python311.dll").write_bytes(b""),
-            (runtime_dir / "Lib" / "site-packages").mkdir(parents=True, exist_ok=True),
+            (runtime_dir.parent / "site-packages").mkdir(parents=True, exist_ok=True),
         )[-1],
     )
     captured: dict[str, Any] = {}
@@ -599,7 +599,7 @@ def test_build_merges_cli_private_sources_with_config(tmp_path: Path, monkeypatc
         lambda zip_path, runtime_dir: (
             runtime_dir.mkdir(parents=True, exist_ok=True),
             (runtime_dir / "python311.dll").write_bytes(b""),
-            (runtime_dir / "Lib" / "site-packages").mkdir(parents=True, exist_ok=True),
+            (runtime_dir.parent / "site-packages").mkdir(parents=True, exist_ok=True),
         )[-1],
     )
     captured: dict[str, Any] = {}
@@ -657,7 +657,7 @@ def test_build_passes_config_private_sources_without_cli(tmp_path: Path, monkeyp
         lambda zip_path, runtime_dir: (
             runtime_dir.mkdir(parents=True, exist_ok=True),
             (runtime_dir / "python311.dll").write_bytes(b""),
-            (runtime_dir / "Lib" / "site-packages").mkdir(parents=True, exist_ok=True),
+            (runtime_dir.parent / "site-packages").mkdir(parents=True, exist_ok=True),
         )[-1],
     )
     captured: dict[str, Any] = {}
@@ -694,7 +694,7 @@ def test_build_skips_download_when_site_packages_has_deps(tmp_path: Path, monkey
     def fake_extract_embed(zip_path: object, runtime_dir: Path) -> None:
         runtime_dir.mkdir(parents=True, exist_ok=True)
         (runtime_dir / "python311.dll").write_bytes(b"")
-        sp = runtime_dir / "Lib" / "site-packages"
+        sp = runtime_dir.parent / "site-packages"
         sp.mkdir(parents=True)
         (sp / "requests-2.31.0.dist-info").mkdir()
 
@@ -784,7 +784,7 @@ def test_build_supplements_tkinter_when_needed(tmp_path: Path, monkeypatch: pyte
         lambda zip_path, runtime_dir: (
             runtime_dir.mkdir(parents=True, exist_ok=True),
             (runtime_dir / "python311.dll").write_bytes(b""),
-            (runtime_dir / "Lib" / "site-packages").mkdir(parents=True, exist_ok=True),
+            (runtime_dir.parent / "site-packages").mkdir(parents=True, exist_ok=True),
         )[-1],
     )
     monkeypatch.setattr("fspack.packaging.pipeline.stages.download_wheels", lambda *a, **k: [])
@@ -824,7 +824,7 @@ def test_build_skips_tkinter_when_not_used(tmp_path: Path, monkeypatch: pytest.M
         lambda zip_path, runtime_dir: (
             runtime_dir.mkdir(parents=True, exist_ok=True),
             (runtime_dir / "python311.dll").write_bytes(b""),
-            (runtime_dir / "Lib" / "site-packages").mkdir(parents=True, exist_ok=True),
+            (runtime_dir.parent / "site-packages").mkdir(parents=True, exist_ok=True),
         )[-1],
     )
     monkeypatch.setattr("fspack.packaging.pipeline.stages.download_wheels", lambda *a, **k: [])
@@ -925,7 +925,7 @@ def _setup_embed_mocks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, py_versi
         lambda zip_path, runtime_dir: (
             runtime_dir.mkdir(parents=True, exist_ok=True),
             (runtime_dir / f"{pyxy}.dll").write_bytes(b""),
-            (runtime_dir / "Lib" / "site-packages").mkdir(parents=True, exist_ok=True),
+            (runtime_dir.parent / "site-packages").mkdir(parents=True, exist_ok=True),
         )[-1],
     )
     monkeypatch.setattr("fspack.packaging.pipeline.stages.download_wheels", lambda *a, **k: [])
@@ -980,7 +980,7 @@ def test_build_skips_win7_compat_dll_for_linux(tmp_path: Path, monkeypatch: pyte
             runtime_dir.mkdir(parents=True, exist_ok=True),
             (runtime_dir / "python" / "bin").mkdir(parents=True, exist_ok=True),
             (runtime_dir / "python" / "bin" / "python3.11").write_text(""),
-            (runtime_dir / "python" / "lib" / "python3.11" / "site-packages").mkdir(parents=True, exist_ok=True),
+            (runtime_dir.parent / "site-packages").mkdir(parents=True, exist_ok=True),
         )[-1],
     )
     monkeypatch.setattr("fspack.packaging.pipeline.stages.download_wheels", lambda *a, **k: [])
@@ -1152,7 +1152,7 @@ def test_precompile_pyc_windows_calls_compileall(tmp_path: Path, monkeypatch: py
     runtime = tmp_path / "runtime"
     runtime.mkdir(parents=True, exist_ok=True)
     (runtime / "python.exe").write_bytes(b"")
-    (runtime / "Lib" / "site-packages").mkdir(parents=True)
+    (tmp_path / "dist" / "site-packages").mkdir(parents=True)
     dist = tmp_path / "dist"
     (dist / "src").mkdir(parents=True)
     (dist / "src" / "app.py").write_text("print('hi')")
@@ -1171,7 +1171,7 @@ def test_precompile_pyc_windows_calls_compileall(tmp_path: Path, monkeypatch: py
         assert str(runtime / "python.exe") in cmd[0]
     # 第一次编译 src，第二次编译 site-packages
     assert str(dist / "src") in captured[0]
-    assert str(runtime / "Lib" / "site-packages") in captured[1]
+    assert str(tmp_path / "dist" / "site-packages") in captured[1]
 
 
 def test_precompile_pyc_linux_uses_python3_bin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1179,7 +1179,7 @@ def test_precompile_pyc_linux_uses_python3_bin(tmp_path: Path, monkeypatch: pyte
     runtime = tmp_path / "runtime"
     (runtime / "python" / "bin").mkdir(parents=True)
     (runtime / "python" / "bin" / "python3.11").write_bytes(b"")
-    (runtime / "python" / "lib" / "python3.11" / "site-packages").mkdir(parents=True)
+    (tmp_path / "dist" / "site-packages").mkdir(parents=True)
     dist = tmp_path / "dist"
     (dist / "src").mkdir(parents=True)
     (dist / "src" / "app.py").write_text("")
@@ -1202,7 +1202,7 @@ def test_precompile_pyc_strip_deletes_non_init_py(tmp_path: Path, monkeypatch: p
     runtime = tmp_path / "runtime"
     runtime.mkdir(parents=True, exist_ok=True)
     (runtime / "python.exe").write_bytes(b"")
-    (runtime / "Lib" / "site-packages").mkdir(parents=True)
+    (tmp_path / "dist" / "site-packages").mkdir(parents=True)
     dist = tmp_path / "dist"
     src = dist / "src"
     src.mkdir(parents=True)
@@ -1466,7 +1466,7 @@ def test_precompile_pyc_compileall_failure_warns_not_raises(
     runtime = tmp_path / "runtime"
     runtime.mkdir(parents=True, exist_ok=True)
     (runtime / "python.exe").write_bytes(b"")
-    (runtime / "Lib" / "site-packages").mkdir(parents=True)
+    (tmp_path / "dist" / "site-packages").mkdir(parents=True)
     dist = tmp_path / "dist"
     (dist / "src").mkdir(parents=True)
     (dist / "src" / "app.py").write_text("")
@@ -1492,7 +1492,7 @@ def test_precompile_pyc_optimize_passes_o_flag(tmp_path: Path, monkeypatch: pyte
     runtime = tmp_path / "runtime"
     runtime.mkdir(parents=True, exist_ok=True)
     (runtime / "python.exe").write_bytes(b"")
-    (runtime / "Lib" / "site-packages").mkdir(parents=True)
+    (tmp_path / "dist" / "site-packages").mkdir(parents=True)
     dist = tmp_path / "dist"
     (dist / "src").mkdir(parents=True)
     (dist / "src" / "app.py").write_text("print('hi')")
@@ -1507,7 +1507,7 @@ def test_precompile_pyc_optimize_passes_o_flag(tmp_path: Path, monkeypatch: pyte
     assert len(captured) == 2
     src_cmd = next(cmd for cmd in captured if str(dist / "src") in cmd)
     assert src_cmd[src_cmd.index("-o") + 1] == "2"
-    sp_cmd = next(cmd for cmd in captured if str(runtime / "Lib" / "site-packages") in cmd)
+    sp_cmd = next(cmd for cmd in captured if str(tmp_path / "dist" / "site-packages") in cmd)
     assert sp_cmd[sp_cmd.index("-o") + 1] == "1"
 
 
@@ -1538,7 +1538,7 @@ def test_precompile_pyc_optimize_default_zero(tmp_path: Path, monkeypatch: pytes
     runtime = tmp_path / "runtime"
     runtime.mkdir(parents=True, exist_ok=True)
     (runtime / "python.exe").write_bytes(b"")
-    (runtime / "Lib" / "site-packages").mkdir(parents=True)
+    (tmp_path / "dist" / "site-packages").mkdir(parents=True)
     dist = tmp_path / "dist"
     (dist / "src").mkdir(parents=True)
     (dist / "src" / "app.py").write_text("print('hi')")
@@ -1579,7 +1579,7 @@ def test_precompile_pyc_optimize_invalidates_old_stamp(tmp_path: Path, monkeypat
     runtime = tmp_path / "runtime"
     runtime.mkdir(parents=True, exist_ok=True)
     (runtime / "python.exe").write_bytes(b"")
-    (runtime / "Lib" / "site-packages").mkdir(parents=True)
+    (tmp_path / "dist" / "site-packages").mkdir(parents=True)
     dist = tmp_path / "dist"
     (dist / "src").mkdir(parents=True)
     (dist / "src" / "app.py").write_text("print('hi')")
@@ -2019,13 +2019,13 @@ def test_precompile_pyc_stamp_cache_hit_skips_compileall(tmp_path: Path, monkeyp
     runtime = tmp_path / "runtime"
     runtime.mkdir(parents=True, exist_ok=True)
     (runtime / "python.exe").write_bytes(b"")
-    (runtime / "Lib" / "site-packages").mkdir(parents=True)
+    (tmp_path / "dist" / "site-packages").mkdir(parents=True)
     dist = tmp_path / "dist"
     (dist / "src").mkdir(parents=True)
     (dist / "src" / "app.py").write_text("print('hi')")
 
     # 预先写入匹配的 stamp
-    stamp_key = _pyc_stamp_key(dist / "src", runtime / "Lib" / "site-packages", strip_py=False, optimize=0)
+    stamp_key = _pyc_stamp_key(dist / "src", tmp_path / "dist" / "site-packages", strip_py=False, optimize=0)
     _pyc_stamp_path(dist).parent.mkdir(parents=True, exist_ok=True)
     _pyc_stamp_path(dist).write_text(stamp_key, encoding="utf-8")
 

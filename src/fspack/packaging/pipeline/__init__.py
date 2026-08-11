@@ -287,7 +287,7 @@ def _execute_build(  # noqa: PLR0912, PLR0913
 
     if target is Platform.WINDOWS:
         # tkinter 补充到 runtime/Lib/tkinter/，需将 Lib 加入 _pth 使其可 import
-        # （_pth 默认只含 Lib\site-packages，不含 Lib 本身）
+        # （_pth 默认含 ..\site-packages 与 ..\src，不含 Lib 本身）
         extra_pth_paths = ("Lib",) if has_tkinter else ()
         write_pth(cfg.dist_dir, info.py_version, extra_paths=extra_pth_paths, enable_site=not opts.no_site)
 
