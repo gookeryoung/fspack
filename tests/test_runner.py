@@ -436,3 +436,28 @@ def test_run_run_multi_entry_py310_select(tmp_path: Path, monkeypatch: pytest.Mo
     monkeypatch.setattr("fspack.runner.platform.system", lambda: "Windows")
     run_run(tmp_path, entry="gui")
     assert captured["cmd"] == [str(gui_exe)]
+
+
+# --- iter-148 前后端分离 Web 打包：WEB 类型非零退出码警告 ---
+
+
+def test_run_run_web_nonzero_hints_debug(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """WEB 应用非零退出码时提示用 --debug（与 GUI 一样关闭控制台）."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\ndependencies = ["flask"]\n')
+    (tmp_path / "app.py").write_text("from flask import Flask\ndef main():\n    pass\n")
+    exe = tmp_path / "dist" / "app.exe"
+    exe.parent.mkdir()
+    exe.write_bytes(b"")
+
+    class _Completed:
+        returncode = 1
+
+    monkeypatch.setattr("fspack.runner.subprocess.run", lambda cmd, **kw: _Completed())
+    monkeypatch.setattr("fspack.runner.platform.system", lambda: "Windows")
+    with caplog.at_level("WARNING", logger="fspack.runner"), pytest.raises(FspackError, match="程序退出码非零"):
+        run_run(tmp_path)
+    # WEB 类型警告含 "WEB"（app_type.value.upper()）
+    assert "WEB" in caplog.text
+    assert "fspack r --debug" in caplog.text

@@ -164,6 +164,102 @@ if {has_tkinter}:
     if _tk_lib:
         os.environ.setdefault("TK_LIBRARY", _tk_lib[0])
 
+# Web 应用静态文件 serve 与自动开浏览器注入（仅 AppType.WEB 或显式 --open-browser）。
+# 在 import 用户代码前 monkey-patch flask.Flask.run / uvicorn.run / uvicorn.Config.run：
+# 用户代码调用 app.run() / uvicorn.run() 时挂载静态文件 serve（Flask static_folder /
+# FastAPI StaticFiles）并启动 threading.Timer 调 webbrowser.open 打开浏览器。
+# 静态目录在打包时由 fspack 解析为 dist 内绝对路径（web_static_dirs），运行时直接使用。
+# 非 WEB 类型或未配置 web_static_dirs 时此块无操作（_WEB_STATIC_DIRS 为空）。
+_WEB_STATIC_DIRS = {web_static_dirs!r}
+_OPEN_BROWSER = {open_browser!r}
+if _WEB_STATIC_DIRS and _OPEN_BROWSER:
+    import threading
+    import webbrowser
+
+    # 解析静态目录为 dist 内绝对路径，过滤不存在的目录
+    _resolved_static = [
+        os.path.normpath(os.path.join(_DIST_DIR, _rel))
+        for _rel in _WEB_STATIC_DIRS
+        if os.path.isdir(os.path.normpath(os.path.join(_DIST_DIR, _rel)))
+    ]
+
+    def _open_browser_after_delay(url, delay=1.0):
+        """延迟 delay 秒打开浏览器（等服务器监听端口就绪）."""
+        def _open():
+            try:
+                webbrowser.open(url)
+            except OSError:
+                pass
+        threading.Timer(delay, _open).start()
+
+    def _patch_flask():
+        """Monkey-patch flask.Flask.run 挂载静态目录与开浏览器."""
+        try:
+            from flask import Flask, send_from_directory
+        except ImportError:
+            return False
+        _original_run = Flask.run
+        _static_dir = _resolved_static[0] if _resolved_static else None
+
+        def _patched_run(self, host=None, port=None, **kwargs):
+            # 挂载静态文件 serve：首个静态目录作为 Flask static_folder
+            if _static_dir and not getattr(self, "_fspack_static_mounted", False):
+                # 路由 / 返回 index.html，/<path:path> 返回静态文件
+                @self.route("/")
+                def _fspack_index():
+                    return send_from_directory(_static_dir, "index.html")
+
+                @self.route("/<path:path>")
+                def _fspack_static(path):
+                    return send_from_directory(_static_dir, path)
+
+                self._fspack_static_mounted = True
+            _host = host or "127.0.0.1"
+            _port = port or 5000
+            _open_browser_after_delay(f"http://{{_host}}:{{_port}}/")
+            return _original_run(self, host=host, port=port, **kwargs)
+
+        Flask.run = _patched_run
+        return True
+
+    def _patch_fastapi():
+        """Monkey-patch uvicorn.run 挂载 StaticFiles 与开浏览器.
+
+        FastAPI 项目用 uvicorn.run(app, ...) 启动，无 app.run() 入口。拦截
+        uvicorn.run：若 app 是 Starlette/FastAPI 实例且未挂载 StaticFiles，
+        挂载到 / 路径（前端 SPA fallback 到 index.html 由 StaticFiles html=True
+        处理）。再调原 uvicorn.run。
+        """
+        try:
+            import uvicorn
+        except ImportError:
+            return False
+        _original_uvicorn_run = uvicorn.run
+        _static_dir = _resolved_static[0] if _resolved_static else None
+
+        def _patched_uvicorn_run(app, host="127.0.0.1", port=8000, **kwargs):
+            if _static_dir:
+                try:
+                    from starlette.staticfiles import StaticFiles
+                    # 仅对 Starlette/FastAPI 实例挂载（duck-typing：有 mount 方法）
+                    if hasattr(app, "mount") and not getattr(app, "_fspack_static_mounted", False):
+                        app.mount("/", StaticFiles(directory=_static_dir, html=True), name="fspack_static")
+                        app._fspack_static_mounted = True
+                except ImportError:
+                    pass
+            _open_browser_after_delay(f"http://{{host}}:{{port}}/")
+            return _original_uvicorn_run(app, host=host, port=port, **kwargs)
+
+        uvicorn.run = _patched_uvicorn_run
+        # uvicorn.Config.run 内部不调 uvicorn.run，但 uvicorn.run 是入口，
+        # 多数 FastAPI 项目用 uvicorn.run(app, ...) 启动；少量用 uvicorn.Server
+        # 直接构造，此场景不拦截（用户自行处理静态文件）
+        return True
+
+    # 尝试 patch（按 import 顺序，用户代码 import 时已生效）
+    _patch_flask()
+    _patch_fastapi()
+
 _SRC_DIR = os.path.join(_DIST_DIR, "src")
 _ENTRY_MODULE = {module_dotted!r}
 _ENTRY_REL = {entry_rel!r}
@@ -289,6 +385,8 @@ class EntryWrapper:
         pkg_root_rel: str = ".",
         has_tkinter: bool = False,
         lazy_imports: tuple[str, ...] = (),
+        web_static_dirs: tuple[str, ...] = (),
+        open_browser: bool = False,
     ) -> str:
         """生成入口包装器源码。
 
@@ -307,6 +405,11 @@ class EntryWrapper:
             wrapper 注入 :class:`_LazyImportFinder` meta path finder，首次 import
             时不执行模块 ``__init__.py``，首次属性访问时才真正加载。空元组时
             不注入 finder。典型收益：numpy 启动省 ~80ms，pandas 省 ~150ms。
+        web_static_dirs: 前端构建产物目录（相对项目目录的 POSIX 路径元组），
+            wrapper 解析为 dist 内绝对路径并注入静态文件 serve。仅 WEB 类型
+            或显式启用 ``open_browser`` 时生效。空元组时不注入。
+        open_browser: 是否在服务器启动后自动打开浏览器。``True`` 且
+            ``web_static_dirs`` 非空时注入 Flask/FastAPI monkey-patch。
         """
         return EntryWrapper._TEMPLATE.format(
             entry_name=entry_name,
@@ -315,4 +418,6 @@ class EntryWrapper:
             pkg_root_rel=pkg_root_rel,
             has_tkinter=has_tkinter,
             lazy_imports=lazy_imports,
+            web_static_dirs=web_static_dirs,
+            open_browser=open_browser,
         )

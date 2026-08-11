@@ -118,6 +118,7 @@ def copy_source(
     src_dst: Path,
     extra_excludes: tuple[str, ...] = (),
     data_dirs: tuple[str, ...] = (),
+    web_static_dirs: tuple[str, ...] = (),
 ) -> None:
     """将项目源码同步到 dist/src，剥离开发期文件.
 
@@ -137,10 +138,16 @@ def copy_source(
     用于含子项目作为资源的场景（如 fspack 自身的 ``assets/templates/`` 含完整
     项目模板，其 ``pyproject.toml``/``README.md`` 是模板必需文件，不能剥离）。
 
+    ``web_static_dirs`` 为 ``[tool.fspack] web-static-dirs`` 配置的前端构建
+    产物目录（相对 ``project_dir`` 的 POSIX 路径，如 ``dist``），与 ``data_dirs``
+    同等保护——目录树内元数据/文档不被排除。仅 ``AppType.WEB`` 项目使用，
+    wrapper 在打包时把这些目录解析为 dist 下绝对路径，注入 Flask ``static_folder``
+    / FastAPI ``StaticFiles`` serve。
+
     增量同步：``src_dst`` 已存在时保留 ``__pycache__`` 目录以复用 ``.pyc`` 缓存，
     仅删除源码中已不存在的文件、覆盖复制新增/改动的文件（``copy2`` 保留 mtime）。
     """
-    ignore_fn = _build_ignore_fn(project_dir, extra_excludes, data_dirs)
+    ignore_fn = _build_ignore_fn(project_dir, extra_excludes, data_dirs, web_static_dirs)
     if src_dst.exists():
         _sync_tree(project_dir, src_dst, ignore_fn)
     else:
@@ -151,17 +158,21 @@ def _build_ignore_fn(
     project_dir: Path,
     extra_excludes: tuple[str, ...],
     data_dirs: tuple[str, ...],
+    web_static_dirs: tuple[str, ...] = (),
 ) -> Callable[..., set[str]]:
-    """构造 ignore 函数：data-dirs 内只应用 _EXCLUDE_ALWAYS，外应用完整 _EXCLUDE.
+    """构造 ignore 函数：data-dirs/web-static-dirs 内只应用 _EXCLUDE_ALWAYS，外应用完整 _EXCLUDE.
 
-    data-dirs 解析为绝对路径前缀集合，ignore 函数对每个 ``directory`` 判断是否
-    在任一 data-dir 内（前缀匹配），是则跳过 ``_EXCLUDE_METADATA``。
+    data-dirs 与 web-static-dirs 解析为绝对路径前缀集合，ignore 函数对每个
+    ``directory`` 判断是否在任一保护目录内（前缀匹配），是则跳过 ``_EXCLUDE_METADATA``。
+    两者语义等价（同等保护），合并为一个集合判断。
 
-    ``extra_excludes`` 始终应用（用户显式排除优先级最高，不论是否在 data-dirs 内）。
+    ``extra_excludes`` 始终应用（用户显式排除优先级最高，不论是否在保护目录内）。
     """
     extra_fn = shutil.ignore_patterns(*extra_excludes) if extra_excludes else None
-    if not data_dirs:
-        # 无 data-dirs：返回完整 _EXCLUDE（已含 _ALWAYS + _METADATA）+ extra
+    # 合并 data_dirs + web_static_dirs（两者同等保护，无顺序差异）
+    protected_dirs = (*data_dirs, *web_static_dirs)
+    if not protected_dirs:
+        # 无保护目录：返回完整 _EXCLUDE（已含 _ALWAYS + _METADATA）+ extra
         if extra_fn is None:
             return _EXCLUDE
 
@@ -170,37 +181,48 @@ def _build_ignore_fn(
 
         return full_ignore
 
-    # 预解析 data-dirs 为绝对路径，避免每个 directory 调用时重复 resolve
+    # 预解析保护目录为绝对路径，避免每个 directory 调用时重复 resolve
     project_dir_abs = project_dir.resolve()
-    data_dir_abs: list[Path] = []
-    for rel in data_dirs:
-        # data-dirs 配置为 POSIX 路径（如 "src/fspack/assets/templates"），
+    protected_abs: list[Path] = []
+    for rel in protected_dirs:
+        # 配置为 POSIX 路径（如 "src/fspack/assets/templates" 或 "dist"），
         # Path() 跨平台接受正斜杠，resolve 后与 directory 比较前缀
         abs_path = (project_dir_abs / Path(rel)).resolve()
-        data_dir_abs.append(abs_path)
+        protected_abs.append(abs_path)
 
     def ignore_fn(directory: str, names: list[str]) -> set[str]:
         excluded = _EXCLUDE_ALWAYS(directory, names)
-        # 判断 directory 是否在任一 data-dir 内（含 data-dir 自身）。
+        # 判断 directory 是否在任一保护目录内（含目录自身）。
         # Path.is_relative_to 是 3.9+，fspack 支持 3.8，用 try/except ValueError 兼容。
         dir_path = Path(directory)
         try:
             dir_resolved = dir_path.resolve()
         except OSError:
             dir_resolved = dir_path
-        in_data = False
-        for d in data_dir_abs:
+        in_protected = False
+        for d in protected_abs:
             if dir_resolved == d:
-                in_data = True
+                in_protected = True
                 break
             try:
                 dir_resolved.relative_to(d)
-                in_data = True
+                in_protected = True
                 break
             except ValueError:
                 continue
-        if not in_data:
+        if not in_protected:
             excluded |= _EXCLUDE_METADATA(directory, names)
+        # 保护目录自身可能匹配 _EXCLUDE_ALWAYS/_EXCLUDE_METADATA 模式（如
+        # web-static-dirs = ["dist"] 中的 "dist" 匹配 _EXCLUDE_ALWAYS 的构建产物
+        # 模式），需从排除集中移除保护目录的直接子项名，使其被正常复制。
+        # extra_excludes 优先级最高，不从中移除（用户显式排除始终生效）。
+        if excluded:
+            for name in list(excluded):
+                child = dir_resolved / name
+                for d in protected_abs:
+                    if child == d:
+                        excluded.discard(name)
+                        break
         if extra_fn is not None:
             excluded |= extra_fn(directory, names)
         return excluded

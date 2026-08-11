@@ -161,6 +161,7 @@ def _run_build(project: Path, ns: argparse.Namespace) -> None:
         lazy_imports=_parse_lazy_imports(ns.lazy_imports, base.lazy_imports),
         require_hashes=ns.require_hashes or base.require_hashes,
         no_sbom=ns.no_sbom or base.no_sbom,
+        open_browser=ns.open_browser or base.open_browser,
     )
     log_file = Path(ns.log_file).resolve() if ns.log_file else None
     log_format = LogFormat.parse(ns.log_format)

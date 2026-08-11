@@ -234,9 +234,14 @@ class WindowsLoader(LoaderCompiler):
         app_type: AppType,
         icon_obj: Path | None,
     ) -> list[str]:
-        """构造 mingw 编译命令：GUI 加 -mwindows，icon 编译为 .o 链接。"""
+        """构造 mingw 编译命令：GUI/WEB 加 -mwindows，icon 编译为 .o 链接。
+
+        ``-mwindows`` 使生成的 exe 不带控制台窗口（Windows subsystem）。
+        WEB 类型与 GUI 一样需要关闭控制台（前后端分离 Web 应用作为桌面应用分发，
+        黑色控制台窗口对终端用户不友好）。CLI 类型保留 console subsystem。
+        """
         cmd: list[str] = [_find_mingw_gcc(), "-O2", "-municode", "-o", str(out_exe), str(c_file)]
-        if app_type is AppType.GUI:
+        if app_type in (AppType.GUI, AppType.WEB):
             cmd.insert(1, "-mwindows")
         if icon_obj is not None:
             cmd.append(str(icon_obj))

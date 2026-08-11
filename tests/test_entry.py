@@ -326,3 +326,53 @@ def test_generate_wrapper_source_lazy_imports_empty_tuple() -> None:
     assert "_LAZY_MODULES = ()" in source
     # 类定义仍在源码中（模板静态包含），但 if 块不执行
     assert "_LazyImportFinder" in source
+
+
+# --- iter-148 前后端分离 Web 打包：wrapper 注入静态文件 serve 与开浏览器 ---
+
+
+def test_generate_wrapper_source_web_static_dirs_and_open_browser() -> None:
+    """web_static_dirs + open_browser=True 时注入静态文件 serve 与开浏览器逻辑."""
+    source = EntryWrapper.generate_wrapper_source(
+        "app",
+        None,
+        "app.py",
+        web_static_dirs=("dist",),
+        open_browser=True,
+    )
+    assert "_WEB_STATIC_DIRS = ('dist',)" in source
+    assert "_OPEN_BROWSER = True" in source
+    # Flask monkey-patch 与 FastAPI monkey-patch 均注入
+    assert "_patch_flask" in source
+    assert "_patch_fastapi" in source
+    assert "webbrowser" in source
+    assert "threading.Timer" in source
+
+
+def test_generate_wrapper_source_web_static_dirs_empty_no_injection() -> None:
+    """web_static_dirs 为空时不注入静态文件 serve（if 块不执行）."""
+    source = EntryWrapper.generate_wrapper_source(
+        "app",
+        None,
+        "app.py",
+        web_static_dirs=(),
+        open_browser=True,
+    )
+    assert "_WEB_STATIC_DIRS = ()" in source
+    # 模板静态包含 _patch_flask 等定义，但 if 块不执行
+    assert "if _WEB_STATIC_DIRS and _OPEN_BROWSER:" in source
+
+
+def test_generate_wrapper_source_open_browser_false_no_injection() -> None:
+    """open_browser=False 时即使有 web_static_dirs 也不注入（if 块不执行）."""
+    source = EntryWrapper.generate_wrapper_source(
+        "app",
+        None,
+        "app.py",
+        web_static_dirs=("dist",),
+        open_browser=False,
+    )
+    assert "_WEB_STATIC_DIRS = ('dist',)" in source
+    assert "_OPEN_BROWSER = False" in source
+    # if 块条件 _WEB_STATIC_DIRS and _OPEN_BROWSER 不满足
+    assert "if _WEB_STATIC_DIRS and _OPEN_BROWSER:" in source

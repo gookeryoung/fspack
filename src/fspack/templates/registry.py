@@ -682,6 +682,181 @@ if __name__ == "__main__":
     main()
 '''
 
+# ---- 前后端分离 Web 模板（AppType.WEB）----
+#
+# 与 flask/fastapi 模板区别：app_type="web"（关闭控制台 + 自动开浏览器），
+# pyproject.toml 含 [tool.fspack] web-static-dirs = ["dist"]，前端构建产物
+# dist/ 目录由 wrapper 注入 Flask static_folder / FastAPI StaticFiles serve。
+# 入口仅定义 API 路由，静态文件 serve 由 fspack wrapper monkey-patch 注入。
+
+_WEB_FLASK_VUE_ENTRY = '''"""$project_name 入口：Flask + Vue 前后端分离示例.
+
+静态文件 serve 由 fspack wrapper 在 app.run() 时自动挂载（monkey-patch
+Flask.run 注入 static_folder），入口仅需定义 API 路由。
+"""
+
+from flask import Flask, jsonify
+
+app = Flask(__name__)
+
+
+@app.route("/api/hello")
+def hello() -> object:
+    """API 路由返回问候信息."""
+    return jsonify({"message": "hello from $project_name!"})
+
+
+def main() -> None:
+    """启动 Flask 服务（前端由 wrapper 自动挂载到 dist 目录）."""
+    print("$project_name: 启动 Flask 服务 http://127.0.0.1:5000")
+    app.run(host="127.0.0.1", port=5000)
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+_WEB_FASTAPI_REACT_ENTRY = '''"""$project_name 入口：FastAPI + React 前后端分离示例.
+
+静态文件 serve 由 fspack wrapper 在 uvicorn.run() 时自动挂载（monkey-patch
+uvicorn.run 注入 StaticFiles），入口仅需定义 API 路由。
+"""
+
+import uvicorn
+from fastapi import FastAPI
+
+app = FastAPI(title="$project_name", version="0.1.0")
+
+
+@app.get("/api/hello")
+def hello() -> dict[str, str]:
+    """API 路由返回问候信息."""
+    return {"message": "hello from $project_name!"}
+
+
+def main() -> None:
+    """启动 FastAPI 服务（前端由 wrapper 自动挂载到 dist 目录）."""
+    print("$project_name: 启动 FastAPI 服务 http://127.0.0.1:8000")
+    uvicorn.run(app, host="127.0.0.1", port=8000)
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+# web-flask-vue 模板 pyproject.toml：flask 依赖 + [tool.fspack] web-static-dirs
+_WEB_FLASK_VUE_PYPROJECT = """[project]
+name = "$project_name"
+version = "0.1.0"
+description = "$description"
+requires-python = ">=3.8,<3.12"
+dependencies = [
+    "flask",
+]
+
+[tool.fspack]
+web-static-dirs = ["dist"]
+"""
+
+# web-fastapi-react 模板 pyproject.toml：fastapi + uvicorn 依赖 + [tool.fspack] web-static-dirs
+_WEB_FASTAPI_REACT_PYPROJECT = """[project]
+name = "$project_name"
+version = "0.1.0"
+description = "$description"
+requires-python = ">=3.8,<3.12"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+]
+
+[tool.fspack]
+web-static-dirs = ["dist"]
+"""
+
+# Vue 3 前端示例：CDN 引入 Vue，fetch 调用后端 /api/hello
+_WEB_VUE_INDEX = """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>$project_name</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <style>
+        body { font-family: system-ui, sans-serif; max-width: 600px; margin: 50px auto; }
+        h1 { color: #333; }
+        .loading { color: #888; }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <h1>$project_name</h1>
+        <p :class="{ loading: loading }">{{ message }}</p>
+    </div>
+    <script>
+        const { createApp } = Vue;
+        createApp({
+            data() {
+                return { message: "Loading...", loading: true };
+            },
+            async mounted() {
+                try {
+                    const res = await fetch("/api/hello");
+                    const data = await res.json();
+                    this.message = data.message;
+                } catch (e) {
+                    this.message = "API 请求失败: " + e.message;
+                } finally {
+                    this.loading = false;
+                }
+            }
+        }).mount("#app");
+    </script>
+</body>
+</html>
+"""
+
+# React 前端示例：CDN 引入 React + Babel，fetch 调用后端 /api/hello
+_WEB_REACT_INDEX = """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>$project_name</title>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        body { font-family: system-ui, sans-serif; max-width: 600px; margin: 50px auto; }
+        h1 { color: #333; }
+        .loading { color: #888; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="text/babel">
+        function App() {
+            const [message, setMessage] = React.useState("Loading...");
+            const [loading, setLoading] = React.useState(true);
+            React.useEffect(() => {
+                fetch("/api/hello")
+                    .then(res => res.json())
+                    .then(data => setMessage(data.message))
+                    .catch(e => setMessage("API 请求失败: " + e.message))
+                    .finally(() => setLoading(false));
+            }, []);
+            return (
+                <div>
+                    <h1>$project_name</h1>
+                    <p className={loading ? "loading" : ""}>{message}</p>
+                </div>
+            );
+        }
+        ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
+    </script>
+</body>
+</html>
+"""
+
 _PYINSTALLER_ENTRY = '''"""$project_name 入口：PyInstaller 兼容配置示例.
 
 此模板演示 [tool.fspack] 完整配置，适合从 PyInstaller 迁移的用户参考。
@@ -1112,6 +1287,33 @@ _TEMPLATES: tuple[Template, ...] = (
         files=(
             TemplateFile(rel_path="pyproject.toml", content=_pyproject(("fastapi", "uvicorn"))),
             TemplateFile(rel_path="$entry_module.py", content=_FASTAPI_ENTRY),
+        ),
+    ),
+    # ---- 前后端分离 Web 模板（AppType.WEB，关闭控制台 + 自动开浏览器）----
+    Template(
+        id="web-flask-vue",
+        name="Flask + Vue 前后端分离",
+        description="Flask API + Vue 3 前端，wrapper 自动挂载静态文件与开浏览器",
+        category="web",
+        app_type="web",
+        dependencies=("flask",),
+        files=(
+            TemplateFile(rel_path="pyproject.toml", content=_WEB_FLASK_VUE_PYPROJECT),
+            TemplateFile(rel_path="$entry_module.py", content=_WEB_FLASK_VUE_ENTRY),
+            TemplateFile(rel_path="dist/index.html", content=_WEB_VUE_INDEX),
+        ),
+    ),
+    Template(
+        id="web-fastapi-react",
+        name="FastAPI + React 前后端分离",
+        description="FastAPI API + React 前端，wrapper 自动挂载静态文件与开浏览器",
+        category="web",
+        app_type="web",
+        dependencies=("fastapi", "uvicorn"),
+        files=(
+            TemplateFile(rel_path="pyproject.toml", content=_WEB_FASTAPI_REACT_PYPROJECT),
+            TemplateFile(rel_path="$entry_module.py", content=_WEB_FASTAPI_REACT_ENTRY),
+            TemplateFile(rel_path="dist/index.html", content=_WEB_REACT_INDEX),
         ),
     ),
     # ---- 配置示例模板 ----

@@ -447,6 +447,7 @@ def _strip_compiled_py(  # noqa: PLR0913
     sp_optimize: int,
     py_version: str,
     data_dirs: tuple[Path, ...] = (),
+    web_static_dirs: tuple[Path, ...] = (),
 ) -> int:
     """剥离 src 与 site-packages 的非 ``__init__.py`` 源码，返回剥离总数.
 
@@ -457,12 +458,20 @@ def _strip_compiled_py(  # noqa: PLR0913
     ``data_dirs`` 为 src 下的数据资源目录绝对路径列表，其下 ``.py`` 不剥离
     （视为完整资源，如 fspack 的 ``assets/templates/`` 含项目模板源码）。
 
+    ``web_static_dirs`` 为 src 下的前端构建产物目录绝对路径列表，与
+    ``data_dirs`` 同等保护——其下 ``.py`` 不剥离。仅 ``AppType.WEB`` 项目使用。
+
     提取为辅助函数以降低 :func:`_precompile_pyc` 分支数（PLR0912）。
     """
     stripped = 0
     if src_dir.is_dir():
         stripped += _strip_py_sources(
-            [src_dir], entry_rels, optimize=optimize, py_version=py_version, data_dirs=data_dirs
+            [src_dir],
+            entry_rels,
+            optimize=optimize,
+            py_version=py_version,
+            data_dirs=data_dirs,
+            web_static_dirs=web_static_dirs,
         )
     if site_packages.is_dir():
         stripped += _strip_py_sources([site_packages], frozenset(), optimize=sp_optimize, py_version=py_version)
@@ -480,6 +489,7 @@ def _precompile_pyc(  # noqa: PLR0913
     optimize: int = 0,
     entry_rels: frozenset[str] = frozenset(),
     data_dirs: tuple[Path, ...] = (),
+    web_static_dirs: tuple[Path, ...] = (),
 ) -> None:
     """预编译 src 与 site-packages 的 .py 为 .pyc，加速首次启动.
 
@@ -510,6 +520,10 @@ def _precompile_pyc(  # noqa: PLR0913
     避免 PEP 420 命名空间包导致 ``.pyc`` 不被加载）。``entry_rels`` 中的入口文件
     跳过剥离（入口包装器需 ``.py`` 存在以供 ``runpy`` 定位）。src 与 site-packages
     分别用各自的 optimize 级别迁移 ``.pyc`` 到 legacy 布局。
+
+    ``data_dirs``/``web_static_dirs`` 为 src 下的数据资源/前端构建产物目录绝对
+    路径元组，其下 ``.py`` 不剥离（视为完整资源）。仅对 src 生效（site-packages
+    无数据资源目录）。
 
     重复构建时用 ``dist/.pyc_stamp``（src 指纹 + site-packages 指纹 + strip_py +
     optimize + sp_optimize）跳过 compileall，避免 subprocess 启动与文件遍历开销。
@@ -563,9 +577,19 @@ def _precompile_pyc(  # noqa: PLR0913
     # 分别剥离 src 与 site-packages：entry_rels 仅对 src 生效（入口文件在 src 下），
     # site-packages 无入口文件故传空集合。src 与 site-packages 用各自的 optimize
     # 级别匹配 .pyc 文件名后缀（cpython-{ver}.opt-{N}.pyc）。
-    # data_dirs 仅对 src 生效（site-packages 无数据资源目录），其下 .py 不剥离。
+    # data_dirs/web_static_dirs 仅对 src 生效（site-packages 无数据资源目录），
+    # 其下 .py 不剥离。
     stripped = (
-        _strip_compiled_py(src_dir, site_packages, entry_rels, optimize, sp_optimize, py_version, data_dirs)
+        _strip_compiled_py(
+            src_dir,
+            site_packages,
+            entry_rels,
+            optimize,
+            sp_optimize,
+            py_version,
+            data_dirs,
+            web_static_dirs,
+        )
         if strip_py
         else 0
     )
@@ -576,13 +600,14 @@ def _precompile_pyc(  # noqa: PLR0913
         stage.set_detail(f"编译 {compiled} 目录")
 
 
-def _strip_py_sources(
+def _strip_py_sources(  # noqa: PLR0913
     targets: list[Path],
     entry_rels: frozenset[str] = frozenset(),
     *,
     optimize: int = 0,
     py_version: str = "",
     data_dirs: tuple[Path, ...] = (),
+    web_static_dirs: tuple[Path, ...] = (),
 ) -> int:
     """删除 targets 中非 ``__init__.py`` 的 ``.py`` 源码，返回剥离数量.
 
@@ -600,10 +625,12 @@ def _strip_py_sources(
     需 ``.py`` 存在才能被 ``find_spec`` 定位（``__pycache__`` 下的 ``.pyc`` 不在
     ``FileFinder`` 搜索范围，``.pyd`` 模块无 Python 字节码无法被 ``runpy`` 执行）。
 
-    ``data_dirs`` 为数据资源目录绝对路径元组（如 ``dist/src/fspack/assets/templates``），
-    其下 ``.py`` 不剥离：这些目录树视为完整资源原样保留（如 fspack 的项目模板源码），
-    下游 ``fsp doctor --test`` 复制后需 ``.py`` 存在才能构建。``data_dirs`` 仅对
-    ``targets[0]``（src）生效，site-packages 无数据资源目录。
+    ``data_dirs``/``web_static_dirs`` 为数据资源/前端构建产物目录绝对路径元组
+    （如 ``dist/src/fspack/assets/templates``、``dist/src/dist``），其下 ``.py``
+    不剥离：这些目录树视为完整资源原样保留（如 fspack 的项目模板源码、前端构建
+    产物中的 JS 工具脚本），下游 ``fsp doctor --test`` 复制后需 ``.py`` 存在才能
+    构建。``data_dirs``/``web_static_dirs`` 仅对 ``targets[0]``（src）生效，
+    site-packages 无此类目录。
     """
     # 推导 .pyc 文件名后缀：cpython-{major}{minor}[-opt-N]
     if py_version:
@@ -614,13 +641,16 @@ def _strip_py_sources(
     opt_suffix = "" if optimize == 0 else f".opt-{optimize}"
     pyc_name_pattern = f"{{stem}}.{ver_tag}{opt_suffix}.pyc"
 
+    # 合并 data_dirs + web_static_dirs（同等保护，单次判断）
+    protected = (*data_dirs, *web_static_dirs)
+
     stripped = 0
     for d in targets:
         for py in d.rglob("*.py"):
             if py.name == "__init__.py":
                 continue
-            # data_dirs 内的 .py 不剥离（数据资源目录，原样保留）
-            if _is_in_data_dirs(py, data_dirs):
+            # data_dirs/web_static_dirs 内的 .py 不剥离（数据资源/前端产物目录，原样保留）
+            if _is_in_data_dirs(py, protected):
                 continue
             try:
                 rel = py.relative_to(d).as_posix()

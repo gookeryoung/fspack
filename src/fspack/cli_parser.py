@@ -258,6 +258,16 @@ def _add_build_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser
             "有此标志则清空 dist 后重新构建"
         ),
     )
+    p.add_argument(
+        "--open-browser",
+        action="store_true",
+        help=(
+            "WEB 应用启动后自动打开浏览器（webbrowser.open）。"
+            "WEB 类型（Flask/FastAPI 等）默认启用，无需显式指定；"
+            "非 WEB 类型显式指定时也启用（如 GUI 内嵌 WebView 场景）。"
+            "与 [tool.fspack] open-browser 配置默认合并（CLI 或配置任一启用 → 启用）"
+        ),
+    )
 
 
 def _add_run_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:

@@ -54,8 +54,11 @@ def run(
     _logger.info("运行入口 %s: %s", ep.name, " ".join(cmd))
     completed = subprocess.run(cmd, check=False, env=env)
     if completed.returncode != 0:
-        if ep.app_type is AppType.GUI and not debug:
-            _logger.warning("GUI 应用输出被 Windows subsystem 吞掉，如需查看输出请用 `fspack r --debug`")
+        if ep.app_type in (AppType.GUI, AppType.WEB) and not debug:
+            _logger.warning(
+                "%s 应用输出被 Windows subsystem 吞掉，如需查看输出请用 `fspack r --debug`",
+                ep.app_type.value.upper(),
+            )
         raise FspackError(f"程序退出码非零: {completed.returncode}")
 
 

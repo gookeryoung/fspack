@@ -311,6 +311,7 @@ def _execute_build(  # noqa: PLR0912, PLR0913
                 src_dst,
                 extra_excludes=info.exclude_dirs,
                 data_dirs=info.data_dirs,
+                web_static_dirs=info.web_static_dirs,
             )
 
     _compile_user_sources(ctx, src_dst)

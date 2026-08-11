@@ -86,10 +86,17 @@ _BUILD_DEFAULT_KEYS: dict[str, str] = {
     "analyze_deps": "analyze_deps",
     "require_hashes": "require_hashes",
     "no_sbom": "no_sbom",
+    "open_browser": "open_browser",
 }
 
 # GUI 框架导入名集合：用于按入口脚本 import 推断 AppType
 _GUI_HINTS = frozenset({"tkinter", "PySide2", "PySide6", "PyQt5", "PyQt6", "matplotlib", "wx", "win32gui", "pygame"})
+
+# Web 框架导入名集合：用于按入口脚本 import 推断 AppType.WEB。
+# 含 ASGI/WSGI 服务器（uvicorn/hypercorn）与框架本体（flask/fastapi 等），
+# 任一 import 即判定为 WEB 类型。GUI 优先级高于 WEB（matplotlib 等 GUI 框架
+# 偶尔与 web 框架共存，按 GUI 处理关闭控制台更合理）。
+_WEB_HINTS = frozenset({"flask", "fastapi", "sanic", "django", "tornado", "starlette", "uvicorn", "hypercorn", "quart"})
 
 
 def parse_project(project_dir: Path, py_version: str | None = None) -> ProjectInfo:
@@ -163,6 +170,10 @@ def _parse_project_cached(
     # [tool.fspack] data-dirs：原样保留的数据资源目录树（相对项目目录的 POSIX 路径），
     # copy_source 对其跳过元数据/文档排除，_strip_py_sources 跳过其下 .py 剥离。
     data_dirs = _parse_data_dirs(fspack_cfg.get("data-dirs"))
+    # [tool.fspack] web-static-dirs：前端构建产物目录（相对项目目录的 POSIX 路径，
+    # 如 "dist"），与 data-dirs 同等保护，且 wrapper 在打包时解析为 dist 内绝对
+    # 路径注入 Flask static_folder / FastAPI StaticFiles serve。
+    web_static_dirs = _parse_web_static_dirs(fspack_cfg.get("web-static-dirs"))
     # [tool.fspack] 构建默认值：CLI 标志覆盖
     build_defaults = _parse_build_defaults(fspack_cfg)
     # [tool.fspack] 私有包源：extra-index-urls / find-links 透传给 pip/uv
@@ -195,6 +206,7 @@ def _parse_project_cached(
                 icon=icon_path,
                 exclude_dirs=exclude_dirs,
                 data_dirs=data_dirs,
+                web_static_dirs=web_static_dirs,
                 build_defaults=build_defaults,
                 extra_index_urls=extra_index_urls,
                 find_links=find_links,
@@ -216,6 +228,7 @@ def _parse_project_cached(
         icon=icon_path,
         exclude_dirs=exclude_dirs,
         data_dirs=data_dirs,
+        web_static_dirs=web_static_dirs,
         build_defaults=build_defaults,
         extra_index_urls=extra_index_urls,
         find_links=find_links,
@@ -394,6 +407,18 @@ def _parse_data_dirs(value: object) -> tuple[str, ...]:
     元数据/文档排除与 ``.py`` 剥离。空列表表示无数据资源目录（默认行为不变）。
     """
     return _parse_string_list_cfg(value, "data-dirs", reject_empty=True)
+
+
+def _parse_web_static_dirs(value: object) -> tuple[str, ...]:
+    """解析 ``[tool.fspack] web-static-dirs`` 配置为目录路径元组（空元素报错）。
+
+    路径为相对项目目录的 POSIX 风格字符串（如 ``dist``），运行时由
+    :func:`copy_source`/``_strip_py_sources`` 与 ``data-dirs`` 同等跳过元数据/文档
+    排除与 ``.py`` 剥离，并由 :class:`EntryWrapper` 在打包时解析为 dist 内绝对
+    路径注入 Flask ``static_folder`` / FastAPI ``StaticFiles`` serve。空列表
+    表示无前端构建产物（仅 ``AppType.WEB`` 项目使用）。
+    """
+    return _parse_string_list_cfg(value, "web-static-dirs", reject_empty=True)
 
 
 def _parse_optional_dependencies(value: object) -> dict[str, tuple[str, ...]]:
@@ -643,18 +668,31 @@ def _is_main_check(node: ast.AST) -> bool:
 
 
 def infer_app_type(path: Path, declared: tuple[str, ...]) -> AppType:
-    """根据 import 与声明依赖推断 CLI/GUI 类型.
+    """根据 import 与声明依赖推断 CLI/GUI/WEB 类型.
+
+    优先级：GUI > WEB > CLI。GUI 框架（PySide/tkinter/matplotlib 等）优先于
+    Web 框架（Flask/FastAPI 等），因 matplotlib 等可视化库偶尔与 web 框架共存，
+    按 GUI 处理关闭控制台更合理。
 
     惰性导入 :func:`fspack.analyzer.collect_imports` 打破 config ↔ analyzer 循环依赖。
     """
     from fspack.analyzer import collect_imports
 
     tree = ast.parse(path.read_text(encoding="utf-8"))
-    for top in collect_imports(tree):
+    imports = collect_imports(tree)
+    # 先查 GUI：matplotlib 等可视化库优先于 web 框架
+    for top in imports:
         if top in _GUI_HINTS:
             return AppType.GUI
+    # 再查 WEB：flask/fastapi 等任一 import 即判定
+    for top in imports:
+        if top in _WEB_HINTS:
+            return AppType.WEB
+    # 声明依赖回退：入口脚本未直接 import 但 pyproject 声明依赖
     for dep in declared:
         top = re.split(r"[<>=!~;\[]", dep, maxsplit=1)[0].strip().replace("-", "_")
         if top in _GUI_HINTS:
             return AppType.GUI
+        if top in _WEB_HINTS:
+            return AppType.WEB
     return AppType.CLI

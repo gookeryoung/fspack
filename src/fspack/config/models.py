@@ -43,10 +43,16 @@ _logger = logging.getLogger(__name__)
 
 
 class AppType(enum.Enum):
-    """应用类型：CLI 控制台或 GUI 窗口."""
+    """应用类型：CLI 控制台、GUI 窗口或 WEB 服务.
+
+    ``WEB`` 用于前后端分离 Web 应用（Flask/FastAPI 等），与 GUI 一样关闭
+    控制台窗口（Windows loader 加 ``-mwindows``），且 wrapper 注入静态文件
+    serve 与自动开浏览器逻辑。
+    """
 
     CLI = "cli"
     GUI = "gui"
+    WEB = "web"
 
 
 @dataclass(frozen=True)
@@ -170,6 +176,9 @@ class BuildDefaults:
     # Linux .deb GPG 签名密钥 ID：未指定时跳过 gpg 签名。
     # 配置层仅作为 CLI --sign-deb-key 的回退默认值
     sign_deb_key: str | None = None
+    # WEB 应用启动后自动打开浏览器（webbrowser.open）。WEB 类型默认启用，
+    # 配置层 true 对非 WEB 类型也可启用（如 GUI 内嵌 WebView 场景）
+    open_browser: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -233,6 +242,11 @@ class ProjectInfo:
     # _strip_py_sources 跳过其下 .py 剥离。用于含子项目作为资源的场景
     # （如 fspack 自身的 src/fspack/assets/templates/ 含完整项目模板）。
     data_dirs: tuple[str, ...] = ()
+    # 前端构建产物目录（相对项目目录的 POSIX 路径，如 "dist"）：与 data_dirs
+    # 同等保护——copy_source 跳过元数据排除、_strip_py_sources 跳过 .py 剥离。
+    # 此外 entry wrapper 在打包时把这些目录解析为 dist 下绝对路径，注入
+    # Flask static_folder / FastAPI StaticFiles serve。仅 AppType.WEB 项目使用。
+    web_static_dirs: tuple[str, ...] = ()
     build_defaults: BuildDefaults = field(default_factory=BuildDefaults)
     extra_index_urls: tuple[str, ...] = ()
     find_links: tuple[str, ...] = ()
@@ -272,18 +286,21 @@ class ProjectInfo:
 
     @property
     def default_entry(self) -> EntryPoint:
-        """默认入口：GUI 优先于 CLI，同类型按入口名字母排序。
+        """默认入口：GUI 优先于 WEB 优先于 CLI，同类型按入口名字母排序。
 
         未显式指定入口时（如 ``fsp r`` 不带 ``--entry``、``fsp doctor --test``
-        运行验证），按 GUI 优先、同类型按名字母序选第一个，保证选择稳定
-        可预期。单入口项目返回唯一入口。
+        运行验证），按 GUI 优先、WEB 次之、CLI 最后，同类型按名字母序选第一个，
+        保证选择稳定可预期。单入口项目返回唯一入口。
 
-        排序键 ``(0 if GUI else 1, name)``：GUI 排前，同类型内按 ``name``
-        升序。``AppType`` 枚举定义序 CLI 在前 GUI 在后，不能直接用枚举值
-        排序，须显式让 GUI 优先。
+        排序键 ``(0 if GUI else 1 if WEB else 2, name)``：GUI 排前、WEB 次之、
+        CLI 最后，同类型内按 ``name`` 升序。``AppType`` 枚举定义序 CLI/GUI/WEB
+        不能直接用枚举值排序，须显式让 GUI > WEB > CLI。
         """
         entries = self.all_entries
-        return min(entries, key=lambda ep: (0 if ep.app_type is AppType.GUI else 1, ep.name))
+        return min(
+            entries,
+            key=lambda ep: (0 if ep.app_type is AppType.GUI else 1 if ep.app_type is AppType.WEB else 2, ep.name),
+        )
 
 
 @dataclass(frozen=True)
@@ -388,6 +405,9 @@ class BuildOptions:
     sign_exe_password: str | None = None
     # Linux .deb GPG 签名密钥 ID：非 None 时调用 gpg --detach-sign 签名 .deb
     sign_deb_key: str | None = None
+    # WEB 应用启动后自动打开浏览器：WEB 类型在 stages 层默认启用
+    # （app_type is WEB），配置/CLI 可显式覆盖（如 GUI 内嵌 WebView 也启用）
+    open_browser: bool = False
 
 
 def build_options_from_defaults(defaults: BuildDefaults) -> BuildOptions:
@@ -426,6 +446,7 @@ def build_options_from_defaults(defaults: BuildDefaults) -> BuildOptions:
         if defaults.sign_exe_password is not None
         else base.sign_exe_password,
         sign_deb_key=defaults.sign_deb_key if defaults.sign_deb_key is not None else base.sign_deb_key,
+        open_browser=defaults.open_browser if defaults.open_browser is not None else base.open_browser,
     )
 
 

@@ -981,3 +981,25 @@ def test_downloader_module_no_top_level_threading_import() -> None:
     # 移除 TYPE_CHECKING 块内容（仅类型注解，运行时不执行）
     top_runtime = re.sub(r"if TYPE_CHECKING:.*?(?=\n\n|\n[^\s])", "", top_section, flags=re.DOTALL)
     assert "import threading" not in top_runtime
+
+
+# --- iter-148 前后端分离 Web 打包：--open-browser CLI 标志 ---
+
+
+def test_build_open_browser_flag_present_in_help() -> None:
+    """build 子命令含 --open-browser 标志."""
+    parser = cli.build_parser()
+    # --open-browser 在 build 子解析器中，非顶层 parser
+    sub_action = next(a for a in parser._actions if hasattr(a, "choices") and isinstance(a.choices, dict))
+    build_parser = sub_action.choices["build"]  # type: ignore[index]
+    flag_names = {opt for a in build_parser._actions for opt in a.option_strings}
+    assert "--open-browser" in flag_names
+
+
+def test_build_open_browser_flag_sets_build_options(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`fsp b <project> --open-browser` 解析为 BuildOptions.open_browser=True."""
+    _make_minimal_project(tmp_path)
+    called, fake_build = _capture_build()
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    cli.main(["b", str(tmp_path), "--open-browser"])
+    assert called["options"].open_browser is True

@@ -213,8 +213,8 @@ ITER84_APP_TYPES: dict[str, str] = {
     "matplotlib": "gui",
     "numpy": "cli",
     "scipy": "cli",
-    "flask": "cli",
-    "fastapi": "cli",
+    "flask": "web",
+    "fastapi": "web",
     "pyinstaller": "cli",
 }
 
@@ -245,7 +245,7 @@ def test_iter84_template_entry_script_syntax_valid(tpl_id: str) -> None:
 
 @pytest.mark.parametrize("tpl_id", ITER84_ALL_IDS)
 def test_iter84_template_app_type_inferred(tpl_id: str, tmp_path: Path) -> None:
-    """模板入口脚本被 infer_app_type 识别为预期类型（gui/cli）."""
+    """模板入口脚本被 infer_app_type 识别为预期类型（gui/cli/web）."""
     from fspack.config import infer_app_type
 
     rendered = _render_template_files(tpl_id)
@@ -433,9 +433,9 @@ def test_init_project_full_config(tmp_path: Path) -> None:
 
 
 def test_template_count_final() -> None:
-    """模板总数 = 22（6 CLI + 6 GUI + 2 game + 3 sci + 2 web + 3 config）."""
+    """模板总数 = 24（6 CLI + 6 GUI + 2 game + 3 sci + 4 web + 3 config）."""
     templates = list_templates()
-    assert len(templates) == 22, f"应有 22 个模板，实际 {len(templates)}"
+    assert len(templates) == 24, f"应有 24 个模板，实际 {len(templates)}"
     # 分类统计
     categories: dict[str, int] = {}
     for tpl in templates:
@@ -444,5 +444,75 @@ def test_template_count_final() -> None:
     assert categories.get("gui", 0) == 6
     assert categories.get("game", 0) == 2
     assert categories.get("sci", 0) == 3
-    assert categories.get("web", 0) == 2
+    assert categories.get("web", 0) == 4
     assert categories.get("config", 0) == 3
+
+
+# --- iter-148 前后端分离 Web 模板（web-flask-vue / web-fastapi-react）---
+
+
+WEB_SEPARATED_TEMPLATE_IDS = ("web-flask-vue", "web-fastapi-react")
+
+
+@pytest.mark.parametrize("tpl_id", WEB_SEPARATED_TEMPLATE_IDS)
+def test_web_separated_templates_registered(tpl_id: str) -> None:
+    """前后端分离 Web 模板已注册到 registry."""
+    assert get_template(tpl_id) is not None, f"Web 模板 {tpl_id!r} 未注册"
+
+
+@pytest.mark.parametrize("tpl_id", WEB_SEPARATED_TEMPLATE_IDS)
+def test_web_separated_template_metadata(tpl_id: str) -> None:
+    """前后端分离 Web 模板元数据：category=web, app_type=web."""
+    tpl = get_template(tpl_id)
+    assert tpl is not None
+    assert tpl.category == "web"
+    assert tpl.app_type == "web"
+
+
+def test_web_flask_vue_template_dependencies() -> None:
+    """web-flask-vue 模板依赖为 flask."""
+    tpl = get_template("web-flask-vue")
+    assert tpl is not None
+    assert tpl.dependencies == ("flask",)
+
+
+def test_web_fastapi_react_template_dependencies() -> None:
+    """web-fastapi-react 模板依赖为 fastapi + uvicorn."""
+    tpl = get_template("web-fastapi-react")
+    assert tpl is not None
+    assert tpl.dependencies == ("fastapi", "uvicorn")
+
+
+def test_web_separated_templates_contain_dist_index_html() -> None:
+    """前后端分离 Web 模板含 dist/index.html 前端入口文件."""
+    for tpl_id in WEB_SEPARATED_TEMPLATE_IDS:
+        tpl = get_template(tpl_id)
+        assert tpl is not None, f"模板 {tpl_id!r} 不存在"
+        rel_paths = [f.rel_path for f in tpl.files]
+        assert "dist/index.html" in rel_paths, f"{tpl_id} 缺少 dist/index.html"
+
+
+def test_web_separated_templates_pyproject_contains_web_static_dirs() -> None:
+    """前后端分离 Web 模板 pyproject.toml 含 web-static-dirs = ['dist']."""
+    for tpl_id in WEB_SEPARATED_TEMPLATE_IDS:
+        rendered = _render_template_files(tpl_id)
+        pyproject = rendered[Path("pyproject.toml")]
+        assert 'web-static-dirs = ["dist"]' in pyproject, f"{tpl_id} pyproject 缺少 web-static-dirs"
+
+
+def test_web_separated_template_entry_script_syntax_valid() -> None:
+    """前后端分离 Web 模板入口脚本能被 AST 解析（语法正确）."""
+    for tpl_id in WEB_SEPARATED_TEMPLATE_IDS:
+        rendered = _render_template_files(tpl_id)
+        entry_path = Path("test_app.py")
+        assert entry_path in rendered, f"{tpl_id} 缺少入口脚本"
+        ast.parse(rendered[entry_path])
+
+
+def test_init_project_web_flask_vue(tmp_path: Path) -> None:
+    """init_project 用 web-flask-vue 模板创建项目."""
+    target = init_project("wf-app", template_id="web-flask-vue", directory=tmp_path)
+    assert (target / "wf_app.py").is_file()
+    assert (target / "dist" / "index.html").is_file()
+    pyproject = (target / "pyproject.toml").read_text(encoding="utf-8")
+    assert 'web-static-dirs = ["dist"]' in pyproject

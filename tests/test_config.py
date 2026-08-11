@@ -611,7 +611,8 @@ def test_parse_project_multi_entry_py310_example() -> None:
     # 每个入口按自身 import 推断类型（不看项目级 declared PySide2）
     assert info.entries[0].app_type is AppType.CLI
     assert info.entries[1].app_type is AppType.GUI
-    assert info.entries[2].app_type is AppType.CLI
+    # web.py 入口 import flask → AppType.WEB（iter-148 新增 WEB 类型）
+    assert info.entries[2].app_type is AppType.WEB
 
 
 def test_parse_project_multi_entry_py310_single_declared_compat(tmp_path: Path) -> None:
@@ -1169,10 +1170,10 @@ def test_multi_entry_py310_template_backward_compat() -> None:
     info = parse_project(_EXAMPLES / "multi_entry_py310")
     assert len(info.entries) == 3
     assert [ep.name for ep in info.entries] == ["cli", "gui", "web"]
-    # cli 是 CLI，gui 是 GUI（import PySide2）
+    # cli 是 CLI，gui 是 GUI（import PySide2），web 是 WEB（import flask）
     assert info.entries[0].app_type is AppType.CLI
     assert info.entries[1].app_type is AppType.GUI
-    assert info.entries[2].app_type is AppType.CLI
+    assert info.entries[2].app_type is AppType.WEB
 
 
 def test_scripts_with_fspack_supplements_extra_entry(tmp_path: Path) -> None:
@@ -2292,3 +2293,129 @@ def test_build_defaults_security_defaults_all_none() -> None:
     assert defaults.sign_exe_certificate is None
     assert defaults.sign_exe_password is None
     assert defaults.sign_deb_key is None
+
+
+# --- iter-148 前后端分离 Web 打包：AppType.WEB 推断与配置 ---
+
+
+def test_apptype_web_enum_value() -> None:
+    """AppType.WEB 枚举值为 'web'（与 CLI/GUI 并列）."""
+    assert AppType.WEB.value == "web"
+    assert AppType.WEB is not AppType.CLI
+    assert AppType.WEB is not AppType.GUI
+
+
+def test_infer_app_type_flask_import(tmp_path: Path) -> None:
+    """入口脚本 import flask 推断为 WEB 类型."""
+    script = tmp_path / "app.py"
+    script.write_text("from flask import Flask\ndef main():\n    pass\n")
+    assert infer_app_type(script, ()) is AppType.WEB
+
+
+def test_infer_app_type_fastapi_import(tmp_path: Path) -> None:
+    """入口脚本 import fastapi 推断为 WEB 类型."""
+    script = tmp_path / "app.py"
+    script.write_text("from fastapi import FastAPI\ndef main():\n    pass\n")
+    assert infer_app_type(script, ()) is AppType.WEB
+
+
+def test_infer_app_type_uvicorn_import(tmp_path: Path) -> None:
+    """入口脚本 import uvicorn 推断为 WEB 类型（ASGI 服务器）."""
+    script = tmp_path / "app.py"
+    script.write_text("import uvicorn\ndef main():\n    pass\n")
+    assert infer_app_type(script, ()) is AppType.WEB
+
+
+def test_infer_app_type_gui_priority_over_web(tmp_path: Path) -> None:
+    """GUI 优先级高于 WEB：同时 import GUI 与 Web 框架时判为 GUI.
+
+    matplotlib 等可视化库偶尔与 web 框架共存，按 GUI 处理关闭控制台更合理。
+    """
+    script = tmp_path / "app.py"
+    script.write_text("import flask\nimport tkinter\ndef main():\n    pass\n")
+    assert infer_app_type(script, ()) is AppType.GUI
+
+
+def test_infer_app_type_web_from_declared_dependency(tmp_path: Path) -> None:
+    """入口脚本未直接 import 但声明依赖 flask 时推断为 WEB 类型."""
+    script = tmp_path / "app.py"
+    script.write_text("def main():\n    pass\n")
+    assert infer_app_type(script, ("flask>=2",)) is AppType.WEB
+
+
+def test_parse_web_static_dirs_valid(tmp_path: Path) -> None:
+    """[tool.fspack] web-static-dirs 配置解析为路径元组."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nweb-static-dirs = ["dist", "static"]\n'
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    info = parse_project(tmp_path)
+    assert info.web_static_dirs == ("dist", "static")
+
+
+def test_parse_web_static_dirs_empty(tmp_path: Path) -> None:
+    """无 [tool.fspack] web-static-dirs 配置时 web_static_dirs 为空元组."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    info = parse_project(tmp_path)
+    assert info.web_static_dirs == ()
+
+
+def test_parse_web_static_dirs_invalid_type(tmp_path: Path) -> None:
+    """web-static-dirs 非列表时报错."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nweb-static-dirs = "dist"\n'
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    with pytest.raises(ProjectError, match="web-static-dirs 必须是字符串列表"):
+        parse_project(tmp_path)
+
+
+def test_parse_web_static_dirs_empty_element(tmp_path: Path) -> None:
+    """web-static-dirs 元素为空字符串时报错."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nweb-static-dirs = [""]\n'
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    with pytest.raises(ProjectError, match="web-static-dirs 元素必须是非空字符串"):
+        parse_project(tmp_path)
+
+
+def test_build_defaults_open_browser(tmp_path: Path) -> None:
+    """[tool.fspack] open_browser = true 解析到 BuildDefaults.open_browser."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nopen_browser = true\n'
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    info = parse_project(tmp_path)
+    assert info.build_defaults.open_browser is True
+
+
+def test_build_options_open_browser() -> None:
+    """BuildOptions.open_browser 默认 False（WEB 类型在 stages 层自动启用）."""
+    opts = BuildOptions()
+    assert opts.open_browser is False
+    # build_options_from_defaults: None 回退到 BuildOptions 默认值
+    defaults = BuildDefaults()
+    assert build_options_from_defaults(defaults).open_browser is False
+    # 非 None 时覆盖
+    defaults_true = BuildDefaults(open_browser=True)
+    assert build_options_from_defaults(defaults_true).open_browser is True
+
+
+def test_default_entry_web_priority_over_cli() -> None:
+    """多入口项目默认入口：WEB 优先于 CLI（GUI > WEB > CLI）."""
+    ep_cli = EntryPoint(name="cli", module="cli", file=Path("cli.py"), app_type=AppType.CLI)
+    ep_web = EntryPoint(name="web", module="web", file=Path("web.py"), app_type=AppType.WEB)
+    info = ProjectInfo(
+        name="multi",
+        version="0.1",
+        src_dir=Path(),
+        entry_module="cli",
+        entry_file=Path("cli.py"),
+        app_type=AppType.CLI,
+        dependencies=(),
+        py_version="3.11.9",
+        entries=(ep_cli, ep_web),
+    )
+    assert info.default_entry is ep_web

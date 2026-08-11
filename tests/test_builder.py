@@ -3279,3 +3279,59 @@ def test_build_entry_loaders_parallel_preserves_order(tmp_path: Path, monkeypatc
     exes = _build_entry_loaders(ctx, resolved_icon=None, has_tkinter=False)
 
     assert [e.stem for e in exes] == list(names), "exes 顺序应与 entries 提交顺序一致"
+
+
+# --- iter-148 前后端分离 Web 打包：web_static_dirs 保护 ---
+
+
+def test_copy_source_web_static_dirs_keeps_metadata(tmp_path: Path) -> None:
+    """web_static_dirs 内的元数据/文档文件保留（与 data_dirs 同等保护）."""
+    src = tmp_path / "proj"
+    src.mkdir()
+    (src / "app.py").write_text("print('hi')")
+    # 模拟前端构建产物目录 dist/
+    dist_dir = src / "dist"
+    dist_dir.mkdir()
+    (dist_dir / "index.html").write_text("<html></html>")
+    (dist_dir / "pyproject.toml").write_text('[project]\nname = "frontend"\n')
+    (dist_dir / "README.md").write_text("# frontend\n")
+    # 项目根目录的元数据文件仍应被剥离
+    (src / "pyproject.toml").write_text('[project]\nname = "app"\n')
+    (src / "README.md").write_text("# app\n")
+    dst = tmp_path / "out" / "src"
+
+    copy_source(src, dst, web_static_dirs=("dist",))
+    # web_static_dirs 内的元数据/文档文件保留
+    assert (dst / "dist" / "index.html").is_file()
+    assert (dst / "dist" / "pyproject.toml").is_file()
+    assert (dst / "dist" / "README.md").is_file()
+    # 应用源码保留
+    assert (dst / "app.py").is_file()
+    # 项目根目录的元数据文件仍被剥离
+    assert not (dst / "pyproject.toml").exists()
+    assert not (dst / "README.md").exists()
+
+
+def test_strip_py_sources_skips_web_static_dirs(tmp_path: Path) -> None:
+    """``web_static_dirs`` 内的 .py 不剥离（前端产物目录原样保留）."""
+    from fspack.builder import _strip_py_sources
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "__init__.py").write_text("")
+    (src / "app.py").write_text("print('app')")
+    # 模拟前端构建产物目录 dist/ 下的 .py 文件（如 JS 工具脚本）
+    web_dir = src / "dist"
+    web_dir.mkdir()
+    (web_dir / "tool.py").write_text("def run():\n    pass\n")
+    # 为两个 .py 都生成 .pyc（确保 PEP 3147 迁移条件满足，区别仅在 web_static_dirs 跳过）
+    _make_pyc_file(src / "app.py", "3.11", optimize=0)
+    _make_pyc_file(web_dir / "tool.py", "3.11", optimize=0)
+
+    web_static_dirs = (web_dir.resolve(),)
+    stripped = _strip_py_sources([src], py_version="3.11.9", optimize=0, web_static_dirs=web_static_dirs)
+
+    # 仅 app.py 被剥离，tool.py 保留
+    assert stripped == 1
+    assert not (src / "app.py").exists()
+    assert (web_dir / "tool.py").is_file()

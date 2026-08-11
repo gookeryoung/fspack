@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Sequence
 
 from fspack.config import (
     DEFAULT_SLIM_RULES,
+    AppType,
     BuildConfig,
     BuildOptions,
     DependencyReport,
@@ -377,9 +378,10 @@ def _compile_user_sources(ctx: BuildContext, src_dst: Path) -> None:
     ``runpy`` 执行，``__pycache__`` 下的 ``.pyc`` 不在 ``FileFinder`` 搜索范围）。
 
     ``[tool.fspack] data-dirs`` 配置的数据资源目录树（``ctx.info.data_dirs``）
+    与 ``web-static-dirs`` 配置的前端构建产物目录（``ctx.info.web_static_dirs``）
     传递给 ``_precompile_pyc``，其下 ``.py`` 不被剥离：这些目录视为完整资源原样
     保留（如 fspack 的 ``assets/templates/`` 含项目模板源码，下游 ``fsp doctor
-    --test`` 复制后需 ``.py`` 存在才能构建）。
+    --test`` 复制后需 ``.py`` 存在才能构建；前端 ``dist/`` 内含 JS 工具脚本）。
     """
     target = ctx.cfg.target
     # 入口文件相对 src 的 POSIX 路径集合：Nuitka 编译与 pyc_strip 剥离均跳过这些文件
@@ -408,15 +410,18 @@ def _compile_user_sources(ctx: BuildContext, src_dst: Path) -> None:
     # 交叉构建时（构建机平台 ≠ 目标平台）runtime python 无法执行，跳过预编译。
     # Nuitka 模式下 src 已编译为 .pyd，compileall 会跳过（找不到 .py 不生成 .pyc），
     # site-packages 仍按 pyc_optimize 编译，故本步保留不跳过。
-    # data_dirs 解析为 dist/src 下的绝对路径，传递给 _precompile_pyc 跳过其下 .py 剥离。
+    # data_dirs/web_static_dirs 解析为 dist/src 下的绝对路径，传递给 _precompile_pyc
+    # 跳过其下 .py 剥离。
     if not ctx.opts.no_pyc and target is detect_platform():
         with ctx.tracker.stage("预编译字节码") as st:
-            # data_dirs 配置为相对项目目录的 POSIX 路径（如 src/fspack/assets/templates），
-            # 解析为 dist/src 下的绝对路径：project_dir/src/fspack/assets/templates →
-            # dist/src/src/fspack/assets/templates（src_dst 即 dist/src）。
+            # data_dirs/web_static_dirs 配置为相对项目目录的 POSIX 路径，解析为 dist/src
+            # 下的绝对路径：project_dir/<rel> → dist/src/<rel>（src_dst 即 dist/src）。
             # 仅解析存在的目录，避免传不存在的路径（无副作用但增加判断开销）。
             resolved_data_dirs = tuple(
                 src_dst / Path(rel) for rel in ctx.info.data_dirs if (src_dst / Path(rel)).is_dir()
+            )
+            resolved_web_static_dirs = tuple(
+                src_dst / Path(rel) for rel in ctx.info.web_static_dirs if (src_dst / Path(rel)).is_dir()
             )
             _precompile_pyc(
                 ctx.cfg.dist_dir,
@@ -428,6 +433,7 @@ def _compile_user_sources(ctx: BuildContext, src_dst: Path) -> None:
                 optimize=ctx.opts.pyc_optimize,
                 entry_rels=entry_rels,
                 data_dirs=resolved_data_dirs,
+                web_static_dirs=resolved_web_static_dirs,
             )
 
 
@@ -510,9 +516,13 @@ def _build_one_loader(  # noqa: PLR0913
     result = EntryWrapper.dotted_module_name(ctx.info.src_dir, ep.file)
     module_dotted = result[0] if result is not None else None
     pkg_root_rel = result[1] if result is not None else "."
-    # 生成入口包装器：处理 sys.path、Qt 插件路径与包上下文（相对导入）
+    # 生成入口包装器：处理 sys.path、Qt 插件路径与包上下文（相对导入），
+    # WEB 类型额外注入静态文件 serve 与自动开浏览器（open_browser 默认启用）。
+    # open_browser = opts.open_browser（CLI/配置显式启用）或 WEB 类型自动启用；
+    # 非 WEB 类型 opts.open_browser=True 时也启用（如 GUI 内嵌 WebView 场景）。
     wrapper_name = f"_entry_{ep.name}.py"
     wrapper_path = ctx.cfg.dist_dir / wrapper_name
+    open_browser = ctx.opts.open_browser or ep.app_type is AppType.WEB
     wrapper_path.write_text(
         EntryWrapper.generate_wrapper_source(
             ep.name,
@@ -521,6 +531,8 @@ def _build_one_loader(  # noqa: PLR0913
             pkg_root_rel,
             has_tkinter=has_tkinter,
             lazy_imports=ctx.opts.lazy_imports,
+            web_static_dirs=ctx.info.web_static_dirs,
+            open_browser=open_browser,
         ),
         encoding="utf-8",
     )

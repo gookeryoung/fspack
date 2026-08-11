@@ -766,3 +766,21 @@ def test_compile_loader_different_icon_misses_cache(tmp_path: Path, monkeypatch:
     )
     # 两次都完整编译（windres + gcc 各两次）
     assert len(calls) == 4
+
+
+# --- iter-148 前后端分离 Web 打包：WEB 类型 loader 加 -mwindows ---
+
+
+def test_compile_loader_web_adds_mwindows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """WEB 类型与 GUI 一样加 -mwindows 关闭控制台窗口."""
+    captured: dict[str, list[str]] = {}
+
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
+        captured["cmd"] = cmd
+        _touch_out(cmd)
+        return CompletedStub()
+
+    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
+    out = tmp_path / "app.exe"
+    compile_loader("x", out, AppType.WEB, tmp_path / "w", cache_dir=tmp_path / "cache")
+    assert "-mwindows" in captured["cmd"]
