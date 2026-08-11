@@ -268,7 +268,7 @@ class NuitkaCompile:
         ``env`` 为 None 时继承当前进程环境；非 None 时替换环境（用于注入
         ``CC="ccache gcc"`` 让 scons 通过 ccache 调用 gcc，加速重复编译）。
 
-        同时累积 stdout/stderr 内容供失败时诊断（当前仅返回未使用，保留以备扩展）。
+        同时累积 stdout/stderr 内容供失败时诊断与测试验证捕获行为。
 
         **内存保护**：stdout/stderr 累积上限 :data:`_STREAM_ACCUM_LIMIT`（16MB），
         超过后停止累积（继续写终端实时显示），避免大型项目（数百 .py 文件）

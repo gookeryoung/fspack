@@ -1,11 +1,11 @@
 """Python 运行时下载与解压：embed python（Windows）与 python-build-standalone（Linux）。
 
-提取 :class:`RuntimeDownloader` 基类封装 ``download → extract → ensure`` 三步流程的共性：
+提取 :class:`RuntimeDownloader` 基类封装 ``download → extract`` 流程的共性：
 
 - 缓存检查（命中调 ``stage.hit_cache``）
 - 进度条下载（:class:`fspack.packaging.net.Downloader`）
 - 归档解压（zipfile/tarfile）
-- marker 检查（重复构建跳过）
+- marker 检查（重复构建跳过，由模块级 ``ensure_embed``/``ensure_standalone`` 函数实现）
 - 解压后钩子（``post_extract``，用于 embed 的 site-packages 创建）
 
 子类通过实现钩子方法定制差异：归档文件名、下载 URL、marker 文件、解压格式等。
@@ -223,15 +223,16 @@ def _validate_zip_member(info: zipfile.ZipInfo) -> None:
 class RuntimeDownloader(abc.ABC):
     """Python 运行时下载与解压基类。
 
-    封装 ``download → extract → ensure`` 三步流程的共性。子类通过实现钩子方法
+    封装 ``download → extract`` 流程的共性。子类通过实现钩子方法
     定制归档格式、URL、marker 检查等差异。
 
     通用流程：
     1. :meth:`download` —— 缓存检查 → 命中调 ``stage.hit_cache`` →
        未命中调 :meth:`Downloader.download`
     2. :meth:`extract` —— ``mkdir runtime_dir`` → 调 :meth:`extract_archive` 钩子
-    3. :meth:`ensure` —— marker 检查 → 命中跳过 → 未命中 download+extract →
-       :meth:`post_extract`
+
+    marker 检查与 ``post_extract`` 钩子由模块级 ``ensure_embed``/``ensure_standalone``
+    函数编排（便于测试 monkeypatch ``download_*`` 函数）。
 
     类属性：
     - ``download_timeout``：下载超时秒数
@@ -269,7 +270,7 @@ class RuntimeDownloader(abc.ABC):
     @classmethod
     def post_extract(cls, runtime_dir: Path, version: str) -> None:  # noqa: ARG003
         """解压后额外步骤，默认无操作。子类可覆盖（如 embed 创建 site-packages）。"""
-        return None  # pragma: no cover # 默认钩子，所有子类均覆盖或 ensure_* 函数不调用
+        return None  # pragma: no cover # EmbedRuntime 覆盖；ensure_standalone 不调用此钩子
 
     @classmethod
     def download(
@@ -348,42 +349,6 @@ class RuntimeDownloader(abc.ABC):
         """解压运行时归档到 runtime_dir。"""
         runtime_dir.mkdir(parents=True, exist_ok=True)
         cls.extract_archive(archive_path, runtime_dir)
-
-    @classmethod
-    def ensure(
-        cls,
-        version: str,
-        cache_dir: Path,
-        runtime_dir: Path,
-        *,
-        stage: StageRecorder | None = None,
-        **kwargs: object,
-    ) -> Path:
-        """确保 runtime_dir 内有可用运行时，返回 runtime_dir。
-
-        重复构建时若 marker 文件已存在则跳过下载与解压，但仍执行 :meth:`post_extract`。
-
-        .. note::
-
-            当前生产路径由模块级 ``ensure_embed``/``ensure_standalone`` 函数承担
-            （便于测试 monkeypatch ``download_*`` 函数），本方法保留作为基类模板
-            供未来子类复用。
-        """
-        marker = cls.marker_path(runtime_dir, version)  # pragma: no cover # 模板方法，当前未使用
-        if marker.exists():  # pragma: no cover
-            _logger.info("%s 已就绪: %s", cls.runtime_label, runtime_dir)  # pragma: no cover
-            if stage is not None:  # pragma: no cover
-                stage.hit_cache()  # pragma: no cover
-        else:  # pragma: no cover
-            archive_path = cls.download(
-                version,
-                cache_dir,
-                stage=stage,
-                **kwargs,  # pyrefly: ignore[bad-argument-type]
-            )  # pragma: no cover
-            cls.extract(archive_path, runtime_dir)  # pragma: no cover
-        cls.post_extract(runtime_dir, version)  # pragma: no cover
-        return runtime_dir  # pragma: no cover
 
 
 # ---- 子类 ----
