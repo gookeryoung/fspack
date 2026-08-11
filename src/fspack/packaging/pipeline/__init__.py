@@ -457,6 +457,8 @@ def _save_build_failure(dist_dir: Path, tracker: BuildTracker, exc: Exception) -
     import json
     from datetime import datetime
 
+    from fspack._util.fsutil import atomic_write_text
+
     if not dist_dir.is_dir():
         return
 
@@ -472,7 +474,7 @@ def _save_build_failure(dist_dir: Path, tracker: BuildTracker, exc: Exception) -
         "timestamp": datetime.now().isoformat(timespec="seconds"),
     }
     try:
-        (dist_dir / _BUILD_FAILED).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        atomic_write_text(dist_dir / _BUILD_FAILED, json.dumps(data, ensure_ascii=False, indent=2))
     except OSError as e:
         _logger.warning("写入 .build_failed 失败: %s", e)
 
@@ -480,20 +482,17 @@ def _save_build_failure(dist_dir: Path, tracker: BuildTracker, exc: Exception) -
 def _load_build_failure(dist_dir: Path) -> dict[str, str] | None:
     """读取 ``dist/.build_failed`` JSON，返回失败信息 dict.
 
-    文件不存在或解析失败返回 None（不阻断构建流程）。
+    文件不存在或解析失败返回 None（不阻断构建流程）。读取 → 解析 → 根 dict
+    校验的公共骨架委托 :func:`fspack._util.jsoncache.load_json_dict`
+    （``delete_on_corrupt=False``：诊断文件不删除）；值统一转 ``str`` 为本函数外壳。
     """
-    import json
+    from fspack._util.jsoncache import load_json_dict
 
     path = dist_dir / _BUILD_FAILED
-    if not path.is_file():
+    data = load_json_dict(path, delete_on_corrupt=False, logger=_logger)
+    if data is None:
         return None
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(data, dict):
-            return {k: str(v) for k, v in data.items()}
-    except (json.JSONDecodeError, OSError):
-        _logger.warning("读取 .build_failed 失败，忽略: %s", path)
-    return None
+    return {k: str(v) for k, v in data.items()}
 
 
 def _remove_build_failure(dist_dir: Path) -> None:

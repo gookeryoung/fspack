@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Sequence
 
+from fspack._util.fsutil import atomic_write_text
 from fspack.config import (
     DEFAULT_SLIM_RULES,
     AppType,
@@ -635,7 +636,7 @@ def _dep_cache_save(dist_dir: Path, fingerprint: str, report: DependencyReport) 
             "ast_submodules": {k: sorted(v) for k, v in report.ast_submodules.items()},
         },
     }
-    cache.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    atomic_write_text(cache, json.dumps(payload, ensure_ascii=False))
 
 
 def _resolve_project_icon(

@@ -23,7 +23,8 @@ from __future__ import annotations
 
 import abc
 import logging
-import subprocess  # noqa: F401 # 测试 monkeypatch 通过 fspack.packaging.installer.subprocess.run 访问
+import shutil
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Sequence, TypeVar
@@ -89,6 +90,69 @@ def _run_stage(
         if detail:
             st.set_detail(detail)
     return result
+
+
+def _run_tool(
+    cmd: list[str],
+    *,
+    not_found_msg: str,
+    fail_prefix: str,
+    cwd: Path | None = None,
+    produces: Path | None = None,
+) -> None:
+    """执行外部命令行工具，统一异常处理与产物校验，失败抛 :class:`InstallerError`.
+
+    汇聚 dpkg-deb / gpg / makensis / signtool / pkgbuild / hdiutil / codesign
+    等外部工具调用的相同 try/except 骨架：``FileNotFoundError`` 转 ``not_found_msg``
+    （工具未安装），``CalledProcessError`` 转 ``{fail_prefix}:\\n{stderr}``（执行失败）。
+
+    Args:
+        cmd: 命令与参数列表（如 ``["dpkg-deb", "--build", ...]``）
+        not_found_msg: 工具未找到时的完整异常消息（含安装建议）
+        fail_prefix: 命令执行失败时异常消息前缀（后接 ``:\\n<stderr>``）
+        cwd: 子进程工作目录（如 makensis 需在 .nsi 所在目录执行），``None`` 时继承当前目录
+        produces: 命令应产出的文件路径，非 ``None`` 时命令成功后校验其存在，
+            缺失抛 ``InstallerError``（makensis 静默失败兜底）
+
+    Raises:
+        InstallerError: 工具未找到、命令返回非零、或 ``produces`` 声明的产物缺失
+    """
+    _logger.info("执行: %s", " ".join(cmd))
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8", errors="replace", cwd=cwd)
+    except FileNotFoundError as e:
+        raise InstallerError(not_found_msg) from e
+    except subprocess.CalledProcessError as e:
+        raise InstallerError(f"{fail_prefix}:\n{e.stderr or e.stdout}") from e
+    if produces is not None and not produces.is_file():
+        raise InstallerError(f"{cmd[0]} 未产出安装包: {produces}")
+
+
+def _make_staged_archive(dist_dir: Path, release_dir: Path, base: str, fmt: str) -> Path:
+    """将 dist 复制到 ``release_dir/<base>`` staging 目录后打包为归档，返回归档路径.
+
+    汇聚 tar.gz（``linux.build_tarball``）与 zip（``zip._make_zip``）逐行相同的打包流程：
+    创建 release_dir → 清理旧 staging → ``copytree(ignore=_DIST_IGNORE)`` →
+    ``make_archive`` → 清理 staging。归档顶层目录为 ``<base>``，解压后即可运行；
+    排除 ``release/`` 与构建中间文件（见 :data:`_DIST_IGNORE`）避免递归打包自身。
+
+    Args:
+        dist_dir: 待打包的 dist 目录
+        release_dir: 归档输出目录（同时用作 staging 父目录）
+        base: 归档基础名与内顶层目录名（如 ``<name>-<version>-<py_tag>-<platform>-slim``）
+        fmt: ``shutil.make_archive`` 格式，``"gztar"``（tar.gz）或 ``"zip"``
+
+    Returns:
+        生成的归档文件路径
+    """
+    release_dir.mkdir(parents=True, exist_ok=True)
+    staging = release_dir / base
+    if staging.exists():
+        shutil.rmtree(staging)
+    shutil.copytree(dist_dir, staging, ignore=_DIST_IGNORE)
+    archive = shutil.make_archive(str(release_dir / base), fmt, root_dir=release_dir, base_dir=base)
+    shutil.rmtree(staging)
+    return Path(archive)
 
 
 # ---- 基类 ----
@@ -266,6 +330,11 @@ _DIST_INTERMEDIATE_EXCLUDES: tuple[str, ...] = (
     "*.build",
     "build",
 )
+
+
+# 便携包/安装包打包排除模式：release 目录 + 构建中间文件（与 NSIS /x 排除一致）。
+# tar.gz / zip / .deb / .pkg / .dmg 五处 staging 复制共用，避免递归打包自身与残留中间文件。
+_DIST_IGNORE = shutil.ignore_patterns("release", *_DIST_INTERMEDIATE_EXCLUDES)
 
 
 # ---- 函数式 API（委托给子类）----

@@ -3,7 +3,7 @@
 从 ``assets/templates/`` 加载所有项目模板，逐个复制到临时目录并执行
 :func:`fspack.builder.build`，收集成功/失败/耗时/产物大小/运行验证结果，
 输出汇总表格。``--bench`` 额外启用 ``profile=True`` 输出各阶段耗时报告，
-并通过 :mod:`fspack.doctor_bench` 保存基准并与历史横向对比。
+并通过 :mod:`fspack.doctor.bench` 保存基准并与历史横向对比。
 
 运行验证统一用超时策略处理 CLI/GUI/Web 应用，无需依赖 ``app_type``：
 
@@ -29,9 +29,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Mapping
 
 from fspack.console import console
-from fspack.doctor_bench import _save_and_compare_bench
-from fspack.doctor_envs import _dir_size, _format_size
-from fspack.doctor_models import TemplateBuildResult, TemplateRunResult
+from fspack.doctor.bench import _save_and_compare_bench
+from fspack.doctor.envs import _dir_size, _format_size
+from fspack.doctor.models import TemplateBuildResult, TemplateRunResult
 
 if TYPE_CHECKING:
     from fspack.templates.registry import Template

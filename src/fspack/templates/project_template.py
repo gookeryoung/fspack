@@ -27,7 +27,7 @@ class ProjectTemplate(Template):
     """doctor 富示例模板兼容 shim.
 
     继承 :class:`fspack.templates.registry.Template`，不新增字段。
-    保留旧 classmethod 接口以兼容 :mod:`fspack.doctor_templates` 与测试。
+    保留旧 classmethod 接口以兼容 :mod:`fspack.doctor.templates` 与测试。
 
     新代码应直接用 :func:`fspack.templates.list_templates(role="doctor")`
     与 :func:`fspack.templates.get_template(id, role="doctor")`。

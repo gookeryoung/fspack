@@ -10,7 +10,7 @@ NSIS 模板、快捷方式块、注册表块、脚本生成与 makensis 编译�
 from __future__ import annotations
 
 import logging
-import subprocess
+import subprocess  # noqa: F401  # 保留 patch 路径 fspack.packaging.installer.nsis.subprocess.run
 from pathlib import Path
 from typing import Sequence
 
@@ -25,6 +25,7 @@ from fspack.packaging.installer.base import (
     _prepare_dist,
     _release_base,
     _run_stage,
+    _run_tool,
 )
 from fspack.platform import Platform
 from fspack.progress import BuildTracker
@@ -278,16 +279,13 @@ def _build_uninstall_registry_block(project: ProjectInfo) -> str:
 
 def compile_installer(nsi_path: Path, out_setup: Path) -> Path:
     """调用 makensis 编译 .nsi 为安装包，返回 out_setup 路径。"""
-    cmd = ["makensis", str(nsi_path)]
-    _logger.info("编译安装包: %s", " ".join(cmd))
-    try:
-        subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8", errors="replace", cwd=nsi_path.parent)
-    except FileNotFoundError as e:
-        raise InstallerError("未找到 makensis，请安装 NSIS（如 sudo apt install -y nsis）") from e
-    except subprocess.CalledProcessError as e:
-        raise InstallerError(f"makensis 编译失败:\n{e.stderr}") from e
-    if not out_setup.is_file():
-        raise InstallerError(f"makensis 未产出安装包: {out_setup}")
+    _run_tool(
+        ["makensis", str(nsi_path)],
+        not_found_msg="未找到 makensis，请安装 NSIS（如 sudo apt install -y nsis）",
+        fail_prefix="makensis 编译失败",
+        cwd=nsi_path.parent,
+        produces=out_setup,
+    )
     return out_setup
 
 
@@ -317,12 +315,11 @@ def sign_exe_file(
         cmd.extend(["/p", password])
     cmd.extend(["/t", timestamp_url, str(exe_path)])
     _logger.info("签名 exe: %s", exe_path.name)
-    try:
-        subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8", errors="replace")
-    except FileNotFoundError as e:
-        raise InstallerError("未找到 signtool，请安装 Windows SDK 并将 signtool 加入 PATH") from e
-    except subprocess.CalledProcessError as e:
-        raise InstallerError(f"signtool 签名失败 {exe_path.name}:\n{e.stderr}") from e
+    _run_tool(
+        cmd,
+        not_found_msg="未找到 signtool，请安装 Windows SDK 并将 signtool 加入 PATH",
+        fail_prefix=f"signtool 签名失败 {exe_path.name}",
+    )
 
 
 def sign_exe_files(

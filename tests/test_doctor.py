@@ -1,6 +1,6 @@
 """``fsp doctor`` 环境诊断子命令单元测试.
 
-覆盖 :mod:`fspack.cli_doctor` 的核心场景：
+覆盖 :mod:`fspack.doctor` 的核心场景：
 
 - :class:`CheckResult`/``CheckStatus``/``DoctorReport`` 数据结构
 - :func:`_check_tool_version` 通用工具检查（成功/未找到/超时/退出码非零）
@@ -21,7 +21,8 @@ from unittest.mock import patch
 
 import pytest
 
-from fspack.cli_doctor import (
+from fspack.console import console
+from fspack.doctor import (
     CheckResult,
     CheckStatus,
     DoctorReport,
@@ -56,7 +57,6 @@ from fspack.cli_doctor import (
     print_doctor_report,
     run_doctor,
 )
-from fspack.console import console
 from fspack.platform import Platform
 
 
@@ -181,8 +181,8 @@ def test_check_tool_version_success() -> None:
         stdout = "gcc (Ubuntu 11.4.0) 11.4.0\nCopyright (C) 2021\n"
         stderr = ""
 
-    with patch("fspack.cli_doctor.shutil.which", return_value="/usr/bin/gcc"), patch(
-        "fspack.cli_doctor.subprocess.run", return_value=_FakeCompleted()
+    with patch("fspack.doctor.shutil.which", return_value="/usr/bin/gcc"), patch(
+        "fspack.doctor.subprocess.run", return_value=_FakeCompleted()
     ):
         result = _check_tool_version("gcc", ["gcc", "--version"])
     assert result.status is CheckStatus.OK
@@ -191,7 +191,7 @@ def test_check_tool_version_success() -> None:
 
 def test_check_tool_version_not_found() -> None:
     """工具未安装在 PATH 时返回 ERROR + 修复建议."""
-    with patch("fspack.cli_doctor.shutil.which", return_value=None):
+    with patch("fspack.doctor.shutil.which", return_value=None):
         result = _check_tool_version(
             "gcc",
             ["gcc", "--version"],
@@ -204,7 +204,7 @@ def test_check_tool_version_not_found() -> None:
 
 def test_check_tool_version_not_found_warn_only() -> None:
     """warn_only=True 时未安装降级为 WARN."""
-    with patch("fspack.cli_doctor.shutil.which", return_value=None):
+    with patch("fspack.doctor.shutil.which", return_value=None):
         result = _check_tool_version(
             "wine",
             ["wine", "--version"],
@@ -217,8 +217,8 @@ def test_check_tool_version_not_found_warn_only() -> None:
 
 def test_check_tool_version_timeout() -> None:
     """工具执行超时返回 ERROR（不阻塞测试，patch 抛 TimeoutExpired）."""
-    with patch("fspack.cli_doctor.shutil.which", return_value="/usr/bin/gcc"), patch(
-        "fspack.cli_doctor.subprocess.run",
+    with patch("fspack.doctor.shutil.which", return_value="/usr/bin/gcc"), patch(
+        "fspack.doctor.subprocess.run",
         side_effect=subprocess.TimeoutExpired(cmd=["gcc"], timeout=5),
     ):
         result = _check_tool_version("gcc", ["gcc", "--version"], error_suggestion="超时")
@@ -228,8 +228,8 @@ def test_check_tool_version_timeout() -> None:
 
 def test_check_tool_version_oserror() -> None:
     """工具执行 OSError 返回 ERROR."""
-    with patch("fspack.cli_doctor.shutil.which", return_value="/usr/bin/gcc"), patch(
-        "fspack.cli_doctor.subprocess.run", side_effect=OSError("permission denied")
+    with patch("fspack.doctor.shutil.which", return_value="/usr/bin/gcc"), patch(
+        "fspack.doctor.subprocess.run", side_effect=OSError("permission denied")
     ):
         result = _check_tool_version("gcc", ["gcc", "--version"], error_suggestion="权限")
     assert result.status is CheckStatus.ERROR
@@ -244,8 +244,8 @@ def test_check_tool_version_nonzero_returncode() -> None:
         stdout = ""
         stderr = "Error: invalid option\nsecond line\n"
 
-    with patch("fspack.cli_doctor.shutil.which", return_value="/usr/bin/gcc"), patch(
-        "fspack.cli_doctor.subprocess.run", return_value=_FakeFailed()
+    with patch("fspack.doctor.shutil.which", return_value="/usr/bin/gcc"), patch(
+        "fspack.doctor.subprocess.run", return_value=_FakeFailed()
     ):
         result = _check_tool_version("gcc", ["gcc", "--version"], error_suggestion="失败")
     assert result.status is CheckStatus.ERROR
@@ -261,8 +261,8 @@ def test_check_tool_version_no_parse_version() -> None:
         stdout = "wine-8.0\nsome extra\n"
         stderr = ""
 
-    with patch("fspack.cli_doctor.shutil.which", return_value="/usr/bin/wine"), patch(
-        "fspack.cli_doctor.subprocess.run", return_value=_FakeOk()
+    with patch("fspack.doctor.shutil.which", return_value="/usr/bin/wine"), patch(
+        "fspack.doctor.subprocess.run", return_value=_FakeOk()
     ):
         result = _check_tool_version(
             "wine",
@@ -281,8 +281,8 @@ def test_check_tool_version_empty_stdout() -> None:
         stdout = ""
         stderr = ""
 
-    with patch("fspack.cli_doctor.shutil.which", return_value="/usr/bin/gcc"), patch(
-        "fspack.cli_doctor.subprocess.run", return_value=_EmptyStdout()
+    with patch("fspack.doctor.shutil.which", return_value="/usr/bin/gcc"), patch(
+        "fspack.doctor.subprocess.run", return_value=_EmptyStdout()
     ):
         result = _check_tool_version("gcc", ["gcc", "--version"])
     assert result.status is CheckStatus.OK
@@ -354,8 +354,8 @@ def test_check_pip_via_pip_command() -> None:
         stdout = "pip 24.0 from /usr/lib/python3/dist-packages/pip (python 3.11)\n"
         stderr = ""
 
-    with patch("fspack.cli_doctor.shutil.which", return_value="/usr/bin/pip"), patch(
-        "fspack.cli_doctor.subprocess.run", return_value=_FakePip()
+    with patch("fspack.doctor.shutil.which", return_value="/usr/bin/pip"), patch(
+        "fspack.doctor.subprocess.run", return_value=_FakePip()
     ):
         result = _check_pip()
     assert result.status is CheckStatus.OK
@@ -373,8 +373,8 @@ def test_check_pip_via_python_module() -> None:
     def _which(name: str) -> None:
         return None
 
-    with patch("fspack.cli_doctor.shutil.which", side_effect=_which), patch(
-        "fspack.cli_doctor.subprocess.run", return_value=_FakePipModule()
+    with patch("fspack.doctor.shutil.which", side_effect=_which), patch(
+        "fspack.doctor.subprocess.run", return_value=_FakePipModule()
     ):
         result = _check_pip()
     assert result.status is CheckStatus.OK
@@ -392,8 +392,8 @@ def test_check_pip_not_found() -> None:
     def _which(name: str) -> None:
         return None
 
-    with patch("fspack.cli_doctor.shutil.which", side_effect=_which), patch(
-        "fspack.cli_doctor.subprocess.run", return_value=_FakeFail()
+    with patch("fspack.doctor.shutil.which", side_effect=_which), patch(
+        "fspack.doctor.subprocess.run", return_value=_FakeFail()
     ):
         result = _check_pip()
     assert result.status is CheckStatus.ERROR
@@ -407,8 +407,8 @@ def test_check_pip_python_module_oserror() -> None:
     def _which(name: str) -> None:
         return None
 
-    with patch("fspack.cli_doctor.shutil.which", side_effect=_which), patch(
-        "fspack.cli_doctor.subprocess.run", side_effect=OSError("denied")
+    with patch("fspack.doctor.shutil.which", side_effect=_which), patch(
+        "fspack.doctor.subprocess.run", side_effect=OSError("denied")
     ):
         result = _check_pip()
     assert result.status is CheckStatus.ERROR
@@ -448,7 +448,7 @@ def test_check_cache_dir_scan_error(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     def _raise_oserror(path: Path) -> int:
         raise OSError("permission denied")
 
-    monkeypatch.setattr("fspack.doctor_envs._dir_size", _raise_oserror)
+    monkeypatch.setattr("fspack.doctor.envs._dir_size", _raise_oserror)
     result = _check_cache_dir(cache)
     assert result.status is CheckStatus.WARN
     assert "扫描缓存目录失败" in result.suggestion
@@ -459,7 +459,7 @@ def test_check_cache_dir_scan_error(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
 def test_check_cache_integrity_dir_not_exists(tmp_path: Path) -> None:
     """缓存目录不存在时返回 OK（无需检查）."""
-    from fspack.cli_doctor import _check_cache_integrity
+    from fspack.doctor import _check_cache_integrity
 
     result = _check_cache_integrity(tmp_path / "no-cache")
     assert result.status is CheckStatus.OK
@@ -468,7 +468,7 @@ def test_check_cache_integrity_dir_not_exists(tmp_path: Path) -> None:
 
 def test_check_cache_integrity_empty_dir(tmp_path: Path) -> None:
     """缓存目录为空（无 deps 文件与 wheel 文件）时返回 OK."""
-    from fspack.cli_doctor import _check_cache_integrity
+    from fspack.doctor import _check_cache_integrity
 
     cache = tmp_path / "cache"
     cache.mkdir()
@@ -480,7 +480,7 @@ def test_check_cache_integrity_empty_dir(tmp_path: Path) -> None:
 
 def test_check_cache_integrity_orphan_wheel_only(tmp_path: Path) -> None:
     """只有 wheel 文件无 deps 引用时返回 WARN（孤儿 wheel，iter-139）."""
-    from fspack.cli_doctor import _check_cache_integrity
+    from fspack.doctor import _check_cache_integrity
 
     cache = tmp_path / "cache"
     cache.mkdir()
@@ -495,7 +495,7 @@ def test_check_cache_integrity_orphan_wheel_only(tmp_path: Path) -> None:
 
 def test_check_cache_integrity_all_valid(tmp_path: Path) -> None:
     """所有缓存文件结构有效且引用的 wheel 都存在时返回 OK."""
-    from fspack.cli_doctor import _check_cache_integrity
+    from fspack.doctor import _check_cache_integrity
 
     cache = tmp_path / "cache"
     cache.mkdir()
@@ -518,7 +518,7 @@ def test_check_cache_integrity_all_valid(tmp_path: Path) -> None:
 
 def test_check_cache_integrity_corrupt_json_deleted(tmp_path: Path) -> None:
     """JSON 损坏的缓存文件被删除并返回 WARN."""
-    from fspack.cli_doctor import _check_cache_integrity
+    from fspack.doctor import _check_cache_integrity
 
     cache = tmp_path / "cache"
     cache.mkdir()
@@ -539,7 +539,7 @@ def test_check_cache_integrity_corrupt_json_deleted(tmp_path: Path) -> None:
 
 def test_check_cache_integrity_non_dict_root_deleted(tmp_path: Path) -> None:
     """JSON 根对象非 dict（如 list）的缓存文件被删除."""
-    from fspack.cli_doctor import _check_cache_integrity
+    from fspack.doctor import _check_cache_integrity
 
     cache = tmp_path / "cache"
     cache.mkdir()
@@ -553,7 +553,7 @@ def test_check_cache_integrity_non_dict_root_deleted(tmp_path: Path) -> None:
 
 def test_check_cache_integrity_wrong_wheels_type_deleted(tmp_path: Path) -> None:
     """wheels 字段非 list 的缓存文件被删除."""
-    from fspack.cli_doctor import _check_cache_integrity
+    from fspack.doctor import _check_cache_integrity
 
     cache = tmp_path / "cache"
     cache.mkdir()
@@ -567,7 +567,7 @@ def test_check_cache_integrity_wrong_wheels_type_deleted(tmp_path: Path) -> None
 
 def test_check_cache_integrity_multiple_corrupt_count(tmp_path: Path) -> None:
     """多个损坏文件时详情显示总数（iter-139 改为概要，文件名列表在 fsp cache status）."""
-    from fspack.cli_doctor import _check_cache_integrity
+    from fspack.doctor import _check_cache_integrity
 
     cache = tmp_path / "cache"
     cache.mkdir()
@@ -581,7 +581,7 @@ def test_check_cache_integrity_multiple_corrupt_count(tmp_path: Path) -> None:
 
 def test_check_cache_integrity_oserror_skipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """read_text 抛 OSError 时不计为损坏（可能是瞬时文件系统问题）."""
-    from fspack.cli_doctor import _check_cache_integrity
+    from fspack.doctor import _check_cache_integrity
 
     cache = tmp_path / "cache"
     cache.mkdir()
@@ -603,7 +603,7 @@ def test_check_cache_integrity_oserror_skipped(tmp_path: Path, monkeypatch: pyte
 
 def test_check_cache_integrity_stale_deps_warns(tmp_path: Path) -> None:
     """deps 引用的 wheel 不存在时返回 WARN（stale deps，iter-139）."""
-    from fspack.cli_doctor import _check_cache_integrity
+    from fspack.doctor import _check_cache_integrity
 
     cache = tmp_path / "cache"
     cache.mkdir()
@@ -617,7 +617,7 @@ def test_check_cache_integrity_stale_deps_warns(tmp_path: Path) -> None:
 
 def test_check_cache_integrity_orphan_wheel_with_valid_deps(tmp_path: Path) -> None:
     """有有效 deps 但存在未被引用的孤儿 wheel 时返回 WARN（iter-139）."""
-    from fspack.cli_doctor import _check_cache_integrity
+    from fspack.doctor import _check_cache_integrity
 
     cache = tmp_path / "cache"
     cache.mkdir()
@@ -633,7 +633,7 @@ def test_check_cache_integrity_orphan_wheel_with_valid_deps(tmp_path: Path) -> N
 
 def test_run_doctor_cache_check_renders_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """run_doctor_cache_check 调 _check_cache_integrity 并渲染表格，返回 CheckResult."""
-    from fspack.cli_doctor import run_doctor_cache_check
+    from fspack.doctor import run_doctor_cache_check
 
     cache = tmp_path / "wheels"
     cache.mkdir()
@@ -657,9 +657,9 @@ def test_cli_doctor_check_cache_flag_dispatches() -> None:
         env_info=(CheckResult("Python", CheckStatus.OK, "3.11.9"),),
         tool_checks=(CheckResult("pip", CheckStatus.OK, "24.0"),),
     )
-    with patch("fspack.cli_doctor.run_doctor", return_value=fake_report), patch(
-        "fspack.cli_doctor.print_doctor_report"
-    ), patch("fspack.cli_doctor.run_doctor_cache_check") as mock_check:
+    with patch("fspack.doctor.run_doctor", return_value=fake_report), patch("fspack.doctor.print_doctor_report"), patch(
+        "fspack.doctor.run_doctor_cache_check"
+    ) as mock_check:
         main(["doctor", "--check-cache"])
     mock_check.assert_called_once()
 
@@ -669,7 +669,7 @@ def test_cli_doctor_check_cache_flag_dispatches() -> None:
 
 def test_scan_cache_health_dir_not_exists(tmp_path: Path) -> None:
     """缓存目录不存在时返回空报告."""
-    from fspack.cli_doctor import _scan_cache_health
+    from fspack.doctor import _scan_cache_health
 
     report = _scan_cache_health(tmp_path / "no-cache")
     assert report.total_deps_files == 0
@@ -682,7 +682,7 @@ def test_scan_cache_health_dir_not_exists(tmp_path: Path) -> None:
 
 def test_scan_cache_health_empty_dir(tmp_path: Path) -> None:
     """空缓存目录返回空报告."""
-    from fspack.cli_doctor import _scan_cache_health
+    from fspack.doctor import _scan_cache_health
 
     cache = tmp_path / "cache"
     cache.mkdir()
@@ -694,7 +694,7 @@ def test_scan_cache_health_empty_dir(tmp_path: Path) -> None:
 
 def test_scan_cache_health_all_valid(tmp_path: Path) -> None:
     """所有 deps 有效且 wheel 都存在时无问题."""
-    from fspack.cli_doctor import _scan_cache_health
+    from fspack.doctor import _scan_cache_health
 
     cache = tmp_path / "cache"
     cache.mkdir()
@@ -715,7 +715,7 @@ def test_scan_cache_health_all_valid(tmp_path: Path) -> None:
 
 def test_scan_cache_health_corrupt_deleted(tmp_path: Path) -> None:
     """损坏 deps 文件被删除并计入 corrupt_deps_files."""
-    from fspack.cli_doctor import _scan_cache_health
+    from fspack.doctor import _scan_cache_health
 
     cache = tmp_path / "cache"
     cache.mkdir()
@@ -735,7 +735,7 @@ def test_scan_cache_health_corrupt_deleted(tmp_path: Path) -> None:
 
 def test_scan_cache_health_stale_deps_detected(tmp_path: Path) -> None:
     """deps 引用缺失 wheel 时计入 stale_deps_files 与 missing_wheels."""
-    from fspack.cli_doctor import _scan_cache_health
+    from fspack.doctor import _scan_cache_health
 
     cache = tmp_path / "cache"
     cache.mkdir()
@@ -751,7 +751,7 @@ def test_scan_cache_health_stale_deps_detected(tmp_path: Path) -> None:
 
 def test_scan_cache_health_orphan_wheel_detected(tmp_path: Path) -> None:
     """未被任何 deps 引用的 wheel 计入 orphan_wheels 并累加体积."""
-    from fspack.cli_doctor import _scan_cache_health
+    from fspack.doctor import _scan_cache_health
 
     cache = tmp_path / "cache"
     cache.mkdir()
@@ -768,7 +768,7 @@ def test_scan_cache_health_orphan_wheel_detected(tmp_path: Path) -> None:
 
 def test_scan_cache_health_shared_wheel_not_orphan(tmp_path: Path) -> None:
     """多个 deps 引用同一 wheel 时该 wheel 不算孤儿."""
-    from fspack.cli_doctor import _scan_cache_health
+    from fspack.doctor import _scan_cache_health
 
     cache = tmp_path / "cache"
     cache.mkdir()
@@ -784,7 +784,7 @@ def test_scan_cache_health_shared_wheel_not_orphan(tmp_path: Path) -> None:
 
 def test_scan_cache_health_non_string_wheels_ignored(tmp_path: Path) -> None:
     """wheels 列表中非字符串元素被忽略（防御性，避免 is_file 报错）."""
-    from fspack.cli_doctor import _scan_cache_health
+    from fspack.doctor import _scan_cache_health
 
     cache = tmp_path / "cache"
     cache.mkdir()
@@ -803,7 +803,7 @@ def test_scan_cache_health_non_string_wheels_ignored(tmp_path: Path) -> None:
 
 def test_clean_cache_issues_no_issues(tmp_path: Path) -> None:
     """无问题时清理不删除任何文件."""
-    from fspack.cli_doctor import _clean_cache_issues
+    from fspack.doctor import _clean_cache_issues
 
     cache = tmp_path / "cache"
     cache.mkdir()
@@ -818,7 +818,7 @@ def test_clean_cache_issues_no_issues(tmp_path: Path) -> None:
 
 def test_clean_cache_issues_dry_run_no_delete(tmp_path: Path) -> None:
     """dry_run=True 时仅扫描不删除文件."""
-    from fspack.cli_doctor import _clean_cache_issues
+    from fspack.doctor import _clean_cache_issues
 
     cache = tmp_path / "cache"
     cache.mkdir()
@@ -835,7 +835,7 @@ def test_clean_cache_issues_dry_run_no_delete(tmp_path: Path) -> None:
 
 def test_clean_cache_issues_deletes_stale_and_orphan(tmp_path: Path) -> None:
     """清理删除 stale deps 文件与孤儿 wheel 文件."""
-    from fspack.cli_doctor import _clean_cache_issues
+    from fspack.doctor import _clean_cache_issues
 
     cache = tmp_path / "cache"
     cache.mkdir()
@@ -857,7 +857,7 @@ def test_clean_cache_issues_deletes_stale_and_orphan(tmp_path: Path) -> None:
 
 def test_clean_cache_issues_keeps_shared_wheel(tmp_path: Path) -> None:
     """清理时多个 deps 共享的 wheel 不被删除（即使某个 deps 是 stale）."""
-    from fspack.cli_doctor import _clean_cache_issues
+    from fspack.doctor import _clean_cache_issues
 
     cache = tmp_path / "cache"
     cache.mkdir()
@@ -879,7 +879,7 @@ def test_clean_cache_issues_keeps_shared_wheel(tmp_path: Path) -> None:
 
 def test_clean_cache_issues_unlink_oserror_continues(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """unlink 抛 OSError 时不阻断其他文件清理（best-effort）."""
-    from fspack.cli_doctor import _clean_cache_issues
+    from fspack.doctor import _clean_cache_issues
 
     cache = tmp_path / "cache"
     cache.mkdir()
@@ -911,7 +911,7 @@ def test_clean_cache_issues_unlink_oserror_continues(tmp_path: Path, monkeypatch
 
 def test_scan_cache_health_orphan_stat_oserror_skipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """orphan wheel 的 stat() 抛 OSError 时跳过体积累加但仍视为孤儿."""
-    from fspack.cli_doctor import _scan_cache_health
+    from fspack.doctor import _scan_cache_health
 
     cache = tmp_path / "cache"
     cache.mkdir()
@@ -939,7 +939,7 @@ def test_scan_cache_health_orphan_stat_oserror_skipped(tmp_path: Path, monkeypat
 
 def test_run_cache_status_no_issues(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """run_cache_status 渲染健康报告，无问题时返回 has_issues=False."""
-    from fspack.cli_doctor import run_cache_status
+    from fspack.doctor import run_cache_status
 
     cache = tmp_path / "wheels"
     cache.mkdir()
@@ -955,7 +955,7 @@ def test_run_cache_status_no_issues(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
 def test_run_cache_status_with_orphan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """run_cache_status 渲染孤儿 wheel 警告并提示 fsp cache clean."""
-    from fspack.cli_doctor import run_cache_status
+    from fspack.doctor import run_cache_status
 
     cache = tmp_path / "wheels"
     cache.mkdir()
@@ -971,7 +971,7 @@ def test_run_cache_status_with_orphan(tmp_path: Path, monkeypatch: pytest.Monkey
 
 def test_run_cache_status_dir_not_exists(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """缓存目录不存在时 run_cache_status 返回空报告."""
-    from fspack.cli_doctor import run_cache_status
+    from fspack.doctor import run_cache_status
 
     cache = tmp_path / "no-cache"
     monkeypatch.setattr("fspack.config.cache.wheel_cache_dir", lambda: cache)
@@ -983,7 +983,7 @@ def test_run_cache_status_dir_not_exists(tmp_path: Path, monkeypatch: pytest.Mon
 
 def test_run_cache_status_empty_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """缓存目录为空时 run_cache_status 输出"为空"提示."""
-    from fspack.cli_doctor import run_cache_status
+    from fspack.doctor import run_cache_status
 
     cache = tmp_path / "wheels"
     cache.mkdir()
@@ -997,7 +997,7 @@ def test_run_cache_status_empty_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
 def test_run_cache_status_with_corrupt_and_stale(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """run_cache_status 同时检测 corrupt/stale/orphan 三类问题."""
-    from fspack.cli_doctor import run_cache_status
+    from fspack.doctor import run_cache_status
 
     cache = tmp_path / "wheels"
     cache.mkdir()
@@ -1023,7 +1023,7 @@ def test_run_cache_status_with_corrupt_and_stale(tmp_path: Path, monkeypatch: py
 
 def test_run_cache_status_wheels_only_no_orphan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """run_cache_status 在 wheel 全部被引用时不报孤儿（覆盖 _format_cache_summary 分支）."""
-    from fspack.cli_doctor import run_cache_status
+    from fspack.doctor import run_cache_status
 
     cache = tmp_path / "wheels"
     cache.mkdir()
@@ -1041,7 +1041,7 @@ def test_run_cache_status_wheels_only_no_orphan(tmp_path: Path, monkeypatch: pyt
 
 def test_run_cache_clean_dry_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """run_cache_clean --dry-run 仅预览不删除."""
-    from fspack.cli_doctor import run_cache_clean
+    from fspack.doctor import run_cache_clean
 
     cache = tmp_path / "wheels"
     cache.mkdir()
@@ -1059,7 +1059,7 @@ def test_run_cache_clean_dry_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 
 def test_run_cache_clean_actual_delete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """run_cache_clean 实际删除 stale deps 与孤儿 wheel."""
-    from fspack.cli_doctor import run_cache_clean
+    from fspack.doctor import run_cache_clean
 
     cache = tmp_path / "wheels"
     cache.mkdir()
@@ -1076,7 +1076,7 @@ def test_run_cache_clean_actual_delete(tmp_path: Path, monkeypatch: pytest.Monke
 
 def test_run_cache_clean_no_issues(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """run_cache_clean 在无问题时输出"无需清理"且不删除文件."""
-    from fspack.cli_doctor import run_cache_clean
+    from fspack.doctor import run_cache_clean
 
     cache = tmp_path / "wheels"
     cache.mkdir()
@@ -1092,7 +1092,7 @@ def test_run_cache_clean_no_issues(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
 def test_run_cache_clean_dir_not_exists(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """缓存目录不存在时 run_cache_clean 返回空报告."""
-    from fspack.cli_doctor import run_cache_clean
+    from fspack.doctor import run_cache_clean
 
     cache = tmp_path / "no-cache"
     monkeypatch.setattr("fspack.config.cache.wheel_cache_dir", lambda: cache)
@@ -1104,7 +1104,7 @@ def test_run_cache_clean_dir_not_exists(tmp_path: Path, monkeypatch: pytest.Monk
 
 def test_run_cache_clean_with_corrupt_and_orphan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """run_cache_clean 同时处理 corrupt/stale/orphan 三类问题（覆盖 _print_cache_clean_lists 分支）."""
-    from fspack.cli_doctor import run_cache_clean
+    from fspack.doctor import run_cache_clean
 
     cache = tmp_path / "wheels"
     cache.mkdir()
@@ -1134,7 +1134,7 @@ def test_run_cache_clean_with_corrupt_and_orphan(tmp_path: Path, monkeypatch: py
 
 def test_run_cache_clean_dry_run_with_all_issue_types(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """run_cache_clean --dry-run 同时预览 corrupt/stale/orphan（覆盖 dry_run 分支）."""
-    from fspack.cli_doctor import run_cache_clean
+    from fspack.doctor import run_cache_clean
 
     cache = tmp_path / "wheels"
     cache.mkdir()
@@ -1155,7 +1155,7 @@ def test_run_cache_clean_dry_run_with_all_issue_types(tmp_path: Path, monkeypatc
 
 def test_preview_names_truncates_at_limit() -> None:
     """_preview_names 超过 limit 时显示前 N 个 + 总数提示."""
-    from fspack.cli_doctor import _preview_names
+    from fspack.doctor import _preview_names
 
     names = tuple(f"file{i}.whl" for i in range(10))
     result = _preview_names(names, limit=3)
@@ -1167,14 +1167,14 @@ def test_preview_names_truncates_at_limit() -> None:
 
 def test_preview_names_empty_returns_empty() -> None:
     """_preview_names 空列表返回空字符串."""
-    from fspack.cli_doctor import _preview_names
+    from fspack.doctor import _preview_names
 
     assert _preview_names(()) == ""
 
 
 def test_preview_names_under_limit() -> None:
     """_preview_names 数量不超过 limit 时全部列出."""
-    from fspack.cli_doctor import _preview_names
+    from fspack.doctor import _preview_names
 
     result = _preview_names(("a.whl", "b.whl"), limit=5)
     assert result == "a.whl, b.whl"
@@ -1186,10 +1186,10 @@ def test_preview_names_under_limit() -> None:
 def test_cli_cache_status_dispatches() -> None:
     """``fsp cache status`` 触发 run_cache_status 调用."""
     from fspack.cli import main
-    from fspack.doctor_models import CacheHealthReport
+    from fspack.doctor.models import CacheHealthReport
 
     fake_report = CacheHealthReport(cache_dir=Path("/tmp/cache"))
-    with patch("fspack.cli_doctor.run_cache_status", return_value=fake_report) as mock_status:
+    with patch("fspack.doctor.run_cache_status", return_value=fake_report) as mock_status:
         main(["cache", "status"])
     mock_status.assert_called_once()
 
@@ -1197,10 +1197,10 @@ def test_cli_cache_status_dispatches() -> None:
 def test_cli_cache_clean_dispatches() -> None:
     """``fsp cache clean`` 触发 run_cache_clean 调用（dry_run=False）."""
     from fspack.cli import main
-    from fspack.doctor_models import CacheHealthReport
+    from fspack.doctor.models import CacheHealthReport
 
     fake_report = CacheHealthReport(cache_dir=Path("/tmp/cache"))
-    with patch("fspack.cli_doctor.run_cache_clean", return_value=fake_report) as mock_clean:
+    with patch("fspack.doctor.run_cache_clean", return_value=fake_report) as mock_clean:
         main(["cache", "clean"])
     mock_clean.assert_called_once_with(dry_run=False)
 
@@ -1208,10 +1208,10 @@ def test_cli_cache_clean_dispatches() -> None:
 def test_cli_cache_clean_dry_run_dispatches() -> None:
     """``fsp cache clean --dry-run`` 触发 run_cache_clean(dry_run=True)."""
     from fspack.cli import main
-    from fspack.doctor_models import CacheHealthReport
+    from fspack.doctor.models import CacheHealthReport
 
     fake_report = CacheHealthReport(cache_dir=Path("/tmp/cache"))
-    with patch("fspack.cli_doctor.run_cache_clean", return_value=fake_report) as mock_clean:
+    with patch("fspack.doctor.run_cache_clean", return_value=fake_report) as mock_clean:
         main(["cache", "clean", "--dry-run"])
     mock_clean.assert_called_once_with(dry_run=True)
 
@@ -1262,12 +1262,12 @@ def test_run_doctor_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     def _fake_ok(name: str, cmd: list[str], **kwargs: object) -> CheckResult:
         return CheckResult(name=name, status=CheckStatus.OK, detail="mocked")
 
-    monkeypatch.setattr("fspack.cli_doctor._check_tool_version", _fake_ok)
-    monkeypatch.setattr("fspack.cli_doctor._check_pillow", lambda: CheckResult("Pillow", CheckStatus.OK, "10.0"))
-    monkeypatch.setattr("fspack.cli_doctor._check_pip", lambda: CheckResult("pip", CheckStatus.OK, "24.0"))
-    monkeypatch.setattr("fspack.cli_doctor._check_uv", lambda: CheckResult("uv", CheckStatus.OK, "0.4"))
-    monkeypatch.setattr("fspack.cli_doctor._check_mingw", lambda: CheckResult("mingw-w64", CheckStatus.OK, "13.2.0"))
-    monkeypatch.setattr("fspack.cli_doctor._check_nsis", lambda: CheckResult("NSIS", CheckStatus.OK, "3.09"))
+    monkeypatch.setattr("fspack.doctor._check_tool_version", _fake_ok)
+    monkeypatch.setattr("fspack.doctor._check_pillow", lambda: CheckResult("Pillow", CheckStatus.OK, "10.0"))
+    monkeypatch.setattr("fspack.doctor._check_pip", lambda: CheckResult("pip", CheckStatus.OK, "24.0"))
+    monkeypatch.setattr("fspack.doctor._check_uv", lambda: CheckResult("uv", CheckStatus.OK, "0.4"))
+    monkeypatch.setattr("fspack.doctor._check_mingw", lambda: CheckResult("mingw-w64", CheckStatus.OK, "13.2.0"))
+    monkeypatch.setattr("fspack.doctor._check_nsis", lambda: CheckResult("NSIS", CheckStatus.OK, "3.09"))
 
     report = run_doctor()
 
@@ -1288,13 +1288,13 @@ def test_run_doctor_linux(monkeypatch: pytest.MonkeyPatch) -> None:
     """run_doctor 在 Linux 平台检查 gcc/wine，不查 mingw."""
     monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
 
-    monkeypatch.setattr("fspack.cli_doctor._check_pillow", lambda: CheckResult("Pillow", CheckStatus.OK, "10.0"))
-    monkeypatch.setattr("fspack.cli_doctor._check_pip", lambda: CheckResult("pip", CheckStatus.OK, "24.0"))
-    monkeypatch.setattr("fspack.cli_doctor._check_uv", lambda: CheckResult("uv", CheckStatus.OK, "0.4"))
-    monkeypatch.setattr("fspack.cli_doctor._check_gcc", lambda: CheckResult("gcc", CheckStatus.OK, "11.4"))
-    monkeypatch.setattr("fspack.cli_doctor._check_wine", lambda: CheckResult("wine", CheckStatus.WARN, "未安装"))
+    monkeypatch.setattr("fspack.doctor._check_pillow", lambda: CheckResult("Pillow", CheckStatus.OK, "10.0"))
+    monkeypatch.setattr("fspack.doctor._check_pip", lambda: CheckResult("pip", CheckStatus.OK, "24.0"))
+    monkeypatch.setattr("fspack.doctor._check_uv", lambda: CheckResult("uv", CheckStatus.OK, "0.4"))
+    monkeypatch.setattr("fspack.doctor._check_gcc", lambda: CheckResult("gcc", CheckStatus.OK, "11.4"))
+    monkeypatch.setattr("fspack.doctor._check_wine", lambda: CheckResult("wine", CheckStatus.WARN, "未安装"))
     monkeypatch.setattr(
-        "fspack.cli_doctor._check_makensis_on_linux",
+        "fspack.doctor._check_makensis_on_linux",
         lambda: CheckResult("NSIS (交叉打包)", CheckStatus.WARN, "未安装"),
     )
 
@@ -1315,10 +1315,10 @@ def test_run_doctor_macos(monkeypatch: pytest.MonkeyPatch) -> None:
     """run_doctor 在 macOS 平台检查 clang，不查 mingw/gcc/wine/NSIS."""
     monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.MACOS)
 
-    monkeypatch.setattr("fspack.cli_doctor._check_pillow", lambda: CheckResult("Pillow", CheckStatus.OK, "10.0"))
-    monkeypatch.setattr("fspack.cli_doctor._check_pip", lambda: CheckResult("pip", CheckStatus.OK, "24.0"))
-    monkeypatch.setattr("fspack.cli_doctor._check_uv", lambda: CheckResult("uv", CheckStatus.OK, "0.4"))
-    monkeypatch.setattr("fspack.cli_doctor._check_clang", lambda: CheckResult("clang", CheckStatus.OK, "15.0"))
+    monkeypatch.setattr("fspack.doctor._check_pillow", lambda: CheckResult("Pillow", CheckStatus.OK, "10.0"))
+    monkeypatch.setattr("fspack.doctor._check_pip", lambda: CheckResult("pip", CheckStatus.OK, "24.0"))
+    monkeypatch.setattr("fspack.doctor._check_uv", lambda: CheckResult("uv", CheckStatus.OK, "0.4"))
+    monkeypatch.setattr("fspack.doctor._check_clang", lambda: CheckResult("clang", CheckStatus.OK, "15.0"))
 
     report = run_doctor()
 
@@ -1335,19 +1335,19 @@ def test_run_doctor_has_error_when_tool_missing(monkeypatch: pytest.MonkeyPatch)
     """run_doctor 必备工具缺失时 has_error=True."""
     monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
 
-    monkeypatch.setattr("fspack.cli_doctor._check_pillow", lambda: CheckResult("Pillow", CheckStatus.OK, "10.0"))
+    monkeypatch.setattr("fspack.doctor._check_pillow", lambda: CheckResult("Pillow", CheckStatus.OK, "10.0"))
     monkeypatch.setattr(
-        "fspack.cli_doctor._check_pip",
+        "fspack.doctor._check_pip",
         lambda: CheckResult("pip", CheckStatus.ERROR, "未找到", "安装 pip"),
     )
-    monkeypatch.setattr("fspack.cli_doctor._check_uv", lambda: CheckResult("uv", CheckStatus.OK, "0.4"))
+    monkeypatch.setattr("fspack.doctor._check_uv", lambda: CheckResult("uv", CheckStatus.OK, "0.4"))
     monkeypatch.setattr(
-        "fspack.cli_doctor._check_gcc",
+        "fspack.doctor._check_gcc",
         lambda: CheckResult("gcc", CheckStatus.ERROR, "未找到", "安装 gcc"),
     )
-    monkeypatch.setattr("fspack.cli_doctor._check_wine", lambda: CheckResult("wine", CheckStatus.WARN, "未安装"))
+    monkeypatch.setattr("fspack.doctor._check_wine", lambda: CheckResult("wine", CheckStatus.WARN, "未安装"))
     monkeypatch.setattr(
-        "fspack.cli_doctor._check_makensis_on_linux",
+        "fspack.doctor._check_makensis_on_linux",
         lambda: CheckResult("NSIS (交叉打包)", CheckStatus.WARN, "未安装"),
     )
 
@@ -1429,8 +1429,8 @@ def test_cli_doctor_dispatches_to_run_doctor() -> None:
         env_info=(CheckResult("Python", CheckStatus.OK, "3.11.9"),),
         tool_checks=(CheckResult("pip", CheckStatus.OK, "24.0"),),
     )
-    with patch("fspack.cli_doctor.run_doctor", return_value=fake_report) as mock_run, patch(
-        "fspack.cli_doctor.print_doctor_report"
+    with patch("fspack.doctor.run_doctor", return_value=fake_report) as mock_run, patch(
+        "fspack.doctor.print_doctor_report"
     ) as mock_print:
         main(["doctor"])
     mock_run.assert_called_once()
@@ -1631,7 +1631,7 @@ def test_build_run_cmd_exe_on_windows(tmp_path: Path, monkeypatch: pytest.Monkey
 def test_build_run_cmd_exe_on_linux_with_wine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Linux 下 .exe 用 wine 运行（wine 在 PATH）."""
     monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
-    monkeypatch.setattr("fspack.cli_doctor.shutil.which", lambda name: "/usr/bin/wine")
+    monkeypatch.setattr("fspack.doctor.shutil.which", lambda name: "/usr/bin/wine")
     exe = tmp_path / "app.exe"
     assert _build_run_cmd(exe) == ["/usr/bin/wine", str(exe)]
 
@@ -1639,7 +1639,7 @@ def test_build_run_cmd_exe_on_linux_with_wine(tmp_path: Path, monkeypatch: pytes
 def test_build_run_cmd_exe_on_linux_no_wine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Linux 下 .exe 但 wine 未安装时回退字符串 'wine'（_run_template 捕获 OSError）."""
     monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
-    monkeypatch.setattr("fspack.cli_doctor.shutil.which", lambda name: None)
+    monkeypatch.setattr("fspack.doctor.shutil.which", lambda name: None)
     exe = tmp_path / "app.exe"
     assert _build_run_cmd(exe) == ["wine", str(exe)]
 
@@ -1774,7 +1774,7 @@ def test_run_template_success_exit_zero(tmp_path: Path, monkeypatch: pytest.Monk
     """进程退出码 0 → 运行成功（CLI 正常执行完成）."""
     monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
     proc = _FakeProc(returncode=0, stdout="hello, world\n", stderr="")
-    monkeypatch.setattr("fspack.cli_doctor.subprocess.Popen", lambda *a, **kw: proc)
+    monkeypatch.setattr("fspack.doctor.subprocess.Popen", lambda *a, **kw: proc)
     result = _run_template([str(tmp_path / "app")], timeout=1.0)
     assert result.success is True
     assert result.timed_out is False
@@ -1790,7 +1790,7 @@ def test_run_template_failure_nonzero_exit(tmp_path: Path, monkeypatch: pytest.M
         stdout="",
         stderr="ModuleNotFoundError: No module named 'modules'\nTraceback follows",
     )
-    monkeypatch.setattr("fspack.cli_doctor.subprocess.Popen", lambda *a, **kw: proc)
+    monkeypatch.setattr("fspack.doctor.subprocess.Popen", lambda *a, **kw: proc)
     result = _run_template([str(tmp_path / "app")], timeout=1.0)
     assert result.success is False
     assert result.timed_out is False
@@ -1802,7 +1802,7 @@ def test_run_template_failure_empty_stderr(tmp_path: Path, monkeypatch: pytest.M
     """进程退出码非 0 且 stderr 为空时 error 显示退出码."""
     monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
     proc = _FakeProc(returncode=2, stdout="", stderr="")
-    monkeypatch.setattr("fspack.cli_doctor.subprocess.Popen", lambda *a, **kw: proc)
+    monkeypatch.setattr("fspack.doctor.subprocess.Popen", lambda *a, **kw: proc)
     result = _run_template([str(tmp_path / "app")], timeout=1.0)
     assert result.success is False
     assert result.exit_code == 2
@@ -1819,7 +1819,7 @@ def test_run_template_timeout_treated_as_success(tmp_path: Path, monkeypatch: py
 
     monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
     proc = _TimeoutProc()
-    monkeypatch.setattr("fspack.cli_doctor.subprocess.Popen", lambda *a, **kw: proc)
+    monkeypatch.setattr("fspack.doctor.subprocess.Popen", lambda *a, **kw: proc)
     result = _run_template([str(tmp_path / "app")], timeout=0.5)
     assert result.success is True
     assert result.timed_out is True
@@ -1837,7 +1837,7 @@ def test_run_template_timeout_terminate_then_kill(tmp_path: Path, monkeypatch: p
 
     monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
     proc = _StubbornProc()
-    monkeypatch.setattr("fspack.cli_doctor.subprocess.Popen", lambda *a, **kw: proc)
+    monkeypatch.setattr("fspack.doctor.subprocess.Popen", lambda *a, **kw: proc)
     result = _run_template([str(tmp_path / "app")], timeout=0.3)
     assert result.success is True
     assert result.timed_out is True
@@ -1853,7 +1853,7 @@ def test_run_template_oserror_startup_failure(tmp_path: Path, monkeypatch: pytes
         raise FileNotFoundError("[Errno 2] No such file or directory: 'wine'")
 
     monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
-    monkeypatch.setattr("fspack.cli_doctor.subprocess.Popen", _raise_popen)
+    monkeypatch.setattr("fspack.doctor.subprocess.Popen", _raise_popen)
     result = _run_template(["wine", str(tmp_path / "app.exe")], timeout=1.0)
     assert result.success is False
     assert result.timed_out is False
@@ -1872,7 +1872,7 @@ def test_run_template_passes_env_to_popen(tmp_path: Path, monkeypatch: pytest.Mo
         captured["env"] = kwargs.get("env")
         return proc
 
-    monkeypatch.setattr("fspack.cli_doctor.subprocess.Popen", _capture_popen)
+    monkeypatch.setattr("fspack.doctor.subprocess.Popen", _capture_popen)
     env = {"PYTHONHOME": "/tmp/python", "PYTHONUNBUFFERED": "1"}
     _run_template([str(tmp_path / "app")], env, timeout=1.0)  # type: ignore[arg-type]
     assert captured["env"] == env

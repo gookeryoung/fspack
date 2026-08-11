@@ -294,7 +294,7 @@ def _run_doctor(ns: argparse.Namespace) -> None:
     的依赖解析缓存文件并删除损坏文件（iter-128，可与 ``--test``/``--bench``
     组合使用）。
     """
-    from fspack.cli_doctor import (
+    from fspack.doctor import (
         print_doctor_report,
         run_doctor,
         run_doctor_bench,
@@ -321,7 +321,7 @@ def _run_cache(ns: argparse.Namespace) -> None:
     ``fsp cache clean [--dry-run]`` 清理 stale deps 与孤儿 wheel，
     ``--dry-run`` 仅预览不删除。
     """
-    from fspack.cli_doctor import run_cache_clean, run_cache_status
+    from fspack.doctor import run_cache_clean, run_cache_status
 
     action = getattr(ns, "cache_action", None)
     if action == "status":

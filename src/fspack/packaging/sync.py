@@ -11,7 +11,9 @@ import logging
 import os
 import shutil
 from pathlib import Path
-from typing import Callable, Iterator
+from typing import Callable
+
+from fspack._util.fsutil import scandir_dir_size
 
 _logger = logging.getLogger(__name__)
 
@@ -322,41 +324,10 @@ def _sync_entry(
 def _dir_size(path: Path) -> int:
     """递归计算目录总字节数（文件大小累加，不含目录元数据）.
 
-    用 :func:`os.scandir` 替代 :meth:`Path.rglob`：``DirEntry.stat`` 复用
-    枚举时的 stat 缓存（Windows ``WIN32_FIND_DATA`` / Linux ``d_ino``），
-    避免对每个文件单独 stat 系统调用。大目录（PySide6 site-packages 数千文件）
-    下显著减少系统调用次数。
+    实现搬迁至 :func:`fspack._util.fsutil.scandir_dir_size`，此处保留同名薄封装
+    维持 ``fspack.packaging.sync._dir_size`` 引用兼容（``pyc.py`` 直接导入）。
     """
-    total = 0
-    for entry in _scandir_tree(path):
-        try:
-            total += entry.stat(follow_symlinks=False).st_size
-        except OSError:
-            # 文件被并发删除或权限问题：跳过，不阻断精简流程
-            continue
-    return total
-
-
-def _scandir_tree(root: Path) -> Iterator[os.DirEntry[str]]:
-    """递归遍历 ``root``，yield 所有文件 ``DirEntry``（不含目录自身）.
-
-    用 ``os.scandir`` 替代 ``Path.rglob("*")``：DirEntry 缓存 stat 信息，
-    ``is_file(follow_symlinks=False)`` 复用缓存避免独立 stat 调用。
-    遇到权限/不存在等 OSError 静默跳过（与 rglob 行为一致）。
-    """
-    try:
-        with os.scandir(root) as it:
-            entries = sorted(it, key=lambda e: e.name)
-    except OSError:
-        return
-    for entry in entries:
-        try:
-            if entry.is_dir(follow_symlinks=False):
-                yield from _scandir_tree(Path(entry.path))
-            elif entry.is_file(follow_symlinks=False):
-                yield entry
-        except OSError:
-            continue
+    return scandir_dir_size(path)
 
 
 def _site_packages_fingerprint(sp: Path) -> str:

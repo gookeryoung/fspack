@@ -5,15 +5,16 @@ tar.gz 打包、.deb 构造（DEBIAN/control + /usr/lib + /usr/bin wrapper）、
 单格式编排（build_tarball_release / build_deb_release）。
 
 依赖 :mod:`fspack.packaging.installer.base` 提供：
-``Installer`` 基类、``_run_stage``/``_prepare_dist``/``_check_exe``/
-``_py_tag``/``_release_base``/``_DIST_INTERMEDIATE_EXCLUDES``。
+``Installer`` 基类、``_run_stage``/``_prepare_dist``/``_check_exe``/``_py_tag``/
+``_release_base``、``_run_tool``（dpkg-deb/gpg 调用）、``_make_staged_archive``
+（tar.gz 打包）、``_DIST_IGNORE``（打包排除模式）。
 """
 
 from __future__ import annotations
 
 import logging
 import shutil
-import subprocess
+import subprocess  # noqa: F401  # 保留 patch 路径 fspack.packaging.installer.linux.subprocess.run
 from pathlib import Path
 from typing import Sequence
 
@@ -22,13 +23,15 @@ from fspack.config import MirrorConfig, ProjectInfo
 from fspack.console import console
 from fspack.exceptions import InstallerError
 from fspack.packaging.installer.base import (
-    _DIST_INTERMEDIATE_EXCLUDES,
+    _DIST_IGNORE,
     Installer,
     _check_exe,
+    _make_staged_archive,
     _prepare_dist,
     _py_tag,
     _release_base,
     _run_stage,
+    _run_tool,
 )
 from fspack.platform import Platform
 from fspack.progress import BuildTracker
@@ -43,9 +46,6 @@ __all__ = [
 ]
 
 _logger = logging.getLogger("fspack.packaging.installer")
-
-# Linux 打包排除模式：release 目录 + 构建中间文件（与 NSIS /x 排除一致）
-_LINUX_IGNORE = shutil.ignore_patterns("release", *_DIST_INTERMEDIATE_EXCLUDES)
 
 
 class LinuxInstaller(Installer):
@@ -98,15 +98,8 @@ def build_tarball(dist_dir: Path, info: ProjectInfo, release_dir: Path) -> Path:
     tar.gz 内顶层目录为 ``<name>-<version>-<py_tag>-linux-slim``，解压后即可运行。
     排除 dist/release/ 避免安装包递归打包自身。
     """
-    release_dir.mkdir(parents=True, exist_ok=True)
     base = _release_base(info, "linux")
-    staging = release_dir / base
-    if staging.exists():
-        shutil.rmtree(staging)
-    shutil.copytree(dist_dir, staging, ignore=_LINUX_IGNORE)
-    archive = shutil.make_archive(str(release_dir / base), "gztar", root_dir=release_dir, base_dir=base)
-    shutil.rmtree(staging)
-    archive_path = Path(archive)
+    archive_path = _make_staged_archive(dist_dir, release_dir, base, "gztar")
     _logger.info("已生成 tar.gz 便携包: %s", archive_path)
     return archive_path
 
@@ -125,7 +118,7 @@ def build_deb(dist_dir: Path, info: ProjectInfo, release_dir: Path) -> Path:
         shutil.rmtree(staging)
 
     pkg_dir = staging / "usr" / "lib" / info.name
-    shutil.copytree(dist_dir, pkg_dir, ignore=_LINUX_IGNORE)
+    shutil.copytree(dist_dir, pkg_dir, ignore=_DIST_IGNORE)
 
     bin_dir = staging / "usr" / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
@@ -145,14 +138,11 @@ def build_deb(dist_dir: Path, info: ProjectInfo, release_dir: Path) -> Path:
     )
 
     deb_path = release_dir / f"{deb_base}.deb"
-    cmd = ["dpkg-deb", "--build", str(staging), str(deb_path)]
-    _logger.info("构建 .deb: %s", " ".join(cmd))
-    try:
-        subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8", errors="replace")
-    except FileNotFoundError as e:
-        raise InstallerError("未找到 dpkg-deb，请安装 dpkg-dev（如 sudo apt install -y dpkg-dev）") from e
-    except subprocess.CalledProcessError as e:
-        raise InstallerError(f"dpkg-deb 构建失败:\n{e.stderr}") from e
+    _run_tool(
+        ["dpkg-deb", "--build", str(staging), str(deb_path)],
+        not_found_msg="未找到 dpkg-deb，请安装 dpkg-dev（如 sudo apt install -y dpkg-dev）",
+        fail_prefix="dpkg-deb 构建失败",
+    )
 
     shutil.rmtree(staging)
     _logger.info("已生成 .deb 安装包: %s", deb_path)
@@ -262,12 +252,11 @@ def sign_deb_file(deb_path: Path, key_id: str | None = None) -> Path:
         cmd.extend(["--local-user", key_id])
     cmd.append(str(deb_path))
     _logger.info("签名 .deb: %s", deb_path.name)
-    try:
-        subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8", errors="replace")
-    except FileNotFoundError as e:
-        raise InstallerError("未找到 gpg，请安装 GnuPG（如 sudo apt install -y gnupg）") from e
-    except subprocess.CalledProcessError as e:
-        raise InstallerError(f"gpg 签名失败 {deb_path.name}:\n{e.stderr}") from e
+    _run_tool(
+        cmd,
+        not_found_msg="未找到 gpg，请安装 GnuPG（如 sudo apt install -y gnupg）",
+        fail_prefix=f"gpg 签名失败 {deb_path.name}",
+    )
     asc_path = deb_path.with_suffix(".deb.asc")
     if not asc_path.is_file():
         asc_path = Path(str(deb_path) + ".asc")

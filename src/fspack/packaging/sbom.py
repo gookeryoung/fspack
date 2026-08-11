@@ -44,6 +44,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from fspack._util.fsutil import atomic_write_text
 from fspack.config import ProjectInfo
 from fspack.packaging.site_packages import find_site_packages
 
@@ -146,10 +147,7 @@ def generate_sbom(dist_dir: Path, info: ProjectInfo) -> Path:
     release_dir.mkdir(parents=True, exist_ok=True)
     sbom_path = release_dir / f"{info.name}-{info.version}-sbom.json"
     sbom_data = collect_sbom(dist_dir, info)
-    sbom_path.write_text(
-        json.dumps(sbom_data, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    atomic_write_text(sbom_path, json.dumps(sbom_data, ensure_ascii=False, indent=2))
     _logger.info("SBOM 已生成: %s（%d 个包）", sbom_path, len(sbom_data["packages"]))
     return sbom_path
 

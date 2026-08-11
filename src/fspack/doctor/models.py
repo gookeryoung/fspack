@@ -2,12 +2,12 @@
 
 定义 :class:`CheckStatus`/:class:`CheckResult`/:class:`DoctorReport`/
 :class:`TemplateRunResult`/:class:`TemplateBuildResult` 等不可变数据类，
-供 :mod:`fspack.cli_doctor` facade 与各职责子模块
-（:mod:`fspack.doctor_envs`/``doctor_tools``/``doctor_report``/
-``doctor_templates``/``doctor_bench``）共享。
+供 :mod:`fspack.doctor` facade 与各职责子模块
+（:mod:`fspack.doctor.envs`/``doctor.tools``/``doctor.report``/
+``doctor.templates``/``doctor.bench``）共享。
 
 独立成模块避免 facade ↔ 子模块循环导入：子模块从本模块 import 数据类，
-facade 从子模块 import 函数并 re-export 数据类保持 ``fspack.cli_doctor.XXX``
+facade 从子模块 import 函数并 re-export 数据类保持 ``fspack.doctor.XXX``
 导入路径兼容。
 """
 
@@ -121,8 +121,8 @@ class TemplateBuildResult:
 class CacheHealthReport:
     """wheel 缓存目录健康扫描报告（iter-139）.
 
-    由 :func:`fspack.doctor_envs._scan_cache_health` 生成，供
-    :func:`fspack.cli_doctor.run_doctor_cache_check`/``run_cache_status``/
+    由 :func:`fspack.doctor.envs._scan_cache_health` 生成，供
+    :func:`fspack.doctor.run_doctor_cache_check`/``run_cache_status``/
     ``run_cache_clean`` 复用，避免重复扫描。
 
     扫描期间已删除 JSON 损坏的 ``.deps-*.json`` 文件（与 iter-128

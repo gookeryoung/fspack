@@ -1,8 +1,10 @@
 """AST 依赖分析：扫描 import，分类标准库/本地/第三方.
 
-facade 模块：编排 :mod:`fspack.analyzer_ast`（AST 解析）与
-:mod:`fspack.analyzer_fingerprint`（源码指纹）完成依赖分析。本模块保留
-:func:`analyze_dependencies` 的并行调度逻辑与本地包识别。
+facade 子包：编排 :mod:`fspack.analyzer.ast_scan`（AST 解析）与
+:mod:`fspack.analyzer.fingerprint`（源码指纹）完成依赖分析。本模块保留
+:func:`analyze_dependencies` 的并行调度逻辑与本地包识别，以及进程池 worker
+函数 :func:`_parse_file_worker`（须在 ``fspack.analyzer`` 命名空间保持模块级
+可解析以支持 pickle 跨进程传递）。
 
 同时扫描 QML 文件（``.qml``）中的 ``import QtXxx`` 语句，将 QML 运行时
 依赖映射为 Qt 子模块名（如 ``QtQuick`` → ``Quick``），补充 AST 静态分析
@@ -20,7 +22,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from pathlib import Path
 
-from fspack.analyzer_ast import (
+from fspack.analyzer.ast_scan import (
     _QT_PYTHON_PACKAGES,
     _STDLIB,
     STDLIB_FALLBACK,
@@ -30,7 +32,7 @@ from fspack.analyzer_ast import (
     collect_submodule_imports,
     parse_qml_imports,
 )
-from fspack.analyzer_fingerprint import (
+from fspack.analyzer.fingerprint import (
     _is_excluded,
     source_fingerprint,
 )
@@ -193,7 +195,7 @@ _PARSE_TOTAL_TIMEOUT = 300.0
 # 构建 :data:`STDLIB_FALLBACK`（3.8/3.9 ~200 元素 frozenset）。用 dict 容器
 # 避免 ``global`` 语句（ruff PLW0603），worker 通过 ``_WORKER_STATE["stdlib"]``
 # 读取预加载的 :data:`_STDLIB`。主进程不使用此容器——主进程直接用模块级
-# :data:`_STDLIB`（:mod:`fspack.analyzer_ast`）。
+# :data:`_STDLIB`（:mod:`fspack.analyzer.ast_scan`）。
 _WORKER_STATE: dict[str, frozenset[str]] = {"stdlib": frozenset()}
 
 
@@ -205,7 +207,7 @@ def _init_parse_worker(stdlib: frozenset[str]) -> None:
     （3.8/3.9 的 :data:`STDLIB_FALLBACK` 构建开销）并确保与主进程分类一致。
 
     worker 启动时已通过 spawn import :mod:`fspack.analyzer`（连带加载
-    :mod:`fspack.analyzer_ast`），initializer 在此之后执行，使第一次
+    :mod:`fspack.analyzer.ast_scan`），initializer 在此之后执行，使第一次
     :func:`_parse_file_worker` 调用时 ``_WORKER_STATE["stdlib"]`` 已就绪，
     无需模块属性查找。
     """

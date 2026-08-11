@@ -1,7 +1,8 @@
 """AST 依赖扫描：从 Python 源码与 QML 文件提取 import.
 
-提取自 :mod:`fspack.analyzer`，按职责拆分。本模块专注于"从代码文本提取
-import 语句"——纯 AST 解析与正则匹配，无文件系统操作。
+:mod:`fspack.analyzer` 子包的 AST 解析模块，专注于"从代码文本提取 import
+语句"——纯 AST 解析与正则匹配，无文件系统遍历（文件系统遍历见
+:mod:`fspack.analyzer.fingerprint`）。
 
 公开 API：
 

@@ -5,8 +5,8 @@
 ad-hoc 签名。单格式编排（build_pkg_release / build_dmg_release）。
 
 依赖 :mod:`fspack.packaging.installer.base` 提供：
-``Installer`` 基类、``_run_stage``/``_prepare_dist``/``_check_exe``/
-``_py_tag``/``_release_base``/``_DIST_INTERMEDIATE_EXCLUDES``。
+``Installer`` 基类、``_run_stage``/``_prepare_dist``/``_check_exe``/``_release_base``、
+``_run_tool``（pkgbuild/hdiutil/codesign 调用）、``_DIST_IGNORE``（打包排除模式）。
 
 工具链（均为 macOS 系统自带，无需额外安装）：
 
@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import logging
 import shutil
-import subprocess
+import subprocess  # noqa: F401  # 保留 patch 路径 fspack.packaging.installer.macos.subprocess.run
 from pathlib import Path
 from typing import Sequence
 
@@ -35,12 +35,13 @@ from fspack.config import MirrorConfig, ProjectInfo
 from fspack.console import console
 from fspack.exceptions import InstallerError
 from fspack.packaging.installer.base import (
-    _DIST_INTERMEDIATE_EXCLUDES,
+    _DIST_IGNORE,
     Installer,
     _check_exe,
     _prepare_dist,
     _release_base,
     _run_stage,
+    _run_tool,
 )
 from fspack.platform import Platform
 from fspack.progress import BuildTracker
@@ -55,9 +56,6 @@ __all__ = [
 ]
 
 _logger = logging.getLogger("fspack.packaging.installer")
-
-# macOS 打包排除模式：release 目录 + 构建中间文件（与 Linux / NSIS / zip 一致）
-_MACOS_IGNORE = shutil.ignore_patterns("release", *_DIST_INTERMEDIATE_EXCLUDES)
 
 # macOS 安装目标位置（拖拽到 /Applications 即安装）
 _MACOS_INSTALL_LOCATION = "/Applications"
@@ -75,17 +73,18 @@ def _bundle_identifier(info: ProjectInfo) -> str:
 def _run_macos_tool(cmd: list[str], *, error_hint: str) -> None:
     """执行 macOS 专属工具（pkgbuild/hdiutil/codesign），失败抛 InstallerError.
 
+    委托 :func:`fspack.packaging.installer.base._run_tool` 统一异常处理，保留
+    macOS 专属消息格式（未找到时附加"macOS 工具，需在 macOS 上运行"提示）。
+
     Args:
         cmd: 命令与参数列表（如 ``["pkgbuild", "--root", ...]``）
-        error_hint: 失败时附加到异常消息的修复建议
+        error_hint: 失败时附加到"未找到"异常消息的修复建议
     """
-    _logger.info("执行: %s", " ".join(cmd))
-    try:
-        subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8", errors="replace")
-    except FileNotFoundError as e:
-        raise InstallerError(f"未找到 {cmd[0]}，{error_hint}（macOS 工具，需在 macOS 上运行）") from e
-    except subprocess.CalledProcessError as e:
-        raise InstallerError(f"{cmd[0]} 执行失败:\n{e.stderr or e.stdout}") from e
+    _run_tool(
+        cmd,
+        not_found_msg=f"未找到 {cmd[0]}，{error_hint}（macOS 工具，需在 macOS 上运行）",
+        fail_prefix=f"{cmd[0]} 执行失败",
+    )
 
 
 def _codesign_adhoc(path: Path) -> None:
@@ -204,7 +203,7 @@ def build_pkg(
 
     # staging 顶层目录 = 安装到 /Applications/<name> 的内容
     pkg_root = staging / info.name
-    shutil.copytree(dist_dir, pkg_root, ignore=_MACOS_IGNORE)
+    shutil.copytree(dist_dir, pkg_root, ignore=_DIST_IGNORE)
 
     pkg_path = release_dir / f"{base}.pkg"
     cmd = [
@@ -254,7 +253,7 @@ def build_dmg(
 
     # 应用目录（拖拽到 /Applications）
     app_dir = staging / info.name
-    shutil.copytree(dist_dir, app_dir, ignore=_MACOS_IGNORE)
+    shutil.copytree(dist_dir, app_dir, ignore=_DIST_IGNORE)
 
     # /Applications 软链接（拖拽安装入口）
     apps_link = staging / "Applications"

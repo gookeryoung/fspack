@@ -25,6 +25,7 @@ from rich.progress import (
 )
 from rich.table import Table
 
+from fspack._util.format import format_bytes_dec
 from fspack.console import console
 
 if TYPE_CHECKING:
@@ -220,14 +221,12 @@ def _fmt_seconds(s: float) -> str:
 
 
 def fmt_bytes(n: int) -> str:
-    """格式化字节数为人类可读字符串（KB/MB/GB）."""
-    if n < 1024:
-        return f"{n}B"
-    if n < 1024 * 1024:
-        return f"{n / 1024:.1f}KB"
-    if n < 1024 * 1024 * 1024:
-        return f"{n / 1024 / 1024:.1f}MB"
-    return f"{n / 1024 / 1024 / 1024:.2f}GB"
+    """格式化字节数为人类可读字符串（KB/MB/GB）.
+
+    实现搬迁至 :func:`fspack._util.format.format_bytes_dec`，此处保留同名薄封装
+    维持 ``fspack.progress.fmt_bytes`` 引用兼容。
+    """
+    return format_bytes_dec(n)
 
 
 @contextmanager

@@ -4,22 +4,21 @@
 可选 build → 校验可执行文件 → 打包 zip（staging 目录 + make_archive）。
 
 zip 跨平台解压即用，无需安装。依赖 :mod:`fspack.packaging.installer.base` 提供：
-``_run_stage``/``_prepare_dist``/``_check_exe``/``_release_base``/
-``_DIST_INTERMEDIATE_EXCLUDES``。
+``_run_stage``/``_prepare_dist``/``_check_exe``/``_release_base``、
+``_make_staged_archive``（zip 打包）。
 """
 
 from __future__ import annotations
 
 import logging
-import shutil
 from pathlib import Path
 from typing import Sequence
 
 from fspack.config import MirrorConfig, ProjectInfo
 from fspack.console import console
 from fspack.packaging.installer.base import (
-    _DIST_INTERMEDIATE_EXCLUDES,
     _check_exe,
+    _make_staged_archive,
     _prepare_dist,
     _release_base,
     _run_stage,
@@ -30,9 +29,6 @@ from fspack.progress import BuildTracker
 __all__ = ["build_zip"]
 
 _logger = logging.getLogger("fspack.packaging.installer")
-
-# zip 打包排除模式：release 目录 + 构建中间文件（与 NSIS /x 排除一致）
-_ZIP_IGNORE = shutil.ignore_patterns("release", *_DIST_INTERMEDIATE_EXCLUDES)
 
 
 def build_zip(  # noqa: PLR0913
@@ -75,15 +71,8 @@ def _make_zip(dist_dir: Path, info: ProjectInfo, release_dir: Path, target: Plat
     顶层目录 ``<name>-<version>-<py_tag>-<platform>-slim``，排除 ``release/`` 子目录。
     用 staging 目录 + ``shutil.make_archive`` 实现，与 :func:`build_tarball` 风格一致。
     """
-    release_dir.mkdir(parents=True, exist_ok=True)
     platform_suffix = "windows" if target is Platform.WINDOWS else "linux"
     base = _release_base(info, platform_suffix)
-    staging = release_dir / base
-    if staging.exists():
-        shutil.rmtree(staging)
-    shutil.copytree(dist_dir, staging, ignore=_ZIP_IGNORE)
-    archive = shutil.make_archive(str(release_dir / base), "zip", root_dir=release_dir, base_dir=base)
-    shutil.rmtree(staging)
-    archive_path = Path(archive)
+    archive_path = _make_staged_archive(dist_dir, release_dir, base, "zip")
     _logger.info("已生成 zip 便携包: %s", archive_path)
     return archive_path

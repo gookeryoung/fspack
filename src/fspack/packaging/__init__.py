@@ -34,7 +34,7 @@
 - :mod:`fspack.packaging.icon` —— :func:`find_favicon` 自动搜索 favicon 与
   :func:`ensure_ico` 图片格式转换（Pillow 可选）
 - :mod:`fspack.packaging.pyc` —— pyc 预编译与 .py 源码剥离
-- :mod:`fspack.packaging.dep_analyzer` —— 依赖分析（AST import 收集 + 缓存）
+- :mod:`fspack.packaging.dep_analyzer` —— 二进制依赖分析与未用二进制剥离
 - :mod:`fspack.packaging.size_report` —— 构建产物体积统计
 - :mod:`fspack.packaging.sbom` —— SBOM（软件物料清单）生成
 - :mod:`fspack.packaging.profile` —— 性能剖析

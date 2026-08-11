@@ -16,6 +16,8 @@ import logging
 from pathlib import Path
 from typing import Sequence
 
+from fspack._util.jsoncache import load_json_dict
+
 __all__ = [
     "_deps_cache_key",
     "_load_deps_cache",
@@ -54,31 +56,27 @@ def _load_deps_cache(cache_dir: Path, key: str) -> list[Path] | None:
     避免下次构建重复触发损坏告警；best-effort 删除失败仅告警不抛异常。
     ``OSError``（读写权限/磁盘 I/O）不删除：可能是瞬时文件系统问题，
     删除反而误伤可恢复的缓存。iter-128 引入。
+
+    读取 → 解析 → 根 dict 校验 → 损坏删除的公共骨架委托
+    :func:`fspack._util.jsoncache.load_json_dict`；``wheels`` 字段类型校验与
+    wheel 文件存在性校验为本函数专属外壳，故保留在此。
     """
     cache_file = cache_dir / f".deps-{key}.json"
-    if not cache_file.is_file():
+    data = load_json_dict(cache_file, delete_on_corrupt=True, logger=_logger)
+    if data is None:
         return None
-    try:
-        data = json.loads(cache_file.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            raise ValueError(f"缓存根对象不是 dict: {type(data).__name__}")
-        names = data.get("wheels", [])
-        if not isinstance(names, list):
-            raise ValueError(f"wheels 字段不是 list: {type(names).__name__}")
-        wheels = [cache_dir / name for name in names]
-        if wheels and all(w.is_file() for w in wheels):
-            return wheels
-    except (json.JSONDecodeError, ValueError) as e:
-        # 内容损坏（非法 JSON、结构不合法、值类型错误、UTF-8 解码失败）：
-        # 删除文件避免下次构建重复告警。UnicodeDecodeError 是 ValueError 子类。
-        _logger.warning("依赖解析缓存损坏，删除并重新解析: %s: %s", cache_file, e)
+    names = data.get("wheels", [])
+    if not isinstance(names, list):
+        # wheels 字段类型错误：视为损坏，删除文件避免下次重复解析
+        _logger.warning("依赖解析缓存 wheels 字段非 list，删除并重新解析: %s", cache_file)
         try:
             cache_file.unlink()
         except OSError as unlink_err:  # pragma: no cover - 删除失败极罕见
             _logger.warning("删除损坏缓存文件失败: %s: %s", cache_file, unlink_err)
-    except OSError as e:
-        # 文件系统层错误（权限/磁盘 I/O）：不删除，可能是瞬时问题，下次构建重试。
-        _logger.warning("读取依赖解析缓存失败，将重新解析: %s: %s", cache_file, e)
+        return None
+    wheels = [cache_dir / name for name in names]
+    if wheels and all(w.is_file() for w in wheels):
+        return wheels
     return None
 
 

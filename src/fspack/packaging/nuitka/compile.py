@@ -19,7 +19,6 @@ facade，所有 ``cls.`` 调用经 MRO 自动派发到对应 mixin。
 
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
 import os
@@ -34,6 +33,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, TextIO
 
+from fspack._util.fsutil import atomic_write_text, safe_unlink
 from fspack.config import MirrorConfig, nuitka_version_for
 from fspack.exceptions import NuitkaError
 from fspack.platform import Platform
@@ -75,24 +75,11 @@ _HASH_INDEX_MAX = 50
 def _atomic_write_text(target: Path, content: str, *, encoding: str = "utf-8") -> None:
     """原子写入文本文件：先写临时文件再 rename，避免半写入文件被读取.
 
-    用 ``tempfile.mkstemp`` 在目标目录创建临时文件（同目录保证 ``Path.replace``
-    是原子操作：POSIX rename(2) 原子，Windows ReplaceFile 原子），写入完成后
-    ``Path.replace`` 替换目标文件。任何失败都清理临时文件并重抛 ``OSError``。
-
-    iter-128 引入：Nuitka stamp 写入用原子化避免构建被中断（Ctrl+C/进程崩溃）后
-    stamp 文件半写入被下次构建误读为有效缓存，从而跳过编译输出陈旧 .pyd。
+    实现搬迁至 :func:`fspack._util.fsutil.atomic_write_text`，此处保留同名薄封装
+    维持模块内 ``_atomic_write_text`` 引用兼容（测试 patch
+    ``fspack.packaging.nuitka.compile._atomic_write_text`` 注入 OSError）。
     """
-    target.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_str = tempfile.mkstemp(dir=target.parent, prefix=".tmp_", suffix=target.suffix)
-    tmp_path = Path(tmp_str)
-    try:
-        with os.fdopen(fd, "w", encoding=encoding, newline="") as f:
-            f.write(content)
-        tmp_path.replace(target)
-    except OSError:
-        with contextlib.suppress(OSError):
-            tmp_path.unlink()
-        raise
+    atomic_write_text(target, content, encoding=encoding)
 
 
 def _hash_index_path(dist_dir: Path) -> Path:
@@ -198,11 +185,12 @@ def _load_hash_index(dist_dir: Path) -> dict[str, str]:
 
 
 def _safe_unlink(path: Path) -> None:
-    """删除文件，OSError 仅告警不抛（用于索引损坏时的清理）."""
-    try:
-        path.unlink()
-    except OSError as e:
-        _logger.warning("删除文件失败: %s: %s", path, e)
+    """删除文件，OSError 仅告警不抛（用于索引损坏时的清理）.
+
+    实现搬迁至 :func:`fspack._util.fsutil.safe_unlink`，此处保留同名薄封装
+    并沿用本模块 logger（``fspack.packaging.nuitka``）。
+    """
+    safe_unlink(path, logger=_logger)
 
 
 def _update_hash_index(dist_dir: Path, stamp_key: str) -> None:

@@ -1,6 +1,6 @@
 """``fsp doctor`` 诊断报告渲染.
 
-将 :class:`fspack.doctor_models.DoctorReport` 渲染到控制台：环境信息表 +
+将 :class:`fspack.doctor.models.DoctorReport` 渲染到控制台：环境信息表 +
 工具检查表 + 汇总结论。颜色映射 OK=绿、WARN=黄、ERROR=红，表格用
 :class:`rich.table.Table`，通过 :data:`fspack.console.console` 输出，
 复用现有日志配置（颜色/编码）。
@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from fspack.console import console
-from fspack.doctor_models import CheckResult, CheckStatus, DoctorReport
+from fspack.doctor.models import CheckResult, CheckStatus, DoctorReport
 
 if TYPE_CHECKING:
     from rich.table import Table

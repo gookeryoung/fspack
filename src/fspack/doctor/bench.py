@@ -1,6 +1,6 @@
 """``fsp doctor --bench`` 基准历史持久化与横向对比.
 
-将 :class:`fspack.doctor_models.TemplateBuildResult` 列表序列化为 JSON
+将 :class:`fspack.doctor.models.TemplateBuildResult` 列表序列化为 JSON
 保存到 ``.benchmarks/doctor/{group}/{timestamp}.json``，按机器 + Python 版本
 分组（``{System}-CPython-{major}.{minor}-{bits}bit-doctor``）。下次运行
 ``--bench`` 时自动加载上一次历史并打印横向对比表（构建耗时/启动耗时/产物
@@ -23,9 +23,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from fspack._util.fsutil import atomic_write_text
 from fspack.console import console
-from fspack.doctor_envs import _format_size
-from fspack.doctor_models import TemplateBuildResult, TemplateRunResult
+from fspack.doctor.envs import _format_size
+from fspack.doctor.models import TemplateBuildResult, TemplateRunResult
 
 __all__ = [
     "_bench_history_group_dir",
@@ -153,7 +154,7 @@ def _save_bench_history(results: list[TemplateBuildResult], dir: Path) -> Path:
     timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
     data = _serialize_bench_results(results)
     path = dir / f"{timestamp}.json"
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_text(path, json.dumps(data, ensure_ascii=False, indent=2))
     return path
 
 

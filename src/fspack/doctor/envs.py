@@ -1,9 +1,9 @@
 """``fsp doctor`` 环境信息检查.
 
 检查 Python 版本/路径、目标平台、fspack 版本、镜像源配置、缓存目录大小，
-返回 :class:`fspack.doctor_models.CheckResult`。同时提供 :func:`_dir_size`
-与 :func:`_format_size` 工具函数，供 :mod:`fspack.doctor_templates`/
-:mod:`fspack.doctor_bench` 复用（递归目录大小与人类可读字节数格式化）。
+返回 :class:`fspack.doctor.models.CheckResult`。同时提供 :func:`_dir_size`
+与 :func:`_format_size` 工具函数，供 :mod:`fspack.doctor.templates`/
+:mod:`fspack.doctor.bench` 复用（递归目录大小与人类可读字节数格式化）。
 
 iter-139 扩展：:func:`_scan_cache_health` 全面扫描 wheel 缓存目录健康状态
 （损坏/stale/orphan），:func:`_clean_cache_issues` 提供清理能力，供
@@ -15,13 +15,14 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
-import os
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Mapping
 
 from fspack import __version__
-from fspack.doctor_models import CacheHealthReport, CheckResult, CheckStatus
+from fspack._util.format import format_size_bin
+from fspack._util.fsutil import walk_dir_size
+from fspack.doctor.models import CacheHealthReport, CheckResult, CheckStatus
 
 if TYPE_CHECKING:
     from fspack.platform import Platform
@@ -109,29 +110,21 @@ def _check_cache_dir(cache_root: Path) -> CheckResult:
 
 
 def _dir_size(path: Path) -> int:
-    """递归计算目录总字节数（不含符号链接循环）."""
-    total = 0
-    for root, _dirs, files in os.walk(path, followlinks=False):
-        for name in files:
-            fp = Path(root) / name
-            try:
-                total += fp.stat().st_size
-            except OSError:
-                continue
-    return total
+    """递归计算目录总字节数（不含符号链接循环）.
+
+    实现搬迁至 :func:`fspack._util.fsutil.walk_dir_size`，此处保留同名薄封装
+    维持 ``fspack.doctor.envs._dir_size`` 引用兼容。
+    """
+    return walk_dir_size(path)
 
 
 def _format_size(size_bytes: int) -> str:
-    """字节数格式化为人类可读（如 ``"123.4 MiB"``）."""
-    if size_bytes < 1024:
-        return f"{size_bytes} B"
-    units = ("KiB", "MiB", "GiB", "TiB")
-    size = float(size_bytes) / 1024
-    for unit in units:
-        if size < 1024:
-            return f"{size:.1f} {unit}"
-        size /= 1024
-    return f"{size:.1f} PiB"
+    """字节数格式化为人类可读（如 ``"123.4 MiB"``）.
+
+    实现搬迁至 :func:`fspack._util.format.format_size_bin`，此处保留同名薄封装
+    维持 ``fspack.doctor.envs._format_size`` 引用兼容。
+    """
+    return format_size_bin(size_bytes)
 
 
 def _check_cache_integrity(cache_dir: Path) -> CheckResult:

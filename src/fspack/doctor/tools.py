@@ -19,7 +19,7 @@ import shutil
 import subprocess
 import sys
 
-from fspack.doctor_models import CheckResult, CheckStatus
+from fspack.doctor.models import CheckResult, CheckStatus
 
 __all__ = [
     "_VERSION_TIMEOUT",
