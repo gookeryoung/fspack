@@ -65,20 +65,23 @@ packages = ["src/fspack"]
 "src/fspack/py.typed" = "fspack/py.typed"
 
 [tool.hatch.build.targets.sdist]
-# 排除开发内部目录与文件，仅保留源码分发必需内容（src/tests/docs + 配置 + README/LICENSE）
+# 隐藏文件/目录默认全局排除：.开头的 10+ 类开发内部项统一拦截，避免新增隐藏项时漏排；
+# 需保留的 sdist 隐藏配置（覆盖率/VCS 规则）见下方 force-include 白名单。
 exclude = [
-    ".benchmarks",        # 性能测试基线数据
-    ".github",            # CI 工作流配置
-    ".trae",              # 开发流程文档（rules/docs/req/skills）
-    ".vscode",            # IDE 配置
-    "templates",          # GitHub Actions 打包模板
-    "Makefile",           # 开发脚本
-    ".copier-answers.yml", # 项目模板生成记录
-    ".python-version",    # pyenv 版本锁
-    ".bumpversion.toml",  # 版本管理工具配置
-    ".pre-commit-config.yaml", # pre-commit 钩子配置
-    ".readthedocs.yaml",  # ReadTheDocs 托管配置
+    ".*",       # 所有.开头的隐藏文件/目录（包括 .benchmarks/.github/.trae/.vscode 与
+                # .copier-answers.yml/.python-version/.bumpversion.toml/.pre-commit-config.yaml/
+                # .readthedocs.yaml 等开发工具配置）
+    "templates",# GitHub Actions 打包模板（非 fsp init 模板；fsp 模板在 src/fspack/assets/）
+    "Makefile", # 开发辅助脚本（sdist 用户不需要）
 ]
+
+[tool.hatch.build.targets.sdist.force-include]
+# sdist 隐藏文件白名单：对用户有价值的 .开头配置
+# - .coveragerc：用户跑 sdist 内 pytest 时需要覆盖率阈值配置
+# - .gitignore / .gitattributes：sdist 解压后仍可作为 git 工作目录子集使用
+".coveragerc"    = ".coveragerc"
+".gitignore"     = ".gitignore"
+".gitattributes" = ".gitattributes"
 
 [tool.fspack]
 # 自身打包配置：排除开发期模板与 GitHub Actions 模板，启用 .pyc 剥离优化
