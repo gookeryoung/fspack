@@ -2,7 +2,7 @@
 branch = true
 concurrency = thread
 omit = tests/*
-source = fspack
+source = src/fspack
 
 [report]
 fail_under = 95

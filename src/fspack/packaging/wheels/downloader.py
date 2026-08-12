@@ -151,7 +151,7 @@ def download_wheels(  # noqa: PLR0913
     py = _find_pip_python()
     base_args = _build_pip_download_args(py, py_version, platform_tags, cache_dir)
 
-    _logger.info("下载依赖 wheel: %s", " ".join(filtered))
+    _logger.info("下载依赖 wheel: %s（镜像 %s）", " ".join(filtered), pypi_index)
     before = {f.name for f in cache_dir.glob("*.whl")}
 
     try:

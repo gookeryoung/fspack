@@ -21,6 +21,7 @@ import logging
 import re
 import shutil
 import subprocess
+import time
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -61,6 +62,44 @@ _UV_DOWNLOAD_WHEEL_RE = re.compile(r"(?:Downloaded|Cached)\s+(.+?\.whl)", re.IGN
 
 # uv pip download --help 检测超时（秒）：uv 启动 ~10ms，5s 裕量覆盖慢速 CI
 _UV_HELP_TIMEOUT = 5.0
+
+# pip download stdout 中匹配 wheel 完整路径（"Saved <path>.whl" / "File was already
+# downloaded <path>.whl"）。用于单包下载完成事件日志：从路径读 stat 获取字节数，
+# 让用户在并行下载场景下能看到每个 wheel 的下载进展（避免 10MB+ wheel 静默下载
+# 被误判为"卡住"）。
+_PIP_SAVED_WHEEL_RE = re.compile(r"(?:Saved|File was already downloaded)\s+(.+\.whl)", re.IGNORECASE)
+
+
+def _log_download_event(req: str, stdout: str, stderr: str, elapsed: float, cache_dir: Path | None = None) -> None:
+    """打印单包下载完成事件日志：req、wheel 文件名、大小、耗时.
+
+    从 stdout 解析 wheel 完整路径（pip ``Saved``/``File was already downloaded`` 行），
+    读 ``stat().st_size`` 获取字节数。解析失败时退化为仅打印 req 与耗时。
+
+    pip 路径 stdout 含完整路径，``cache_dir`` 可不传；uv 路径 stdout 仅含 wheel
+    文件名，需 ``cache_dir`` 拼接才能定位文件取大小。
+
+    并行模式下多线程并发调用，``logging.info`` 单次调用线程安全，事件不会交错。
+    """
+    from fspack._util.format import format_bytes_dec
+
+    wheel_path: Path | None = None
+    for line in stdout.splitlines():
+        m = _PIP_SAVED_WHEEL_RE.search(line)
+        if m:
+            wheel_path = Path(m.group(1).strip())
+            break
+    size_label = ""
+    if wheel_path is None and cache_dir is not None:
+        # uv 输出 ``Downloaded <name>.whl`` 仅文件名，拼接 cache_dir 取大小
+        for line in (stdout + "\n" + stderr).splitlines():
+            m = _UV_DOWNLOAD_WHEEL_RE.search(line)
+            if m:
+                wheel_path = cache_dir / Path(m.group(1).strip()).name
+                break
+    if wheel_path is not None and wheel_path.is_file():
+        size_label = f" ({format_bytes_dec(wheel_path.stat().st_size)})"
+    _logger.info("已下载 %s%s, 耗时 %.1fs", req, size_label, elapsed)
 
 
 def _find_uv() -> str | None:
@@ -343,7 +382,11 @@ def _download_online(  # noqa: PLR0913
         # uv 可用且支持 pip download 时用 uv 下载（比 pip 快 2-5x），否则用 pip
         downloader = "uv pip download" if uv_can_download else "pip download"
         _logger.info(
-            "并行下载 %d 个已解析依赖（最多 %d 并发，%s）", len(resolved), _PARALLEL_DOWNLOAD_WORKERS, downloader
+            "并行下载 %d 个已解析依赖（最多 %d 并发，%s，镜像 %s）",
+            len(resolved),
+            _PARALLEL_DOWNLOAD_WORKERS,
+            downloader,
+            pypi_index,
         )
         return _download_resolved_parallel(
             resolved,
@@ -363,7 +406,7 @@ def _download_online(  # noqa: PLR0913
     try:
         result = _run_pip(
             [*base_args, "-i", pypi_index, *extra_args, *filtered],
-            f"pip download {len(filtered)} 个依赖",
+            f"pip download {len(filtered)} 个依赖（镜像 {pypi_index}）",
             stream=True,
         )
         assert result is not None  # suppress_error=False，不会返回 None
@@ -373,7 +416,7 @@ def _download_online(  # noqa: PLR0913
         _handle_sdist_fallback(e, py, pypi_index, cache_dir, extra_index_urls=extra_index_urls, find_links=find_links)
         result = _run_pip(
             [*base_args, "-i", pypi_index, *extra_args, *filtered],
-            f"pip download 重试 {len(filtered)} 个依赖",
+            f"pip download 重试 {len(filtered)} 个依赖（镜像 {pypi_index}）",
             stream=True,
         )
         assert result is not None  # suppress_error=False，不会返回 None
@@ -431,8 +474,10 @@ def _download_with_hashes(  # noqa: PLR0913
             "-r",
             req_path,
         ]
-        _logger.info("pip download --require-hashes -r %s（%d 个依赖）", req_path, len(filtered))
-        result = _run_pip(cmd, f"pip download --require-hashes {len(filtered)} 个依赖", stream=True)
+        _logger.info("pip download --require-hashes -r %s（%d 个依赖，镜像 %s）", req_path, len(filtered), pypi_index)
+        result = _run_pip(
+            cmd, f"pip download --require-hashes {len(filtered)} 个依赖（镜像 {pypi_index}）", stream=True
+        )
         assert result is not None  # suppress_error=False
         return result
     finally:
@@ -501,7 +546,13 @@ def _download_resolved_parallel(  # noqa: PLR0913
     """
 
     def _download_worker(req: str) -> subprocess.CompletedProcess[str]:
-        """单包下载 worker：优先 uv，失败回退 pip."""
+        """单包下载 worker：优先 uv，失败回退 pip.
+
+        ``with_index=True`` 始终附加 ``-i``/``--index-url <pypi_index>``：并行下载
+        路径已在在线模式（``--no-index`` 离线解析失败后回退），需用用户配置的镜像源
+        而非 pip/uv 默认的 pypi.org（国内访问慢/超时）。``--find-links <cache_dir>``
+        仍优先检查本地缓存，命中时 pip/uv 不会访问网络。
+        """
 
         if uv_path is not None:
             try:
@@ -513,11 +564,11 @@ def _download_resolved_parallel(  # noqa: PLR0913
                     py_version=py_version,
                     platform_tags=platform_tags,
                     pypi_index=pypi_index,
-                    with_index=False,
+                    with_index=True,
                 )
             except subprocess.CalledProcessError as uv_err:
                 _logger.info("uv 下载 %s 失败，回退到 pip: %s", req, (uv_err.stderr or "").strip()[:200])
-        return _download_one_resolved(req, base_args, extra_args, pypi_index, with_index=False)
+        return _download_one_resolved(req, base_args, extra_args, pypi_index, with_index=True)
 
     # 单包场景直接串行，避免线程池开销，但仍走 sdist 回退
     if len(resolved) == 1:
@@ -594,7 +645,10 @@ def _download_one_with_uv(  # noqa: PLR0913
         py_version: 目标 Python 版本（如 ``3.11.9``），用于 ``--python-version``。
         platform_tags: 目标平台标签列表，映射为 ``--python-platform``。
         pypi_index: PyPI 索引 URL，``with_index=True`` 时附加 ``--index-url``。
-        with_index: True 时附加 ``--index-url``（sdist 回退重试场景）。
+        with_index: True 时附加 ``--index-url <pypi_index>``，使用用户配置的镜像源。
+            并行下载路径（``_download_worker``）与 sdist 回退重试均传 ``True``：
+            前者需用配置镜像而非 uv 默认 pypi.org（国内访问慢/超时），
+            后者需从网络下载其他包。
 
     Raises:
         subprocess.CalledProcessError: uv 非零退出时抛出，由调用方捕获后回退 pip。
@@ -619,12 +673,18 @@ def _download_one_with_uv(  # noqa: PLR0913
         cmd.extend(["--index-url", pypi_index])
     cmd.extend(extra_args)
     cmd.append(req)
+    _logger.info("uv 下载 %s（镜像 %s）", req, pypi_index if with_index else "默认")
+    start = time.perf_counter()
     try:
         result = subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8", errors="replace")
     except FileNotFoundError as e:
         raise DependencyError(f"未找到 uv: {uv_path}") from e
     # uv 输出转换为 pip 兼容的 "Saved <name>.whl" 格式
     pip_stdout = _convert_uv_output_to_pip_format(result.stdout + "\n" + result.stderr)
+    # 用原始 uv 输出（含 "Downloaded X.whl" 行）让 _log_download_event 走 uv fallback
+    # 路径：pip_stdout 转换后是 "Saved X.whl"（仅文件名），is_file() 会失败；
+    # uv 原始输出 "Downloaded X.whl" 也是文件名，但拼接 cache_dir 后能定位文件取大小
+    _log_download_event(req, result.stdout, result.stderr, time.perf_counter() - start, cache_dir)
     return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=pip_stdout, stderr=result.stderr)
 
 
@@ -639,26 +699,34 @@ def _download_one_resolved(
     """下载单个已解析 wheel（``pip download --no-deps <req>``）.
 
     用 ``subprocess.run`` 捕获 stdout/stderr，不流式输出（并行模式多进程
-    stderr 交错混乱，单包模式量小无需进度条）。
+    stderr 交错混乱）。下载开始/完成通过 :func:`_log_download_event` 打印事件
+    日志，让用户能看到每个 wheel 的进展（避免 10MB+ wheel 静默下载被误判为卡住）。
 
     Args:
         req: 精确版本需求字符串（如 ``numpy==1.24.0``）。
         base_args: pip download 基础参数（不含 ``-i index`` 与包名）。
         extra_args: 私有包源参数（``--extra-index-url``/``--find-links`` 展开）。
         pypi_index: PyPI 索引 URL，``with_index=True`` 时附加 ``-i <pypi_index>``。
-        with_index: True 时附加 ``-i``（sdist 回退重试场景，需从网络下载其他包）。
+        with_index: True 时附加 ``-i <pypi_index>``，使用用户配置的镜像源。
+            并行下载路径（``_download_worker``）与 sdist 回退重试均传 ``True``：
+            前者需用配置镜像而非 pip 默认 pypi.org（国内访问慢/超时），
+            后者需从网络下载其他包。``--find-links <cache_dir>`` 仍优先检查本地缓存。
     """
     if with_index:
         cmd = [*base_args, "--no-deps", "-i", pypi_index, *extra_args, req]
     else:
         cmd = [*base_args, "--no-deps", *extra_args, req]
+    _logger.info("pip 下载 %s（镜像 %s）", req, pypi_index if with_index else "默认")
+    start = time.perf_counter()
     try:
-        return subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8", errors="replace")
+        result = subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8", errors="replace")
     except FileNotFoundError as e:
         raise DependencyError(f"未找到 pip: {cmd[0]}") from e
     except subprocess.CalledProcessError:
         # 重新抛出原异常，保留 stderr 供 sdist 回退解析
         raise
+    _log_download_event(req, result.stdout, result.stderr, time.perf_counter() - start)
+    return result
 
 
 def _merge_parallel_results(

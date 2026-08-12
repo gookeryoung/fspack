@@ -1417,6 +1417,42 @@ def test_download_resolved_parallel_multiple_packages(tmp_path: Path, monkeypatc
         assert cmd[-1] in resolved_pkgs
 
 
+def test_download_resolved_parallel_uses_configured_pypi_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """并行下载路径必须传 ``-i <pypi_index>``，使用用户配置的镜像源而非 pip 默认 pypi.org.
+
+    回归场景：``_download_worker`` 旧实现 ``with_index=False`` 导致 ``pip download``
+    不传 ``-i``，pip 回退到默认 pypi.org（国内访问慢/超时，构建卡死）。
+    修复后 ``with_index=True``，单包与多包路径均附加 ``-i <pypi_index>``。
+    """
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setattr("fspack.packaging.wheels.resolver._find_uv", lambda: "/usr/bin/uv")
+    monkeypatch.setattr("fspack.packaging.wheels.resolver._uv_supports_download", lambda uv_path: False)
+    # 单包场景（用户的 pygame 卡死场景）
+    monkeypatch.setattr(
+        "fspack.packaging.wheels.resolver._resolve_with_uv",
+        lambda pkgs, pv, pt, idx, **kw: "pygame==2.5.0\n",
+    )
+    captured_cmds: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
+        captured_cmds.append(cmd)
+        r = CompletedStub()
+        r.stdout = "Saved pygame-wheel.whl\n"
+        return r
+
+    monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
+    base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
+    _download_online(
+        ["pygame"], base_args, "/py/python", "3.11.9", ("win_amd64",), "https://mirrors.aliyun.com/pypi/simple/", cache
+    )
+    # 单包路径触发 1 次调用，必须含 -i <pypi_index>
+    assert len(captured_cmds) == 1
+    cmd = captured_cmds[0]
+    assert "-i" in cmd
+    assert "https://mirrors.aliyun.com/pypi/simple/" in cmd
+
+
 def test_download_resolved_parallel_partial_failure_sdist_fallback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1431,6 +1467,8 @@ def test_download_resolved_parallel_partial_failure_sdist_fallback(
         lambda pkgs, pv, pt, idx, **kw: "numpy==1.24.0\nodfpy==1.4.1\n",
     )
     call_count = {"numpy_download": 0, "odfpy_download": 0, "pip_wheel": 0, "odfpy_retry": 0}
+    # odfpy 调用计数：首次失败（无 wheel），sdist 构建后重试成功
+    odfpy_calls = {"count": 0}
 
     def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         req = cmd[-1]
@@ -1439,21 +1477,23 @@ def test_download_resolved_parallel_partial_failure_sdist_fallback(
             r = CompletedStub()
             r.stdout = "Saved numpy-wheel.whl\n"
             return r
-        # odfpy 路径
-        if "-i" in cmd and "https://idx/simple" in cmd:
-            # 带 -i 的重试路径
+        # odfpy 路径：首次失败，重试成功（用计数器区分，因两条路径都带 -i）
+        if "odfpy==1.4.1" in req:
+            odfpy_calls["count"] += 1
+            if odfpy_calls["count"] == 1:
+                call_count["odfpy_download"] += 1
+                raise subprocess.CalledProcessError(
+                    1,
+                    cmd,
+                    stderr="ERROR: Could not find a version that satisfies the requirement odfpy==1.4.1 (from versions: none)\n"
+                    "ERROR: No matching distribution found for odfpy==1.4.1",
+                )
             call_count["odfpy_retry"] += 1
             r = CompletedStub()
             r.stdout = "Saved odfpy-wheel.whl\n"
             return r
-        # 首次 odfpy 下载失败
-        call_count["odfpy_download"] += 1
-        raise subprocess.CalledProcessError(
-            1,
-            cmd,
-            stderr="ERROR: Could not find a version that satisfies the requirement odfpy==1.4.1 (from versions: none)\n"
-            "ERROR: No matching distribution found for odfpy==1.4.1",
-        )
+        r = CompletedStub()
+        return r
 
     def fake_stream(cmd: list[str]) -> CompletedStub:
         # pip wheel --no-deps 构建路径
@@ -1508,6 +1548,10 @@ def test_download_resolved_parallel_multi_sdist_fallback(tmp_path: Path, monkeyp
         "odfpy_retry": 0,
         "wuc_retry": 0,
     }
+    # 各包调用计数：首次失败（无 wheel），sdist 构建后重试成功
+    # 用计数器区分首次/重试，因两条路径都带 -i（with_index=True）
+    odfpy_calls = {"count": 0}
+    wuc_calls = {"count": 0}
     # 记录 pip wheel 构建的包名，验证两个 sdist-only 包都被构建
     built_pkgs: list[str] = []
 
@@ -1518,35 +1562,34 @@ def test_download_resolved_parallel_multi_sdist_fallback(tmp_path: Path, monkeyp
             r = CompletedStub()
             r.stdout = "Saved numpy-wheel.whl\n"
             return r
-        # 带 -i 的重试路径
-        if "-i" in cmd and "https://idx/simple" in cmd:
-            if "odfpy==1.4.1" in req:
-                call_count["odfpy_retry"] += 1
-                r = CompletedStub()
-                r.stdout = "Saved odfpy-wheel.whl\n"
-                return r
-            if "win-unicode-console==0.5" in req:
-                call_count["wuc_retry"] += 1
-                r = CompletedStub()
-                r.stdout = "Saved win_unicode_console-wheel.whl\n"
-                return r
-        # 首次下载失败
         if "odfpy==1.4.1" in req:
-            call_count["odfpy_download"] += 1
-            raise subprocess.CalledProcessError(
-                1,
-                cmd,
-                stderr="ERROR: Could not find a version that satisfies the requirement odfpy==1.4.1 (from versions: none)\n"
-                "ERROR: No matching distribution found for odfpy==1.4.1",
-            )
+            odfpy_calls["count"] += 1
+            if odfpy_calls["count"] == 1:
+                call_count["odfpy_download"] += 1
+                raise subprocess.CalledProcessError(
+                    1,
+                    cmd,
+                    stderr="ERROR: Could not find a version that satisfies the requirement odfpy==1.4.1 (from versions: none)\n"
+                    "ERROR: No matching distribution found for odfpy==1.4.1",
+                )
+            call_count["odfpy_retry"] += 1
+            r = CompletedStub()
+            r.stdout = "Saved odfpy-wheel.whl\n"
+            return r
         if "win-unicode-console==0.5" in req:
-            call_count["wuc_download"] += 1
-            raise subprocess.CalledProcessError(
-                1,
-                cmd,
-                stderr="ERROR: Could not find a version that satisfies the requirement win-unicode-console==0.5 (from versions: none)\n"
-                "ERROR: No matching distribution found for win-unicode-console==0.5",
-            )
+            wuc_calls["count"] += 1
+            if wuc_calls["count"] == 1:
+                call_count["wuc_download"] += 1
+                raise subprocess.CalledProcessError(
+                    1,
+                    cmd,
+                    stderr="ERROR: Could not find a version that satisfies the requirement win-unicode-console==0.5 (from versions: none)\n"
+                    "ERROR: No matching distribution found for win-unicode-console==0.5",
+                )
+            call_count["wuc_retry"] += 1
+            r = CompletedStub()
+            r.stdout = "Saved win_unicode_console-wheel.whl\n"
+            return r
         r = CompletedStub()
         return r
 
