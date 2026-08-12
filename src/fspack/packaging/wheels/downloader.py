@@ -315,6 +315,101 @@ def _find_pip_python() -> str:
     raise DependencyError("未找到可用的 pip，请在当前 venv 执行 `uv pip install pip`，或在系统安装 python3-pip 包")
 
 
+class _DownloadMonitor:
+    """监控 cache_dir ``.whl`` 文件总大小变化，用 rich.progress 显示实时下载速度.
+
+    pip download 在 ``stderr=PIPE`` 下检测到非 tty 不输出进度条，无法通过
+    流式输出获取下载进度。本类每 0.5 秒采样 cache_dir 中所有 ``.whl`` 文件
+    （含 pip 临时文件 ``tmpXXXXXX.whl``）总大小，计算增量与瞬时速度，用
+    :class:`rich.progress.Progress` 显示已下载字节数与速度（``DownloadColumn``
+    + ``TransferSpeedColumn``）。
+
+    下载完成后调用 :meth:`stop` 停止监控线程并清除进度条（``transient=True``）。
+
+    监控基于文件系统大小增量，不依赖 pip 输出，跨平台兼容。仅适用于单包
+    下载场景（``stream=True`` 路径）；并行模式多进程交错无法区分单包进度，
+    不启用监控（靠 :func:`_log_download_event` 事件日志反馈）。
+    """
+
+    _SAMPLE_INTERVAL = 0.5  # 采样间隔（秒），平衡刷新流畅度与 stat 开销
+
+    def __init__(self, cache_dir: Path, label: str) -> None:
+        """初始化监控器.
+
+        Args:
+            cache_dir: wheel 缓存目录（pip ``-d`` 参数指向的目录）。
+            label: 进度条显示的标签（通常是 ``req`` 如 ``numpy==1.24.0``）。
+        """
+        import threading
+
+        from rich.progress import (
+            DownloadColumn,
+            Progress,
+            SpinnerColumn,
+            TextColumn,
+            TransferSpeedColumn,
+        )
+
+        from fspack.console import console
+
+        self._cache_dir = cache_dir
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True, name="dl-monitor")
+        self._progress = Progress(
+            SpinnerColumn(),
+            TextColumn("[bold blue]{task.description}"),
+            DownloadColumn(),
+            TransferSpeedColumn(),
+            console=console.rich,
+            transient=True,
+        )
+        self._task_id = self._progress.add_task(label, total=None)
+
+    def start(self) -> None:
+        """启动监控线程与进度条."""
+        self._progress.start()
+        self._thread.start()
+
+    def stop(self) -> None:
+        """停止监控线程并清除进度条."""
+        self._stop.set()
+        self._thread.join(timeout=2)
+        self._progress.stop()
+
+    def _run(self) -> None:
+        import time
+
+        last_size = self._dir_whl_size()
+        last_time = time.monotonic()
+
+        while not self._stop.wait(self._SAMPLE_INTERVAL):
+            current = self._dir_whl_size()
+            now = time.monotonic()
+            elapsed = now - last_time
+            if elapsed > 0 and current > last_size:
+                delta = current - last_size
+                speed = delta / elapsed
+                self._progress.update(self._task_id, advance=delta, speed=speed)
+            last_size = current
+            last_time = now
+
+    def _dir_whl_size(self) -> int:
+        """获取 cache_dir 中所有 ``.whl`` 文件总大小.
+
+        用 :func:`os.scandir` 代替 :meth:`Path.iterdir`，避免 Path 对象构造
+        开销（scandir 返回 ``DirEntry`` 直接调 ``stat()`` 缓存）。
+        """
+        import contextlib
+
+        total = 0
+        with contextlib.suppress(OSError), os.scandir(self._cache_dir) as entries:
+            for entry in entries:
+                if entry.name.endswith(".whl"):
+                    with contextlib.suppress(OSError):
+                        total += entry.stat().st_size
+        return total
+
+
 def _stream_subprocess(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     """运行命令，实时流式输出 stderr 到终端，捕获 stdout 和 stderr。
 
@@ -331,6 +426,12 @@ def _stream_subprocess(cmd: list[str]) -> subprocess.CompletedProcess[str]:
 
     调用方应在调用前停止 spinner（避免 ``\\r`` 与 pip 进度条冲突），并在调用后
     恢复 spinner 或继续后续日志输出。
+
+    .. note::
+        pip 在 ``stderr=PIPE`` 下检测到非 tty 不输出进度条，本函数的流式输出
+        实际只传递 pip 的非进度条输出（如 ``Downloading X.whl`` 行）。实时下载
+        速度由调用方通过 :class:`_DownloadMonitor` 监控 cache_dir 文件大小变化
+        显示（见 :func:`fspack.packaging.wheels.resolver._download_one_resolved`）。
     """
     # 延迟导入 threading：保持模块顶部零 stdlib 副作用约定（与 net.py/runtime.py
     # 等热路径模块一致）。site.py 启动期已加载 threading，此处为 dict 查询，无实际开销。

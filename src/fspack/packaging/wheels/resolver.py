@@ -553,7 +553,8 @@ def _download_resolved_parallel(  # noqa: PLR0913
         而非 pip/uv 默认的 pypi.org（国内访问慢/超时）。``--find-links <cache_dir>``
         仍优先检查本地缓存，命中时 pip/uv 不会访问网络。
 
-        ``stream`` 仅透传给 pip 路径（uv 下载快且无进度条，无需流式）。
+        ``stream`` 仅透传给 pip 路径（uv 下载快且无进度条，无需流式）。``stream=True``
+        时同时透传 ``cache_dir`` 启动 :class:`_DownloadMonitor` 显示实时下载速度。
         """
 
         if uv_path is not None:
@@ -570,10 +571,18 @@ def _download_resolved_parallel(  # noqa: PLR0913
                 )
             except subprocess.CalledProcessError as uv_err:
                 _logger.info("uv 下载 %s 失败，回退到 pip: %s", req, (uv_err.stderr or "").strip()[:200])
-        return _download_one_resolved(req, base_args, extra_args, pypi_index, with_index=True, stream=stream)
+        return _download_one_resolved(
+            req,
+            base_args,
+            extra_args,
+            pypi_index,
+            with_index=True,
+            stream=stream,
+            cache_dir=cache_dir if stream else None,
+        )
 
     # 单包场景直接串行，避免线程池开销，但仍走 sdist 回退
-    # stream=True 流式输出 pip 进度条，让用户看到实时下载速度
+    # stream=True 流式输出 pip 输出 + _DownloadMonitor 监控 cache_dir 显示实时下载速度
     if len(resolved) == 1:
         try:
             return _download_worker(resolved[0], stream=True)
@@ -583,7 +592,9 @@ def _download_resolved_parallel(  # noqa: PLR0913
             _handle_sdist_fallback(
                 fallback_err, py, pypi_index, cache_dir, extra_index_urls=extra_index_urls, find_links=find_links
             )
-            return _download_one_resolved(resolved[0], base_args, extra_args, pypi_index, with_index=True, stream=True)
+            return _download_one_resolved(
+                resolved[0], base_args, extra_args, pypi_index, with_index=True, stream=True, cache_dir=cache_dir
+            )
 
     workers = min(_PARALLEL_DOWNLOAD_WORKERS, len(resolved))
     succeeded: list[tuple[str, subprocess.CompletedProcess[str]]] = []
@@ -699,14 +710,20 @@ def _download_one_resolved(  # noqa: PLR0913
     *,
     with_index: bool,
     stream: bool = False,
+    cache_dir: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """下载单个已解析 wheel（``pip download --no-deps <req>``）.
 
     ``stream=False``（默认，并行模式）用 ``subprocess.run`` 捕获 stdout/stderr，
     不流式输出（多进程 stderr 交错混乱）。``stream=True``（单包模式）用
     :func:`fspack.packaging.wheels.downloader._stream_subprocess` 实时流式输出
-    pip 进度条到终端，让用户看到实时下载速度（避免 10MB+ wheel 静默下载被
-    误判为卡住）。
+    pip 的非进度条输出（如 ``Downloading X.whl`` 行）。
+
+    pip 在 ``stderr=PIPE`` 下检测到非 tty **不输出进度条**，流式输出无法获取
+    实时下载速度。``stream=True`` 且提供 ``cache_dir`` 时，启动
+    :class:`fspack.packaging.wheels.downloader._DownloadMonitor` 监控 cache_dir
+    中 ``.whl`` 文件（含 pip 临时文件 ``tmpXXXXXX.whl``）总大小变化，用
+    rich.progress 显示实时下载字节数与速度，让用户看到"快还是慢"。
 
     下载开始/完成通过 :func:`_log_download_event` 打印事件日志（含 req、文件
     大小、耗时），``stream=True`` 时进度条与事件日志配合提供完整下载反馈。
@@ -720,8 +737,10 @@ def _download_one_resolved(  # noqa: PLR0913
             并行下载路径（``_download_worker``）与 sdist 回退重试均传 ``True``：
             前者需用配置镜像而非 pip 默认 pypi.org（国内访问慢/超时），
             后者需从网络下载其他包。``--find-links <cache_dir>`` 仍优先检查本地缓存。
-        stream: True 时流式输出 pip 进度条到终端（单包场景），False 时静默
+        stream: True 时流式输出 pip 输出到终端（单包场景），False 时静默
             捕获（并行场景避免多进程 stderr 交错）。
+        cache_dir: wheel 缓存目录，``stream=True`` 时启用下载速度监控。
+            并行模式（``stream=False``）不传，不启用监控。
     """
     if with_index:
         cmd = [*base_args, "--no-deps", "-i", pypi_index, *extra_args, req]
@@ -731,11 +750,18 @@ def _download_one_resolved(  # noqa: PLR0913
     start = time.perf_counter()
     try:
         if stream:
-            # 单包场景流式输出 pip 进度条，让用户看到实时下载速度。
-            # 通过模块属性访问 _stream_subprocess，便于测试 monkeypatch。
+            # 单包场景：流式输出 pip 输出 + 监控 cache_dir 文件大小变化显示实时下载速度。
+            # 通过模块属性访问 _stream_subprocess/_DownloadMonitor，便于测试 monkeypatch。
             from fspack.packaging.wheels import downloader as _dl
 
-            result = _dl._stream_subprocess(cmd)
+            monitor = _dl._DownloadMonitor(cache_dir, req) if cache_dir else None
+            try:
+                if monitor is not None:
+                    monitor.start()
+                result = _dl._stream_subprocess(cmd)
+            finally:
+                if monitor is not None:
+                    monitor.stop()
         else:
             result = subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8", errors="replace")
     except FileNotFoundError as e:
