@@ -581,6 +581,47 @@ def test_load_template_skips_non_utf8_binary_file(tmp_path: Path) -> None:
     assert "icon.ico" not in rel_paths
 
 
+def test_load_template_skips_pycache_without_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """模板目录含 ``__pycache__/*.pyc`` 编译产物时扫描阶段直接过滤，不刷警告.
+
+    复现安装后模板目录被 ``python -O`` 触碰生成 ``__pycache__/*.opt-2.pyc``
+    的场景：这些二进制字节码非模板源文件，此前会逐个触发 UnicodeDecodeError
+    兜底并刷出"跳过非 UTF-8 模板文件"警告刷屏。加载器应在扫描阶段按目录名/
+    后缀过滤，既不读取也不产生任何警告日志。
+    """
+    import logging
+
+    from fspack.templates.registry import _load_template
+
+    tpl_dir = tmp_path / "with_pycache"
+    tpl_dir.mkdir()
+    (tpl_dir / "template.toml").write_text(
+        'id = "with_pycache"\nname = "Pycache"\ndescription = ""\ncategory = "cli"\n',
+        encoding="utf-8",
+    )
+    (tpl_dir / "main.py").write_text('print("hi")', encoding="utf-8")
+    # 模拟 python -O 生成的字节码缓存（0xa7 起始复现用户日志中的解码错误字节）
+    pycache = tpl_dir / "__pycache__"
+    pycache.mkdir()
+    (pycache / "main.cpython-311.opt-2.pyc").write_bytes(b"\xa7\x00\x01\x02\xff")
+    # 顶层散落的 .pyc 也应被后缀过滤
+    (tpl_dir / "stray.pyc").write_bytes(b"\xa7\xff")
+
+    with caplog.at_level(logging.WARNING, logger="fspack.templates.registry"):
+        tpl = _load_template(tpl_dir)
+
+    assert tpl is not None
+    rel_paths = [f.rel_path for f in tpl.files]
+    assert "main.py" in rel_paths
+    # __pycache__ 下文件与顶层 .pyc 均不应出现在模板文件列表
+    assert not any("__pycache__" in p for p in rel_paths)
+    assert not any(p.endswith(".pyc") for p in rel_paths)
+    # 关键：扫描阶段过滤，不产生任何"跳过非 UTF-8 模板文件"警告
+    assert not any("非 UTF-8" in record.message for record in caplog.records)
+
+
 def test_load_all_skips_non_category_directories(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """_load_all 跳过非分类目录（如 README.md 文件、非分类名目录）."""
     from fspack.templates import registry as registry_mod

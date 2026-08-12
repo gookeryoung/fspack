@@ -37,6 +37,15 @@ _CATEGORIES: frozenset[str] = frozenset({"cli", "gui", "game", "sci", "web", "co
 # 默认角色集合：init 模板默认同时可用于 init 与 doctor
 _DEFAULT_ROLES: frozenset[str] = frozenset({"init", "doctor"})
 
+# 扫描模板源文件时跳过的目录名与文件后缀：这些是 Python/工具链产生的编译或缓存
+# 产物（非模板源文件），不应作为 $variable 占位符文本读取。安装后的模板目录若被
+# python -O 等触碰会生成 __pycache__/*.pyc（二进制，UTF-8 解码必失败），此前会逐个
+# 刷出"跳过非 UTF-8 模板文件"警告刷屏。此处在扫描阶段直接过滤，从源头消除噪音。
+_TEMPLATE_SKIP_DIRS: frozenset[str] = frozenset(
+    {"__pycache__", ".git", ".venv", ".pytest_cache", ".ruff_cache", ".mypy_cache", "node_modules"}
+)
+_TEMPLATE_SKIP_SUFFIXES: frozenset[str] = frozenset({".pyc", ".pyo", ".pyd"})
+
 
 @dataclass(frozen=True)
 class TemplateFile:
@@ -149,7 +158,12 @@ def _load_template(tpl_dir: Path) -> Template | None:
             continue
         if file_path.name == "template.toml":
             continue
-        rel_path = file_path.relative_to(tpl_dir).as_posix()
+        # 跳过编译/缓存产物：__pycache__ 等目录下的文件、.pyc/.pyo/.pyd 二进制。
+        # 这些非模板源文件（安装后被 python -O 触碰即生成），不应作为文本模板读取。
+        rel = file_path.relative_to(tpl_dir)
+        if _TEMPLATE_SKIP_DIRS.intersection(rel.parts) or file_path.suffix in _TEMPLATE_SKIP_SUFFIXES:
+            continue
+        rel_path = rel.as_posix()
         try:
             content = file_path.read_text(encoding="utf-8")
         except OSError as e:
