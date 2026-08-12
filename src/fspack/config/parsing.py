@@ -144,7 +144,15 @@ def _parse_project_cached(
     """
     pp = project_dir / "pyproject.toml"
     try:
-        data = tomllib.loads(pp.read_text(encoding="utf-8"))
+        raw_text = pp.read_text(encoding="utf-8")
+    except OSError as e:
+        raise ProjectError(f"pyproject.toml 读取失败: {e}") from e
+    except UnicodeDecodeError as e:
+        # pyproject.toml 非 UTF-8 编码（如 GBK/UTF-16 或含非法字节）：包装为
+        # ProjectError 输出清晰的中文错误，而非抛出原始 UnicodeDecodeError 栈。
+        raise ProjectError(f"pyproject.toml 编码错误（需 UTF-8）: {e}") from e
+    try:
+        data = tomllib.loads(raw_text)
     except tomllib.TOMLDecodeError as e:
         raise ProjectError(f"pyproject.toml 语法错误: {e}") from e
 
@@ -645,7 +653,9 @@ def detect_entry(
 def _has_entry(path: Path) -> bool:
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"))
-    except (SyntaxError, OSError):
+    except (SyntaxError, OSError, UnicodeDecodeError):
+        # UnicodeDecodeError（ValueError 子类，非 OSError）：非 UTF-8 源文件无法
+        # 作为入口候选解析，与语法错误/读取失败同等视为"非入口"跳过，避免崩溃。
         return False
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == "main":
