@@ -1294,7 +1294,7 @@ def test_download_wheels_uv_path_integration(tmp_path: Path, monkeypatch: pytest
     )
 
     # --no-index 走 subprocess.run 失败（缓存未命中）；
-    # 单包路径走 subprocess.run 成功（不走 _stream_subprocess）
+    # 单包路径走 _stream_subprocess 成功（stream=True 流式输出 pip 进度条）
     download_calls = {"no_index": 0, "download": 0}
 
     def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
@@ -1309,6 +1309,7 @@ def test_download_wheels_uv_path_integration(tmp_path: Path, monkeypatch: pytest
         return r
 
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_run)
     result = download_wheels(("numpy>=1.0",), "3.11.9", "https://idx/simple", cache)
     assert any(p.name == whl_name for p in result)
     assert download_calls["no_index"] == 1
@@ -1333,8 +1334,8 @@ def test_download_online_uv_sdist_fallback(tmp_path: Path, monkeypatch: pytest.M
         stdout = ""
         stderr = ""
 
-    # 单包路径调 subprocess.run（pip download --no-deps）；
-    # sdist 构建仍走 _stream_subprocess（pip wheel --no-deps）
+    # 单包路径调 _stream_subprocess（pip download --no-deps，stream=True）；
+    # sdist 构建也走 _stream_subprocess（pip wheel --no-deps）
     def fake_run(cmd: list[str], **kw: Any) -> _Result:
         call_count["pip_download"] += 1
         if call_count["pip_download"] == 1:
@@ -1356,7 +1357,8 @@ def test_download_online_uv_sdist_fallback(tmp_path: Path, monkeypatch: pytest.M
             call_count["pip_wheel"] += 1
             (cache / whl_name).write_bytes(b"wuc")
             return _Result()
-        return _Result()
+        # pip download --no-deps 单包路径（stream=True 流式输出）
+        return fake_run(cmd)
 
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
     monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
@@ -1442,6 +1444,7 @@ def test_download_resolved_parallel_uses_configured_pypi_index(tmp_path: Path, m
         return r
 
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_run)
     base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
     _download_online(
         ["pygame"], base_args, "/py/python", "3.11.9", ("win_amd64",), "https://mirrors.aliyun.com/pypi/simple/", cache
@@ -2025,6 +2028,7 @@ def test_download_online_uv_resolved_passes_extra_sources(tmp_path: Path, monkey
         return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_run)
     base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
     _download_online(
         ["numpy>=1.0"],
@@ -2531,6 +2535,10 @@ def test_download_online_shares_uv_path_detection(tmp_path: Path, monkeypatch: p
         "fspack.packaging.wheels.subprocess.run",
         lambda *a, **kw: subprocess.CompletedProcess(args=[], returncode=0, stdout="Saved numpy.whl\n"),
     )
+    monkeypatch.setattr(
+        "fspack.packaging.wheels.downloader._stream_subprocess",
+        lambda cmd: subprocess.CompletedProcess(args=[], returncode=0, stdout="Saved numpy.whl\n"),
+    )
     base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
     _download_online(["numpy>=1.0"], base_args, "/py/python", "3.11.9", ("win_amd64",), "https://idx/simple", cache)
     # _find_uv 只调一次（共享），不是两次（require_hashes 检查 + uv 解析检查）
@@ -2595,6 +2603,7 @@ def test_download_online_uv_download_fails_falls_back_to_pip(tmp_path: Path, mon
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="Saved numpy.whl\n", stderr="")
 
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_run)
     base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
     result = _download_online(
         ["numpy>=1.0"], base_args, "/py/python", "3.11.9", ("win_amd64",), "https://idx/simple", cache

@@ -545,13 +545,15 @@ def _download_resolved_parallel(  # noqa: PLR0913
             映射为 ``--python-platform windows|linux``。
     """
 
-    def _download_worker(req: str) -> subprocess.CompletedProcess[str]:
+    def _download_worker(req: str, *, stream: bool = False) -> subprocess.CompletedProcess[str]:
         """单包下载 worker：优先 uv，失败回退 pip.
 
         ``with_index=True`` 始终附加 ``-i``/``--index-url <pypi_index>``：并行下载
         路径已在在线模式（``--no-index`` 离线解析失败后回退），需用用户配置的镜像源
         而非 pip/uv 默认的 pypi.org（国内访问慢/超时）。``--find-links <cache_dir>``
         仍优先检查本地缓存，命中时 pip/uv 不会访问网络。
+
+        ``stream`` 仅透传给 pip 路径（uv 下载快且无进度条，无需流式）。
         """
 
         if uv_path is not None:
@@ -568,19 +570,20 @@ def _download_resolved_parallel(  # noqa: PLR0913
                 )
             except subprocess.CalledProcessError as uv_err:
                 _logger.info("uv 下载 %s 失败，回退到 pip: %s", req, (uv_err.stderr or "").strip()[:200])
-        return _download_one_resolved(req, base_args, extra_args, pypi_index, with_index=True)
+        return _download_one_resolved(req, base_args, extra_args, pypi_index, with_index=True, stream=stream)
 
     # 单包场景直接串行，避免线程池开销，但仍走 sdist 回退
+    # stream=True 流式输出 pip 进度条，让用户看到实时下载速度
     if len(resolved) == 1:
         try:
-            return _download_worker(resolved[0])
+            return _download_worker(resolved[0], stream=True)
         except subprocess.CalledProcessError as e:
             _logger.warning("单包下载失败，尝试 sdist 回退: %s", resolved[0])
             fallback_err = DependencyError(f"依赖下载失败:\n{e.stderr}")
             _handle_sdist_fallback(
                 fallback_err, py, pypi_index, cache_dir, extra_index_urls=extra_index_urls, find_links=find_links
             )
-            return _download_one_resolved(resolved[0], base_args, extra_args, pypi_index, with_index=True)
+            return _download_one_resolved(resolved[0], base_args, extra_args, pypi_index, with_index=True, stream=True)
 
     workers = min(_PARALLEL_DOWNLOAD_WORKERS, len(resolved))
     succeeded: list[tuple[str, subprocess.CompletedProcess[str]]] = []
@@ -688,19 +691,25 @@ def _download_one_with_uv(  # noqa: PLR0913
     return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=pip_stdout, stderr=result.stderr)
 
 
-def _download_one_resolved(
+def _download_one_resolved(  # noqa: PLR0913
     req: str,
     base_args: list[str],
     extra_args: list[str],
     pypi_index: str,
     *,
     with_index: bool,
+    stream: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     """下载单个已解析 wheel（``pip download --no-deps <req>``）.
 
-    用 ``subprocess.run`` 捕获 stdout/stderr，不流式输出（并行模式多进程
-    stderr 交错混乱）。下载开始/完成通过 :func:`_log_download_event` 打印事件
-    日志，让用户能看到每个 wheel 的进展（避免 10MB+ wheel 静默下载被误判为卡住）。
+    ``stream=False``（默认，并行模式）用 ``subprocess.run`` 捕获 stdout/stderr，
+    不流式输出（多进程 stderr 交错混乱）。``stream=True``（单包模式）用
+    :func:`fspack.packaging.wheels.downloader._stream_subprocess` 实时流式输出
+    pip 进度条到终端，让用户看到实时下载速度（避免 10MB+ wheel 静默下载被
+    误判为卡住）。
+
+    下载开始/完成通过 :func:`_log_download_event` 打印事件日志（含 req、文件
+    大小、耗时），``stream=True`` 时进度条与事件日志配合提供完整下载反馈。
 
     Args:
         req: 精确版本需求字符串（如 ``numpy==1.24.0``）。
@@ -711,6 +720,8 @@ def _download_one_resolved(
             并行下载路径（``_download_worker``）与 sdist 回退重试均传 ``True``：
             前者需用配置镜像而非 pip 默认 pypi.org（国内访问慢/超时），
             后者需从网络下载其他包。``--find-links <cache_dir>`` 仍优先检查本地缓存。
+        stream: True 时流式输出 pip 进度条到终端（单包场景），False 时静默
+            捕获（并行场景避免多进程 stderr 交错）。
     """
     if with_index:
         cmd = [*base_args, "--no-deps", "-i", pypi_index, *extra_args, req]
@@ -719,7 +730,14 @@ def _download_one_resolved(
     _logger.info("pip 下载 %s（镜像 %s）", req, pypi_index if with_index else "默认")
     start = time.perf_counter()
     try:
-        result = subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8", errors="replace")
+        if stream:
+            # 单包场景流式输出 pip 进度条，让用户看到实时下载速度。
+            # 通过模块属性访问 _stream_subprocess，便于测试 monkeypatch。
+            from fspack.packaging.wheels import downloader as _dl
+
+            result = _dl._stream_subprocess(cmd)
+        else:
+            result = subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8", errors="replace")
     except FileNotFoundError as e:
         raise DependencyError(f"未找到 pip: {cmd[0]}") from e
     except subprocess.CalledProcessError:
