@@ -119,6 +119,7 @@ class TestIsRetryableNetworkError:
 class TestDownloaderRetry:
     """``Downloader.download`` 重试行为."""
 
+    @pytest.mark.slow
     def test_success_on_retry(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """前 2 次 URLError，第 3 次成功，返回字节数."""
         calls: list[int] = []
@@ -137,6 +138,7 @@ class TestDownloaderRetry:
         assert dest.read_bytes() == b"recovered data"
         assert len(calls) == 3
 
+    @pytest.mark.slow
     def test_retry_exhausted_reraises_original(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """达到 3 次上限后抛出原始 URLError（reraise=True，非 RetryError）."""
         calls: list[int] = []
@@ -166,6 +168,7 @@ class TestDownloaderRetry:
         assert exc_info.value.code == 404
         assert len(calls) == 1
 
+    @pytest.mark.slow
     def test_http_503_retried_then_fails(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """HTTP 503 重试 3 次后失败，抛出原始 HTTPError."""
         calls: list[int] = []
@@ -181,6 +184,7 @@ class TestDownloaderRetry:
         assert exc_info.value.code == 503
         assert len(calls) == 3
 
+    @pytest.mark.slow
     def test_http_503_then_success(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """HTTP 503 一次后恢复，重试成功."""
         calls: list[int] = []
@@ -197,6 +201,7 @@ class TestDownloaderRetry:
         assert written == len(b"ok after flap")
         assert len(calls) == 2
 
+    @pytest.mark.slow
     def test_socket_timeout_retried(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """socket.timeout（读超时）触发重试."""
         calls: list[int] = []
@@ -213,6 +218,7 @@ class TestDownloaderRetry:
         assert written == len(b"recovered")
         assert len(calls) == 2
 
+    @pytest.mark.slow
     def test_retry_overwrites_partial_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """重试时 dest 以 wb 模式重新打开，覆盖上次部分写入."""
         calls: list[int] = []
@@ -231,6 +237,7 @@ class TestDownloaderRetry:
         assert written == len(b"full content")
         assert dest.read_bytes() == b"full content"
 
+    @pytest.mark.slow
     def test_stage_receives_bytes_after_retry(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """重试成功后 stage.add_bytes 收到最终字节数."""
         calls: list[int] = []

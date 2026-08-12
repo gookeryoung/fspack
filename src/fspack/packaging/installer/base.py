@@ -155,6 +155,22 @@ def _make_staged_archive(dist_dir: Path, release_dir: Path, base: str, fmt: str)
     return Path(archive)
 
 
+# ---- 关于 *_release 编排骨架抽取的 TODO ----
+# 已实现的抽取：_run_tool / _make_staged_archive / _DIST_IGNORE / _DIST_INTERMEDIATE_EXCLUDES
+# （前四项收益最大、风险最低、monkeypatch 无影响）。
+#
+# 剩余抽取候选：5 个 *_release（tarball/deb/pkg/dmg/zip）骨架高度重复：
+#   own_tracker → BuildTracker → _prepare_dist → _check_exe → release/ → _run_stage →
+#   console.success → (可选 codesign/sign_deb 钩子) → own_tracker 时 summary
+#
+# 暂不合并原因（待后续迭代复核）：
+# 1) *_release 有 15+ 个 monkeypatch 测试断言，统一后 patch 路径需从 linux/macos/zip
+#    三处 "xxx._prepare_dist" / "xxx.BuildTracker" 等改向 base._single_format_release，
+#    涉及 test_installer/test_linux_installer/test_macos_installer 大量路径迁移。
+# 2) deb 有 sign_deb、macos 有 codesign 的可选钩子，合并需设计 hook 参数；现阶段逐个
+#    声明可读性更好。
+# 3) Installer.build_installer 类方法与 *_release 函数式 API 同时存在，两者责任
+#    边界尚未统一，过早合并引入抽象层混乱。
 # ---- 基类 ----
 
 

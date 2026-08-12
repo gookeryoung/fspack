@@ -13,7 +13,6 @@ iter-139 扩展：:func:`_scan_cache_health` 全面扫描 wheel 缓存目录健�
 from __future__ import annotations
 
 import contextlib
-import json
 import logging
 import sys
 from pathlib import Path
@@ -22,6 +21,7 @@ from typing import TYPE_CHECKING, Mapping
 from fspack import __version__
 from fspack._util.format import format_size_bin
 from fspack._util.fsutil import walk_dir_size
+from fspack._util.jsoncache import load_json_dict
 from fspack.doctor.models import CacheHealthReport, CheckResult, CheckStatus
 
 if TYPE_CHECKING:
@@ -230,22 +230,20 @@ def _scan_cache_health(cache_dir: Path) -> CacheHealthReport:
     referenced: set[str] = set()
 
     for f in cache_files:
-        try:
-            data = json.loads(f.read_text(encoding="utf-8"))
-            if not isinstance(data, dict):
-                raise ValueError(f"根对象不是 dict: {type(data).__name__}")
-            names = data.get("wheels", [])
-            if not isinstance(names, list):
-                raise ValueError(f"wheels 字段不是 list: {type(names).__name__}")
-        except (json.JSONDecodeError, ValueError):
+        data = load_json_dict(f)
+        if data is None:
+            # load_json_dict 对 JSON 非法/非 dict 根：损坏删除+返回 None；对 OSError：不删+返回 None
+            if not f.exists():
+                # 文件被删除 = 真正 JSON 损坏，计入 corrupt_names
+                corrupt_names.append(f.name)
+            # OSError 瞬时问题（仍存在）或缺文件：不计入 corrupt，跳过
+            continue
+        names = data.get("wheels", [])
+        if not isinstance(names, list):
+            # wheels 字段类型错误：属缓存损坏，按同策略删除并计入
             corrupt_names.append(f.name)
             with contextlib.suppress(OSError):
-                # 删除失败不阻断扫描，仍计入 corrupt 计数让用户知晓
                 f.unlink()
-            continue
-        except OSError:
-            # 文件系统层错误（权限/磁盘 I/O）：不计为损坏，跳过
-            # （与 _load_deps_cache 一致：OSError 可能是瞬时问题，不删除）
             continue
 
         # 有效 deps 文件：检查引用的 wheel 是否存在
