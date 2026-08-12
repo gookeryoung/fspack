@@ -193,7 +193,7 @@ def _clean_dist_dir(dist_dir: Path, *, keep_diagnostics: bool) -> None:
             try:
                 preserved[name] = path.read_text(encoding="utf-8")
                 _logger.info("保留: %s", path)
-            except OSError:
+            except (OSError, UnicodeDecodeError):
                 pass
 
     shutil.rmtree(dist_dir)

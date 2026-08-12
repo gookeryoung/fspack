@@ -253,7 +253,9 @@ def _compute_package_checksum(dist_info: Path) -> str | None:
                     continue
                 file_hash = hashlib.sha256(abs_path.read_bytes()).hexdigest()
                 file_hashes.append((rel_path, file_hash))
-    except OSError:
+    except (OSError, UnicodeDecodeError):
+        # RECORD 非 UTF-8（损坏/异常 wheel）时 csv 迭代触发 UnicodeDecodeError
+        # （ValueError 子类，非 OSError）：视为无法生成 SBOM 摘要，返回 None 不崩溃。
         return None
 
     if not file_hashes:

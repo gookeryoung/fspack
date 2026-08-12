@@ -268,6 +268,18 @@ def test_parse_project_bad_toml(tmp_path: Path) -> None:
         parse_project(tmp_path)
 
 
+def test_parse_project_non_utf8_pyproject_raises_project_error(tmp_path: Path) -> None:
+    """非 UTF-8 编码的 pyproject.toml 抛 ProjectError（中文提示）而非原始 UnicodeDecodeError.
+
+    回归：用户曾遇到含非法起始字节的文件导致命令以原始 traceback 崩溃。
+    此处写入含 0xa7（GBK "§"）的非法 UTF-8 起始字节，验证被包装为 ProjectError。
+    """
+    # 0xa7 是 UTF-8 的非法起始字节（continuation byte 无前导字节），必抛 UnicodeDecodeError
+    (tmp_path / "pyproject.toml").write_bytes(b"\xa7[project]\nname = 'x'\n")
+    with pytest.raises(ProjectError, match="编码错误"):
+        parse_project(tmp_path)
+
+
 def test_parse_project_uses_dir_name_when_no_name(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text('[project]\nversion = "1.0"\n')
     (tmp_path / "myproj.py").write_text("def main():\n    pass\n")
@@ -340,6 +352,21 @@ def test_detect_entry_prefers_name_match(tmp_path: Path) -> None:
 
 def test_detect_entry_skips_syntax_error_file(tmp_path: Path) -> None:
     (tmp_path / "app.py").write_text("def bad(:\n    pass\n")
+    (tmp_path / "other.py").write_text("def main():\n    pass\n")
+    mod, path, _ = detect_entry(tmp_path, "app")
+    assert mod == "other"
+    assert path.name == "other.py"
+
+
+def test_detect_entry_skips_non_utf8_file(tmp_path: Path) -> None:
+    """非 UTF-8 编码的候选入口脚本被跳过（不崩溃），选中后续合法入口.
+
+    回归：``_has_entry`` 读取候选脚本时若文件非 UTF-8 会抛 UnicodeDecodeError
+    （ValueError 子类，非 OSError），原先仅 catch (SyntaxError, OSError) 无法覆盖，
+    导致 detect_entry 以原始 traceback 崩溃。
+    """
+    # 0xa7 为非法 UTF-8 起始字节，read_text(encoding="utf-8") 必抛 UnicodeDecodeError
+    (tmp_path / "app.py").write_bytes(b"\xa7def main():\n    pass\n")
     (tmp_path / "other.py").write_text("def main():\n    pass\n")
     mod, path, _ = detect_entry(tmp_path, "app")
     assert mod == "other"
@@ -428,6 +455,21 @@ def test_resolve_py_version_python_version_file_utf16_be_bom(tmp_path: Path) -> 
     """.python-version 为 UTF-16 BE（带 BOM）时正确解码."""
     (tmp_path / ".python-version").write_bytes(b"\xfe\xff" + "3.9\r\n".encode("utf-16-be"))
     assert resolve_py_version(tmp_path, None, None) == "3.9.13"
+
+
+def test_resolve_py_version_python_version_file_non_utf8_no_bom(tmp_path: Path) -> None:
+    """.python-version 无 BOM 且含非法 UTF-8 字节时宽松解码不崩溃.
+
+    回归：``_read_python_version`` 无 BOM 分支原先 ``data.decode("utf-8")`` 严格
+    解码，文件为 GBK/含非法字节时抛 UnicodeDecodeError 导致 resolve_py_version
+    以原始 traceback 崩溃（build/package 命令热路径）。现退回 errors="replace"，
+    非法字节替换为占位符后版本号无法匹配已知映射，走告警回退而非崩溃。
+    """
+    # 版本号前混入非法 UTF-8 字节（无 BOM），严格 utf-8 解码必抛 UnicodeDecodeError
+    (tmp_path / ".python-version").write_bytes(b"\xa73.99\n")
+    # 不抛异常：宽松解码后 "\ufffd3.99" 不在已知映射，回退到默认版本
+    result = resolve_py_version(tmp_path, None, None)
+    assert result == DEFAULT_PY_VERSION
 
 
 def test_resolve_py_version_python_version_file_full_version(tmp_path: Path) -> None:
@@ -1225,6 +1267,22 @@ def test_infer_app_type_pygame_is_gui(tmp_path: Path) -> None:
     script = tmp_path / "game.py"
     script.write_text("import pygame\ndef main():\n    pass\n")
     assert infer_app_type(script, ()) is AppType.GUI
+
+
+def test_infer_app_type_non_utf8_falls_back_to_declared(tmp_path: Path) -> None:
+    """非 UTF-8 入口脚本时 infer_app_type 跳过 import 分析，按声明依赖回退（不崩溃）.
+
+    回归：``infer_app_type`` 原先无 try/except，读取非 UTF-8 脚本会抛
+    UnicodeDecodeError 导致命令崩溃。此路径经 ``EntryPoint.from_script`` 直达，
+    不经 ``_has_entry`` 守护，故必须独立防御。
+    """
+    # 0xa7 为非法 UTF-8 起始字节，read_text(encoding="utf-8") 必抛 UnicodeDecodeError
+    script = tmp_path / "app.py"
+    script.write_bytes(b"\xa7import PySide2\ndef main():\n    pass\n")
+    # import 分析被跳过（读取失败），仅按声明依赖推断
+    assert infer_app_type(script, ("PyQt5>=5",)) is AppType.GUI
+    # 无声明依赖时回退 CLI（保留控制台最安全）
+    assert infer_app_type(script, ()) is AppType.CLI
 
 
 def test_parse_project_pygame_example_is_gui() -> None:

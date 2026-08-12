@@ -123,7 +123,8 @@ def _read_python_version(path: Path) -> str:
     """读取 ``.python-version`` 文件内容，自动识别 BOM 编码.
 
     ``.python-version`` 可能由不同编辑器保存为 UTF-8（含/不含 BOM）或 UTF-16，
-    通过字节序标记自动选择解码方式，避免 ``UnicodeDecodeError``。
+    通过字节序标记自动选择解码方式。无 BOM 且非 UTF-8（如 GBK）时退回宽松
+    解码（``errors="replace"``），避免 ``UnicodeDecodeError`` 崩溃命令。
 
     Args:
         path: ``.python-version`` 文件路径。
@@ -136,7 +137,14 @@ def _read_python_version(path: Path) -> str:
         return data.decode("utf-8-sig").strip()
     if data.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
         return data.decode("utf-16").strip()
-    return data.decode("utf-8").strip()
+    # 无 BOM：优先按 UTF-8 严格解码；文件为 GBK/Latin-1 等非 UTF-8 编码且含
+    # 非法字节时（无 BOM 无法自动识别），退回 errors="replace" 宽松解码，避免
+    # UnicodeDecodeError 以原始 traceback 崩溃命令。版本号仅含 ASCII，宽松解码
+    # 至多把非法字节替换为占位符，随后由 _normalize_py_version 校验时告警回退。
+    try:
+        return data.decode("utf-8").strip()
+    except UnicodeDecodeError:
+        return data.decode("utf-8", errors="replace").strip()
 
 
 def _normalize_py_version(version: str, versions: dict[str, str]) -> str | None:

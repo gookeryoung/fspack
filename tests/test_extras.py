@@ -6,7 +6,7 @@
 - CLI ``--extra`` 透传到 ``build_release(extras=...)``（package 子命令）
 - ``[tool.fspack] extras`` 配置默认在未指定 CLI ``--extra`` 时生效
 - CLI ``--extra`` 完全覆盖 ``[tool.fspack] extras`` 配置默认（集合语义，非合并）
-- 未知 extras 分组在 build / package 子命令均抛 ProjectError
+- 未知 extras 分组在 build / package 子命令均被 main 兜底为退出码 2（ProjectError 转 SystemExit）
 - 依赖分析缓存键含扩展后依赖：extras 变化触发缓存失效
 - ``--dry-run`` 打印的依赖分析表含「启用 extras」与「扩展后依赖」行
 """
@@ -21,7 +21,6 @@ import pytest
 from fspack import cli
 from fspack.config import BuildOptions, get_mirror
 from fspack.console import console
-from fspack.exceptions import ProjectError
 from fspack.packaging.pipeline import build
 from fspack.packaging.pipeline.stages import _dep_cache_load, _dep_cache_save
 from fspack.platform import Platform
@@ -194,8 +193,15 @@ def test_cli_build_config_default_used_when_no_extra_flag(tmp_path: Path, monkey
 # ---- 未知 extras 报错 ----
 
 
-def test_cli_build_unknown_extra_raises_project_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """CLI --extra 指定未声明的分组名抛 ProjectError."""
+def test_cli_build_unknown_extra_raises_project_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """CLI --extra 指定未声明的分组名：校验阶段抛 ProjectError，被 main 兜底为退出码 2.
+
+    ``cli.main`` 顶层统一捕获 FspackError（含 ProjectError）打印中文错误并
+    ``SystemExit(2)``，不向用户抛原始 traceback。此处验证 build 未被调用
+    （校验先于构建）且退出码与错误消息正确。
+    """
     _make_project_with_extras(
         tmp_path,
         base_deps=("rich",),
@@ -206,12 +212,16 @@ def test_cli_build_unknown_extra_raises_project_error(tmp_path: Path, monkeypatc
         raise AssertionError("不应调用 build（校验阶段应先抛错）")
 
     monkeypatch.setattr("fspack.builder.build", fake_build)
-    with pytest.raises(ProjectError, match="未知的 extras 分组"):
+    with pytest.raises(SystemExit) as excinfo:
         cli.main(["b", str(tmp_path), "--extra", "unknown_group"])
+    assert excinfo.value.code == 2
+    assert "未知的 extras 分组" in capsys.readouterr().out
 
 
-def test_cli_package_unknown_extra_raises_project_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """package 子命令 --extra 指定未声明的分组名同样抛 ProjectError."""
+def test_cli_package_unknown_extra_raises_project_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """package 子命令 --extra 指定未声明的分组名：同样被 main 兜底为退出码 2."""
     _make_project_with_extras(
         tmp_path,
         base_deps=("rich",),
@@ -222,8 +232,10 @@ def test_cli_package_unknown_extra_raises_project_error(tmp_path: Path, monkeypa
         raise AssertionError("不应调用 build_release（校验阶段应先抛错）")
 
     monkeypatch.setattr("fspack.packaging.installer.build_release", fake_build_release)
-    with pytest.raises(ProjectError, match="未知的 extras 分组"):
+    with pytest.raises(SystemExit) as excinfo:
         cli.main(["p", str(tmp_path), "--extra", "unknown_group", "--no-build"])
+    assert excinfo.value.code == 2
+    assert "未知的 extras 分组" in capsys.readouterr().out
 
 
 # ---- CLI --extra 透传到 package 子命令 ----

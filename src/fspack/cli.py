@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fspack.cli_parser import build_parser
+from fspack.exceptions import FspackError
 
 if TYPE_CHECKING:
     from fspack.config import MirrorConfig
@@ -60,7 +61,15 @@ _RECURSIVE_SKIP_DIRS: frozenset[str] = frozenset(
 
 
 def main(argv: list[str] | None = None) -> None:
-    """主入口，解析参数并分发到子命令."""
+    """主入口，解析参数并分发到子命令.
+
+    单项目命令（build/package/run/clean/init/doctor/...）执行期抛出的
+    :class:`fspack.exceptions.FspackError`（项目解析/入口识别/依赖/编译等领域
+    错误）在此统一捕获：打印简洁中文错误并以退出码 2 退出，而非向用户抛出原始
+    Python traceback。递归路径（``fsp b -r``）在 :func:`_run_recursive` 内逐项目
+    捕获后继续，不会传播到此处；``SystemExit`` 原样放行（argparse ``--help``
+    与显式退出码）。
+    """
     parser = build_parser()
     ns = parser.parse_args(argv)
     command = ns.command
@@ -73,6 +82,19 @@ def main(argv: list[str] | None = None) -> None:
 
     console.setup_logging(verbose=ns.verbose)
 
+    try:
+        _dispatch(command, ns)
+    except FspackError as exc:
+        # 领域错误（如 pyproject.toml 语法/编码错误、未识别入口、未知 extras、
+        # 依赖下载失败等）已携带清晰中文消息：打印后以退出码 2 退出，不暴露原始栈。
+        # 完整堆栈仅在 --verbose（DEBUG）时记录，便于排查而不干扰普通用户。
+        console.error(str(exc))
+        _logger.debug("命令 %s 执行失败", command, exc_info=exc)
+        raise SystemExit(2) from None
+
+
+def _dispatch(command: str, ns: argparse.Namespace) -> None:
+    """按子命令分发到对应执行函数（由 :func:`main` 包裹 FspackError 处理）."""
     if command in ("init", "i"):
         _run_init(ns)
         return

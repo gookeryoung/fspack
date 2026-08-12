@@ -175,8 +175,8 @@ def _load_previous_bench_history(
             continue
         try:
             data = json.loads(f.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            continue  # pragma: no cover - 跳过损坏文件
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+            continue  # pragma: no cover - 跳过损坏/非 UTF-8 文件
         try:
             return _deserialize_bench_results(data)
         except (KeyError, TypeError, ValueError):

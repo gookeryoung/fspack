@@ -689,8 +689,15 @@ def infer_app_type(path: Path, declared: tuple[str, ...]) -> AppType:
     """
     from fspack.analyzer import collect_imports
 
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    imports = collect_imports(tree)
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except (SyntaxError, OSError, UnicodeDecodeError):
+        # 入口脚本无法读取（非 UTF-8）或语法非法时不崩溃：跳过 import 分析，
+        # 仅按声明依赖推断（多入口 declared 为空则回退 CLI，保留控制台最安全）。
+        # 语法错误留待后续构建阶段以更明确的上下文报错，此处不阻断类型推断。
+        imports: frozenset[str] = frozenset()
+    else:
+        imports = frozenset(collect_imports(tree))
     # 先查 GUI：matplotlib 等可视化库优先于 web 框架
     for top in imports:
         if top in _GUI_HINTS:

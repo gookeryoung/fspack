@@ -113,7 +113,7 @@ def _load_failed_files(dist_dir: Path) -> frozenset[str]:
         raw = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return frozenset()
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         _logger.warning("读取失败文件列表失败，视为空: %s", path)
         return frozenset()
     try:
@@ -158,7 +158,7 @@ def _load_hash_index(dist_dir: Path) -> dict[str, str]:
         raw = index_file.read_text(encoding="utf-8")
     except FileNotFoundError:
         return {}
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         _logger.warning("读取 hash 索引失败，视为空索引: %s", index_file)
         return {}
 

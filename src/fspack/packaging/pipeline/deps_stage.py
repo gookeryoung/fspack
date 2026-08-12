@@ -185,7 +185,7 @@ def _dep_cache_load(dist_dir: Path, fingerprint: str, declared: tuple[str, ...])
         return None
     try:
         data = json.loads(cache.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
         return None
     if data.get("fingerprint") != fingerprint or tuple(data.get("declared", [])) != declared:
         return None

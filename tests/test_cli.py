@@ -27,6 +27,65 @@ def test_no_command_prints_help(capsys: pytest.CaptureFixture[str]) -> None:
     assert "fspack" in capsys.readouterr().out
 
 
+def test_build_bad_pyproject_exits_cleanly(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """fsp b 遇到语法错误的 pyproject.toml 时打印中文错误并以退出码 2 退出（不抛原始 traceback）.
+
+    回归：single-project 路径（非递归）原先无 FspackError 兜底，ProjectError 会
+    以原始 Python traceback 崩溃，用户只能在栈底看到淹没的中文消息。现在 main
+    统一捕获 FspackError 输出简洁错误。
+    """
+    (tmp_path / "pyproject.toml").write_text("this is = = not valid {{{", encoding="utf-8")
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main(["b", str(tmp_path)])
+    assert excinfo.value.code == 2
+    out = capsys.readouterr().out
+    assert "语法错误" in out
+
+
+def test_build_non_utf8_pyproject_exits_cleanly(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """fsp b 遇到非 UTF-8 编码的 pyproject.toml 时打印中文错误并以退出码 2 退出.
+
+    回归：用户生产环境曾遇到含非法起始字节文件导致命令以原始 UnicodeDecodeError
+    traceback 崩溃。现在解析层包装为 ProjectError，main 层统一捕获输出简洁错误。
+    """
+    # 0xa7 为非法 UTF-8 起始字节，read_text(encoding="utf-8") 必抛 UnicodeDecodeError
+    (tmp_path / "pyproject.toml").write_bytes(b"\xa7[project]\nname = 'x'\n")
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main(["b", str(tmp_path)])
+    assert excinfo.value.code == 2
+    out = capsys.readouterr().out
+    assert "编码错误" in out
+
+
+def test_build_unknown_extra_exits_cleanly(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """fsp b --extra 指定未知分组时打印中文错误并以退出码 2 退出（ProjectError 被兜底）."""
+    _make_minimal_project(tmp_path)
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main(["b", str(tmp_path), "--extra", "nope"])
+    assert excinfo.value.code == 2
+    out = capsys.readouterr().out
+    assert "未知的 extras 分组" in out
+
+
+def test_build_fspack_error_from_build_exits_cleanly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """构建流程内部抛 FspackError 子类（如 DependencyError）时同样被 main 兜底为退出码 2."""
+    from fspack.exceptions import DependencyError
+
+    _make_minimal_project(tmp_path)
+
+    def fake_build(*_args: Any, **_kwargs: Any) -> None:
+        raise DependencyError("wheel 下载失败: connection reset")
+
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main(["b", str(tmp_path)])
+    assert excinfo.value.code == 2
+    out = capsys.readouterr().out
+    assert "wheel 下载失败" in out
+
+
 def _make_minimal_project(tmp_path: Path) -> Path:
     """在 tmp_path 下创建最小可解析项目（pyproject.toml + 入口脚本）.
 

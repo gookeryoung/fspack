@@ -164,7 +164,7 @@ def _precompile_pyc(  # noqa: PLR0913
             stage.hit_cache()
             stage.set_detail("缓存命中，跳过编译")
             return
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         pass
 
     compiled = 0

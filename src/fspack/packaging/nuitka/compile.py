@@ -477,7 +477,7 @@ class NuitkaCompile:
                 stage.hit_cache()
                 stage.set_detail(f"stamp 命中，nuitka {nuitka_ver} 已编译")
                 return
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             pass
 
         # stamp 未命中但 hash 索引命中：dist 完整保留但 stamp 单独丢失/损坏时，
