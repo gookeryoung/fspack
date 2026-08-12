@@ -384,36 +384,63 @@ def _execute_build(  # noqa: PLR0912, PLR0913
     if opts.analyze_deps:
         _analyze_binary_dependencies(ctx)
 
-    # SBOM 生成（默认启用，--no-sbom 关闭）：扫描 dist 下 site-packages 的
-    # *.dist-info 提取依赖元信息，生成 SPDX 2.3 兼容 JSON 到 dist/release/。
-    # 放在所有构建阶段之后、summary 之前，使 SBOM stage 出现在汇总表中。
-    # 扫描失败不阻断构建（warning 后继续），SBOM 仅为审计辅助产物。
-    if not opts.no_sbom:
+    # SBOM 与 manifest 并行生成：两者都只读扫描 dist 目录，无写入冲突。
+    # 用 ThreadPoolExecutor 并行 submit，主线程在各 stage 内等待对应 future。
+    # stage 记录保持串行（避免 tracker._records 顺序不稳定）。单个启用时
+    # 退化为串行调用，避免线程池启动开销。size_report 在 summary 之后串行
+    # 执行（控制台输出顺序敏感，不能与 summary 并行）。
+    sbom_enabled = not opts.no_sbom
+    manifest_enabled = not opts.no_manifest
+    sbom_future = manifest_future = None
+    _post_build_pool = None
+    if sbom_enabled and manifest_enabled:
+        from concurrent.futures import ThreadPoolExecutor
+
+        from fspack.packaging.manifest import generate_manifest
         from fspack.packaging.sbom import generate_sbom
 
-        with tracker.stage("生成 SBOM") as st:
-            try:
-                sbom_path = generate_sbom(cfg.dist_dir, info)
-                st.processed(1)
-                st.set_detail(sbom_path.name)
-            except OSError as e:
-                _logger.warning("SBOM 生成失败，跳过: %s", e)
-                st.set_detail("生成失败")
+        _post_build_pool = ThreadPoolExecutor(max_workers=2)
+        sbom_future = _post_build_pool.submit(generate_sbom, cfg.dist_dir, info)
+        manifest_future = _post_build_pool.submit(generate_manifest, cfg.dist_dir, info)
 
-    # manifest 产物清单生成（默认启用，--no-manifest 关闭）：扫描 dist 下
-    # 所有文件按分类记录大小/SHA256，生成 JSON 到 dist/release/。版本间
-    # 可通过 ``fsp manifest diff`` 对比差异。失败不阻断构建。
-    if not opts.no_manifest:
-        from fspack.packaging.manifest import generate_manifest
+    try:
+        # SBOM 生成（默认启用，--no-sbom 关闭）：扫描 dist 下 site-packages 的
+        # *.dist-info 提取依赖元信息，生成 SPDX 2.3 兼容 JSON 到 dist/release/。
+        # 放在所有构建阶段之后、summary 之前，使 SBOM stage 出现在汇总表中。
+        # 扫描失败不阻断构建（warning 后继续），SBOM 仅为审计辅助产物。
+        if sbom_enabled:
+            from fspack.packaging.sbom import generate_sbom
 
-        with tracker.stage("生成产物清单") as st:
-            try:
-                manifest_path = generate_manifest(cfg.dist_dir, info)
-                st.processed(1)
-                st.set_detail(manifest_path.name)
-            except OSError as e:
-                _logger.warning("manifest 生成失败，跳过: %s", e)
-                st.set_detail("生成失败")
+            with tracker.stage("生成 SBOM") as st:
+                try:
+                    sbom_path = sbom_future.result() if sbom_future is not None else generate_sbom(cfg.dist_dir, info)
+                    st.processed(1)
+                    st.set_detail(sbom_path.name)
+                except OSError as e:
+                    _logger.warning("SBOM 生成失败，跳过: %s", e)
+                    st.set_detail("生成失败")
+
+        # manifest 产物清单生成（默认启用，--no-manifest 关闭）：扫描 dist 下
+        # 所有文件按分类记录大小/SHA256，生成 JSON 到 dist/release/。版本间
+        # 可通过 ``fsp manifest diff`` 对比差异。失败不阻断构建。
+        if manifest_enabled:
+            from fspack.packaging.manifest import generate_manifest
+
+            with tracker.stage("生成产物清单") as st:
+                try:
+                    manifest_path = (
+                        manifest_future.result()
+                        if manifest_future is not None
+                        else generate_manifest(cfg.dist_dir, info)
+                    )
+                    st.processed(1)
+                    st.set_detail(manifest_path.name)
+                except OSError as e:
+                    _logger.warning("manifest 生成失败，跳过: %s", e)
+                    st.set_detail("生成失败")
+    finally:
+        if _post_build_pool is not None:
+            _post_build_pool.shutdown(wait=True)
 
     # 延迟导入：console 触发 fspack.console 加载（含 rich.console/rich.logging/
     # rich.theme ~17ms）。仅在构建完成输出 summary 时加载。注意 _execute_build

@@ -77,20 +77,22 @@ class ProfileContext:
     """耗时分析上下文，管理 ``tracemalloc`` 与 CPU 时间采样.
 
     用 ``with`` 语句进入时启动 ``tracemalloc`` 并记录 CPU 时间起点，
-    退出时停止 ``tracemalloc``。``collect()`` 方法采集数据生成
-    :class:`ProfileReport`。
+    退出时**先采集内存峰值再停止** ``tracemalloc``，避免 ``stop()`` 后
+    ``get_traced_memory()`` 返回 ``(0, 0)`` 导致 ``memory_peak`` 恒为 0
+    （``collect()`` 在 ``with`` 块外被调用时仍能读到正确峰值）。
 
     线程安全：``tracemalloc`` 全局唯一，同一进程内同时只有一个
     :class:`ProfileContext` 活跃；``tracemalloc.start()`` 多次调用不会报错，
     但 ``stop()`` 会清除所有追踪数据。
     """
 
-    __slots__ = ("_cpu_start", "_started", "_wall_start")
+    __slots__ = ("_cpu_start", "_memory_peak", "_started", "_wall_start")
 
     def __init__(self) -> None:
         """初始化上下文，未启动追踪."""
         self._cpu_start = 0.0
         self._wall_start = 0.0
+        self._memory_peak = 0
         self._started = False
 
     def __enter__(self) -> ProfileContext:
@@ -102,8 +104,15 @@ class ProfileContext:
         return self
 
     def __exit__(self, *exc: object) -> None:
-        """退出上下文：停止 tracemalloc，标记未启动."""
+        """退出上下文：先采集内存峰值，再停止 tracemalloc.
+
+        ``tracemalloc.stop()`` 会清除所有追踪数据，``get_traced_memory()``
+        在 stop 后返回 ``(0, 0)``。因此必须在 stop 前采集峰值并缓存到
+        ``_memory_peak``，供后续 :meth:`collect` 读取。
+        """
         if self._started:
+            # 先采集峰值再 stop：stop 后 traced memory 清零
+            _, self._memory_peak = tracemalloc.get_traced_memory()
             tracemalloc.stop()
             self._started = False
 
@@ -115,12 +124,12 @@ class ProfileContext:
         """
         cpu_time = time.process_time() - self._cpu_start
         wall_time = time.perf_counter() - self._wall_start
-        # tracemalloc 已 stop 时 get_traced_memory 返回 (0, 0)
-        # 在 __exit__ 后调用 collect 仍可工作（数据已采集到 wall/cpu）
+        # 优先用 __exit__ 中缓存的峰值；若 collect 在 with 块内调用（_started
+        # 仍为 True），则实时采集以反映 collect 时刻的峰值。
         if self._started:
             _, peak = tracemalloc.get_traced_memory()
         else:
-            peak = 0
+            peak = self._memory_peak
         return ProfileReport(
             wall_time=wall_time,
             cpu_time=cpu_time,

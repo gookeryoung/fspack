@@ -1149,7 +1149,11 @@ class _CompileCompleted:
 
 
 def test_precompile_pyc_windows_calls_compileall(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Windows 目标用 runtime/python.exe 拆分两次调 compileall 分别编译 src 与 site-packages."""
+    """Windows 目标用 runtime/python.exe 拆分两次调 compileall 分别编译 src 与 site-packages.
+
+    src 与 site-packages 用 ``ThreadPoolExecutor`` 并行编译，完成顺序不保证，
+    断言两个目录都出现且都使用 runtime python.exe。
+    """
     runtime = tmp_path / "runtime"
     runtime.mkdir(parents=True, exist_ok=True)
     (runtime / "python.exe").write_bytes(b"")
@@ -1166,13 +1170,89 @@ def test_precompile_pyc_windows_calls_compileall(tmp_path: Path, monkeypatch: py
 
     # 拆分为两次 compileall 调用：src 与 site-packages 分别编译
     # （src 用 optimize，site-packages 用 min(optimize,1) 保留 docstring）
+    # 并行执行，完成顺序不保证，用集合断言两个目标都出现
     assert len(captured) == 2
+    target_dirs = {cmd[3] for cmd in captured}
+    assert str(dist / "src") in target_dirs
+    assert str(tmp_path / "dist" / "site-packages") in target_dirs
     for cmd in captured:
         assert "compileall" in cmd
         assert str(runtime / "python.exe") in cmd[0]
-    # 第一次编译 src，第二次编译 site-packages
-    assert str(dist / "src") in captured[0]
-    assert str(tmp_path / "dist" / "site-packages") in captured[1]
+
+
+def test_precompile_pyc_parallel_executes_in_threads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """双目录场景下两个 compileall 在不同线程并行执行（验证 ThreadPoolExecutor 启用）.
+
+    使用 :class:`threading.Barrier` 强制两个 compileall 调用同时活跃：若两者
+    在同一线程串行执行，Barrier 永远等不到 2 个 parties，超时抛
+    :class:`BrokenBarrierError` 让测试失败。
+    """
+    import threading
+
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    (runtime / "python.exe").write_bytes(b"")
+    dist = tmp_path / "dist"
+    (dist / "src").mkdir(parents=True)
+    (dist / "src" / "app.py").write_text("print('hi')")
+    (dist / "site-packages").mkdir(parents=True)
+    (dist / "site-packages" / "pkg.py").write_text("x = 1")
+
+    thread_ids: set[int] = set()
+    # Barrier(2) 强制两个 compileall 同时活跃：只有两个任务都在不同线程执行时才能通过
+    barrier: threading.Barrier = threading.Barrier(2)
+
+    def capture_thread(cmd: list[str], **kw: object) -> object:
+        """记录调用线程 ID，等待另一个 compileall 也到达后返回."""
+        thread_ids.add(threading.get_ident())
+        barrier.wait(timeout=2.0)
+        return _CompileCompleted()
+
+    monkeypatch.setattr("subprocess.run", capture_thread)
+
+    st = StageRecorder("预编译字节码")
+    _precompile_pyc(dist, runtime, "3.11.9", Platform.WINDOWS, strip_py=False, stage=st)
+
+    # 两个 compileall 在不同线程执行（ThreadPoolExecutor worker 线程）
+    assert len(thread_ids) >= 2
+
+
+def test_precompile_pyc_parallel_one_failure_skips_stamp(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """并行编译时任一目录失败则不写 stamp，且记录一条 compileall 失败 warning."""
+    import logging
+
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    (runtime / "python.exe").write_bytes(b"")
+    dist = tmp_path / "dist"
+    (dist / "src").mkdir(parents=True)
+    (dist / "src" / "app.py").write_text("print('hi')")
+    (dist / "site-packages").mkdir(parents=True)
+    (dist / "site-packages" / "pkg.py").write_text("x = 1")
+
+    class _CompileFail:
+        returncode = 2
+        stderr = "SyntaxError: invalid syntax"
+        stdout = ""
+
+    monkeypatch.setattr("subprocess.run", lambda cmd, **kw: _CompileFail())
+
+    from fspack.packaging.pyc import _precompile_pyc
+
+    st = StageRecorder("预编译字节码")
+    with caplog.at_level(logging.WARNING, logger="fspack.packaging.pyc_compile"):
+        _precompile_pyc(dist, runtime, "3.11.9", Platform.WINDOWS, strip_py=False, stage=st)
+
+    stamp = dist / ".pyc_stamp"
+    assert not stamp.is_file()
+    fail_logs = [r for r in caplog.records if "compileall 失败" in r.message]
+    # 至少一条失败日志（并行下两个都失败，as_completed 顺序不保证）
+    assert len(fail_logs) >= 1
+    assert "SyntaxError" in fail_logs[0].message
 
 
 def test_precompile_pyc_cleans_data_dirs_pycache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

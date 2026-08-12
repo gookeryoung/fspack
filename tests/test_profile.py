@@ -137,14 +137,20 @@ def test_profile_context_collect_returns_report() -> None:
 
 
 def test_profile_context_collect_after_exit() -> None:
-    """collect() 在 __exit__ 后调用仍可工作（memory_peak 为 0）."""
+    """collect() 在 __exit__ 后调用仍能读到正确的内存峰值.
+
+    修复前 ``__exit__`` 直接调用 ``tracemalloc.stop()``，导致后续 ``collect()``
+    调用 ``get_traced_memory()`` 返回 ``(0, 0)``，``memory_peak`` 恒为 0。
+    修复后 ``__exit__`` 先采集峰值再 stop，缓存到 ``_memory_peak`` 供
+    ``collect()`` 读取。
+    """
     tracker = BuildTracker()
     ctx = ProfileContext()
     with ctx:
-        time.sleep(0.01)
+        # 分配约 1MB 内存确保峰值 > 0
+        _ = [b"x" * 1024 for _ in range(1024)]
     report = ctx.collect(tracker)
-    # tracemalloc 已 stop，get_tracedMemory 返回 (0, 0)
-    assert report.memory_peak == 0
+    assert report.memory_peak > 0
     assert report.wall_time > 0
 
 
@@ -160,15 +166,18 @@ def test_profile_context_exception_cleanup() -> None:
 
 
 def test_profile_context_tracks_memory_allocation() -> None:
-    """ProfileContext 追踪内存分配，collect() 返回的 memory_peak 反映分配."""
+    """ProfileContext 追踪内存分配，collect() 返回的 memory_peak 反映分配.
+
+    修复后 ``__exit__`` 先采集峰值再 stop tracemalloc，因此即使 ``collect()``
+    在 ``with`` 块外被调用，``memory_peak`` 仍能反映追踪期间分配的内存。
+    """
     tracker = BuildTracker()
     ctx = ProfileContext()
     with ctx:
-        # 分配一些内存
-        _ = [b"x" * 1024 for _ in range(1000)]
+        # 分配约 1MB 内存确保峰值 > 0
+        _ = [b"x" * 1024 for _ in range(1024)]
     report = ctx.collect(tracker)
-    # tracemalloc 在 stop 后 get_traced_memory 返回 (0, 0)
-    # 所以 memory_peak 为 0，但 wall_time 应该有值
+    assert report.memory_peak > 0
     assert report.wall_time > 0
 
 
@@ -466,3 +475,67 @@ def test_build_profile_cleans_up_on_exception(tmp_path: Path, monkeypatch: pytes
         build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, profile=True)
     # tracemalloc 已被 ProfileContext.__exit__ 停止
     assert not tracemalloc.is_tracing() or was_tracing
+
+
+# ---- 末尾阶段并行：SBOM + manifest 并行执行 ----
+
+
+def test_build_sbom_manifest_parallel_in_threads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """SBOM 与 manifest 在不同线程并行执行（验证 ThreadPoolExecutor 启用）.
+
+    mock generate_sbom 和 generate_manifest 记录调用线程 ID，断言两者在不同
+    线程执行（证明并行而非串行）。使用 :class:`threading.Barrier` 强制两个
+    任务都到达同步点后才返回：若两者在同一线程串行执行，Barrier 永远等不到
+    2 个 parties，超时抛 :class:`BrokenBarrierError` 让测试失败。
+    """
+    import threading
+
+    from fspack.config import get_mirror
+    from fspack.packaging.pipeline import build
+    from fspack.platform import Platform
+
+    proj = tmp_path / "app"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (proj / "app.py").write_text("def main():\n    pass\n")
+
+    # mock 构建主体避免实际下载/编译
+    monkeypatch.setattr(
+        "fspack.packaging.pipeline._prepare_runtime",
+        lambda ctx: ctx.cfg.dist_dir / "site-packages",
+    )
+    monkeypatch.setattr("fspack.packaging.pipeline._analyze_dependencies", lambda ctx, **kw: _empty_report())
+    monkeypatch.setattr("fspack.packaging.pipeline._download_dependencies", lambda *a, **kw: False)
+    monkeypatch.setattr("fspack.packaging.pipeline.write_pth", lambda *a, **kw: None)
+    monkeypatch.setattr("fspack.packaging.pipeline.copy_source", lambda *a, **kw: None)
+    monkeypatch.setattr("fspack.packaging.pipeline._compile_user_sources", lambda *a, **kw: None)
+    monkeypatch.setattr("fspack.packaging.pipeline._build_entry_loaders", lambda *a, **kw: [])
+
+    sbom_threads: set[int] = set()
+    manifest_threads: set[int] = set()
+    # Barrier(2) 强制两个任务同时活跃：只有两个任务都在不同线程执行时才能通过
+    barrier: threading.Barrier = threading.Barrier(2)
+
+    def fake_generate_sbom(dist_dir: Path, info: object) -> Path:
+        """记录 SBOM 调用线程 ID，等待 manifest 也到达后返回."""
+        sbom_threads.add(threading.get_ident())
+        barrier.wait(timeout=2.0)
+        return dist_dir / "release" / "app-0.1-sbom.json"
+
+    def fake_generate_manifest(dist_dir: Path, info: object) -> Path:
+        """记录 manifest 调用线程 ID，等待 sbom 也到达后返回."""
+        manifest_threads.add(threading.get_ident())
+        barrier.wait(timeout=2.0)
+        return dist_dir / "release" / "app-0.1-manifest.json"
+
+    monkeypatch.setattr("fspack.packaging.sbom.generate_sbom", fake_generate_sbom)
+    monkeypatch.setattr("fspack.packaging.manifest.generate_manifest", fake_generate_manifest)
+
+    with console.rich.capture():
+        build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
+
+    # 两者都被调用
+    assert len(sbom_threads) == 1
+    assert len(manifest_threads) == 1
+    # 在不同线程执行（证明 ThreadPoolExecutor 并行）
+    assert sbom_threads != manifest_threads, "SBOM 与 manifest 应在不同线程并行执行"
