@@ -177,6 +177,13 @@ def _precompile_pyc(  # noqa: PLR0913
     if compiled:
         stage.processed()
 
+    # 清理 data_dirs 下 compileall 生成的 __pycache__：data_dirs 视为完整资源原样
+    # 保留（其下 .py 不剥离），但 compileall 会无差别为其 .py 生成 __pycache__/*.pyc。
+    # 这些字节码对数据资源无运行价值，反而污染产物——尤其 fspack 自身模板目录内的
+    # $entry_module.py 等占位符文件编译出的 .pyc 会被 fsp init 的模板加载器误读，
+    # 刷出"跳过非 UTF-8 模板文件"警告。故编译后删除 data_dirs 下的 __pycache__。
+    _clean_data_dirs_pycache(data_dirs)
+
     stamp.parent.mkdir(parents=True, exist_ok=True)
     stamp.write_text(stamp_key, encoding="utf-8")
 
@@ -199,3 +206,25 @@ def _precompile_pyc(  # noqa: PLR0913
         stage.set_detail(f"编译 {compiled} 目录，剥离 {stripped} 个 .py")
     else:
         stage.set_detail(f"编译 {compiled} 目录")
+
+
+def _clean_data_dirs_pycache(data_dirs: tuple[Path, ...]) -> None:
+    """删除 ``data_dirs`` 各目录树下 compileall 生成的 ``__pycache__`` 目录.
+
+    data_dirs 视为完整数据资源原样保留，其下 ``.py`` 不剥离；但 compileall 会为
+    这些 ``.py`` 生成 ``__pycache__/*.pyc``。这些字节码对数据资源无运行价值，且会
+    污染产物（如 fspack 模板目录内 ``$entry_module.py`` 编译出的 ``.pyc`` 被
+    ``fsp init`` 模板加载器误读刷警告）。逐个删除，单个删除失败仅告警不阻断构建。
+    """
+    import shutil
+
+    for data_dir in data_dirs:
+        if not data_dir.is_dir():
+            continue
+        for pycache in data_dir.rglob("__pycache__"):
+            if not pycache.is_dir():
+                continue
+            try:
+                shutil.rmtree(pycache)
+            except OSError as e:  # pragma: no cover - 文件系统异常容错
+                _logger.warning("清理数据资源 __pycache__ 失败 %s: %s", pycache, e)

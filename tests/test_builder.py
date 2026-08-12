@@ -1175,6 +1175,54 @@ def test_precompile_pyc_windows_calls_compileall(tmp_path: Path, monkeypatch: py
     assert str(tmp_path / "dist" / "site-packages") in captured[1]
 
 
+def test_precompile_pyc_cleans_data_dirs_pycache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``_precompile_pyc`` 编译后删除 data_dirs 下的 __pycache__（数据资源不留 .pyc）.
+
+    compileall 会为 data_dirs 内 .py 生成 __pycache__/*.pyc，但 data_dirs 视为完整
+    资源原样保留，这些字节码是污染（尤其 fspack 模板目录内 $entry_module.py 编译出
+    的 .pyc 会被 fsp init 模板加载器误读）。本测试模拟 compileall 已生成 __pycache__，
+    验证 _precompile_pyc 调用后 data_dirs 下的 __pycache__ 被清理，src 其余 .pyc 保留。
+    """
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    (runtime / "python.exe").write_bytes(b"")
+    dist = tmp_path / "dist"
+    src = dist / "src"
+    src.mkdir(parents=True)
+    (src / "app.py").write_text("print('app')")
+    # 模拟 data_dir：assets/init_templates 下含占位符 .py 的模板目录
+    tpl_dir = src / "fspack" / "assets" / "init_templates" / "cli" / "helloworld"
+    tpl_dir.mkdir(parents=True)
+    (tpl_dir / "$entry_module.py").write_text("def main():\n    pass\n")
+    # 模拟 compileall 已为 data_dir 与普通 src 生成 __pycache__/*.pyc
+    tpl_pycache = tpl_dir / "__pycache__"
+    tpl_pycache.mkdir()
+    (tpl_pycache / "$entry_module.cpython-311.opt-2.pyc").write_bytes(b"\xa7\x00\x01")
+    src_pycache = src / "__pycache__"
+    src_pycache.mkdir()
+    (src_pycache / "app.cpython-311.pyc").write_bytes(b"\x00\x01\x02")
+
+    monkeypatch.setattr("subprocess.run", lambda cmd, **kw: _CompileCompleted())
+
+    st = StageRecorder("预编译字节码")
+    _precompile_pyc(
+        dist,
+        runtime,
+        "3.11.9",
+        Platform.WINDOWS,
+        strip_py=False,
+        stage=st,
+        data_dirs=(tpl_dir.resolve(),),
+    )
+
+    # data_dir 下的 __pycache__ 被清理，占位符 .py 保留
+    assert not tpl_pycache.exists()
+    assert (tpl_dir / "$entry_module.py").is_file()
+    # src 其余（非 data_dir）__pycache__ 不受影响
+    assert src_pycache.is_dir()
+    assert (src_pycache / "app.cpython-311.pyc").is_file()
+
+
 def test_precompile_pyc_linux_uses_python3_bin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Linux 目标用 runtime/python/bin/python{ver} 调 compileall."""
     runtime = tmp_path / "runtime"

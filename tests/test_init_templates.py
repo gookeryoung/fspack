@@ -581,9 +581,7 @@ def test_load_template_skips_non_utf8_binary_file(tmp_path: Path) -> None:
     assert "icon.ico" not in rel_paths
 
 
-def test_load_template_skips_pycache_without_warning(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_load_template_skips_pycache_without_warning(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """模板目录含 ``__pycache__/*.pyc`` 编译产物时扫描阶段直接过滤，不刷警告.
 
     复现安装后模板目录被 ``python -O`` 触碰生成 ``__pycache__/*.opt-2.pyc``
