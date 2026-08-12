@@ -155,6 +155,12 @@ def _load_template(tpl_dir: Path) -> Template | None:
         except OSError as e:
             _logger.warning("读取模板文件 %s/%s 失败: %s", tpl_dir.name, rel_path, e)
             continue
+        except UnicodeDecodeError as e:
+            # 模板渲染基于 string.Template 文本占位符替换，非 UTF-8 的二进制文件
+            # （如误放入的图标/图片）无法作为文本模板处理。跳过而非崩溃，避免
+            # 单个二进制文件导致整个 fsp init/--list 因 UnicodeDecodeError 中断。
+            _logger.warning("跳过非 UTF-8 模板文件 %s/%s: %s", tpl_dir.name, rel_path, e)
+            continue
         files.append(TemplateFile(rel_path=rel_path, content=content))
 
     if not files:

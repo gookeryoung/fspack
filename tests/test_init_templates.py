@@ -555,6 +555,32 @@ def test_load_template_without_source_files_returns_none(tmp_path: Path) -> None
     assert _load_template(tpl_dir) is None
 
 
+def test_load_template_skips_non_utf8_binary_file(tmp_path: Path) -> None:
+    """模板目录含非 UTF-8 二进制文件时跳过该文件而非崩溃（保留有效文本文件）.
+
+    复现打包环境下模板目录混入图标/图片等二进制文件的场景：
+    ``read_text(encoding="utf-8")`` 抛 UnicodeDecodeError，加载器应跳过并
+    继续处理其余文本模板，而非让整个 fsp init/--list 中断。
+    """
+    from fspack.templates.registry import _load_template
+
+    tpl_dir = tmp_path / "with_binary"
+    tpl_dir.mkdir()
+    (tpl_dir / "template.toml").write_text(
+        'id = "with_binary"\nname = "Binary"\ndescription = ""\ncategory = "cli"\n',
+        encoding="utf-8",
+    )
+    (tpl_dir / "main.py").write_text('print("hi")', encoding="utf-8")
+    # 0xa7 起始的非 UTF-8 字节序列（复现用户 traceback 中的 0xa7 解码错误）
+    (tpl_dir / "icon.ico").write_bytes(b"\xa7\x00\x01\x02\xff")
+
+    tpl = _load_template(tpl_dir)
+    assert tpl is not None
+    rel_paths = [f.rel_path for f in tpl.files]
+    assert "main.py" in rel_paths
+    assert "icon.ico" not in rel_paths
+
+
 def test_load_all_skips_non_category_directories(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """_load_all 跳过非分类目录（如 README.md 文件、非分类名目录）."""
     from fspack.templates import registry as registry_mod
