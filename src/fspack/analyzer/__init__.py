@@ -102,9 +102,7 @@ def analyze_dependencies(  # noqa: PLR0912 - 分支多是分类与异常处理�
     # 内存优化：用 scandir 剪枝生成器替代 rglob + list comprehension
     # rglob 会先全量递归（含排除目录）再在 comprehension 中过滤，
     # 生成器在 scandir 层直接跳过排除目录，避免 I/O 与大列表物化。
-    py_files: list[Path] = list(
-        _iter_src_files_by_ext(src_dir, src_dir, resolved_data_dirs, _FP_EXCLUDED_DIRS, ".py")
-    )
+    py_files: list[Path] = list(_iter_src_files_by_ext(src_dir, src_dir, resolved_data_dirs, _FP_EXCLUDED_DIRS, ".py"))
 
     # 内存优化：跨文件去重用 dict 作保序集合（3.7+ dict 插入序稳定），
     # 省掉末尾独立 seen 去重循环与二次 list 分配。
@@ -124,9 +122,7 @@ def analyze_dependencies(  # noqa: PLR0912 - 分支多是分类与异常处理�
     # 仅当项目 import 了 Qt 绑定包时才扫描，避免非 Qt 项目无谓 I/O
     imported_qt_pkgs = _QT_PYTHON_PACKAGES & set(all_imports_ord)
     if imported_qt_pkgs:
-        qml_files = list(
-            _iter_src_files_by_ext(src_dir, src_dir, resolved_data_dirs, _FP_EXCLUDED_DIRS, ".qml")
-        )
+        qml_files = list(_iter_src_files_by_ext(src_dir, src_dir, resolved_data_dirs, _FP_EXCLUDED_DIRS, ".qml"))
         qml_qt_subs: set[str] = set()
         for qml_file in qml_files:
             # 防御性 try/except：parse_qml_imports 内部已 catch OSError，但其他异常

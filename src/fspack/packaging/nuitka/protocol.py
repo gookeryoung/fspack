@@ -34,7 +34,7 @@ from fspack.platform import Platform
 from fspack.progress import StageRecorder
 
 
-class NuitkaCompilerProtocol(Protocol):
+class NuitkaCompilerProtocol(Protocol):  # pragma: no cover - 纯类型契约，无运行时代码
     """NuitkaCompiler facade 与各 mixin 间跨类调用的接口契约.
 
     各 mixin 的 classmethod 用 ``cls: type[NuitkaCompilerProtocol]`` 注解，
