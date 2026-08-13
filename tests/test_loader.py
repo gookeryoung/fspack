@@ -484,6 +484,40 @@ def test_compile_loader_cache_writeback_failure_logged(tmp_path: Path, monkeypat
     assert (tmp_path / "app.exe").is_file()
 
 
+def test_compile_loader_resource_failure_skips_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """资源编译失败（windres 不可用）但有 version_info 时不缓存 exe.
+
+    回归：资源段缺失的 exe 被缓存后，修复 resource.py 重新打包会因缓存键不变
+    命中旧缓存，导致资源段永远无法嵌入。资源失败时跳过缓存，下次打包重新编译。
+    """
+
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
+        out_path = Path(cmd[cmd.index("-o") + 1])
+        out_path.write_bytes(b"exe-no-resource")
+        return CompletedStub()
+
+    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
+    _disable_windres(monkeypatch)
+    info = LoaderVersionInfo("app", "1.0.0", "desc", "author", "app.exe")
+    cache = tmp_path / "cache"
+    compile_loader(
+        "x",
+        tmp_path / "app.exe",
+        AppType.CLI,
+        tmp_path / "w",
+        Platform.WINDOWS,
+        cache_dir=cache,
+        version_info=info,
+    )
+    # exe 生成成功（资源缺失不影响编译）
+    assert (tmp_path / "app.exe").read_bytes() == b"exe-no-resource"
+    # 缓存未写入（resource_obj=None + version_info 非 None → resource_failed=True）
+    assert not any(cache.glob("*.exe"))
+    assert "跳过 loader 缓存" in caplog.text
+
+
 # --- icon 相关测试 ---
 
 

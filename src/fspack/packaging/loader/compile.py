@@ -231,10 +231,22 @@ class LoaderCompiler(abc.ABC):
             raise LoaderError(f"未找到编译器 {cls.compiler_name}，请安装 {cls.install_hint}") from e
         except subprocess.CalledProcessError as e:
             raise LoaderError(f"loader 编译失败:\n{e.stderr}") from e
-        try:
-            shutil.copy2(out_exe, cached_exe)
-        except OSError as e:
-            _logger.warning("loader 缓存回写失败: %s", e)
+        # 资源编译失败（windres 不可用或 rc 语法错误）时不缓存 exe：
+        # 此 exe 缺少 icon/版本信息/manifest 资源段，缓存后修复 resource.py
+        # 重新打包会因缓存键（icon_hash+version_info_hash）不变而命中旧缓存，
+        # 导致资源段永远无法嵌入。资源缺失时跳过缓存，下次打包重新编译。
+        resource_failed = (
+            cls._supports_icon()
+            and (icon is not None or version_info is not None)
+            and resource_obj is None
+        )
+        if resource_failed:
+            _logger.warning("资源段未嵌入，跳过 loader 缓存（修复后重新打包将重新编译）")
+        else:
+            try:
+                shutil.copy2(out_exe, cached_exe)
+            except OSError as e:
+                _logger.warning("loader 缓存回写失败: %s", e)
         if stage is not None:
             stage.set_detail(cls.compiler_name)
         return out_exe
