@@ -21,10 +21,10 @@ from fspack.packaging.entry import EntryWrapper
 from fspack.packaging.icon import ensure_ico, find_favicon
 from fspack.packaging.loader import (
     LoaderVersionInfo,
-    compile_loader as _default_compile_loader,
+    generate_loader_source,
 )
 from fspack.packaging.loader import (
-    generate_loader_source,
+    compile_loader as _default_compile_loader,
 )
 from fspack.packaging.pyc import _precompile_pyc
 from fspack.platform import Platform

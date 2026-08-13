@@ -56,7 +56,24 @@ def test_generate_loader_source_no_entry_hardcoded() -> None:
 
 
 def _touch_out(cmd: list[str]) -> None:
-    Path(cmd[cmd.index("-o") + 1]).touch()
+    """从命令提取输出路径并 touch（gcc 用 -o，windres 用 --output）。"""
+    for flag in ("-o", "--output"):
+        if flag in cmd:
+            Path(cmd[cmd.index(flag) + 1]).touch()
+            return
+
+
+def _disable_windres(monkeypatch: pytest.MonkeyPatch) -> None:
+    """禁用 windres 使 _compile_resource_obj 跳过资源编译，用于不测试资源嵌入的场景。
+
+    新行为下 Windows loader 总是尝试嵌入 manifest（降低杀软误报），会调用 windres。
+    不测试资源嵌入的测试禁用 windres，保持 gcc-only 行为与调用计数语义不变。
+    """
+
+    def fake_which(name: str) -> str | None:
+        return None if "windres" in name else f"/usr/bin/{name}"
+
+    monkeypatch.setattr("fspack.packaging.loader.shutil.which", fake_which)
 
 
 def test_compile_loader_cli_invokes_mingw(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -68,6 +85,7 @@ def test_compile_loader_cli_invokes_mingw(tmp_path: Path, monkeypatch: pytest.Mo
         return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
+    _disable_windres(monkeypatch)
     out = tmp_path / "app.exe"
     compile_loader("int wmain(){return 0;}", out, AppType.CLI, tmp_path / "w", cache_dir=tmp_path / "cache")
     assert out.is_file()
@@ -85,6 +103,7 @@ def test_compile_loader_gui_adds_mwindows(tmp_path: Path, monkeypatch: pytest.Mo
         return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
+    _disable_windres(monkeypatch)
     out = tmp_path / "app.exe"
     compile_loader("x", out, AppType.GUI, tmp_path / "w", cache_dir=tmp_path / "cache")
     assert "-mwindows" in captured["cmd"]
@@ -343,6 +362,7 @@ def test_compile_loader_cache_miss_writes_back(tmp_path: Path, monkeypatch: pyte
         return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
+    _disable_windres(monkeypatch)
     out = tmp_path / "app.exe"
     compile_loader(source, out, AppType.CLI, tmp_path / "w", Platform.WINDOWS, cache_dir=cache)
     assert out.read_bytes() == b"compiled-exe"
@@ -364,6 +384,7 @@ def test_compile_loader_second_call_hits_cache(tmp_path: Path, monkeypatch: pyte
         return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
+    _disable_windres(monkeypatch)
     cache = tmp_path / "cache"
     source = "int wmain(){return 0;}"
     out1 = tmp_path / "app1.exe"
@@ -387,6 +408,7 @@ def test_compile_loader_cache_key_differs_by_app_type(tmp_path: Path, monkeypatc
         return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
+    _disable_windres(monkeypatch)
     compile_loader(source, tmp_path / "cli.exe", AppType.CLI, tmp_path / "w1", Platform.WINDOWS, cache_dir=cache)
     compile_loader(source, tmp_path / "gui.exe", AppType.GUI, tmp_path / "w2", Platform.WINDOWS, cache_dir=cache)
     assert len(calls) == 2
@@ -426,6 +448,7 @@ def test_compile_loader_compile_path_sets_stage_detail(tmp_path: Path, monkeypat
         return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
+    _disable_windres(monkeypatch)
     stage = StageRecorder("生成 C loader")
     compile_loader(
         "x",
@@ -454,6 +477,7 @@ def test_compile_loader_cache_writeback_failure_logged(tmp_path: Path, monkeypat
 
     monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
     monkeypatch.setattr("fspack.packaging.loader.shutil.copy2", fake_copy2)
+    _disable_windres(monkeypatch)
     compile_loader(
         "x", tmp_path / "app.exe", AppType.CLI, tmp_path / "w", Platform.WINDOWS, cache_dir=tmp_path / "cache"
     )
@@ -557,9 +581,7 @@ def test_compile_resource_obj_windres_failure_returns_none(
     assert "资源编译失败" in caplog.text
 
 
-def test_compile_resource_obj_success_with_icon_and_version(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_compile_resource_obj_success_with_icon_and_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """windres 成功时返回 resource.o，rc 含 icon 引用与 VERSIONINFO，manifest 已写入."""
     icon = tmp_path / "icon.ico"
     icon.write_bytes(b"ico-content")
@@ -833,6 +855,7 @@ def test_compile_loader_web_adds_mwindows(tmp_path: Path, monkeypatch: pytest.Mo
         return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
+    _disable_windres(monkeypatch)
     out = tmp_path / "app.exe"
     compile_loader("x", out, AppType.WEB, tmp_path / "w", cache_dir=tmp_path / "cache")
     assert "-mwindows" in captured["cmd"]

@@ -23,7 +23,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from xml.sax.saxutils import escape as _xml_escape
 
 __all__ = [
     "LoaderVersionInfo",
@@ -39,6 +38,17 @@ _SUPPORTED_OS_GUIDS: tuple[str, ...] = (
     "{1f676c76-80e1-4239-95bb-83d0f6d0da78}",  # Windows 8.1
     "{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}",  # Windows 10/11
 )
+
+
+def _xml_escape(s: str) -> str:
+    """转义 XML 文本中的特殊字符（``&`` ``<`` ``>``）。
+
+    手动实现而非 ``xml.sax.saxutils.escape``，避免导入 ``xml.sax`` 链式触发
+    ``urllib.request`` 加载（~15ms），保持 ``import fspack.builder`` 轻量。
+    项目名仅可能含 ``&``/``<``/``>`` 三种破坏 XML 结构的字符，无需转义引号
+    （名字出现在属性值中，但项目名不含引号）。
+    """
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 @dataclass(frozen=True)
@@ -101,7 +111,7 @@ def generate_app_manifest(name: str, version: str) -> str:
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
         '<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">\n'
         f'  <assemblyIdentity type="win32" name="fspack.{safe_name}" version="{quad}"/>\n'
-        "  <trustInfo xmlns=\"urn:schemas-microsoft-com:asm.v3\">\n"
+        '  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">\n'
         "    <security>\n"
         "      <requestedPrivileges>\n"
         '        <requestedExecutionLevel level="asInvoker" uiAccess="false"/>\n'
@@ -174,7 +184,7 @@ def generate_resource_rc(info: LoaderVersionInfo | None, *, has_icon: bool) -> s
                 "        END",
                 '    BLOCK "VarFileInfo"',
                 "    BEGIN",
-                "        VALUE \"Translation\", 0x409, 0x4b0",
+                '        VALUE "Translation", 0x409, 0x4b0',
                 "    END",
                 "END",
                 "",
