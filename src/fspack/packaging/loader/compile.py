@@ -236,9 +236,7 @@ class LoaderCompiler(abc.ABC):
         # 重新打包会因缓存键（icon_hash+version_info_hash）不变而命中旧缓存，
         # 导致资源段永远无法嵌入。资源缺失时跳过缓存，下次打包重新编译。
         resource_failed = (
-            cls._supports_icon()
-            and (icon is not None or version_info is not None)
-            and resource_obj is None
+            cls._supports_icon() and (icon is not None or version_info is not None) and resource_obj is None
         )
         if resource_failed:
             _logger.warning("资源段未嵌入，跳过 loader 缓存（修复后重新打包将重新编译）")
