@@ -119,17 +119,30 @@ class TemplateBuildResult:
 
 @dataclass(frozen=True)
 class CacheHealthReport:
-    """wheel 缓存目录健康扫描报告（iter-139）.
+    """缓存目录健康扫描报告（iter-139 引入，多 cache 类型扩展）.
 
-    由 :func:`fspack.doctor.envs._scan_cache_health` 生成，供
-    :func:`fspack.doctor.run_doctor_cache_check`/``run_cache_status``/
-    ``run_cache_clean`` 复用，避免重复扫描。
+    由各 ``_scan_*_health`` 函数生成，供 :func:`fspack.doctor.run_doctor_cache_check`/
+    ``run_cache_status``/``run_cache_clean`` 复用，避免重复扫描。
+
+    字段分两类：
+
+    - **wheels 专用**（``total_deps_files``/``corrupt_deps_files``/``stale_deps_files``/
+      ``missing_wheels``/``orphan_wheels``/``total_wheels``/``orphan_size_bytes``）：
+      由 :func:`fspack.doctor.envs._scan_cache_health` 填充，描述 wheels 目录特有的
+      ``.deps-*.json`` ↔ ``*.whl`` 引用关系。
+    - **通用**（``cache_type``/``corrupt_files``/``stale_files``/``orphan_files``/
+      ``total_files``/``issues_size_bytes``）：所有 cache 类型共用，描述无引用关系
+      的纯文件级健康状态（embed/standalone/nuitka/loaders/ccache/tkinter 用）。
 
     扫描期间已删除 JSON 损坏的 ``.deps-*.json`` 文件（与 iter-128
     :func:`_check_cache_integrity` 行为一致）；``stale_deps`` 与 ``orphan_wheels``
-    需显式 :func:`_clean_cache_issues` 才会被删除。
+    需显式 :func:`_clean_cache_issues` 才会被删除。其他 cache 类型的损坏文件
+    同样在扫描阶段 best-effort 删除，过期/孤儿文件需 ``--stale`` 显式启用清理。
 
-    :param cache_dir: 扫描的 wheel 缓存目录
+    :param cache_dir: 扫描的缓存目录
+    :param cache_type: cache 类型标识（``"wheels"``/``"embed"``/``"standalone"``/
+        ``"nuitka"``/``"loaders"``/``"ccache"``/``"tkinter"``），默认 ``"wheels"``
+        保持向后兼容
     :param total_deps_files: 扫描到的 ``.deps-*.json`` 文件总数（含已删除的损坏文件）
     :param corrupt_deps_files: JSON 结构损坏已删除的 ``.deps-*.json`` 文件名列表
     :param stale_deps_files: 引用了不存在 wheel 的 ``.deps-*.json`` 文件名列表
@@ -138,9 +151,16 @@ class CacheHealthReport:
     :param orphan_wheels: cache_dir 中未被任何 ``.deps-*.json`` 引用的 wheel 文件名列表
     :param total_wheels: cache_dir 中 wheel 文件总数（``*.whl``，含孤儿）
     :param orphan_size_bytes: 孤儿 wheel 占用字节数（供清理建议展示收益）
+    :param corrupt_files: 通用损坏文件名列表（非 wheels cache 类型用，扫描期已删除）
+    :param stale_files: 通用过期文件名列表（如版本不在 KNOWN_*_VERSIONS 的旧 zip/tar）
+    :param orphan_files: 通用孤儿文件名列表（未被引用的残留产物）
+    :param total_files: 通用文件总数（扫描的顶层文件数，wheels 用 total_deps/total_wheels）
+    :param issues_size_bytes: 可释放字节数（清理 corrupt + stale + orphan 的累计体积）
     """
 
     cache_dir: Path
+    cache_type: str = "wheels"
+    # wheels 专用字段（保持向后兼容）
     total_deps_files: int = 0
     corrupt_deps_files: tuple[str, ...] = ()
     stale_deps_files: tuple[str, ...] = ()
@@ -148,8 +168,33 @@ class CacheHealthReport:
     orphan_wheels: tuple[str, ...] = ()
     total_wheels: int = 0
     orphan_size_bytes: int = 0
+    # 通用字段（embed/standalone/nuitka/loaders/ccache/tkinter 用）
+    corrupt_files: tuple[str, ...] = ()
+    stale_files: tuple[str, ...] = ()
+    orphan_files: tuple[str, ...] = ()
+    total_files: int = 0
+    issues_size_bytes: int = 0
 
     @property
     def has_issues(self) -> bool:
-        """是否存在需要清理的问题（损坏/stale/orphan 任一即 True）."""
-        return bool(self.corrupt_deps_files or self.stale_deps_files or self.orphan_wheels)
+        """是否存在需要清理的问题（wheels 专用 + 通用 任一非空即 True）."""
+        return bool(
+            self.corrupt_deps_files
+            or self.stale_deps_files
+            or self.orphan_wheels
+            or self.corrupt_files
+            or self.stale_files
+            or self.orphan_files
+        )
+
+    @property
+    def issues_count(self) -> int:
+        """问题文件总数（wheels 专用 + 通用三类合计），便于汇总展示."""
+        return (
+            len(self.corrupt_deps_files)
+            + len(self.stale_deps_files)
+            + len(self.orphan_wheels)
+            + len(self.corrupt_files)
+            + len(self.stale_files)
+            + len(self.orphan_files)
+        )

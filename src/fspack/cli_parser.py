@@ -518,22 +518,46 @@ def _add_doctor_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParse
 
 
 def _add_cache_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    """添加 cache 子命令：wheel 缓存健康检查与清理.
+    """添加 cache 子命令：缓存健康检查与清理.
 
-    ``fsp cache status`` 扫描 ``~/.fspack/cache/wheels`` 下的 ``.deps-*.json``
-    依赖解析缓存与 ``*.whl`` wheel 文件，报告：
+    ``fsp cache status`` 扫描 ``~/.fspack/cache`` 下各子目录的健康状态，
+    报告：
 
-    - 损坏 deps（JSON 结构非法，扫描时已自动删除）
-    - stale deps（引用了缺失 wheel 的 deps 文件，需 ``fsp cache clean`` 清理）
-    - 孤儿 wheel（未被任何 deps 引用的 wheel 文件，需 ``fsp cache clean`` 清理）
+    - 损坏文件（zip/tar 结构非法、PE 头缺失、空文件，扫描时已自动删除）
+    - 过期文件（版本不在 KNOWN_*_VERSIONS 中的旧 zip/tar/子目录，需 ``--stale`` 清理）
+    - wheels 专用：stale deps（引用缺失 wheel 的 deps 文件）与孤儿 wheel
 
-    ``fsp cache clean`` 删除 stale deps 与孤儿 wheel，``--dry-run`` 仅预览不删除。
+    ``fsp cache clean`` 删除损坏文件与 wheels 的 stale/orphan，``--dry-run`` 仅预览，
+    ``--stale`` 额外清理非 wheels 类型的过期文件，``--target <name>`` 限定单类型。
     """
-    p = sub.add_parser("cache", help="wheel 缓存健康检查与清理")
+    p = sub.add_parser("cache", help="缓存健康检查与清理")
     cache_sub = p.add_subparsers(dest="cache_action", metavar="<action>", required=True)
-    cache_sub.add_parser("status", help="扫描缓存目录健康状态（损坏/stale/orphan）")
-    clean_p = cache_sub.add_parser("clean", help="清理 stale deps 与孤儿 wheel 文件")
-    _add_options(clean_p, (_Opt(("--dry-run",), "仅预览将删除的文件，不实际删除", action="store_true"),))
+
+    # 公共选项：--target 限定单 cache 类型，status/clean 都支持
+    target_opt = _Opt(
+        ("--target",),
+        "指定单 cache 类型（wheels/embed/standalone/nuitka/loaders/ccache/tkinter）；未指定时扫描全部类型",
+        default=None,
+        choices=("wheels", "embed", "standalone", "nuitka", "loaders", "ccache", "tkinter"),
+    )
+
+    status_p = cache_sub.add_parser("status", help="扫描缓存目录健康状态（损坏/过期/孤儿）")
+    _add_options(status_p, (target_opt,))
+
+    clean_p = cache_sub.add_parser("clean", help="清理损坏文件与孤儿产物")
+    _add_options(
+        clean_p,
+        (
+            target_opt,
+            _Opt(("--dry-run",), "仅预览将删除的文件，不实际删除", action="store_true"),
+            _Opt(
+                ("--stale",),
+                "额外清理过期文件（embed/standalone/nuitka/tkinter 的旧版本 zip/tar，"
+                "ccache 旧版子目录）；wheels 的 stale_deps/orphan_wheels 始终清理",
+                action="store_true",
+            ),
+        ),
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:

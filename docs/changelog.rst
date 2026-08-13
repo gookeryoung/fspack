@@ -4,6 +4,7 @@
 v0.2.7（未发布）
 ----------------
 
+- feat: ``fsp cache`` 扩展为多 cache 类型健康检查与清理，覆盖 ``~/.fspack/cache/`` 下全部 7 个子目录（wheels/embed/standalone/nuitka/loaders/ccache/tkinter）。新增 ``--target <name>`` 限定单 cache 类型，``--stale`` 启用过期文件清理。各扫描器识别三类问题：损坏文件（zip/tar 结构非法、PE 头缺失、空文件，扫描期自动删除）、过期文件（版本不在 ``KNOWN_*_VERSIONS`` 的旧 zip/tar/子目录，需 ``--stale`` 显式清理）、孤儿文件（wheels 专用：未被 deps 引用的 wheel）。默认扫描全部 cache 类型，逐个渲染详细报告
 - feat: Windows loader exe 自动嵌入 PE 资源段（VS_VERSIONINFO + application manifest），降低 Defender 等杀软启发式误报。版本信息从 ``pyproject.toml`` 的 ``[project].description`` 与 ``[project].authors[0].name`` 提取填充 CompanyName/FileDescription/ProductName 等字段；manifest 声明 asInvoker、PerMonitorV2 DPI 感知、Win7-11 supportedOS；资源段变化纳入 loader 缓存键触发重编。README 新增「安全与分发」章节，补充代码签名（signtool）使用与误报申诉指引
 - ci: benchmark gate 对比策略从「与上一次基线对比」改为「与历史最佳基准对比」。新增 ``scripts/compare_benchmark.py`` 扫描 ``.benchmarks/`` 下所有历史 JSON，按测试名找最小 median 作为最佳基准，当前运行与最佳对比，median 超过最佳 25% 视为退化（exit 1）。与上一次基线对比相比，最佳基准过滤了 GitHub Actions 共享机器性能波动导致的慢运行，减少误报
 - feat: 新增 ``[project.optional-dependencies]`` 可选依赖分组支持（PEP 621）。``fsp b``/``fsp p`` 新增 ``--extra <name>`` CLI 参数（可多次指定）启用分组，等价 ``pip install pkg[extra]`` 语义；``[tool.fspack] extras`` 配置默认启用分组；CLI ``--extra`` 完全覆盖配置默认（集合语义，非合并）；自引用 ``my-pkg[extra]`` 递归展开（含循环保护），第三方 ``pkg[extra]`` 原样透传 pip；扩展后依赖纳入依赖分析缓存键，extras 变化触发缓存失效；未知分组名报错并列出可选分组

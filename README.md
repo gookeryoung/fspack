@@ -234,6 +234,7 @@ fsp r --entry gui         # 运行 gui 入口
 | `fsp package` | `fsp p` | 生成安装包（Windows NSIS / Linux .deb + tar.gz） |
 | `fsp init` | `fsp i` | 从模板创建新项目（22 个模板可选） |
 | `fsp doctor` | — | 环境诊断：检查打包工具可用性与配置 |
+| `fsp cache` | — | 缓存健康检查与清理（损坏/过期/孤儿文件） |
 
 ### fsp build
 
@@ -341,6 +342,28 @@ fsp doctor                # 环境诊断：检查打包工具与配置
 - **修复建议**：缺失工具给出安装命令（如 `choco install mingw` / `sudo apt install gcc`）
 
 打包失败时先跑 `fsp doctor` 前置发现环境问题。
+
+### fsp cache
+
+```text
+fsp cache status [--target <name>]      # 扫描缓存目录健康状态
+fsp cache clean  [--dry-run] [--stale] [--target <name>]  # 清理损坏与过期文件
+```
+
+扫描 `~/.fspack/cache/` 下全部 7 个子目录（wheels/embed/standalone/nuitka/loaders/ccache/tkinter），
+识别三类问题：
+
+- **损坏文件**（zip/tar 结构非法、PE 头缺失、空文件）：扫描期自动删除
+- **过期文件**（版本不在 `KNOWN_*_VERSIONS` 中的旧 zip/tar/子目录）：需 `--stale` 显式清理
+- **孤儿文件**（wheels 专用：未被 deps 引用的 wheel / 引用缺失 wheel 的 deps）
+
+| 选项 | 说明 |
+|------|------|
+| `--target <name>` | 限定单 cache 类型（wheels/embed/standalone/nuitka/loaders/ccache/tkinter） |
+| `--dry-run` | 仅预览将删除的文件，不实际删除（clean 专用） |
+| `--stale` | 额外清理过期文件（默认仅清理损坏文件与 wheels 的 stale/orphan） |
+
+缓存损坏（磁盘写满/下载中断）会导致构建失败，`fsp cache status` 可前置发现并自动删除损坏文件。
 
 ## 示例
 
