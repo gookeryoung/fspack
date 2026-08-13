@@ -182,6 +182,7 @@ def generate_resource_rc(info: LoaderVersionInfo | None, *, has_icon: bool) -> s
                 f'            VALUE "OriginalFilename", "{_rc_escape(info.exe_filename)}"',
                 '            VALUE "LegalCopyright", ""',
                 "        END",
+                "    END",
                 '    BLOCK "VarFileInfo"',
                 "    BEGIN",
                 '        VALUE "Translation", 0x409, 0x4b0',

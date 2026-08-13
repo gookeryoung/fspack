@@ -899,6 +899,8 @@ def test_generate_resource_rc_with_icon_and_version() -> None:
     assert 'VALUE "InternalName", "myapp"' in rc
     assert 'VALUE "OriginalFilename", "myapp.exe"' in rc
     assert '1 24 "app.manifest"' in rc
+    # BEGIN/END 必须配对，否则 windres 报 syntax error（回归：StringFileInfo 的 END 曾缺失）
+    assert rc.count("BEGIN") == rc.count("END"), "rc 文件 BEGIN/END 未配对"
 
 
 def test_generate_resource_rc_without_icon_falls_back_name() -> None:
@@ -909,6 +911,7 @@ def test_generate_resource_rc_without_icon_falls_back_name() -> None:
     assert "VERSIONINFO" in rc
     assert 'VALUE "CompanyName", "myapp"' in rc
     assert 'VALUE "FileDescription", "myapp"' in rc
+    assert rc.count("BEGIN") == rc.count("END"), "rc 文件 BEGIN/END 未配对"
 
 
 def test_generate_resource_rc_without_version_info() -> None:
