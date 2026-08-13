@@ -159,10 +159,10 @@ class LoaderCompiler(abc.ABC):
     @classmethod
     def _prepare_resources(
         cls,
-        icon: Path | None,
-        version_info: LoaderVersionInfo | None,
-        work_dir: Path,
-    ) -> Path | None:  # noqa: ARG003
+        icon: Path | None,  # noqa: ARG003
+        version_info: LoaderVersionInfo | None,  # noqa: ARG003
+        work_dir: Path,  # noqa: ARG003
+    ) -> Path | None:
         """编译资源（icon/版本信息/manifest）为 .o 文件，返回路径。
 
         默认无资源处理（Linux/macOS 无 PE 资源段概念），Windows 子类覆盖为
