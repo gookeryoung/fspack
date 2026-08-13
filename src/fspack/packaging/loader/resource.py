@@ -97,20 +97,23 @@ def generate_app_manifest(name: str, version: str) -> str:
 
     内容包含：
 
-    - ``assemblyIdentity``（win32，name 形如 ``fspack.<name>``，version 为 quad）
+    - ``assemblyIdentity``（win32，name 形如 ``fspack.<name>``，version 为点分隔 quad）
     - ``trustInfo`` 声明 ``asInvoker``（loader 不提权，安装器单独请求 admin）
     - ``compatibility`` 声明 Win7/8/8.1/10/11 supportedOS
     - ``windowsSettings`` 声明 PerMonitorV2 DPI 感知（PySide GUI 高 DPI 适配）
 
-    ``name`` 经 XML 转义避免 ``&``/``<`` 破坏文档结构。
+    ``name`` 经 XML 转义避免 ``&``/``<`` 破坏文档结构。manifest 的 ``version``
+    属性用点分隔（如 ``0.4.9.0``），与 .rc 的 ``FILEVERSION``（逗号分隔 ``0,4,9,0``）
+    不同——Windows SxS 要求 assemblyIdentity version 为点分隔，逗号格式会导致
+    "应用程序并行配置不正确"错误。
     """
     safe_name = _xml_escape(name)
-    quad = _version_to_quad(version)
+    dotted = _version_to_quad(version).replace(",", ".")
     guid_lines = "\n".join(f'      <supportedOS Id="{g}"/>' for g in _SUPPORTED_OS_GUIDS)
     return (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
         '<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">\n'
-        f'  <assemblyIdentity type="win32" name="fspack.{safe_name}" version="{quad}"/>\n'
+        f'  <assemblyIdentity type="win32" name="fspack.{safe_name}" version="{dotted}"/>\n'
         '  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">\n'
         "    <security>\n"
         "      <requestedPrivileges>\n"

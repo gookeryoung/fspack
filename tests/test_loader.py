@@ -906,7 +906,7 @@ def test_generate_app_manifest_contains_as_invoker_and_dpi() -> None:
     assert "requestedExecutionLevel" in xml
     assert "supportedOS" in xml
     assert "fspack.myapp" in xml
-    assert 'version="1,2,3,0"' in xml
+    assert 'version="1.2.3.0"' in xml  # manifest version 用点分隔（非 .rc 的逗号）
     # Win10/11 supportedOS GUID
     assert "8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a" in xml
 
