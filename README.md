@@ -486,6 +486,47 @@ dist/
     └── <name>-<ver>-linux.tar.gz  # Linux 便携包
 ```
 
+## 安全与分发
+
+### 资源段嵌入（自动）
+
+fspack 打包 Windows exe 时自动嵌入 PE 资源段，降低 Windows Defender 等杀软启发式误报：
+
+- **VS_VERSIONINFO**：从 `pyproject.toml` 的 `[project].description` 与 `[project].authors[0].name` 提取，填充 CompanyName / FileDescription / ProductName / OriginalFilename 等字段
+- **application manifest**：声明 asInvoker（loader 不提权）、PerMonitorV2 DPI 感知、Win7-11 supportedOS
+- **图标**：按 CLI `--icon` > 配置 `icon` > favicon 自动搜索 > 默认图标 优先级解析
+
+在 `pyproject.toml` 声明 `description` 与 `authors` 即可丰富资源段（未声明时回退到项目名，不留空值字段）：
+
+```toml
+[project]
+name = "my-app"
+version = "1.0.0"
+description = "我的桌面应用"
+authors = [{ name = "张三" }]
+```
+
+### 代码签名（推荐）
+
+生产分发建议用 Authenticode 证书签名 exe 与安装包，进一步降低误报。fspack 打包后用 Windows SDK `signtool` 签名：
+
+```bash
+fsp b                                              # 产出 dist/my-app.exe
+signtool sign /fd SHA256 /f cert.pfx /p <密码> dist/my-app.exe
+signtool sign /fd SHA256 /f cert.pfx /p <密码> dist/release/my-app-setup.exe
+```
+
+无证书时可生成自签名证书用于内部分发，或向 DigiCert / Sectigo 等机构购买代码签名证书。
+
+### 误报申诉
+
+mingw 编译的小型 exe 即使嵌入资源段仍可能被部分杀软误报。确认安全但被误报时：
+
+1. **Microsoft Defender**：访问 [微软安全智能提交页](https://www.microsoft.com/wdsi/filesubmission)，选择"我认为此文件是安全的"
+2. **VirusTotal**：上传至 [virustotal.com](https://www.virustotal.com) 查看各引擎检测结果，对命中引擎单独申诉
+3. **代码签名**：签名后的 exe 误报率显著降低，多数杀软对已签名文件放宽启发式阈值
+4. **重复检测**：杀软定义更新后可能自动解除误报，签名 + 等待更新通常即可解决
+
 ## 已知限制
 
 ### `missing` 依赖误报
