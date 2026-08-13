@@ -129,11 +129,17 @@ if _LAZY_MODULES and _SITE_PACKAGES and os.path.isdir(_SITE_PACKAGES):
 
 # Qt 插件路径与 DLL 目录（PySide2/PySide6/PyQt5/PyQt6）——必须在 import 用户代码前设置，
 # 否则 QApplication 启动时报 "Failed to load platform plugin windows"。
-# QML 插件（qml/QtQuick.2/qtquick2plugin.dll）加载时依赖 Qt5/6*.dll，默认 DLL
-# 搜索路径不含 site-packages/<qt_pkg>/，需显式 add_dll_directory 使其可被发现。
-# 同时将 <qt_root> 加入 PATH：QPluginLoader 加载 QML 插件时依赖 DLL 搜索走 PATH
-# 而非 add_dll_directory（Qt 内部用 LoadLibrary 不传 LOAD_LIBRARY_SEARCH_USER_DIRS），
-# 不修改 PATH 会导致 qtquick2plugin.dll 找到但 Qt5Quick.dll 加载失败。
+# 将 <qt_root> 加入 PATH：QPluginLoader 加载 QML 插件时依赖 DLL 搜索走 PATH
+# （Qt 内部用 LoadLibrary 不传 LOAD_LIBRARY_SEARCH_USER_DIRS），不修改 PATH 会导致
+# qtquick2plugin.dll 找到但 Qt5Quick.dll 加载失败。Qt C 扩展（.pyd）所在目录即
+# <qt_root>，LoadLibrary 默认搜索加载模块目录，故 .pyd 依赖的 Qt DLL 无需额外设置。
+#
+# 不使用 os.add_dll_directory：PySide2 wheel 自带 VC++ 运行时 DLL（msvcp140.dll、
+# vcruntime140.dll、ucrtbase.dll 等），add_dll_directory 把整个 <qt_root> 加入 DLL
+# 搜索路径后，其他 C 扩展（如 onnxruntime）加载时会在 <qt_root> 找到这些运行时 DLL
+# 的副本，与已加载的系统版本冲突，触发 "DLL 初始化例程失败"（DllMain 返回 FALSE）。
+# 仅修改 PATH 不触发此冲突——PATH 用于 LoadLibrary 兜底搜索，但 add_dll_directory
+# 添加的目录优先级更高且范围更广。PATH 修改足以让 QML 插件与 Qt C 扩展找到 Qt DLL。
 for _qt_pkg in ("PySide2", "PySide6", "PyQt5", "PyQt6"):
     _qt_root = os.path.join(_SITE_PACKAGES, _qt_pkg)
     _qt_plugins = os.path.join(_qt_root, "plugins")
@@ -141,14 +147,6 @@ for _qt_pkg in ("PySide2", "PySide6", "PyQt5", "PyQt6"):
         os.environ.setdefault("QT_PLUGIN_PATH", _qt_plugins)
         os.environ.setdefault("QT_QPA_PLATFORM_PLUGIN_PATH", _qt_plugins)
         if os.path.isdir(_qt_root):
-            # 添加 Qt DLL 目录到搜索路径（Python 3.8+ 推荐 API，取代修改 PATH）
-            # 使 QML 插件能找到 Qt5Core.dll/Qt5Quick.dll 等 C 层依赖
-            try:
-                os.add_dll_directory(_qt_root)
-            except (OSError, FileNotFoundError):
-                pass
-            # 同时加入 PATH：QPluginLoader 走 LoadLibrary 不传 SEARCH_USER_DIRS，
-            # 仅 add_dll_directory 不够，需 PATH 兜底使 QML 插件依赖 DLL 可加载
             _path_sep = os.pathsep
             _old_path = os.environ.get("PATH", "")
             if _qt_root not in _old_path.split(_path_sep):
