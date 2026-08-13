@@ -260,6 +260,11 @@ class ProjectInfo:
     dependencies: tuple[str, ...]
     py_version: str
     requires_python: str | None = None
+    # 项目描述与作者：取自 [project].description 与 [project].authors[0].name，
+    # 用于 Windows loader exe 的 VS_VERSIONINFO 资源段（CompanyName/FileDescription），
+    # 资源段完整的 exe 可显著降低 Defender 等杀软启发式可疑度。未声明时为空串。
+    description: str = ""
+    author: str = ""
     entries: tuple[EntryPoint, ...] = ()
     icon: Path | None = None
     exclude_dirs: tuple[str, ...] = ()

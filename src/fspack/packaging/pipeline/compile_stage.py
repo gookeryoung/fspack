@@ -20,6 +20,7 @@ from fspack.config import AppType, EntryPoint, nuitka_cache_dir
 from fspack.packaging.entry import EntryWrapper
 from fspack.packaging.icon import ensure_ico, find_favicon
 from fspack.packaging.loader import (
+    LoaderVersionInfo,
     compile_loader as _default_compile_loader,
 )
 from fspack.packaging.loader import (
@@ -254,7 +255,30 @@ def _build_one_loader(  # noqa: PLR0913
         # 单入口模式：写 .entry（向后兼容）
         (ctx.cfg.dist_dir / ".entry").write_text(wrapper_name, encoding="utf-8")
     exe = _loader_exe_path(ctx, ep, ctx.cfg.target)
-    compile_loader_dispatch(source, exe, ep.app_type, work_dir, ctx.cfg.target, icon=resolved_icon, stage=stage)
+    # Windows 目标构造版本信息元数据，嵌入 exe 资源段（VS_VERSIONINFO + manifest），
+    # 降低 Defender 等杀软对 mingw 小型 exe 的启发式误报。Linux/macOS 无 PE 资源段，
+    # 传 None 保持 loader 缓存按 (source, app_type, platform) 跨项目共享。
+    version_info = (
+        LoaderVersionInfo(
+            name=ctx.info.name,
+            version=ctx.info.version,
+            description=ctx.info.description,
+            author=ctx.info.author,
+            exe_filename=f"{ep.name}.exe",
+        )
+        if ctx.cfg.target is Platform.WINDOWS
+        else None
+    )
+    compile_loader_dispatch(
+        source,
+        exe,
+        ep.app_type,
+        work_dir,
+        ctx.cfg.target,
+        icon=resolved_icon,
+        version_info=version_info,
+        stage=stage,
+    )
 
 
 def _loader_exe_path(ctx: BuildContext, ep: EntryPoint, target: Platform) -> Path:

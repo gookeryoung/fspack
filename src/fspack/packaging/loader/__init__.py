@@ -40,13 +40,15 @@ from fspack.packaging.loader.compile import (
     MINGW_WINDRES,
     LinuxLoader,
     LoaderCompiler,
+    LoaderVersionInfo,
     MacLoader,
     WindowsLoader,
-    _compile_icon_resource,  # noqa: F401 # 测试通过 fspack.packaging.loader._compile_icon_resource 访问
+    _compile_resource_obj,  # noqa: F401 # 测试通过 fspack.packaging.loader._compile_resource_obj 访问
     _find_mingw_gcc,  # noqa: F401 # 测试 monkeypatch 通过 fspack.packaging.loader._find_mingw_gcc 访问
     _find_windres,  # noqa: F401 # 测试通过 fspack.packaging.loader._find_windres 访问
     _icon_hash,  # noqa: F401 # 测试通过 fspack.packaging.loader._icon_hash 访问
     _loader_cache_key,  # noqa: F401 # 测试通过 fspack.packaging.loader._loader_cache_key 访问
+    _version_info_hash,  # noqa: F401 # 测试通过 fspack.packaging.loader._version_info_hash 访问
     clang_available,
     compile_loader,
     gcc_available,
@@ -62,6 +64,7 @@ __all__ = [
     "MINGW_WINDRES",
     "LinuxLoader",
     "LoaderCompiler",
+    "LoaderVersionInfo",
     "MacLoader",
     "WindowsLoader",
     "clang_available",

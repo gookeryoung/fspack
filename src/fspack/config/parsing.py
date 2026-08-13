@@ -163,6 +163,11 @@ def _parse_project_cached(
     version = str(proj.get("version", "0.0.0"))
     deps = tuple(str(d) for d in proj.get("dependencies", []))
     requires_python = str(proj.get("requires-python") or "") or None
+    # [project].description 与 [project].authors[0].name：用于 Windows loader exe
+    # 的 VS_VERSIONINFO 资源段（FileDescription/CompanyName），降低杀软启发式可疑度。
+    # authors 取 PEP 621 列表首项的 name（dict 形式）或首项字符串（裸字符串形式）。
+    description = str(proj.get("description") or "")
+    author = _parse_author(proj.get("authors"))
     # [project.optional-dependencies] 全部分组：extra_name → 依赖声明元组
     optional_deps = _parse_optional_dependencies(proj.get("optional-dependencies"))
 
@@ -211,6 +216,8 @@ def _parse_project_cached(
                 dependencies=deps,
                 py_version=py_version or DEFAULT_PY_VERSION,
                 requires_python=requires_python,
+                description=description,
+                author=author,
                 entries=merged,
                 icon=icon_path,
                 exclude_dirs=exclude_dirs,
@@ -234,6 +241,8 @@ def _parse_project_cached(
         dependencies=deps,
         py_version=py_version or DEFAULT_PY_VERSION,
         requires_python=requires_python,
+        description=description,
+        author=author,
         icon=icon_path,
         exclude_dirs=exclude_dirs,
         data_dirs=data_dirs,
@@ -258,6 +267,27 @@ def clear_project_cache() -> None:
     - 内存管理：长期运行进程主动释放缓存条目
     """
     _parse_project_cached.cache_clear()
+
+
+def _parse_author(authors: object) -> str:
+    """从 PEP 621 ``[project].authors`` 提取首位作者名，用于 VS_VERSIONINFO 资源段.
+
+    支持两种声明形式：
+
+    - dict 形式（规范）：``authors = [{ name = "张三", email = "..." }]``，取 ``name`` 字段
+    - 裸字符串形式：``authors = ["张三"]``，取首项字符串
+
+    非列表、空列表、首项无 ``name`` 字段时返回空串（资源段对应字段留空，
+    不影响 exe 编译，仅资源信息不完整）。
+    """
+    if not isinstance(authors, list) or not authors:
+        return ""
+    first = authors[0]
+    if isinstance(first, dict):
+        return str(first.get("name") or "")
+    if isinstance(first, str):
+        return first
+    return ""
 
 
 def _parse_entries(

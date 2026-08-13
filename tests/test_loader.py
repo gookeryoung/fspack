@@ -13,11 +13,13 @@ from fspack.exceptions import LoaderError
 from fspack.packaging.loader import (
     MINGW_GCC,
     MINGW_WINDRES,
-    _compile_icon_resource,
+    LoaderVersionInfo,
+    _compile_resource_obj,
     _find_mingw_gcc,
     _find_windres,
     _icon_hash,
     _loader_cache_key,
+    _version_info_hash,
     clang_available,
     compile_loader,
     gcc_available,
@@ -25,6 +27,7 @@ from fspack.packaging.loader import (
     loader_cache_dir,
     mingw_available,
 )
+from fspack.packaging.loader.resource import generate_app_manifest, generate_resource_rc
 from fspack.platform import Platform
 from fspack.progress import StageRecorder
 from tests._stubs import CompletedStub
