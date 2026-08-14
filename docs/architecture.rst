@@ -39,8 +39,10 @@
    ``--pyc-strip`` 进一步剥离 ``.py`` 仅留 ``.pyc``
 10. **Nuitka 编译**（可选，``--nuitka``）：用户源码编译为 ``.pyd`` 本机执行；
     按 Python 版本锁定 Nuitka 版本（3.8/3.9→2.5.1，3.10+→4.1.3），自动装到
-    ``~/.fspack/cache/nuitka/``；Windows 用缓存于 ``~/.fspack/cache/python/`` 的
-    standalone python 运行编译（embed python 不完整会触发 reExecute fork bomb）；
+    ``~/.fspack/cache/nuitka/``；Windows 优先复用构建机自身 python（major.minor
+    与目标一致时免下载），否则用缓存于 ``~/.fspack/cache/python/`` 的 standalone
+    python 运行编译（embed python 不完整会触发 reExecute fork bomb），tarball 与
+    tkinter 打包共享 ``standalone-windows/`` 缓存；
     入口文件保留 ``.py`` 不编译（``runpy.run_path()`` 兼容）；
     stamp 缓存键 = ``nuitka_version|py_version|src_fingerprint|entry_rels``，
     命中跳过整个阶段；交叉构建自动跳过
@@ -116,13 +118,15 @@ fspack 支持通过环境变量启用的离线模式，适用于无网络环境�
 .. code-block:: text
 
    <cache_root>/
-   ├── embed/          # Windows embed python zip
-   ├── standalone/     # Linux python-build-standalone tar.gz
-   ├── wheels/         # 第三方 wheel + 依赖解析缓存（.deps_cache.json）
-   ├── nuitka/         # Nuitka 包 + 编译用 standalone python（按 py_version 分目录）
-   ├── loaders/        # C loader 编译缓存（按 source hash 命名）
-   ├── ccache/         # ccache 二进制与编译缓存
-   └── tkinter/        # tkinter 补充包缓存（按 standalone 版本命名的 zip）
+   ├── embed/                # Windows embed python zip
+   ├── standalone/           # Linux python-build-standalone tar.gz
+   ├── standalone-windows/   # Windows standalone tarball（nuitka 编译与 tkinter 提取共享）
+   ├── wheels/               # 第三方 wheel + 依赖解析缓存（.deps_cache.json）
+   ├── python/               # Nuitka 编译用 standalone python（按 standalone 版本分目录）
+   ├── nuitka/               # Nuitka 包（按 py_version 分目录）
+   ├── loaders/              # C loader 编译缓存（按 source hash 命名）
+   ├── ccache/               # ccache 二进制与编译缓存
+   └── tkinter/              # tkinter 补充包缓存（按 standalone 版本命名的 zip）
 
 子模块缓存目录通过 :mod:`fspack.config.cache` 的 ``embed_cache_dir()``/
 ``standalone_cache_dir()``/``wheel_cache_dir()``/``nuitka_cache_dir()``/

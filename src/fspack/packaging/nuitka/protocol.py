@@ -294,6 +294,11 @@ class NuitkaCompilerProtocol(Protocol):  # pragma: no cover - 纯类型契约，
         """返回 standalone python 可执行文件路径."""
         ...
 
+    @staticmethod
+    def _host_python_exe(py_version: str) -> Path | None:
+        """构建机 python 可直接运行 nuitka 时返回其路径，否则返回 None."""
+        ...
+
     @classmethod
     def _download_standalone_python(
         cls,
@@ -301,13 +306,12 @@ class NuitkaCompilerProtocol(Protocol):  # pragma: no cover - 纯类型契约，
         standalone_version: str,
         stage: StageRecorder,
     ) -> Path:
-        """下载 python-build-standalone tarball 到缓存目录，返回归档路径."""
+        """确保 standalone tarball 就绪（共享缓存优先），返回归档路径."""
         ...
 
     @classmethod
     def _extract_standalone_python(
         cls,
-        archive_path: Path,
         build_python_dir: Path,
         standalone_version: str,
     ) -> None:

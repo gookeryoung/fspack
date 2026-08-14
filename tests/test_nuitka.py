@@ -21,6 +21,7 @@ import tarfile
 import zipfile
 from collections.abc import Iterator
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -41,7 +42,7 @@ from fspack.packaging.nuitka.compile import (
     _load_hash_index,
     _update_hash_index,
 )
-from fspack.packaging.runtime import STANDALONE_RELEASE_TAG
+from fspack.packaging.runtime import STANDALONE_RELEASE_TAG, standalone_tarball_name
 from fspack.platform import Platform
 from fspack.progress import StageRecorder
 
@@ -149,6 +150,16 @@ def test_build_python_exe_linux(tmp_path: Path) -> None:
 # ---- _ensure_build_python standalone python 就绪测试 ----
 
 
+@pytest.fixture
+def no_host_python(monkeypatch: pytest.MonkeyPatch) -> None:
+    """禁用构建机 python 复用，强制走 standalone 下载/缓存路径.
+
+    测试环境（Windows + 与目标同 minor 的 python）会命中 ``_host_python_exe``
+    复用分支提前返回，覆盖不到下载/缓存逻辑，故显式关闭。
+    """
+    monkeypatch.setattr(NuitkaCompiler, "_host_python_exe", staticmethod(lambda py_version: None))
+
+
 def _make_standalone_tarball(dest: Path, version: str, tag: str, *, with_python: bool = True) -> None:
     """构造 standalone python tarball，模拟 python-build-standalone 解压结构.
 
@@ -184,7 +195,7 @@ def test_ensure_build_python_unknown_version_raises(tmp_path: Path) -> None:
         NuitkaCompiler._ensure_build_python(tmp_path / "cache", "3.15.0", Platform.WINDOWS, stage=st)
 
 
-def test_ensure_build_python_cache_hit_skips_download(tmp_path: Path) -> None:
+def test_ensure_build_python_cache_hit_skips_download(tmp_path: Path, no_host_python: None) -> None:
     """standalone python.exe 已存在时缓存命中，跳过下载并标注 stage."""
     ver = KNOWN_STANDALONE_VERSIONS["3.11"]
     cache_root = tmp_path / "cache"
@@ -201,7 +212,9 @@ def test_ensure_build_python_cache_hit_skips_download(tmp_path: Path) -> None:
     assert "已就绪" in st._detail
 
 
-def test_ensure_build_python_download_failure_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ensure_build_python_download_failure_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_host_python: None
+) -> None:
     """下载 standalone python 失败（OSError）时包装为 NuitkaError."""
 
     class _FailDownloader:
@@ -220,8 +233,14 @@ def test_ensure_build_python_download_failure_raises(tmp_path: Path, monkeypatch
         NuitkaCompiler._ensure_build_python(tmp_path / "cache", "3.11.9", Platform.WINDOWS, stage=st)
 
 
-def test_ensure_build_python_download_extract_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """下载并解压 standalone python 成功：内层 python/ 提升到缓存根，tarball 与解压根被清理."""
+def test_ensure_build_python_download_extract_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_host_python: None
+) -> None:
+    """下载并解压 standalone python 成功：内层 python/ 提升到缓存根，解压根被清理.
+
+    tarball 保留在共享缓存目录 ``<cache根>/standalone-windows/``（与
+    TkinterBundler 共享，供 tkinter 提取复用）。
+    """
     ver = KNOWN_STANDALONE_VERSIONS["3.11"]
     cache_root = tmp_path / "cache"
 
@@ -243,15 +262,20 @@ def test_ensure_build_python_download_extract_success(tmp_path: Path, monkeypatc
     expected_exe = cache_root / ver / "python" / "python.exe"
     assert result == expected_exe
     assert expected_exe.is_file()
-    # tarball 已删除节省空间
-    assert not list((cache_root / ver).glob("*.tar.gz"))
+    # tarball 保留在共享缓存目录（供 tkinter 打包复用，不再删除）
+    shared_tarball = (
+        cache_root.parent / "standalone-windows" / standalone_tarball_name(ver, STANDALONE_RELEASE_TAG, windows=True)
+    )
+    assert shared_tarball.is_file()
     # 内层解压根（share/doc 等）已清理
     inner_root = cache_root / ver / f"cpython-{ver}+{STANDALONE_RELEASE_TAG}-x86_64-pc-windows-msvc-install_only"
     assert not inner_root.exists()
     assert "安装完成" in st._detail
 
 
-def test_ensure_build_python_corrupt_tarball_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ensure_build_python_corrupt_tarball_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_host_python: None
+) -> None:
     """tarball 损坏（无法解压）时 raise NuitkaError."""
 
     class _CorruptDownloader:
@@ -271,7 +295,9 @@ def test_ensure_build_python_corrupt_tarball_raises(tmp_path: Path, monkeypatch:
         NuitkaCompiler._ensure_build_python(tmp_path / "cache", "3.11.9", Platform.WINDOWS, stage=st)
 
 
-def test_ensure_build_python_missing_exe_after_extract_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ensure_build_python_missing_exe_after_extract_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_host_python: None
+) -> None:
     """解压后未找到 python.exe（tarball 结构异常）时 raise NuitkaError."""
     ver = KNOWN_STANDALONE_VERSIONS["3.11"]
 
@@ -295,6 +321,7 @@ def test_ensure_build_python_missing_exe_after_extract_raises(tmp_path: Path, mo
 def test_ensure_build_python_injects_win7_compat_dll_on_extract(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    no_host_python: None,
 ) -> None:
     """解压 standalone python 后注入 api-ms-win-core-path-l1-1-0.dll 到 python.exe 同目录.
 
@@ -329,6 +356,7 @@ def test_ensure_build_python_injects_win7_compat_dll_on_extract(
 
 def test_ensure_build_python_injects_win7_compat_dll_on_cache_hit(
     tmp_path: Path,
+    no_host_python: None,
 ) -> None:
     """缓存命中时也注入 Win7 兼容 DLL（用户清理过 DLL 但保留 python.exe 时补充）.
 
@@ -360,6 +388,102 @@ def test_ensure_build_python_skips_win7_compat_dll_for_linux(tmp_path: Path) -> 
     assert result == Path()
     # Linux 不创建缓存目录，自然无 DLL 注入
     assert not cache_root.exists()
+
+
+# ---- 构建机 python 复用（_host_python_exe）测试 ----
+
+
+def test_host_python_exe_matches_on_windows(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Windows 原生构建 + major.minor 匹配时返回 sys.executable（免下载 standalone）."""
+    fake_exe = tmp_path / "python.exe"
+    fake_exe.write_bytes(b"fake")
+    # SimpleNamespace 模拟 version_info（代码仅访问 .major/.minor）
+    monkeypatch.setattr("fspack.packaging.nuitka.standalone.sys.platform", "win32")
+    monkeypatch.setattr("fspack.packaging.nuitka.standalone.sys.version_info", SimpleNamespace(major=3, minor=11))
+    monkeypatch.setattr("fspack.packaging.nuitka.standalone.sys.executable", str(fake_exe))
+    assert NuitkaCompiler._host_python_exe("3.11.9") == fake_exe
+    # 补丁版本差异不影响（CPython 按 major.minor ABI 兼容）
+    assert NuitkaCompiler._host_python_exe("3.11.15") == fake_exe
+
+
+def test_host_python_exe_version_mismatch_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """构建机与目标 major.minor 不一致时返回 None（Nuitka 必须在目标版本下运行）."""
+    monkeypatch.setattr("fspack.packaging.nuitka.standalone.sys.platform", "win32")
+    monkeypatch.setattr("fspack.packaging.nuitka.standalone.sys.version_info", SimpleNamespace(major=3, minor=12))
+    assert NuitkaCompiler._host_python_exe("3.11.9") is None
+
+
+def test_host_python_exe_non_windows_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """非 Windows 构建机（如 Linux 交叉编译 Windows 目标）返回 None（ELF 无法运行）."""
+    monkeypatch.setattr("fspack.packaging.nuitka.standalone.sys.platform", "linux")
+    monkeypatch.setattr("fspack.packaging.nuitka.standalone.sys.version_info", SimpleNamespace(major=3, minor=11))
+    assert NuitkaCompiler._host_python_exe("3.11.9") is None
+
+
+def test_host_python_exe_missing_executable_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """sys.executable 不存在（异常环境）时返回 None，回退下载分支."""
+    monkeypatch.setattr("fspack.packaging.nuitka.standalone.sys.platform", "win32")
+    monkeypatch.setattr("fspack.packaging.nuitka.standalone.sys.version_info", SimpleNamespace(major=3, minor=11))
+    monkeypatch.setattr("fspack.packaging.nuitka.standalone.sys.executable", "Z:/nonexistent/python.exe")
+    assert NuitkaCompiler._host_python_exe("3.11.9") is None
+
+
+def test_ensure_build_python_reuses_host_python(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """构建机 python 版本匹配时直接复用 sys.executable，不创建缓存目录不下载."""
+    fake_exe = tmp_path / "python.exe"
+    fake_exe.write_bytes(b"fake")
+    monkeypatch.setattr(
+        NuitkaCompiler,
+        "_host_python_exe",
+        staticmethod(lambda py_version: fake_exe),
+    )
+    cache_root = tmp_path / "cache"
+    st = StageRecorder("standalone python")
+    result = NuitkaCompiler._ensure_build_python(cache_root, "3.11.9", Platform.WINDOWS, stage=st)
+    assert result == fake_exe
+    # 复用分支不触碰 standalone 缓存目录
+    assert not cache_root.exists()
+    assert "复用构建机 python" in st._detail
+
+
+def test_ensure_build_python_shared_tarball_cache_hit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    no_host_python: None,
+) -> None:
+    """共享缓存目录已有 standalone tarball 时免下载（tkinter 打包阶段已下载过）.
+
+    验证 nuitka 与 TkinterBundler 共享 ``standalone-windows/`` 缓存：
+    tarball 已存在则不触发网络请求，直接解压。
+    """
+    ver = KNOWN_STANDALONE_VERSIONS["3.11"]
+    cache_root = tmp_path / "cache"
+    shared_dir = tmp_path / "standalone-windows"
+    shared_dir.mkdir()
+    tarball = shared_dir / standalone_tarball_name(ver, STANDALONE_RELEASE_TAG, windows=True)
+    _make_standalone_tarball(tarball, ver, STANDALONE_RELEASE_TAG)
+
+    class _NoNetDownloader:
+        """Downloader 桩：共享缓存命中时不应被实例化调用."""
+
+        def __init__(self, timeout: int = 0) -> None:
+            pass
+
+        def download(self, url: str, dest: Path, *, stage: object = None, label: str = "") -> int:
+            raise AssertionError("共享缓存命中时不应触发下载")
+
+    monkeypatch.setattr("fspack.packaging.net.Downloader", _NoNetDownloader)
+
+    st = StageRecorder("standalone python")
+    result = NuitkaCompiler._ensure_build_python(cache_root, "3.11.9", Platform.WINDOWS, stage=st)
+
+    assert result == cache_root / ver / "python" / "python.exe"
+    assert st._hits == 1
+    # tarball 保留（共享缓存不被解压流程删除）
+    assert tarball.is_file()
 
 
 # ---- compile_src 测试 ----
