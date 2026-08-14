@@ -604,8 +604,9 @@ def _scan_loader_health(cache_dir: Path) -> CacheHealthReport:
     扫描规则：
 
     - 0 字节文件（编译中断残留）：记入 ``corrupt_files``，扫描期删除
-    - 非 PE 文件（缺 MZ 头，Windows 路径下）：记入 ``corrupt_files``，扫描期删除
-    - Linux/macOS 路径下不校验 PE 头（ELF/Mach-O 无 MZ magic），仅检查非空
+    - 非 PE 的 exe 文件（缺 MZ 头）：记入 ``corrupt_files``，扫描期删除；
+      exe 为 mingw 编译产物（含 Linux 交叉编译场景），任何平台下都应为 PE
+    - Linux/macOS 路径下无扩展名文件为 ELF/Mach-O loader（无 MZ magic），仅检查非空
 
     loader 文件名是 hash 无版本概念，不识别 ``stale_files``；无引用关系不识别
     ``orphan_files``（孤儿识别需要遍历所有可能的 cache_key，不可行）。
@@ -624,11 +625,10 @@ def _scan_loader_health(cache_dir: Path) -> CacheHealthReport:
         is_corrupt = False
         if size == 0:
             is_corrupt = True
-        elif is_windows_target and name.endswith(".exe") and not _is_pe_file(path):
-            # 仅 Windows 路径下 exe 校验 PE 头（Linux 路径下 Windows exe 也是 PE，
-            # 但 mingw 交叉编译产物本应是 PE，跨平台校验保留 PE 头检查）
-            is_corrupt = True
-        elif is_windows_target and not name.endswith(".exe") and not _is_pe_file(path):
+        elif name.endswith(".exe"):
+            # exe 为 mingw 编译产物（含 Linux 交叉编译场景），任何平台下都应含 MZ 头
+            is_corrupt = not _is_pe_file(path)
+        elif is_windows_target:
             # Windows 路径下非 exe 文件不应出现在 loader cache（可能是测试残留）
             # 不计为 corrupt（无法判断语义），仅跳过
             continue

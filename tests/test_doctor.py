@@ -1623,6 +1623,20 @@ def test_scan_loader_health_non_pe_deleted(tmp_path: Path) -> None:
     assert report.has_issues
 
 
+def test_scan_loader_health_non_exe_kept(tmp_path: Path) -> None:
+    """非 exe loader 文件（Linux/macOS ELF 产物）非空即健康，跨平台均保留."""
+    from fspack.doctor import _scan_loader_health
+
+    cache = tmp_path / "loaders"
+    cache.mkdir()
+    elf = cache / "elf1234567890abcd"
+    elf.write_bytes(b"\x7fELF" + b"\x00" * 50)
+    report = _scan_loader_health(cache)
+    assert report.corrupt_files == ()
+    assert not report.has_issues
+    assert elf.is_file()
+
+
 # ---- _scan_ccache_health ----
 
 
