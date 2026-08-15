@@ -75,6 +75,7 @@ class NuitkaStandalone:
         """
         if target is Platform.WINDOWS:
             return build_python_dir / "python" / "python.exe"
+
         major, minor = py_version.split(".")[:2]
         return build_python_dir / "python" / "bin" / f"python{major}.{minor}"
 
