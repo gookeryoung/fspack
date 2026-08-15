@@ -27,100 +27,81 @@ def _align(value: int, alignment: int) -> int:
     return (value + alignment - 1) // alignment * alignment
 
 
-def _build_pe(
-    imports: dict[str, list[str]] | None = None,
-    exports: list[str] | None = None,
-    *,
-    pe32plus: bool = True,
-    machine: int = 0x8664,
-    import_rva_override: int | None = None,
-) -> bytes:
-    """构造最小 PE 镜像：单 .rdata 节承载导入表/导出表（解析测试 fixture）.
+class _Blob:
+    """测试用 .rdata 节内容构造器：顺序追加内容并返回对应 RVA."""
 
-    imports 中函数名以 ``#`` 开头表示按序号导入（如 ``"#15"``）；
-    exports 生成按名导出表。import_rva_override 用于构造 RVA 越界样本。
-    """
-    blob = bytearray()
+    def __init__(self, rva_base: int) -> None:
+        self._rva_base = rva_base
+        self.data = bytearray()
 
-    def add_bytes(content: bytes) -> int:
-        rva = _RDATA_RVA + len(blob)
-        blob.extend(content)
+    def add(self, content: bytes) -> int:
+        """追加原始字节，返回其 RVA."""
+        rva = self._rva_base + len(self.data)
+        self.data.extend(content)
         return rva
 
-    def add_str(text: str) -> int:
-        return add_bytes(text.encode("ascii") + b"\x00")
+    def add_str(self, text: str) -> int:
+        """追加 NUL 结尾 ASCII 字符串，返回其 RVA."""
+        return self.add(text.encode("ascii") + b"\x00")
 
-    thunk_fmt, thunk_size = ("<Q", 8) if pe32plus else ("<I", 4)
-    ord_flag = 1 << 63 if pe32plus else 1 << 31
 
-    # 每个导入 DLL：名称字符串 + hint/name 表 + IAT thunk 数组
+def _append_import_table(blob: _Blob, imports: dict[str, list[str]], thunk_fmt: str, ord_flag: int) -> int:
+    """向 blob 追加导入表（含按名/按序号导入），返回导入目录 RVA，无导入时 0."""
     descriptors: list[tuple[int, int]] = []
-    for dll, funcs in (imports or {}).items():
-        name_rva = add_str(dll)
+    for dll, funcs in imports.items():
+        name_rva = blob.add_str(dll)
         values: list[int] = []
         for func in funcs:
             if func.startswith("#"):
                 values.append(ord_flag | int(func[1:]))
             else:
-                values.append(add_bytes(b"\x00\x00" + func.encode("ascii") + b"\x00"))
+                values.append(blob.add(b"\x00\x00" + func.encode("ascii") + b"\x00"))
         thunk = bytearray()
         for value in values:
             thunk += struct.pack(thunk_fmt, value)
         thunk += struct.pack(thunk_fmt, 0)
-        thunk_rva = add_bytes(bytes(thunk))
-        descriptors.append((name_rva, thunk_rva))
+        descriptors.append((name_rva, blob.add(bytes(thunk))))
 
-    import_rva = 0
-    if descriptors:
-        table = bytearray()
-        for name_rva, thunk_rva in descriptors:
-            table += struct.pack("<IIIII", thunk_rva, 0, 0, name_rva, thunk_rva)
-        table += b"\x00" * 20
-        import_rva = add_bytes(bytes(table))
+    if not descriptors:
+        return 0
+    table = bytearray()
+    for name_rva, thunk_rva in descriptors:
+        table += struct.pack("<IIIII", thunk_rva, 0, 0, name_rva, thunk_rva)
+    table += b"\x00" * 20
+    return blob.add(bytes(table))
 
-    export_rva = 0
-    if exports:
-        name_rvas = [add_str(name) for name in exports]
-        functions_rva = add_bytes(b"".join(struct.pack("<I", r) for r in name_rvas))
-        names_rva = add_bytes(b"".join(struct.pack("<I", r) for r in name_rvas))
-        ordinals_rva = add_bytes(b"\x00\x00" * len(name_rvas))
-        dll_name_rva = add_str("fixture.dll")
-        export_rva = add_bytes(
-            struct.pack(
-                "<IIHHIIIIIII",
-                0,
-                0,
-                0,
-                0,
-                dll_name_rva,
-                1,
-                len(exports),
-                len(exports),
-                functions_rva,
-                names_rva,
-                ordinals_rva,
-            )
+
+def _append_export_table(blob: _Blob, exports: list[str]) -> int:
+    """向 blob 追加导出表（按名导出），返回导出目录 RVA，无导出时 0."""
+    if not exports:
+        return 0
+    name_rvas = [blob.add_str(name) for name in exports]
+    functions_rva = blob.add(b"".join(struct.pack("<I", r) for r in name_rvas))
+    names_rva = blob.add(b"".join(struct.pack("<I", r) for r in name_rvas))
+    ordinals_rva = blob.add(b"\x00\x00" * len(name_rvas))
+    dll_name_rva = blob.add_str("fixture.dll")
+    return blob.add(
+        struct.pack(
+            "<IIHHIIIIIII",
+            0,
+            0,
+            0,
+            0,
+            dll_name_rva,
+            1,
+            len(exports),
+            len(exports),
+            functions_rva,
+            names_rva,
+            ordinals_rva,
         )
+    )
 
-    if import_rva_override is not None:
-        import_rva = import_rva_override
 
-    pe_offset = 0x40
-    opt_offset = pe_offset + 24
-    opt_size = 240 if pe32plus else 224
-    sec_offset = opt_offset + opt_size
-    raw_ptr = _align(sec_offset + 40, _FILE_ALIGN)
-    raw_size = _align(len(blob), _FILE_ALIGN)
-    image_size = _RDATA_RVA + max(raw_size, _FILE_ALIGN)
-
-    dos = bytearray(pe_offset)
-    dos[0:2] = b"MZ"
-    struct.pack_into("<I", dos, 0x3C, pe_offset)
-
-    coff = struct.pack("<HHIIIHH", machine, 1, 0, 0, 0, opt_size, 0x2022)
-
+def _optional_header(pe32plus: bool, image_size: int, raw_ptr: int, dirs: list[tuple[int, int]]) -> bytes:
+    """构造可选头（PE32/PE32+ 标准字段 + 16 个数据目录）."""
     if pe32plus:
-        optional = struct.pack(
+        standard = struct.pack(
             "<HBBIIIIIQIIHHHHHHIIIIHHQQQQII",
             0x20B,
             14,
@@ -153,7 +134,7 @@ def _build_pe(
             16,
         )
     else:
-        optional = struct.pack(
+        standard = struct.pack(
             "<HBBIIIIIIIIIHHHHHHIIIIHHIIIIII",
             0x10B,
             14,
@@ -186,24 +167,52 @@ def _build_pe(
             0,
             16,
         )
+    return standard + b"".join(struct.pack("<II", *entry) for entry in dirs)
 
+
+def _build_pe(
+    imports: dict[str, list[str]] | None = None,
+    exports: list[str] | None = None,
+    *,
+    pe32plus: bool = True,
+    machine: int = 0x8664,
+    import_rva_override: int | None = None,
+) -> bytes:
+    """构造最小 PE 镜像：单 .rdata 节承载导入表/导出表（解析测试 fixture）.
+
+    imports 中函数名以 ``#`` 开头表示按序号导入（如 ``"#15"``）；
+    import_rva_override 用于构造 RVA 越界样本。
+    """
+    thunk_fmt = "<Q" if pe32plus else "<I"
+    ord_flag = 1 << 63 if pe32plus else 1 << 31
+    blob = _Blob(_RDATA_RVA)
+    import_rva = _append_import_table(blob, imports or {}, thunk_fmt, ord_flag)
+    export_rva = _append_export_table(blob, exports or [])
+    if import_rva_override is not None:
+        import_rva = import_rva_override
+
+    opt_size = 240 if pe32plus else 224
+    raw_ptr = _align(0x40 + 24 + opt_size + 40, _FILE_ALIGN)
+    raw_size = _align(len(blob.data), _FILE_ALIGN)
     dirs: list[tuple[int, int]] = [(0, 0)] * 16
     if export_rva:
         dirs[0] = (export_rva, 40)
     if import_rva:
-        dirs[1] = (import_rva, 20 * (len(descriptors) + 1))
-    optional += b"".join(struct.pack("<II", *entry) for entry in dirs)
+        dirs[1] = (import_rva, 0x200)
 
-    section = struct.pack(
-        "<8sIIIIIIHHI", b".rdata\0\0", len(blob), _RDATA_RVA, raw_size, raw_ptr, 0, 0, 0, 0, 0x40000040
+    dos = bytearray(0x40)
+    dos[0:2] = b"MZ"
+    struct.pack_into("<I", dos, 0x3C, 0x40)
+    headers = bytes(dos) + b"PE\x00\x00"
+    headers += struct.pack("<HHIIIHH", machine, 1, 0, 0, 0, opt_size, 0x2022)
+    headers += _optional_header(pe32plus, _RDATA_RVA + max(raw_size, _FILE_ALIGN), raw_ptr, dirs)
+    headers += struct.pack(
+        "<8sIIIIIIHHI", b".rdata\0\0", len(blob.data), _RDATA_RVA, raw_size, raw_ptr, 0, 0, 0, 0, 0x40000040
     )
 
-    image = bytearray()
-    image += dos
-    image += b"PE\x00\x00" + coff
-    image += optional + section
+    image = bytearray(headers)
     image += b"\x00" * (raw_ptr - len(image))
-    image += blob
+    image += blob.data
     return bytes(image)
 
 

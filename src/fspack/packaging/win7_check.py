@@ -193,7 +193,7 @@ def _parse_pe_inner(data: bytes) -> _PeInfo:
 
     export_rva = _u32(data, dd_offset)
     import_rva = _u32(data, dd_offset + 8)
-    imports = _read_imports(data, rva2off, import_rva, thunk_fmt, thunk_size, ord_flag)
+    imports = _read_imports(data, rva2off, import_rva, (thunk_fmt, thunk_size, ord_flag))
     exports = _read_exports(data, rva2off, export_rva) if export_rva else ()
     return _PeInfo(imports=imports, exports=exports)
 
@@ -202,14 +202,15 @@ def _read_imports(
     data: bytes,
     rva2off: Callable[[int], int],
     import_rva: int,
-    thunk_fmt: str,
-    thunk_size: int,
-    ord_flag: int,
+    thunk_spec: tuple[str, int, int],
 ) -> dict[str, list[str]]:
     """遍历 IMAGE_IMPORT_DESCRIPTOR 数组，返回 {DLL 名: 导入函数名列表}.
 
-    按序号导入记录为 ``#N``；import_rva 为 0 返回空表。
+    thunk_spec 为 (格式串, 步长, 序号标志位)——PE32 为 ``("<I", 4, 1<<31)``，
+    PE32+ 为 ``("<Q", 8, 1<<63)``。按序号导入记录为 ``#N``；import_rva 为 0
+    返回空表。
     """
+    thunk_fmt, thunk_size, ord_flag = thunk_spec
     imports: dict[str, list[str]] = {}
     if not import_rva:
         return imports
@@ -276,6 +277,7 @@ def check_win7_imports(path: Path, *, shim: Path | None = None) -> Win7CheckResu
     notes: list[str] = []
     shim_dlls: list[str] = []
     path_set_funcs: list[str] = []
+    crt_dlls: list[str] = []
 
     for dll, funcs in info.imports.items():
         low = dll.lower()
@@ -283,7 +285,7 @@ def check_win7_imports(path: Path, *, shim: Path | None = None) -> Win7CheckResu
             shim_dlls.append(dll)
             path_set_funcs.extend(f for f in funcs if not f.startswith("#"))
         elif low.startswith("api-ms-win-crt-"):
-            notes.append(f"{dll}: 需系统 UCRT（Win7 SP1 需 KB2999226 或 VC 运行库）")
+            crt_dlls.append(dll)
         elif low.startswith(("api-ms-", "ext-ms-")):
             violations.append(Win7ApiViolation(dll, "未知 API Set，Win7 可能缺失且无 shim"))
         elif low in _WIN8_SYSTEM_DLLS:
@@ -297,6 +299,8 @@ def check_win7_imports(path: Path, *, shim: Path | None = None) -> Win7CheckResu
                     violations.append(Win7ApiViolation(f"{dll}!{func}", f"{level} API，Win7 SP1 不存在"))
 
     shim_missing: tuple[str, ...] = ()
+    if crt_dlls:
+        notes.append(f"{len(crt_dlls)} 个 api-ms-win-crt-* 依赖需系统 UCRT（Win7 SP1 需 KB2999226 或 VC 运行库）")
     if shim_dlls:
         notes.append("需随包分发 api-ms-win-core-path shim（fspack 已内置注入）")
         if shim is not None:
