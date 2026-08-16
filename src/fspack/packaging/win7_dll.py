@@ -196,19 +196,37 @@ def ensure_win7_dll(
     dest_dir: Path,
     *,
     stage: StageRecorder | None = None,
+    replace_invalid: bool = False,
 ) -> Path:
     """确保 dest_dir 内有经双重校验的 win7 重编译版 python3XX.dll，返回 dll 路径.
 
     dest_dir 已有 dll 时重新校验导入表后复用（防误换/篡改，~6MB 解析耗时可忽略）；
     否则按清单下载 zip（sha256 校验）→ 提取 dll → 导入表校验。
+
+    Args:
+        version: 完整 Python 版本号（须收录 :data:`WIN7_EMBED_SHA256`）。
+        cache_dir: win7 embed zip 下载缓存目录。
+        dest_dir: dll 目标目录（runtime 根目录）。
+        stage: 可选进度记录器（缓存命中/下载字节自动回写）。
+        replace_invalid: dest_dir 已有 dll 且校验不通过时的处理——False（默认）
+            抛错（独立调用时透明暴露篡改）；True 删除后重新下载提取。打包
+            pipeline 传 True：官方 embed 解压出的 python3XX.dll 必然含 Win8+
+            导入，需静默替换为重编译版而非报错。
     """
     dll = dest_dir / win7_dll_name(version)
     if dll.is_file():
-        _check_dll(dll)
-        _logger.info("win7 python dll 已就绪并校验通过: %s", dll)
-        if stage is not None:
-            stage.hit_cache()
-        return dll
+        try:
+            _check_dll(dll)
+        except Win7DllError:
+            if not replace_invalid:
+                raise
+            _logger.info("%s 校验未通过（官方 dll 或已损坏），删除后重新替换", dll.name)
+            dll.unlink(missing_ok=True)
+        else:
+            _logger.info("win7 python dll 已就绪并校验通过: %s", dll)
+            if stage is not None:
+                stage.hit_cache()
+            return dll
     zip_path = download_win7_embed(version, cache_dir, stage=stage)
     dll = extract_win7_dll(zip_path, dest_dir, version)
     try:

@@ -15,7 +15,7 @@
 - :func:`is_offline` — 是否启用离线模式
 - :func:`embed_cache_dir` / :func:`standalone_cache_dir` / :func:`wheel_cache_dir` /
   :func:`nuitka_cache_dir` / :func:`loader_cache_dir` / :func:`ccache_cache_dir` /
-  :func:`tkinter_cache_dir` — 各子模块缓存目录
+  :func:`tkinter_cache_dir` / :func:`win7_dll_cache_dir` — 各子模块缓存目录
 """
 
 from __future__ import annotations
@@ -33,6 +33,7 @@ __all__ = [
     "standalone_cache_dir",
     "tkinter_cache_dir",
     "wheel_cache_dir",
+    "win7_dll_cache_dir",
 ]
 
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
@@ -97,3 +98,8 @@ def ccache_cache_dir() -> Path:
 def tkinter_cache_dir() -> Path:
     """tkinter 补充包缓存目录（``<cache_root>/tkinter``）."""
     return cache_root() / "tkinter"
+
+
+def win7_dll_cache_dir() -> Path:
+    """Win7 重编译版 python3XX.dll 的 embed zip 缓存目录（``<cache_root>/win7-dll``）."""
+    return cache_root() / "win7-dll"

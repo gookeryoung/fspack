@@ -3142,6 +3142,110 @@ def test_slim_runtime_windows_skips(tmp_path: Path) -> None:
     assert (bin_dir / "python3.11").is_file()
 
 
+# --- _prepare_runtime Win7 dll 替换集成测试 ---
+
+
+def _make_win7_runtime_context(
+    tmp_path: Path,
+    py_version: str,
+    *,
+    target: Platform = Platform.WINDOWS,
+) -> tuple[BuildContext, Path]:
+    """构造 runtime 已就绪（官方 dll 存在）的 BuildContext 用于 _prepare_runtime 测试."""
+    from fspack.config import BuildConfig
+    from fspack.progress import BuildTracker
+
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    info = ProjectInfo.from_dir(tmp_path, py_version)
+    cfg = BuildConfig(
+        project_dir=tmp_path,
+        dist_dir=tmp_path / "dist",
+        embed_cache_dir=tmp_path / "cache",
+        mirror=get_mirror("huawei"),
+        target=target,
+    )
+    runtime_dir = tmp_path / "dist" / "runtime"
+    runtime_dir.mkdir(parents=True)
+    major, minor = py_version.split(".")[:2]
+    (runtime_dir / f"python{major}{minor}.dll").write_bytes(b"official")
+    ctx = BuildContext(
+        tracker=BuildTracker(),
+        info=info,
+        cfg=cfg,
+        opts=BuildOptions(),
+        runtime_dir=runtime_dir,
+    )
+    return ctx, runtime_dir
+
+
+def test_prepare_runtime_replaces_dll_on_windows_312(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows 3.12+ 目标：官方 embed 解压后调 ensure_win7_dll（replace_invalid）替换."""
+    from fspack.packaging.pipeline import runtime_stage
+
+    ctx, runtime_dir = _make_win7_runtime_context(tmp_path, "3.12.10")
+    calls: dict[str, object] = {}
+
+    def fake_ensure(version: str, cache_dir: Path, dest_dir: Path, **kwargs: object) -> Path:
+        calls["version"] = version
+        calls["cache_dir"] = cache_dir
+        calls["dest_dir"] = dest_dir
+        calls["kwargs"] = kwargs
+        dll = dest_dir / "python312.dll"
+        dll.write_bytes(b"win7")
+        return dll
+
+    monkeypatch.setattr(runtime_stage, "ensure_win7_dll", fake_ensure)
+    inject_calls: list[Path] = []
+    monkeypatch.setattr(runtime_stage, "_inject_win7_compat_dll", inject_calls.append)
+    from fspack.config import win7_dll_cache_dir
+
+    result = runtime_stage._prepare_runtime(ctx)
+    assert calls["version"] == "3.12.10"
+    assert calls["dest_dir"] == runtime_dir
+    assert calls["cache_dir"] == win7_dll_cache_dir()
+    # kwargs 含 replace_invalid=True 即可（stage 为 StageRecorder 实例）
+    assert calls["kwargs"]["replace_invalid"] is True  # type: ignore[index]
+    assert (runtime_dir / "python312.dll").read_bytes() == b"win7"
+    # 3.12 >= 3.9，shim 注入同样触发
+    assert inject_calls == [runtime_dir]
+    assert result == tmp_path / "dist" / "site-packages"
+
+
+def test_prepare_runtime_skips_dll_replace_on_311(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows 3.11 目标：shim 注入即可，不触发 dll 替换."""
+    from fspack.packaging.pipeline import runtime_stage
+
+    ctx, runtime_dir = _make_win7_runtime_context(tmp_path, "3.11.9")
+    called = {"ensure": False}
+    monkeypatch.setattr(runtime_stage, "ensure_win7_dll", lambda *a, **k: called.__setitem__("ensure", True))
+    inject_calls: list[Path] = []
+    monkeypatch.setattr(runtime_stage, "_inject_win7_compat_dll", inject_calls.append)
+    runtime_stage._prepare_runtime(ctx)
+    assert not called["ensure"]
+    assert inject_calls == [runtime_dir]
+    assert (runtime_dir / "python311.dll").read_bytes() == b"official"
+
+
+def test_prepare_runtime_skips_dll_replace_on_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Linux 目标：非 Windows 不触发 dll 替换与 shim 注入."""
+    from fspack.packaging.pipeline import runtime_stage
+
+    ctx, _ = _make_win7_runtime_context(tmp_path, "3.12.10", target=Platform.LINUX)
+    # Linux 分支走 standalone 下载：runtime 内无 python/bin 会被判未就绪而下载，
+    # patch 下载/解压避免网络
+    monkeypatch.setattr(
+        "fspack.packaging.pipeline.stages.download_standalone", lambda *a, **k: tmp_path / "fake.tar.gz"
+    )
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.extract_standalone", lambda *a, **k: None)
+    called = {"ensure": False, "inject": False}
+    monkeypatch.setattr(runtime_stage, "ensure_win7_dll", lambda *a, **k: called.__setitem__("ensure", True))
+    monkeypatch.setattr(runtime_stage, "_inject_win7_compat_dll", lambda *a, **k: called.__setitem__("inject", True))
+    runtime_stage._prepare_runtime(ctx)
+    assert not called["ensure"]
+    assert not called["inject"]
+
+
 # --- _build_entry_loaders 并行编译测试（iter-133）---
 
 

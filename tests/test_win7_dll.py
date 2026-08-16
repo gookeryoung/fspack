@@ -192,6 +192,39 @@ def test_ensure_existing_dll_with_violations_rejected(tmp_path: Path, monkeypatc
         ensure_win7_dll(_VER, tmp_path / "cache", dest)
 
 
+def test_ensure_replace_invalid_replaces_official_dll(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """replace_invalid=True 时官方 dll（校验必然违规）被静默替换为重编译版.
+
+    打包 pipeline 场景：官方 embed 解压出的 python3XX.dll 含 Win8+ 导入，
+    应下载重编译版覆盖而非报错。
+    """
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    (dest / "python312.dll").write_bytes(b"official-dll")
+    zip_bytes = _make_zip_bytes({"python312.dll": b"win7-dll"})
+    _patch_manifest(monkeypatch, _VER, zip_bytes)
+    monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout, **kw: FakeResp(zip_bytes))
+
+    check_calls: list[bytes] = []
+
+    def fake_check(path: Path, *, shim: Path | None = None) -> Win7CheckResult:
+        check_calls.append(Path(path).read_bytes())
+        # 官方 dll 违规，重编译版通过
+        ok = Path(path).read_bytes() == b"win7-dll"
+        if ok:
+            return Win7CheckResult(path=Path(path))
+        return Win7CheckResult(
+            path=Path(path),
+            violations=(Win7ApiViolation("KERNEL32.dll!CopyFile2", "Win8+ API，Win7 SP1 不存在"),),
+        )
+
+    monkeypatch.setattr(win7_dll, "check_win7_imports", fake_check)
+    dll = ensure_win7_dll(_VER, tmp_path / "cache", dest, replace_invalid=True)
+    assert dll.read_bytes() == b"win7-dll"
+    # 官方 dll 先被校验（违规→删除），重编译版提取后再校验（通过）
+    assert check_calls == [b"official-dll", b"win7-dll"]
+
+
 def test_ensure_downloads_extracts_and_checks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """完整流程：下载 → 哈希校验 → 提取 dll → 导入表校验通过."""
     zip_bytes = _make_zip_bytes({"python312.dll": b"dll-bytes", "python313._pth": b"x"})

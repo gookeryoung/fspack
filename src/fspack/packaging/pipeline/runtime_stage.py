@@ -1,10 +1,11 @@
-"""runtime 准备阶段：下载/解压运行时、精简标准库、精简 standalone runtime.
+"""runtime 准备阶段：下载/解压运行时、Win7 兼容处理、精简标准库.
 
-四个平台分支函数 + 一个后处理精简函数（在源码编译完成后调用）：
+四个平台分支函数 + Win7 dll 替换 + 一个后处理精简函数（在源码编译完成后调用）：
 
 - :func:`_prepare_runtime`：主入口，按目标平台分支
 - :func:`_prepare_standalone_runtime`：Linux/macOS python-build-standalone 下载解压
 - :func:`_prepare_windows_runtime`：Windows embed python 下载解压
+- :func:`_replace_win7_dll`：Windows 3.12+ 官方 python3XX.dll 替换为 win7 重编译版
 - :func:`_slim_runtime`：编译后 strip 调试符号 + 删无用文件
 """
 
@@ -12,9 +13,9 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
-from fspack.config import standalone_cache_dir
+from fspack.config import standalone_cache_dir, win7_dll_cache_dir
 from fspack.packaging.pyc import (
     _inject_win7_compat_dll,
     _needs_win7_compat_dll,
@@ -37,9 +38,13 @@ from fspack.packaging.runtime import (
 from fspack.packaging.runtime import (
     extract_standalone as _default_extract_standalone,
 )
+from fspack.packaging.win7_dll import ensure_win7_dll, needs_win7_dll
 from fspack.platform import Platform
 
 from .context import BuildContext
+
+if TYPE_CHECKING:
+    from fspack.progress import StageRecorder
 
 __all__ = [
     "_prepare_runtime",
@@ -95,6 +100,11 @@ def _prepare_runtime(ctx: BuildContext) -> Path:
     # Win7 兼容性：Python 3.9+ 官方不再支持 Win7，注入 api-ms-win-core-path-l1-1-0.dll
     # 使 embed python 3.9+ 在 Win7 SP1 / Server 2008 R2 SP1 上也能运行。
     # 仅 Windows 目标需要（Linux/macOS standalone 不存在此问题）。
+    # 3.12+ 官方 python3XX.dll 另含 kernel32 的 Win8+ 静态导入，shim 无法解决，
+    # 须先替换为重编译版 dll（清单驱动下载 + 双重校验，见 win7_dll 模块）。
+    if target is Platform.WINDOWS and needs_win7_dll(ctx.info.py_version):
+        with ctx.tracker.stage("Win7 dll 替换") as st:
+            _replace_win7_dll(ctx, st)
     if target is Platform.WINDOWS and _needs_win7_compat_dll(ctx.info.py_version):
         _inject_win7_compat_dll(ctx.runtime_dir)
 
@@ -209,3 +219,21 @@ def _prepare_windows_runtime(ctx: BuildContext) -> Path:
             st.processed(1)
             st.set_detail("embed python")
     return ctx.cfg.dist_dir / "site-packages"
+
+
+def _replace_win7_dll(ctx: BuildContext, st: StageRecorder) -> None:
+    """将 runtime 内官方 python3XX.dll 替换为 win7 重编译版（3.12+ 目标）.
+
+    官方 dll 含 kernel32 的 Win8+ 静态导入，loader 在 Win7 上直接拒绝加载，
+    shim 无法解决；此处在官方 embed 解压后按清单下载重编译版覆盖。zip
+    缓存命中时仅本地提取 + 导入表校验。``replace_invalid=True``：官方 dll
+    校验必然失败，静默替换而非报错。
+    """
+    ensure_win7_dll(
+        ctx.info.py_version,
+        win7_dll_cache_dir(),
+        ctx.runtime_dir,
+        stage=st,
+        replace_invalid=True,
+    )
+    st.set_detail(f"win7 重编译版 {ctx.info.py_version}")

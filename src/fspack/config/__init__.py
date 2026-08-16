@@ -37,6 +37,7 @@ from fspack.config.cache import (
     standalone_cache_dir,
     tkinter_cache_dir,
     wheel_cache_dir,
+    win7_dll_cache_dir,
 )
 from fspack.config.models import (
     DEFAULT_MIRROR,
@@ -129,4 +130,5 @@ __all__ = [
     "standalone_cache_dir",
     "tkinter_cache_dir",
     "wheel_cache_dir",
+    "win7_dll_cache_dir",
 ]
