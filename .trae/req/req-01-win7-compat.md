@@ -16,9 +16,9 @@
 
 ## P3 诊断与守卫
 
-- [ ] doctor 新增 Win7 诊断项：缓存 dll 抽检、清单对齐性、shim 资产存在性
-- [ ] 清单对齐守卫测试：KNOWN_EMBED_VERSIONS 的 3.12+ 版本必须收录 WIN7_EMBED_SHA256
-- [ ] 决策项：是否需要 --no-win7-compat 开关（当前倾向不加，重编译版 Win7-11 通用）
+- [x] doctor 新增 Win7 诊断项：缓存 dll 抽检、清单对齐性、shim 资产存在性
+- [x] 清单对齐守卫测试：KNOWN_EMBED_VERSIONS 的 3.12+ 版本必须收录 WIN7_EMBED_SHA256
+- [x] 决策项：是否需要 --no-win7-compat 开关 → 已确认不加（重编译版 Win7-11 通用，dll 替换无条件执行）
 
 ## P4 实机验证
 

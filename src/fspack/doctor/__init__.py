@@ -123,6 +123,7 @@ from fspack.doctor.tools import (
     _check_uv,
     _check_wine,
 )
+from fspack.doctor.win7 import _check_win7_compat
 
 __all__ = [
     "CACHE_TYPES",
@@ -154,6 +155,7 @@ __all__ = [
     "_check_python",
     "_check_tool_version",
     "_check_uv",
+    "_check_win7_compat",
     "_check_wine",
     "_clean_all_caches",
     "_clean_cache_by_type",
@@ -223,6 +225,9 @@ def run_doctor() -> DoctorReport:
         _check_mirror_config(DEFAULT_MIRROR, MIRRORS),
         _check_cache_dir(cache_root()),
     ]
+    # Win7 兼容自检（清单对齐/shim 资产/缓存 zip 抽检）仅 Windows 目标相关
+    if platform is Platform.WINDOWS:
+        env_info.append(_check_win7_compat())
 
     tool_checks: list[CheckResult] = []
     # 通用工具：pip/uv/Pillow（两平台都需要）

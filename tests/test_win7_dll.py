@@ -315,3 +315,31 @@ def test_win7_embed_runtime_hooks(tmp_path: Path) -> None:
     zip_path.write_bytes(_make_zip_bytes({"python312.dll": b"dll"}))
     Win7EmbedRuntime.extract_archive(zip_path, runtime_dir)
     assert (runtime_dir / "python312.dll").read_bytes() == b"dll"
+
+
+# --- 清单对齐守卫（版本升级忘同步时立即红） ---
+
+
+def test_manifest_covers_all_embed_versions_ge_312() -> None:
+    """KNOWN_EMBED_VERSIONS 的 3.12+ 版本必须收录 WIN7_EMBED_SHA256.
+
+    3.12+ 官方 dll 含 Win8+ 静态导入，打包流程无条件调 ensure_win7_dll；
+    升级 KNOWN_EMBED_VERSIONS（如 3.13 换补丁版）而忘同步 win7 清单时，
+    打包到 runtime 阶段才报"清单未收录"——本守卫让它在 CI 单测阶段即失败。
+    """
+    from fspack.config import KNOWN_EMBED_VERSIONS
+
+    expected = {
+        full for minor, full in KNOWN_EMBED_VERSIONS.items() if tuple(int(x) for x in minor.split(".")) >= (3, 12)
+    }
+    missing = expected - set(win7_dll.WIN7_EMBED_SHA256)
+    assert not missing, f"win7 清单缺失版本（升级 KNOWN_EMBED_VERSIONS 后须同步 WIN7_EMBED_SHA256）: {sorted(missing)}"
+
+
+def test_manifest_has_no_stale_entries() -> None:
+    """清单不得收录 KNOWN_EMBED_VERSIONS 之外的版本（旧补丁版残留属死条目）."""
+    from fspack.config import KNOWN_EMBED_VERSIONS
+
+    known = set(KNOWN_EMBED_VERSIONS.values())
+    stale = set(win7_dll.WIN7_EMBED_SHA256) - known
+    assert not stale, f"win7 清单含已知版本之外的死条目: {sorted(stale)}"
