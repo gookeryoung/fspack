@@ -87,6 +87,7 @@ _BUILD_DEFAULT_KEYS: dict[str, str] = {
     "require_hashes": "require_hashes",
     "no_sbom": "no_sbom",
     "no_manifest": "no_manifest",
+    "no_win7_scan": "no_win7_scan",
     "open_browser": "open_browser",
 }
 

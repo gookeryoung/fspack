@@ -278,6 +278,14 @@ _BUILD_OPTS: tuple[_Opt, ...] = (
         dest="no_manifest",
     ),
     _Opt(
+        ("--no-win7-scan",),
+        "关闭构建结束后的 Win7 兼容扫描（默认扫描 dist 下全部 .dll/.pyd/.exe "
+        "导入表，输出文本报告到 dist/release/win7-compat-report.txt；仅 Windows 目标，"
+        "loader exe 硬门禁不受此开关影响）",
+        action="store_true",
+        dest="no_win7_scan",
+    ),
+    _Opt(
         ("--auto-clean",),
         "构建前自动清理 dist 残留（含上次失败标记 .build_failed），"
         "无需手动 fsp c。检测到半成品时：无此标志则告警并继续（可能因残留文件失败），"

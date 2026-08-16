@@ -34,6 +34,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "WIN7_EMBED_SHA256",
+    "WIN7_SHIM_DLL_PATH",
     "Win7DllError",
     "Win7EmbedRuntime",
     "download_win7_embed",
@@ -60,8 +61,9 @@ WIN7_EMBED_SHA256: dict[str, str] = {
     "3.14.6": "ff2345af4334a6c5e122b92512146e984b00fd55ace53dda00dc9cdefcfbb1c9",
 }
 
-# 内置 api-ms-win-core-path shim（随 fspack 分发），dll 导入表校验时验证导出覆盖
-_SHIM_PATH = Path(__file__).parent.parent / "assets" / "runtime" / "api-ms-win-core-path-l1-1-0.dll"
+# 内置 api-ms-win-core-path shim（随 fspack 分发），dll 导入表校验时验证导出覆盖。
+# 公开常量：win7_scan 全量扫描复用同一 shim 做覆盖校验。
+WIN7_SHIM_DLL_PATH = Path(__file__).parent.parent / "assets" / "runtime" / "api-ms-win-core-path-l1-1-0.dll"
 
 
 class Win7DllError(FspackError):
@@ -181,7 +183,7 @@ def extract_win7_dll(zip_path: Path, dest_dir: Path, version: str) -> Path:
 def _check_dll(dll: Path) -> Win7CheckResult:
     """校验 dll 导入表 Win7 兼容性（含内置 shim 导出覆盖），违规抛 Win7DllError."""
     try:
-        result = check_win7_imports(dll, shim=_SHIM_PATH)
+        result = check_win7_imports(dll, shim=WIN7_SHIM_DLL_PATH)
     except PeParseError as exc:
         raise Win7DllError(f"{dll.name} 不是合法 PE 镜像: {exc}") from exc
     if not result.ok:

@@ -192,6 +192,7 @@ def _run_build(project: Path, ns: argparse.Namespace) -> None:
         require_hashes=ns.require_hashes or base.require_hashes,
         no_sbom=ns.no_sbom or base.no_sbom,
         no_manifest=getattr(ns, "no_manifest", False) or base.no_manifest,
+        no_win7_scan=getattr(ns, "no_win7_scan", False) or base.no_win7_scan,
         open_browser=ns.open_browser or base.open_browser,
     )
     log_file = Path(ns.log_file).resolve() if ns.log_file else None

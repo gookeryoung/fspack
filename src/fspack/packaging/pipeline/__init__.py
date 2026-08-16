@@ -379,6 +379,15 @@ def _execute_build(  # noqa: PLR0912, PLR0913
 
     exes = _build_entry_loaders(ctx, resolved_icon, has_tkinter)
 
+    # Win7 门禁（硬）：loader exe 由 fspack 内置 C 源码 + mingw 编译，导入表
+    # 引入 Win8+ API 属 fspack 回归，违规即阻断构建，不允许带病出包。
+    if target is Platform.WINDOWS:
+        from fspack.packaging.win7_scan import enforce_win7_loaders
+
+        with tracker.stage("Win7 loader 校验") as st:
+            enforce_win7_loaders(exes)
+            st.set_detail(f"{len(exes)} 个 exe 通过")
+
     # 二进制依赖分析（可选）：解析 .dll/.so/.dylib 依赖树，剥离无引用文件。
     # 仅当 --analyze-deps 启用时执行，节省字节数写入 tracker 的"依赖分析"stage。
     if opts.analyze_deps:
@@ -441,6 +450,27 @@ def _execute_build(  # noqa: PLR0912, PLR0913
     finally:
         if _post_build_pool is not None:
             _post_build_pool.shutdown(wait=True)
+
+    # Win7 兼容扫描（软门禁，默认启用，--no-win7-scan 关闭）：dist 下全部
+    # .dll/.pyd/.exe 导入表检查，第三方依赖与 Nuitka 产物违规无法自动修复，
+    # 不阻断构建，生成文本报告到 dist/release/win7-compat-report.txt。
+    # 仅 Windows 目标（Linux/macOS 产物不运行于 Win7）。
+    if target is Platform.WINDOWS and not opts.no_win7_scan:
+        from fspack.packaging.win7_scan import scan_dist_win7, write_win7_report
+
+        with tracker.stage("Win7 兼容扫描") as st:
+            report = scan_dist_win7(cfg.dist_dir)
+            report_path = write_win7_report(report, cfg.dist_dir)
+            st.processed(report.scanned)
+            if report.violations:
+                st.set_detail(f"{len(report.violations)} 个文件违规，见 {report_path.name}")
+                _logger.warning(
+                    "Win7 兼容扫描发现 %d 个违规文件（不阻断构建），详见 %s",
+                    len(report.violations),
+                    report_path,
+                )
+            else:
+                st.set_detail(f"{report.scanned} 个文件通过")
 
     # 延迟导入：console 触发 fspack.console 加载（含 rich.console/rich.logging/
     # rich.theme ~17ms）。仅在构建完成输出 summary 时加载。注意 _execute_build

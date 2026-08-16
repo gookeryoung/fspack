@@ -172,6 +172,9 @@ class BuildDefaults:
     # 关闭构建结束后的 manifest 生成：默认输出产物清单 JSON
     # 到 dist/release/<name>-<version>-manifest.json
     no_manifest: bool | None = None
+    # 关闭构建结束后的 Win7 兼容扫描：默认输出文本报告
+    # 到 dist/release/win7-compat-report.txt（仅 Windows 目标）
+    no_win7_scan: bool | None = None
     # Windows 代码签名证书路径：未指定时跳过 signtool 签名。
     # 配置层仅作为 CLI --sign-exe-certificate 的回退默认值
     sign_exe_certificate: str | None = None
@@ -450,6 +453,9 @@ class BuildOptions:
     no_sbom: bool = False
     # 关闭构建结束后的 manifest 生成：默认输出产物清单 JSON
     no_manifest: bool = False
+    # 关闭构建结束后的 Win7 兼容扫描与报告（仅 Windows 目标，loader exe
+    # 硬门禁不受此开关影响）
+    no_win7_scan: bool = False
     # Windows 代码签名证书路径：非 None 时调用 signtool 签名 exe 与安装包
     sign_exe_certificate: Path | None = None
     # Windows 代码签名证书密码：与 sign_exe_certificate 配套
@@ -491,6 +497,7 @@ def build_options_from_defaults(defaults: BuildDefaults) -> BuildOptions:
         require_hashes=defaults.require_hashes if defaults.require_hashes is not None else base.require_hashes,
         no_sbom=defaults.no_sbom if defaults.no_sbom is not None else base.no_sbom,
         no_manifest=defaults.no_manifest if defaults.no_manifest is not None else base.no_manifest,
+        no_win7_scan=defaults.no_win7_scan if defaults.no_win7_scan is not None else base.no_win7_scan,
         sign_exe_certificate=(
             Path(defaults.sign_exe_certificate) if defaults.sign_exe_certificate else base.sign_exe_certificate
         ),
