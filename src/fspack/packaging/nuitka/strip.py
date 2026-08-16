@@ -65,6 +65,9 @@ class NuitkaStrip:
         .pyd 可能损坏（returncode==0、文件已生成，但运行时访问违例 0xC0000005）。
         提供验证参数时，删除 .py 前用 subprocess 批量 import 验证 .pyd 可加载，
         不可加载的 .pyd 删除产物并保留 .py，回退到 .pyc 加载。
+        **依赖缺失不算损坏**：验证环境 sys.path 仅含包根，模块顶层 import 的第三方
+        依赖（如 PySide2）缺失时 .pyd 二进制仍有效，正常剥离（分类规则见
+        :mod:`fspack.packaging.nuitka.verify` 的 ``_BINARY_LOAD_FAILURE_SNIPPET``）。
 
         Nuitka module 模式（``--mode=module``）输出文件名格式：
         - Windows: ``{stem}.cp{major}{minor}-{platform}.pyd``

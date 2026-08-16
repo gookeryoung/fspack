@@ -1084,7 +1084,7 @@ class _CrashResult:
 class _SubprocessResult:
     """subprocess.run 返回值桩."""
 
-    def __init__(self, returncode: int = 0, stdout: str = "", stderr: str = "") -> None:
+    def __init__(self, returncode: int = 0, stdout: str | bytes = "", stderr: str = "") -> None:
         self.returncode = returncode
         self.stdout = stdout
         self.stderr = stderr
@@ -1093,7 +1093,8 @@ class _SubprocessResult:
 class _IndividualRunner:
     """subprocess.run 可调用桩：模拟逐个验证，按调用解析模块名返回结果.
 
-    ``ok_modules`` 为可加载模块集合，其余模块返回崩溃码。
+    ``ok_modules`` 为二进制有效模块集合：输出 FSPACK_ONE_RESULT:1 标记并 exit 0；
+    其余模块模拟硬崩溃（访问违例 returncode），与真实损坏 .pyd 行为一致。
     每次调用返回新的 :class:`_SubprocessResult`，避免 returncode 在调用间被覆盖。
     """
 
@@ -1116,8 +1117,10 @@ class _IndividualRunner:
                     end = line.find('"', start)
                     mod = line[start:end]
                 break
-        returncode = 0 if mod in self._ok_modules else -1073741819
-        return _SubprocessResult(returncode=returncode)
+        if mod in self._ok_modules:
+            # individual 测试 subprocess 未指定 encoding，stdout 为 bytes
+            return _SubprocessResult(returncode=0, stdout=b"FSPACK_ONE_RESULT:1\n")
+        return _SubprocessResult(returncode=-1073741819)
 
 
 def test_strip_compiled_sources_verify_preserves_py_when_pyd_corrupt(
@@ -1335,6 +1338,69 @@ def test_individual_import_test_locates_corrupt_pyd(tmp_path: Path, monkeypatch:
         tmp_path / "python.exe", [tmp_path], ["rich.errors", "rich.console"]
     )
     assert result == {"rich.errors"}
+
+
+def test_binary_load_failure_snippet_classification() -> None:
+    """分类规则：依赖缺失/模块代码层异常有效，DLL 加载失败与模块自身缺失判损坏."""
+    from fspack.packaging.nuitka.verify import _BINARY_LOAD_FAILURE_SNIPPET
+
+    ns: dict[str, Any] = {}
+    exec(_BINARY_LOAD_FAILURE_SNIPPET, ns)
+    fn = ns["_fspack_binary_load_failure"]
+
+    # 依赖缺失：ModuleNotFoundError.name 指向第三方依赖（如模板模块 import PySide2）
+    assert fn("main", ModuleNotFoundError("No module named 'PySide2'", name="PySide2")) is False
+    assert fn("modules.module_b", ModuleNotFoundError("No module named 'ordered_set'", name="ordered_set")) is False
+    # 模块自身缺失（模块名推导错误或产物不存在）
+    assert fn("main", ModuleNotFoundError("No module named 'main'", name="main")) is True
+    # DLL 加载失败（.pyd 二进制损坏）：ImportError 无 name
+    assert fn("main", ImportError("DLL load failed while importing 'main'")) is True
+    # 模块顶层代码运行时异常：.pyd 已成功加载执行
+    assert fn("main", ValueError("boom")) is False
+    assert fn("main", ZeroDivisionError("division by zero")) is False
+
+
+def _make_verify_fixture(tmp_path: Path) -> Path:
+    """构造真实验证场景：依赖缺失模块 + 损坏扩展产物，返回包根.
+
+    - ``dep_missing.py``：顶层 import 不存在的第三方依赖（模拟模板模块 import PySide2）
+    - ``junk.py`` + 垃圾字节扩展产物：import 时二进制加载失败（模拟损坏 .pyd）。
+      扩展后缀用 :data:`importlib.machinery.EXTENSION_SUFFIXES[0]` 保证跨平台命名正确
+      （Windows 为 ``.cp311-win_amd64.pyd``，Linux 为 ``.cpython-311-...so``），
+      且扩展模块优先级高于 .py，import 必走损坏产物。
+    """
+    import importlib.machinery
+
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "dep_missing.py").write_text("import fspack_nonexistent_dep\n")
+    (pkg / "junk.py").write_text("x = 1\n")
+    (pkg / f"junk{importlib.machinery.EXTENSION_SUFFIXES[0]}").write_bytes(b"garbage-not-a-valid-binary")
+    return pkg
+
+
+def test_batch_import_test_real_subclassifies_dependency_missing(tmp_path: Path) -> None:
+    """真实 subprocess 集成：依赖缺失判有效、损坏扩展产物判损坏.
+
+    回归：模板模块顶层 import PySide2/pygame 等非本项目依赖时抛 ModuleNotFoundError，
+    旧实现误判为 .pyd 损坏并删除产物；修复后仅二进制自身加载失败才判损坏。
+    """
+    from fspack.packaging.nuitka import NuitkaCompiler
+
+    pkg = _make_verify_fixture(tmp_path)
+    result = NuitkaCompiler._batch_import_test(Path(sys.executable), [pkg], ["dep_missing", "junk"])
+    assert result is not None
+    assert "dep_missing" in result, "依赖缺失应视为二进制有效"
+    assert "junk" not in result, "损坏扩展产物应判损坏"
+
+
+def test_individual_import_test_real_subclassifies_dependency_missing(tmp_path: Path) -> None:
+    """真实 subprocess 集成（逐个测试）：依赖缺失判有效、损坏扩展产物判损坏."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+
+    pkg = _make_verify_fixture(tmp_path)
+    result = NuitkaCompiler._individual_import_test(Path(sys.executable), [pkg], ["dep_missing", "junk"])
+    assert result == {"dep_missing"}
 
 
 def test_batch_import_test_skips_non_prefix_lines(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
