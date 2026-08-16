@@ -66,7 +66,7 @@ class NuitkaStrip:
         提供验证参数时，删除 .py 前用 subprocess 批量 import 验证 .pyd 可加载，
         不可加载的 .pyd 删除产物并保留 .py，回退到 .pyc 加载。
 
-        Nuitka ``--module`` 输出文件名格式：
+        Nuitka module 模式（``--mode=module``）输出文件名格式：
         - Windows: ``{stem}.cp{major}{minor}-{platform}.pyd``
         - Linux: ``{stem}.cpython-{major}{minor}-{platform}.so``
 

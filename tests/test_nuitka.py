@@ -575,7 +575,13 @@ def test_compile_src_invokes_bootstrap_script_with_sys_path_injection(
         # 所有调用复用同一 bootstrap 脚本
         assert bootstrap_script.endswith("_nuitka_bootstrap.py")
         # nuitka 编译参数（--show-progress 在 4.x 已 obsolete，不加；不用 --quiet 抑制 INFO）
-        assert "--module" in cmd
+        # --mode=module：4.x 中旧 --module 已废弃，模块模式专属选项检查只认 --mode=module，
+        # 否则 --no-pyi-file 触发 "has no effect" WARNING
+        assert "--mode=module" in cmd
+        # --nofollow-imports：显式不跟随导入（模块模式默认行为），消除
+        # "did not specify to follow or include anything" 警告
+        assert "--nofollow-imports" in cmd
+        assert "--module" not in cmd
         assert "--no-pyi-file" in cmd
         assert "--remove-output" in cmd
         # --assume-yes-for-downloads：Nuitka 4.x 内置 zig 作为可选 C 编译器，自动接受下载

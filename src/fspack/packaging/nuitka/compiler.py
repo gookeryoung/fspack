@@ -6,7 +6,7 @@ import 在 :mod:`fspack.packaging.nuitka` 包 ``__init__.py``。本模块通过�
 所有方法为 staticmethod/classmethod，无实例状态。``cls.`` 调用经 MRO 自动派发
 到对应 mixin，对外暴露统一的 :class:`NuitkaCompiler` API。
 
-参考 RimSort 的 Nuitka 打包方案，用 ``python -m nuitka --module`` 将每个 ``.py``
+参考 RimSort 的 Nuitka 打包方案，用 ``python -m nuitka --mode=module`` 将每个 ``.py``
 编译为对应平台的 ``.pyd``（Windows）/ ``.so``（Linux）。运行时 ``.pyd`` 优先级
 高于 ``.pyc``，Python 自动加载本机代码版本，执行速度提升 30-50%。
 

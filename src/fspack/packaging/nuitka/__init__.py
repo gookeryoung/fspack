@@ -10,7 +10,7 @@
 - :class:`fspack.packaging.nuitka.ccache.NuitkaCcache` — ccache 管理
   （PATH 查找、本地缓存、预编译二进制下载）
 - :class:`fspack.packaging.nuitka.compile.NuitkaCompile` — 编译流程
-  （单文件 ``--module`` 编译、stamp 缓存、第三方包编译）
+  （单文件 ``--mode=module`` 编译、stamp 缓存、第三方包编译）
 - :class:`fspack.packaging.nuitka.strip.NuitkaStrip` — 产物剥离与构建目录清理
   （验证 .pyd 可加载后删 .py、清理 ``.build/`` 残留）
 - :class:`fspack.packaging.nuitka.verify.NuitkaVerify` — 编译产物验证
@@ -19,7 +19,7 @@
 所有方法为 staticmethod/classmethod，无实例状态。``cls.`` 调用经 MRO 自动派发
 到对应 mixin，对外暴露统一的 :class:`NuitkaCompiler` API。
 
-参考 RimSort 的 Nuitka 打包方案，用 ``python -m nuitka --module`` 将每个 ``.py``
+参考 RimSort 的 Nuitka 打包方案，用 ``python -m nuitka --mode=module`` 将每个 ``.py``
 编译为对应平台的 ``.pyd``（Windows）/ ``.so``（Linux）。运行时 ``.pyd`` 优先级
 高于 ``.pyc``，Python 自动加载本机代码版本，执行速度提升 30-50%。
 

@@ -9,7 +9,7 @@ facade，MRO 顺序见 :mod:`fspack.packaging.nuitka.compiler`。
 - 流式编译输出（``_stream_compile``）：实时显示 nuitka INFO 与 gcc 调用，
   累积 stdout/stderr 供失败诊断，含超时与死锁防护。
 - 并行编译池（``_compile_files``）：ThreadPoolExecutor 并行调 nuitka
-  ``--module`` 批量编译 .py，全局心跳进度反馈，gcc 总并行度防超订。
+  ``--mode=module`` 批量编译 .py，全局心跳进度反馈，gcc 总并行度防超订。
 
 跨 mixin 调用（``cls.<method>()``）通过
 :class:`fspack.packaging.nuitka.protocol.NuitkaCompilerProtocol` 类型契约声明。
@@ -215,7 +215,7 @@ class NuitkaProgress:
         """并行编译 .py 文件，返回 (成功编译的文件集合, 失败文件路径列表).
 
         用 dispatch 的 ThreadPoolExecutor（compile 层 patch 后的类，供测试注入 mock）
-        并行调 nuitka ``--module``（subprocess 释放 GIL，线程足够并行）。
+        并行调 nuitka ``--mode=module``（subprocess 释放 GIL，线程足够并行）。
         ``max_workers = min(cpu_count, _MAX_COMPILE_WORKERS)`` 平衡并行收益与
         Windows 资源限制。常量均通过 :func:`_C` dispatch，保证 monkeypatch 生效。
 
@@ -225,7 +225,11 @@ class NuitkaProgress:
 
         Nuitka 编译参数（作为脚本参数传入，进入 ``sys.argv[1:]``）：
 
-        - ``--module``：编译为可导入模块（.pyd/.so），不生成独立 exe
+        - ``--mode=module``：编译为可导入模块（.pyd/.so），不生成独立 exe
+          （Nuitka 4.x 须用 ``--mode=module``，旧 ``--module`` 已废弃且不再被
+          模块模式专属选项检查识别，会触发无效果 WARNING）
+        - ``--nofollow-imports``：显式不跟随导入（单文件编译本就不跟随，
+          显式声明消除 "did not specify to follow or include anything" 警告）
         - ``--output-dir``：输出目录与源码同目录（保持包结构）
         - ``--no-pyi-file``：不生成 .pyi 类型存根（运行时不需要）
         - ``--remove-output``：编译后删除临时构建文件（.build/ 目录）
@@ -259,12 +263,17 @@ class NuitkaProgress:
         total = len(py_files)
 
         def _compile_one(py_file: Path) -> tuple[Path, int]:
-            """单文件编译 worker：调 nuitka --module，返回 (文件路径, 退出码)."""
+            """单文件编译 worker：调 nuitka --mode=module，返回 (文件路径, 退出码)."""
             returncode, _stdout, _stderr = cls._stream_compile(
                 [
                     str(py_exe),
                     str(bootstrap_script),
-                    "--module",
+                    # Nuitka 4.x：--module 已废弃为兼容写法，须用 --mode=module，
+                    # 否则 --no-pyi-file 等模块模式专属选项触发无效果 WARNING
+                    "--mode=module",
+                    # 显式声明不跟随导入：单文件逐个编译本就不跟随（模块模式默认行为），
+                    # 显式传入避免 Nuitka "did not specify to follow or include anything" 警告
+                    "--nofollow-imports",
                     f"--output-dir={py_file.parent}",
                     "--no-pyi-file",
                     "--remove-output",

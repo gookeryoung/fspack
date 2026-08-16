@@ -178,7 +178,7 @@ def build(  # noqa: PLR0913
     ``.png``/``.jpg``）通过 Pillow 转换为 ``.ico``（需安装 ``fspack[image]``），
     转换失败回退到默认 icon。仅 Windows 目标生效，Linux 忽略（ELF 无图标资源概念）。
 
-    ``options.nuitka=True`` 时启用 Nuitka 编译模式：用 ``python -m nuitka --module``
+    ``options.nuitka=True`` 时启用 Nuitka 编译模式：用 ``python -m nuitka --mode=module``
     将 ``dist/src`` 下用户源码编译为 ``.pyd``，运行时本机执行，速度提升 30-50%。
     默认关闭。Nuitka 模式下 ``pyc_optimize`` 与 ``pyc_strip`` 仍生效于
     site-packages（第三方依赖保持 .pyc），用户源码以 .pyd 替代 .pyc。
