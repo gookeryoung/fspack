@@ -478,6 +478,21 @@ fsp p --extra full               # package 子命令同样支持
 
 Linux 可交叉编译 Windows 包（`fsp b --target windows`），反之亦然。
 
+### Windows 7 支持
+
+Windows 产物可在 **Win7 SP1** 上运行（Python 3.9–3.14），fspack 自动处理两代兼容问题：
+
+| Python 版本 | 兼容手段 |
+|------------|---------|
+| 3.9–3.11 | 构建时注入内置 `api-ms-win-core-path-l1-1-0.dll` shim（官方 dll 仅缺此 API Set） |
+| 3.12–3.14 | 按 sha256 清单从 [PythonVista](https://github.com/adang1345/PythonVista) 下载 Win7 重编译版 `python3XX.dll` 替换官方件（官方 dll 静态导入 Win8+ API，shim 无法覆盖） |
+
+构建期自动执行三道门禁（无需配置）：loader exe 导入表校验（违规即构建失败）、python3XX.dll 双重校验（sha256 + 导入表）、dist 全量 `.dll`/`.pyd` 扫描并输出报告 `dist/release/win7-compat-report.txt`（第三方依赖违规仅报告不阻断，可据此更换依赖版本；`--no-win7-scan` 可关闭）。
+
+**运行前提**：目标机需已安装 UCRT（Win7 装 [KB2999226](https://www.microsoft.com/en-us/download/details.aspx?id=49077)，Win10/11 自带）。NSIS 安装包会在启动时检测 `ucrtbase.dll`，缺失时提示 KB 编号并询问是否继续；zip 便携包请自行确认该前提。
+
+**已知限制**：第三方 pyd 若自身链接了 Win8+ API，在 Win7 上加载会失败——兼容报告会列出此类文件，但 fspack 无法自动修复（只能更换依赖版本）；Nuitka 编译模式（`--nuitka`）的用户代码产物同样受扫描报告监督。
+
 ## CI/CD 集成
 
 fspack 可集成到 CI/CD 工作流，实现自动打包与发布。提供两个 GitHub Actions 模板：

@@ -24,7 +24,7 @@ from fspack.packaging.installer import (
 )
 
 # 注意：installer.nsis 必须在 installer 之后导入（installer 导入会触发子模块加载）
-from fspack.packaging.installer.nsis import sign_exe_file, sign_exe_files
+from fspack.packaging.installer.nsis import dist_needs_ucrt, sign_exe_file, sign_exe_files
 from fspack.platform import Platform
 from fspack.progress import BuildTracker
 from tests._stubs import CompletedStub
@@ -154,6 +154,50 @@ def test_generate_nsis_script_uninstall_old_version(tmp_path: Path) -> None:
     assert "ExecWait '\"$R2\\uninstall.exe\" /S _?=$R2' $R3" in content
     # 用户拒绝卸载时直接覆盖安装
     assert "skip_uninstall:" in content
+
+
+def test_dist_needs_ucrt(tmp_path: Path) -> None:
+    """dist 内 PE 导入 api-ms-win-crt-* 时判定需 UCRT（release/build 不参与）."""
+    dist = tmp_path / "dist"
+    runtime = dist / "runtime"
+    runtime.mkdir(parents=True)
+    # 导入表 dll 名为 ASCII 明文：含前缀即命中（build/release 排除在外）
+    (runtime / "python311.dll").write_bytes(b"MZ...api-ms-win-crt-runtime-l1-1-0.dll...")
+    (dist / "release").mkdir()
+    (dist / "release" / "fake.dll").write_bytes(b"api-ms-win-crt-")
+    assert dist_needs_ucrt(dist) is True
+
+    clean = tmp_path / "clean"
+    clean.mkdir()
+    (clean / "app.exe").write_bytes(b"MZ clean no ucrt marker")
+    assert dist_needs_ucrt(clean) is False
+
+
+def test_generate_nsis_script_ucrt_check_block(tmp_path: Path) -> None:
+    """产物依赖 UCRT 时 .onInit 含 ucrtbase.dll 检测段（缺失提示 KB 编号）."""
+    info = _make_info(tmp_path, name="app")
+    dist = tmp_path / "dist"
+    (dist / "runtime").mkdir(parents=True)
+    (dist / "runtime" / "python311.dll").write_bytes(b"MZ...api-ms-win-crt-runtime-l1-1-0.dll...")
+    nsi = generate_nsis_script(info, dist, dist / "release")
+    content = nsi.read_text(encoding="utf-8")
+    assert '${IfNot} ${FileExists} "$SYSDIR\\ucrtbase.dll"' in content
+    assert "KB2999226" in content
+    # 拒绝继续时中止安装
+    assert "Abort" in content
+    assert "ucrt_ok:" in content
+
+
+def test_generate_nsis_script_no_ucrt_block_when_not_needed(tmp_path: Path) -> None:
+    """产物无 UCRT 依赖时不生成检测段（Win10+/自带场景不弹窗）."""
+    info = _make_info(tmp_path, name="app")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "app.exe").write_bytes(b"MZ no ucrt")
+    nsi = generate_nsis_script(info, dist, dist / "release")
+    content = nsi.read_text(encoding="utf-8")
+    assert "ucrtbase.dll" not in content
+    assert "Function .onInit" in content
 
 
 def test_compile_installer_makensis_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

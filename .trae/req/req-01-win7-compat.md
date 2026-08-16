@@ -10,9 +10,9 @@
 
 ## P2 运行前提闭环（UCRT）
 
-- [ ] 扫描 dist 内 api-ms-win-crt-* 依赖，NSIS 安装包检测目标机 UCRT 缺失并提示
-- [ ] zip 发行版文档注明 KB2999226 前提
-- [ ] README 增补 Win7 支持章节：支持矩阵（3.9-3.14 × Win7 SP1）/原理/前提/已知限制
+- [x] 扫描 dist 内 api-ms-win-crt-* 依赖，NSIS 安装包检测目标机 UCRT 缺失并提示
+- [x] zip 发行版文档注明 KB2999226 前提
+- [x] README 增补 Win7 支持章节：支持矩阵（3.9-3.14 × Win7 SP1）/原理/前提/已知限制
 
 ## P3 诊断与守卫
 

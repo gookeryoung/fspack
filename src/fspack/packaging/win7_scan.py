@@ -30,6 +30,7 @@ __all__ = [
     "Win7ScanError",
     "Win7ScanReport",
     "enforce_win7_loaders",
+    "iter_pe_files",
     "render_win7_report",
     "scan_dist_win7",
     "write_win7_report",
@@ -72,8 +73,11 @@ class Win7ScanReport:
         return not self.violations
 
 
-def _iter_scan_files(dist_dir: Path) -> list[Path]:
-    """收集 dist 下待扫描的 PE 文件（排除 build/release，排序保证确定性）."""
+def iter_pe_files(dist_dir: Path) -> list[Path]:
+    """收集 dist 下待扫描的 PE 文件（排除 build/release，排序保证确定性）.
+
+    公开给 NSIS 生成器复用（UCRT 依赖检测遍历同一文件集合）。
+    """
     files = [
         p
         for p in dist_dir.rglob("*")
@@ -98,7 +102,7 @@ def scan_dist_win7(dist_dir: Path, *, shim: Path | None = WIN7_SHIM_DLL_PATH) ->
     violations: list[Win7CheckResult] = []
     shim_files = 0
     ucrt_files = 0
-    for path in _iter_scan_files(dist_dir):
+    for path in iter_pe_files(dist_dir):
         try:
             result = check_win7_imports(path, shim=shim)
         except PeParseError as exc:

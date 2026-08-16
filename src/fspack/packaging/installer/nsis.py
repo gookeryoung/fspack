@@ -27,12 +27,14 @@ from fspack.packaging.installer.base import (
     _run_stage,
     _run_tool,
 )
+from fspack.packaging.win7_scan import iter_pe_files
 from fspack.platform import Platform
 from fspack.progress import BuildTracker
 
 __all__ = [
     "NsisInstaller",
     "compile_installer",
+    "dist_needs_ucrt",
     "generate_nsis_script",
     "sign_exe_file",
     "sign_exe_files",
@@ -43,6 +45,32 @@ _logger = logging.getLogger("fspack.packaging.installer")
 
 # NSIS File /x 参数列表（空格分隔的 /x <pattern> 序列）
 _NSIS_EXCLUDE_INTERMEDIATE = " ".join(f"/x {pat}" for pat in _DIST_INTERMEDIATE_EXCLUDES)
+
+# UCRT 依赖时 .onInit 注入的检测段：缺失时告知 KB 编号并让用户选择是否继续。
+# 注意：本块作为 format 的值传入（非模板片段），不使用 {{}} 转义，直接写 NSIS 语法。
+_NSIS_UCRT_CHECK_BLOCK = """\
+  # UCRT 检测：产物依赖 Universal C Runtime，Win7/Win8 系统需微软更新
+  # （Win7=KB2999226 / Win8=KB2999264）提供 ucrtbase.dll，缺失则装后无法启动
+  ${IfNot} ${FileExists} "$SYSDIR\\ucrtbase.dll"
+    MessageBox MB_YESNO|MB_ICONEXCLAMATION "未检测到系统 Universal C Runtime（ucrtbase.dll）。$\\r$\\n$\\r$\\n本程序依赖 UCRT 运行库：Windows 7 需安装更新 KB2999226（Windows 8/8.1 为 KB2999264），Windows 10/11 自带无需处理。缺少 UCRT 时程序安装后将无法启动。$\\r$\\n$\\r$\\n是否仍要继续安装？（建议选否，先安装 UCRT 更新后再运行本安装包）" IDYES ucrt_ok
+    Abort
+  ${EndIf}
+  ucrt_ok:
+"""
+
+# UCRT 依赖二进制标记（PE 导入表 dll 名为 ASCII 明文，子串检测零漏报）
+_UCRT_MARKER = b"api-ms-win-crt-"
+
+
+def dist_needs_ucrt(dist_dir: Path) -> bool:
+    """dist 内 PE 是否依赖 UCRT（api-ms-win-crt-* 导入），决定 NSIS 是否生成检测段.
+
+    导入表 dll 名以 ASCII 明文存储，二进制子串检测零漏报；第三方数据段
+    偶发嵌含该前缀字符串仅致安装时多一次提示（无害），不值得全量 PE
+    导入表解析（P1 的 win7 扫描已产出精确统计，本检测用于独立的
+    ``fsp p`` 打包路径）。
+    """
+    return any(_UCRT_MARKER in path.read_bytes() for path in iter_pe_files(dist_dir))
 
 
 _NSIS_TEMPLATE = """\
@@ -87,6 +115,7 @@ Function .onInit
       # 用户选择直接覆盖安装
     done:
   ${{EndIf}}
+{ucrt_check_block}
 FunctionEnd
 
 Section "Main"
@@ -212,11 +241,15 @@ def generate_nsis_script(project: ProjectInfo, dist_dir: Path, release_dir: Path
     release_dir.mkdir(parents=True, exist_ok=True)
     out_setup_rel = release_dir.relative_to(dist_dir) / f"{_release_base(project, 'windows')}-setup.exe"
     out_setup_win = str(out_setup_rel).replace("/", "\\")
+    needs_ucrt = dist_needs_ucrt(dist_dir)
+    if needs_ucrt:
+        _logger.info("产物依赖 UCRT，NSIS 安装包将检测目标机 ucrtbase.dll 并在缺失时提示")
     content = _NSIS_TEMPLATE.format(
         name=project.name,
         version=project.version,
         out_setup=out_setup_win,
         nsis_exclude_intermediate=_NSIS_EXCLUDE_INTERMEDIATE + " " if _NSIS_EXCLUDE_INTERMEDIATE else "",
+        ucrt_check_block=_NSIS_UCRT_CHECK_BLOCK if needs_ucrt else "",
         shortcut_block=_build_shortcut_block(project),
         uninstall_shortcut_block=_build_uninstall_shortcut_block(project),
         registry_block=_build_registry_block(project),
