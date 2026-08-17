@@ -51,6 +51,7 @@ from fspack.packaging.pipeline.frontend_stage import (
     FrontendProject,
     _build_frontend,
     _detect_frontends,
+    _frontend_prune_map,
 )
 from fspack.packaging.pipeline.runtime_stage import (
     _prepare_runtime,
@@ -86,6 +87,7 @@ __all__ = [
     "_dep_cache_save",
     "_detect_frontends",
     "_download_dependencies",
+    "_frontend_prune_map",
     "_normalize_pkg_name",
     "_prepare_runtime",
     "_prepare_standalone_runtime",

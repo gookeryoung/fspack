@@ -49,7 +49,7 @@ from fspack.packaging.pipeline import (
     _save_build_failure,
     _save_build_ok,
 )
-from fspack.packaging.pipeline.frontend_stage import _build_frontend, _detect_frontends, _run_cmd
+from fspack.packaging.pipeline.frontend_stage import _build_frontend, _detect_frontends, _frontend_prune_map, _run_cmd
 from fspack.packaging.pipeline.stages import _MAX_LOADER_WORKERS, BuildContext, _build_entry_loaders
 from fspack.platform import Platform
 from fspack.progress import StageRecorder
@@ -3847,3 +3847,114 @@ def test_run_cmd_failure_raises_with_tail(tmp_path: Path, monkeypatch: pytest.Mo
         _run_cmd("npm", ["run", "build"], tmp_path)
     assert "E" * 800 in str(exc_info.value)
     assert "E" * 801 not in str(exc_info.value)
+
+
+# ---- copy_source 前端裁剪（dist 只发布产物，前端源码不进入） ----
+
+
+def test_frontend_prune_map_assembly(tmp_path: Path) -> None:
+    """_frontend_prune_map 组装：FrontendProject 集 → root 到产物映射."""
+    fe = _write_frontend_pkg(tmp_path / "frontend")
+    fps = _detect_frontends(tmp_path, ())
+    assert _frontend_prune_map(fps) == {fe.resolve(): (fe / "deploy", fe / "dist")}
+
+
+def test_copy_source_frontend_prune_keeps_only_output(tmp_path: Path) -> None:
+    """前端根目录下只保留产物目录：src/public/package.json 等源码不进 dist."""
+    src = tmp_path / "proj"
+    fe = src / "src" / "webview_app" / "frontend"
+    _write_frontend_pkg(fe)
+    (fe / "src").mkdir()
+    (fe / "src" / "App.vue").write_text("<template/>", encoding="utf-8")
+    (fe / "public").mkdir()
+    (fe / "vite.config.ts").write_text("export default {}", encoding="utf-8")
+    (fe / "index.html").write_text("<html/>", encoding="utf-8")
+    deploy = fe / "deploy"
+    deploy.mkdir()
+    (deploy / "index.html").write_text("<html>built</html>", encoding="utf-8")
+    assets = deploy / "assets"
+    assets.mkdir()
+    (assets / "app.js").write_text("console.log(1)", encoding="utf-8")
+
+    dst = tmp_path / "dist_src"
+    copy_source(src, dst, frontend_prune=_frontend_prune_map(_detect_frontends(src, ())))
+
+    fe_dst = dst / "src" / "webview_app" / "frontend"
+    assert sorted(p.name for p in fe_dst.iterdir()) == ["deploy"]
+    assert (fe_dst / "deploy" / "index.html").read_text(encoding="utf-8") == "<html>built</html>"
+    assert (fe_dst / "deploy" / "assets" / "app.js").is_file()
+    assert not (fe_dst / "package.json").exists()
+    assert not (fe_dst / "src").exists()
+    assert not (fe_dst / "vite.config.ts").exists()
+
+
+def test_copy_source_frontend_prune_output_name_dist_restored(tmp_path: Path) -> None:
+    """产物目录名为 dist 时命中 _EXCLUDE_ALWAYS 构建产物模式，仍被保护恢复."""
+    src = tmp_path / "proj"
+    fe = _write_frontend_pkg(src / "frontend")
+    out = fe / "dist"
+    out.mkdir()
+    (out / "index.html").write_text("<html/>", encoding="utf-8")
+
+    dst = tmp_path / "dist_src"
+    # 显式配置产物目录为 frontend/dist（配置路径识别的 output_dirs）
+    prune = {fe.resolve(): (out.resolve(),)}
+    copy_source(src, dst, frontend_prune=prune)
+
+    assert sorted(p.name for p in (dst / "frontend").iterdir()) == ["dist"]
+    assert (dst / "frontend" / "dist" / "index.html").is_file()
+
+
+def test_copy_source_frontend_prune_nested_output(tmp_path: Path) -> None:
+    """产物目录嵌套（build/www）：逐层裁剪，只保留通往产物的路径链."""
+    src = tmp_path / "proj"
+    fe = _write_frontend_pkg(src / "frontend")
+    www = fe / "build" / "www"
+    www.mkdir(parents=True)
+    (www / "index.html").write_text("<html/>", encoding="utf-8")
+    (fe / "build" / "cache.txt").write_text("x", encoding="utf-8")
+
+    dst = tmp_path / "dist_src"
+    copy_source(src, dst, frontend_prune={fe.resolve(): (www.resolve(),)})
+
+    fe_dst = dst / "frontend"
+    assert sorted(p.name for p in fe_dst.iterdir()) == ["build"]
+    assert sorted(p.name for p in (fe_dst / "build").iterdir()) == ["www"]
+    assert (fe_dst / "build" / "www" / "index.html").is_file()
+
+
+def test_copy_source_frontend_prune_output_is_root_no_prune(tmp_path: Path) -> None:
+    """产物目录即前端根本身（配置指向前端根，如 flask 手写 html）：不裁剪."""
+    src = tmp_path / "proj"
+    fe = _write_frontend_pkg(src / "frontend")
+    (fe / "index.html").write_text("<html/>", encoding="utf-8")
+
+    dst = tmp_path / "dist_src"
+    copy_source(src, dst, frontend_prune={fe.resolve(): (fe.resolve(),)})
+
+    # frontend 根即产物：原样复制（package.json 保留）
+    assert (dst / "frontend" / "package.json").is_file()
+    assert (dst / "frontend" / "index.html").is_file()
+
+
+def test_copy_source_frontend_prune_incremental_sync(tmp_path: Path) -> None:
+    """增量同步路径（dst 已存在）同样应用裁剪：dst 残留的前端源码被删除."""
+    src = tmp_path / "proj"
+    fe = _write_frontend_pkg(src / "frontend")
+    (fe / "src").mkdir()
+    (fe / "src" / "App.vue").write_text("<template/>", encoding="utf-8")
+    deploy = fe / "deploy"
+    deploy.mkdir()
+    (deploy / "index.html").write_text("<html/>", encoding="utf-8")
+
+    dst = tmp_path / "dist_src"
+    # 首次复制（未裁剪，模拟旧版 fspack 打出的 dist 残留前端源码）
+    copy_source(src, dst)
+    assert (dst / "frontend" / "package.json").is_file()
+
+    # 二次构建（带裁剪）：增量同步删除 dst 中源码侧已排除的文件
+    copy_source(src, dst, frontend_prune=_frontend_prune_map(_detect_frontends(src, ())))
+    fe_dst = dst / "frontend"
+    assert sorted(p.name for p in fe_dst.iterdir()) == ["deploy"]
+    assert not (fe_dst / "package.json").exists()
+    assert not (fe_dst / "src").exists()

@@ -10,6 +10,7 @@ import hashlib
 import logging
 import os
 import shutil
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Callable
 
@@ -118,12 +119,13 @@ def _merge_ignore_fns(
 _EXCLUDE = _merge_ignore_fns(_EXCLUDE_ALWAYS, _EXCLUDE_METADATA)
 
 
-def copy_source(
+def copy_source(  # noqa: PLR0913
     project_dir: Path,
     src_dst: Path,
     extra_excludes: tuple[str, ...] = (),
     data_dirs: tuple[str, ...] = (),
     web_static_dirs: tuple[str, ...] = (),
+    frontend_prune: Mapping[Path, Sequence[Path]] | None = None,
 ) -> None:
     """将项目源码同步到 dist/src，剥离开发期文件.
 
@@ -149,14 +151,63 @@ def copy_source(
     wrapper 在打包时把这些目录解析为 dist 下绝对路径，注入 Flask ``static_folder``
     / FastAPI ``StaticFiles`` serve。
 
+    ``frontend_prune`` 为前端裁剪映射（前端根目录绝对路径 → 产物目录绝对路径
+    元组，来自构建阶段的 :class:`FrontendProject` 集合）：前端根目录下仅保留
+    产物路径上的条目（``deploy/``/``dist/``），源码（``src/``/``public/``/
+    ``package.json``/构建配置等）不进入发布产物——发布产物离线可用，无需
+    node 环境。产物目录同时并入保护集合（目录树内文件不被元数据排除，产物
+    目录名命中 ``_EXCLUDE_ALWAYS`` 时如 ``dist`` 会被恢复）。
+
     增量同步：``src_dst`` 已存在时保留 ``__pycache__`` 目录以复用 ``.pyc`` 缓存，
     仅删除源码中已不存在的文件、覆盖复制新增/改动的文件（``copy2`` 保留 mtime）。
     """
-    ignore_fn = _build_ignore_fn(project_dir, extra_excludes, data_dirs, web_static_dirs)
+    ignore_fn = _build_ignore_fn(project_dir, extra_excludes, data_dirs, web_static_dirs, frontend_prune)
     if src_dst.exists():
         _sync_tree(project_dir, src_dst, ignore_fn)
     else:
         shutil.copytree(project_dir, src_dst, ignore=ignore_fn)
+
+
+def _build_frontend_prune_fn(
+    frontend_prune: Mapping[Path, Sequence[Path]],
+) -> Callable[[Path, list[str]], set[str]]:
+    """构造前端裁剪函数：前端根目录下仅保留产物路径上的条目.
+
+    返回 ``(dir_resolved, names) -> set[str]``（接收已 resolve 的目录路径，
+    与 :func:`_build_ignore_fn` 共享 resolve 结果避免重复系统调用）：
+
+    - 目录即前端根：保留各产物目录相对根的首段名（``deploy``/``dist``），
+      其余（``src``/``public``/``package.json``/构建配置等）全排除
+    - 目录在产物路径上（产物的祖先）：保留通往产物的下一段
+    - 目录在前端根内但不在任何产物路径上：全排除（不可达，防御分支）
+    - 产物目录即前端根本身（配置指向前端根的语义）：不裁剪，返回空集
+    """
+    # 预 resolve（root/产物均绝对），忽略大小写差异由 Path 语义保证
+    resolved: list[tuple[Path, tuple[Path, ...]]] = [
+        (root.resolve(), tuple(o.resolve() for o in outs)) for root, outs in frontend_prune.items()
+    ]
+
+    def prune_fn(dir_resolved: Path, names: list[str]) -> set[str]:
+        for root, outs in resolved:
+            if dir_resolved != root and root not in dir_resolved.parents:
+                continue
+            if root in outs:
+                return set()
+            # 目录在某产物目录内部（含产物自身，即产物是目录的祖先）：
+            # 产物内部不裁剪（html/js/css 等全保留）
+            if any(dir_resolved == out or out in dir_resolved.parents for out in outs):
+                return set()
+            rel = dir_resolved.relative_to(root).parts
+            keep: set[str] = set()
+            for out in outs:
+                parts = out.relative_to(root).parts
+                if len(parts) > len(rel) and parts[: len(rel)] == rel:
+                    keep.add(parts[len(rel)])
+            # keep 为空 = 目录不在任何产物路径上（不可达，防御分支）：全裁
+            return {n for n in names if n not in keep}
+        return set()
+
+    return prune_fn
 
 
 def _build_ignore_fn(
@@ -164,6 +215,7 @@ def _build_ignore_fn(
     extra_excludes: tuple[str, ...],
     data_dirs: tuple[str, ...],
     web_static_dirs: tuple[str, ...] = (),
+    frontend_prune: Mapping[Path, Sequence[Path]] | None = None,
 ) -> Callable[..., set[str]]:
     """构造 ignore 函数：data-dirs/web-static-dirs 内只应用 _EXCLUDE_ALWAYS，外应用完整 _EXCLUDE.
 
@@ -171,12 +223,16 @@ def _build_ignore_fn(
     ``directory`` 判断是否在任一保护目录内（前缀匹配），是则跳过 ``_EXCLUDE_METADATA``。
     两者语义等价（同等保护），合并为一个集合判断。
 
+    ``frontend_prune`` 的产物目录并入保护集合；裁剪函数
+    :func:`_build_frontend_prune_fn` 的排除集合并入返回值（前端源码不进 dist）。
+
     ``extra_excludes`` 始终应用（用户显式排除优先级最高，不论是否在保护目录内）。
     """
     extra_fn = shutil.ignore_patterns(*extra_excludes) if extra_excludes else None
+    prune_fn = _build_frontend_prune_fn(frontend_prune) if frontend_prune else None
     # 合并 data_dirs + web_static_dirs（两者同等保护，无顺序差异）
     protected_dirs = (*data_dirs, *web_static_dirs)
-    if not protected_dirs:
+    if not protected_dirs and not frontend_prune:
         # 无保护目录：返回完整 _EXCLUDE（已含 _ALWAYS + _METADATA）+ extra
         if extra_fn is None:
             return _EXCLUDE
@@ -194,6 +250,12 @@ def _build_ignore_fn(
         # Path() 跨平台接受正斜杠，resolve 后与 directory 比较前缀
         abs_path = (project_dir_abs / Path(rel)).resolve()
         protected_abs.append(abs_path)
+    # 前端产物目录同等保护：目录树内文件不被元数据排除（产物内的
+    # asset-manifest.json/README 等随包分发）；产物目录名命中
+    # _EXCLUDE_ALWAYS（如 "dist"）时由下方恢复机制救回
+    if frontend_prune:
+        for outs in frontend_prune.values():
+            protected_abs.extend(o.resolve() for o in outs)
 
     def ignore_fn(directory: str, names: list[str]) -> set[str]:
         excluded = _EXCLUDE_ALWAYS(directory, names)
@@ -217,17 +279,19 @@ def _build_ignore_fn(
                 continue
         if not in_protected:
             excluded |= _EXCLUDE_METADATA(directory, names)
-        # 保护目录自身可能匹配 _EXCLUDE_ALWAYS/_EXCLUDE_METADATA 模式（如
-        # web-static-dirs = ["dist"] 中的 "dist" 匹配 _EXCLUDE_ALWAYS 的构建产物
-        # 模式），需从排除集中移除保护目录的直接子项名，使其被正常复制。
+        # 保护目录自身或其祖先目录名可能匹配 _EXCLUDE_ALWAYS/_EXCLUDE_METADATA
+        # 模式（如产物目录 "dist"/嵌套产物 "build/www" 的祖先 "build" 匹配构建
+        # 产物模式），需从排除集中移除该名字，保护目录（含嵌套路径链）被正常复制。
         # extra_excludes 优先级最高，不从中移除（用户显式排除始终生效）。
         if excluded:
             for name in list(excluded):
                 child = dir_resolved / name
                 for d in protected_abs:
-                    if child == d:
+                    if child == d or child in d.parents:
                         excluded.discard(name)
                         break
+        if prune_fn is not None:
+            excluded |= prune_fn(dir_resolved, names)
         if extra_fn is not None:
             excluded |= extra_fn(directory, names)
         return excluded

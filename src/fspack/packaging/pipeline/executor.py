@@ -48,6 +48,7 @@ from fspack.packaging.pipeline.stages import (
     _compile_user_sources,
     _detect_frontends,
     _download_dependencies,
+    _frontend_prune_map,
     _prepare_runtime,
     _resolve_project_icon,
     _slim_runtime,
@@ -322,6 +323,7 @@ def _execute_build(  # noqa: PLR0912, PLR0913
                 extra_excludes=info.exclude_dirs,
                 data_dirs=info.data_dirs,
                 web_static_dirs=info.web_static_dirs,
+                frontend_prune=_frontend_prune_map(_frontends),
             )
 
     _compile_user_sources(ctx, src_dst)

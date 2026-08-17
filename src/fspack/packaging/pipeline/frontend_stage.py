@@ -23,6 +23,7 @@
 **公开导出**（由 ``pipeline.stages`` re-export）：
 - :func:`_detect_frontends`：识别前端项目（纯检测，无副作用）
 - :func:`_build_frontend`：构建（产物就绪则跳过），返回阶段 detail 文案
+- :func:`_frontend_prune_map`：前端项目集转 copy_source 裁剪映射
 - :class:`FrontendProject`：单个前端项目（根目录 + 产物目录集合）
 """
 
@@ -44,6 +45,7 @@ __all__ = [
     "FrontendProject",
     "_build_frontend",
     "_detect_frontends",
+    "_frontend_prune_map",
 ]
 
 _logger = logging.getLogger(__name__)
@@ -232,3 +234,13 @@ def _build_frontend(frontends: list[FrontendProject]) -> str:
     if skipped:
         detail += f"；产物已存在跳过: {'、'.join(skipped)}"
     return detail
+
+
+def _frontend_prune_map(frontends: Sequence[FrontendProject]) -> dict[Path, tuple[Path, ...]]:
+    """前端项目集转裁剪映射：前端根目录 → 产物目录元组.
+
+    供 :func:`fspack.packaging.sync.copy_source` 的 ``frontend_prune`` 参数
+    使用——dist 内前端根目录下只保留产物路径（``deploy/``/``dist/``），
+    源码（``src/``/``public/``/``package.json``/构建配置等）不进入发布产物。
+    """
+    return {fp.root: fp.output_dirs for fp in frontends}
