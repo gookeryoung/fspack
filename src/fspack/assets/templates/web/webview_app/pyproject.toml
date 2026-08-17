@@ -24,10 +24,6 @@ webdemo = "webview_app.cli:main"
 build-backend = "hatchling.build"
 requires = ["hatchling"]
 
-# 自定义构建钩子
-[tool.hatch.build.hooks.custom]
-path = "hatch_build_hook.py"
-
 [tool.hatch.build.targets.wheel]
 exclude = [
     "src/webview_app/frontend/*.*",
