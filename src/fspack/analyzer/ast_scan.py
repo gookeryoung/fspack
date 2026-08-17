@@ -330,7 +330,7 @@ STDLIB_FALLBACK: frozenset[str] = frozenset(
         # 下划线 C 模块（CPython 3.8 全平台默认构建）：源码 ``import _io``/
         # ``from _collections import deque`` 等不应在 3.8/3.9 回退集合下
         # 被误判为第三方依赖。按 CPython 3.8 标准构建的下划线模块补齐
-        # （排除平台专属如 _winapi/_curses/_posixsubprocess 等）。
+        #（排除平台专属如 _winapi/_curses/_posixsubprocess 等）。
         "__future__",
         "__main__",
         "_abc",

@@ -1793,7 +1793,9 @@ def test_download_resolved_parallel_multi_sdist_fallback(tmp_path: Path, monkeyp
     assert "Saved win_unicode_console-wheel.whl" in result.stdout
 
 
-def test_download_resolved_parallel_dependency_error_collected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_download_resolved_parallel_dependency_error_collected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """worker 内 DependencyError（如 pip 消失）也收集进 failed 走 sdist 回退，不逃逸.
 
     回归场景：``_download_one_resolved`` 将 FileNotFoundError 转为

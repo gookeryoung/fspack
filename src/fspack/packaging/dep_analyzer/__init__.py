@@ -39,10 +39,7 @@ from .graph import (
     strip_unused_binaries,
 )
 from .macho import _parse_otool_deps  # noqa: F401 — facade re-export
-from .pe import (
-    _parse_pe_imports,
-    _read_ascii_string,
-)  # facade re-export（__all__ 成员，_parse_pe_imports 为测试 patch 点）
+from .pe import _parse_pe_imports, _read_ascii_string  # facade re-export（__all__ 成员，_parse_pe_imports 为测试 patch 点）
 
 __all__ = [
     "BinaryInfo",

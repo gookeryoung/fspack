@@ -311,7 +311,9 @@ def _build_single_template(  # pragma: no cover
     # 项目（cli/gui/web）非默认入口的无后缀产物也须计入，故按入口名精确匹配
     if dist_dir.is_dir():
         entry_count = sum(
-            1 for ep in info.all_entries if (dist_dir / f"{ep.name}.exe").is_file() or (dist_dir / ep.name).is_file()
+            1
+            for ep in info.all_entries
+            if (dist_dir / f"{ep.name}.exe").is_file() or (dist_dir / ep.name).is_file()
         )
     else:
         entry_count = 0

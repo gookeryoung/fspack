@@ -556,7 +556,8 @@ def _add_cache_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser
             target_opt,
             _Opt(
                 ("--verify",),
-                "全量校验 zip 归档完整性（embed/tkinter 逐文件 CRC 校验，慢但可发现数据区损坏；默认仅快检中心目录）",
+                "全量校验 zip 归档完整性（embed/tkinter 逐文件 CRC 校验，慢但可发现"
+                "数据区损坏；默认仅快检中心目录）",
                 action="store_true",
             ),
         ),

@@ -650,7 +650,9 @@ def test_satisfies_compatible_release_three_segments() -> None:
     assert _satisfies("3.12.0", "~=3.11.5") is False  # 越 minor 上界
 
 
-def test_satisfies_compatible_release_single_segment_warns(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+def test_satisfies_compatible_release_single_segment_warns(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     """``~=3`` 单段非法（PEP 440 要求至少两段）：warning 后宽松放行."""
     with caplog.at_level("WARNING", logger="fspack.config.versions"):
         assert _satisfies("3.12.0", "~=3") is True
@@ -664,7 +666,9 @@ def test_satisfies_compatible_release_combined_with_other_specifiers() -> None:
     assert _satisfies("3.12.1", "~=3.11,!=3.11.9") is False  # 被 ~= 上界排除
 
 
-def test_satisfies_unparseable_specifiers_warns_and_passes(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+def test_satisfies_unparseable_specifiers_warns_and_passes(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     """整串无可识别规范符（如 ``"abc"``）：warning 后宽松放行."""
     with caplog.at_level("WARNING", logger="fspack.config.versions"):
         assert _satisfies("3.11.9", "abc") is True
