@@ -17,6 +17,7 @@ import hashlib
 import logging
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -197,7 +198,14 @@ class LoaderCompiler(abc.ABC):
         """
         out_exe.parent.mkdir(parents=True, exist_ok=True)
 
-        icon_hash = _icon_hash(icon) if icon is not None and cls._supports_icon() else ""
+        # icon 路径不存在时不崩溃：warning 并按无 icon 处理（hash 空串），
+        # 与 _compile_resource_obj 对 version_info/icon 的宽容行为对齐
+        icon_hash = ""
+        if icon is not None and cls._supports_icon():
+            if icon.is_file():
+                icon_hash = _icon_hash(icon)
+            else:
+                _logger.warning("icon 文件不存在，按无图标处理: %s", icon)
         version_info_hash = _version_info_hash(version_info) if version_info is not None else ""
         cache = cache_dir or loader_cache_dir()
         cache.mkdir(parents=True, exist_ok=True)
@@ -265,7 +273,8 @@ class WindowsLoader(LoaderCompiler):
     @override
     def available(cls) -> bool:
         """检测 mingw gcc 是否可用（带前缀或无前缀均可）。"""
-        return shutil.which(_find_mingw_gcc()) is not None
+        gcc = _find_mingw_gcc()
+        return gcc is not None and shutil.which(gcc) is not None
 
     @classmethod
     @override
@@ -291,7 +300,10 @@ class WindowsLoader(LoaderCompiler):
         ``resource_obj`` 为 windres 编译的资源段（icon + 版本信息 + manifest），
         非 None 时追加到 gcc 命令末尾链接进 exe。
         """
-        cmd: list[str] = [_find_mingw_gcc(), "-O2", "-municode", "-o", str(out_exe), str(c_file)]
+        # available() 前置检查已确保 mingw gcc 存在；断言仅为类型收窄（str | None → str）
+        gcc = _find_mingw_gcc()
+        assert gcc is not None
+        cmd: list[str] = [gcc, "-O2", "-municode", "-o", str(out_exe), str(c_file)]
         if app_type in (AppType.GUI, AppType.WEB):
             cmd.insert(1, "-mwindows")
         if resource_obj is not None:
@@ -487,18 +499,21 @@ def _find_windres() -> str:
     return MINGW_WINDRES
 
 
-def _find_mingw_gcc() -> str:
-    """查找可用的 mingw gcc，优先交叉前缀，回退无前缀。
+def _find_mingw_gcc() -> str | None:
+    """查找可用的 mingw gcc，优先交叉前缀。
 
-    与 :func:`_find_windres` 同理：Windows 原生 mingw64 发行版（MSYS2、WinLibs、
-    chocolatey mingw 包）通常命名 ``gcc``（无前缀），Linux 交叉编译环境命名
-    ``x86_64-w64-mingw32-gcc``（带前缀）。两者都查找不到时返回默认名，让后续
-    subprocess 报 FileNotFoundError。
+    与 :func:`_find_windres` 类似但回退受限：Windows 原生 mingw64 发行版
+    （MSYS2、WinLibs、chocolatey mingw 包）通常命名 ``gcc``（无前缀），
+    仅在 ``sys.platform == "win32"`` 时回退 ``"gcc"``。Linux/macOS 的
+    ``gcc`` 是 host 编译器（产出 ELF/Mach-O 而非 PE），交叉构建 Windows
+    exe 时不能回退，无 mingw 前缀编译器时返回 ``None``（调用方据此判
+    ``available()`` 为 False）。
     """
-    for name in (MINGW_GCC, "gcc"):
-        if shutil.which(name):
-            return name
-    return MINGW_GCC
+    if shutil.which(MINGW_GCC):
+        return MINGW_GCC
+    if sys.platform == "win32" and shutil.which("gcc"):
+        return "gcc"
+    return None
 
 
 def _compile_resource_obj(

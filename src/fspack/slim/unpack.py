@@ -44,10 +44,14 @@ def _detect_top_pkg(zf: zipfile.ZipFile, whl_pkg: str) -> str | None:
     无任何匹配时返回 None（调用方走全量解压）。
     """
     fallback: str | None = None
+    # top 目录去重：同一 wheel 的全部条目共享顶层目录名，对每个 top 只判定一次，
+    # 避免逐条目重复 normalize_name（正则替换）与 get_spec（注册表遍历）
+    seen_tops: set[str] = set()
     for name in zf.namelist():
         top = name.split("/")[0]
-        if top.endswith(".dist-info"):
+        if top.endswith(".dist-info") or top in seen_tops:
             continue
+        seen_tops.add(top)
         if normalize_name(top) == whl_pkg:
             return top
         # 回退：记录第一个能匹配非兜底 spec 的顶层目录

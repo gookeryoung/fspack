@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import shutil
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -30,6 +31,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "_BUILD_FAILED",
+    "_BUILD_OK",
     "_KEEP_NSI",
     "_NUITKA_STAMP",
     "_PYC_STAMP",
@@ -39,7 +41,9 @@ __all__ = [
     "_has_dist_artifacts",
     "_load_build_failure",
     "_remove_build_failure",
+    "_remove_build_ok",
     "_save_build_failure",
+    "_save_build_ok",
     "clean_dist",
 ]
 
@@ -50,6 +54,11 @@ _KEEP_NSI = "installer.nsi"
 
 # 构建失败标记文件：构建异常时写入，下次 fsp b 检测到时提示用户
 _BUILD_FAILED = ".build_failed"
+
+# 构建成功完成标记文件：构建成功后写入，构建开始时删除（与 .build_failed 的
+# 写入/删除点对齐）。no_pyc 与交叉构建场景不产出 .pyc_stamp/.nuitka_compile_stamp，
+# 此标记确保半成品检测不误判"恒有残留"
+_BUILD_OK = ".build_ok"
 
 # 编译阶段产出的 stamp 文件名：存在即说明上次构建至少完成到编译阶段
 _PYC_STAMP = ".pyc_stamp"
@@ -64,8 +73,42 @@ def _has_dist_artifacts(dist_dir: Path) -> bool:
 
 
 def _has_build_stamps(dist_dir: Path) -> bool:
-    """dist 目录是否含编译 stamp 文件（说明上次构建至少完成到编译阶段）."""
-    return (dist_dir / _PYC_STAMP).is_file() or (dist_dir / _NUITKA_STAMP).is_file()
+    """dist 目录是否含构建完成 stamp 文件（说明上次构建至少完成到编译阶段）.
+
+    ``.build_ok`` 为通用完成标记：``no_pyc`` 或交叉构建场景不产出
+    ``.pyc_stamp``/``.nuitka_compile_stamp``，此前恒判"残留"导致二次构建误报。
+    三者任一存在即视为已完成。
+    """
+    return any((dist_dir / name).is_file() for name in (_PYC_STAMP, _NUITKA_STAMP, _BUILD_OK))
+
+
+def _save_build_ok(dist_dir: Path) -> None:
+    """构建成功完成后写入 ``dist/.build_ok`` JSON（记录完成时间戳）.
+
+    与 ``.build_failed`` 的写入点（``build()`` 的异常分支）对齐：成功分支写入。
+    dist 目录不存在时跳过；写入失败 best-effort（OSError 仅告警不阻断）。
+    """
+    if not dist_dir.is_dir():
+        return
+    data = {"timestamp": datetime.now().isoformat(timespec="seconds")}
+    try:
+        atomic_write_text(dist_dir / _BUILD_OK, json.dumps(data, ensure_ascii=False))
+    except OSError as e:
+        _logger.warning("写入 .build_ok 失败: %s", e)
+
+
+def _remove_build_ok(dist_dir: Path) -> None:
+    """构建开始时删除旧的 ``.build_ok`` 标记（如存在）.
+
+    与 ``.build_failed`` 的删除点（构建成功后）对齐：``.build_ok`` 在构建
+    开始时删除，保证中途中断/失败的构建不残留"成功完成"标记。
+    """
+    path = dist_dir / _BUILD_OK
+    if path.is_file():
+        try:
+            path.unlink()
+        except OSError as e:
+            _logger.warning("删除 .build_ok 失败: %s", e)
 
 
 def _handle_dist_incomplete(dist_dir: Path, auto_clean: bool) -> None:
@@ -116,10 +159,12 @@ def _handle_dist_incomplete(dist_dir: Path, auto_clean: bool) -> None:
         )
 
 
-def _save_build_failure(dist_dir: Path, tracker: BuildTracker, exc: Exception) -> None:
+def _save_build_failure(dist_dir: Path, tracker: BuildTracker, exc: BaseException) -> None:
     """构建异常时写入 ``dist/.build_failed`` JSON 记录失败信息.
 
-    iter-140 引入：供下次 ``fsp b`` 检测并提示用户。记录内容：
+    iter-140 引入：供下次 ``fsp b`` 检测并提示用户。``exc`` 接受
+    ``BaseException``：``KeyboardInterrupt``/``SystemExit`` 等中断类异常同样
+    写入标记（Ctrl+C 是半成品 dist 的常见成因）。记录内容：
 
     - ``stage``：失败时最后完成的阶段名（从 ``tracker.records`` 取末尾）
     - ``error``：异常类型与消息（截断到 500 字符避免文件过大）
@@ -175,34 +220,58 @@ def _remove_build_failure(dist_dir: Path) -> None:
 def _clean_dist_dir(dist_dir: Path, *, keep_diagnostics: bool) -> None:
     """清空 dist 目录，按 keep_diagnostics 决定是否保留诊断文件.
 
-    :param keep_diagnostics: True 时保留 ``installer.nsi`` 与 ``.build_failed``
-        （供 ``fsp c`` 使用，用户排查后保留诊断信息）；False 时全清（供
-        ``--auto-clean`` 使用，全新开始构建）。
+    保留文件先 :func:`shutil.move` 到 dist 同级临时目录（``.fspack_keep_<uuid>``），
+    再 rmtree dist、重建后 move 回——规避旧实现"读入内存 → rmtree → 写回"在
+    rmtree 与写回之间崩溃导致保留文件丢失的窗口（move 方案下文件任一时刻
+    都在磁盘上，崩溃后可恢复）。
+
+    :param keep_diagnostics: True 时保留 ``installer.nsi``/``.build_failed``/
+        ``.build_ok``（供 ``fsp c`` 使用，用户排查后保留诊断信息）；False 时
+        全清（供 ``--auto-clean`` 使用，全新开始构建）。
     """
     if not dist_dir.is_dir():
         return
 
     keep_names: list[str] = [_KEEP_NSI]
     if keep_diagnostics:
-        keep_names.append(_BUILD_FAILED)
+        keep_names.extend((_BUILD_FAILED, _BUILD_OK))
 
-    preserved: dict[str, str] = {}
-    for name in keep_names:
-        path = dist_dir / name
-        if path.is_file():
-            try:
-                preserved[name] = path.read_text(encoding="utf-8")
+    keep_dir = dist_dir.parent / f".fspack_keep_{uuid.uuid4().hex}"
+    # (临时目录内路径, 原文件名)：move 出的保留文件，rmtree 失败时据此恢复
+    moved: list[tuple[Path, str]] = []
+    try:
+        keep_dir.mkdir(parents=True)
+        for name in keep_names:
+            path = dist_dir / name
+            if path.is_file():
+                target = keep_dir / name
+                shutil.move(str(path), str(target))
+                moved.append((target, name))
                 _logger.info("保留: %s", path)
-            except (OSError, UnicodeDecodeError):
-                pass
-
-    shutil.rmtree(dist_dir)
-    dist_dir.mkdir(parents=True, exist_ok=True)
-    for name, content in preserved.items():
-        try:
-            (dist_dir / name).write_text(content, encoding="utf-8")
-        except OSError as e:
-            _logger.warning("恢复 %s 失败: %s", name, e)
+        shutil.rmtree(dist_dir)
+        dist_dir.mkdir(parents=True, exist_ok=True)
+        for src, name in moved:
+            shutil.move(str(src), str(dist_dir / name))
+    finally:
+        # rmtree/mkdir 失败等场景：把已 move 出的文件恢复回 dist，避免保留文件丢失
+        # （成功路径 src 已 move 回 dist，exists() 为 False 自然跳过）
+        to_restore = [(src, name) for src, name in moved if src.exists()]
+        if to_restore:
+            try:
+                dist_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                _logger.warning("重建 %s 失败: %s", dist_dir, e)
+            for src, name in to_restore:
+                try:
+                    shutil.move(str(src), str(dist_dir / name))
+                except OSError as e:
+                    _logger.warning("恢复 %s 失败: %s", name, e)
+        if keep_dir.is_dir():
+            try:
+                keep_dir.rmdir()
+            except OSError:
+                # 目录非空说明有文件未能恢复，保留现场便于人工找回
+                _logger.warning("临时保留目录未清空: %s", keep_dir)
     _logger.info("已清理: %s", dist_dir)
 
 

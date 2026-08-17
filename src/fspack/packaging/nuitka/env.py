@@ -103,18 +103,6 @@ class NuitkaEnv:
             )
 
     @staticmethod
-    def _resolve_jobs() -> int:
-        """计算 Nuitka C 编译并行度：使用全部 CPU 核心加速单文件内的 C 代码编译.
-
-        Nuitka ``--jobs=N`` 控制 scons 内部 gcc 并行编译 C 代码的并行度。
-        串行编译每个 .py 文件（一次一个 nuitka 进程），单进程内 N 个 gcc 并行：
-        4 核机器 → 1 nuitka + 1 scons + 4 gcc = 6 进程，无多进程膨胀风险。
-        （若同时多 nuitka 进程并行 + 每个 --jobs=N，进程数指数级膨胀导致 CPU 卡死，
-        这也是 fspack 保持串行编译 .py 文件的原因。）
-        """
-        return os.cpu_count() or 4
-
-    @staticmethod
     def _build_compile_env(target: Platform, ccache_exe: Path | None) -> dict[str, str]:
         """构建注入 Nuitka 子进程的环境变量，始终设置 ``CC`` 指定 C 编译器.
 
@@ -141,7 +129,9 @@ class NuitkaEnv:
         compiler = LINUX_GCC if target is Platform.LINUX else MINGW_GCC
         env = os.environ.copy()
         if ccache_exe is not None:
-            env["CC"] = f"{ccache_exe} {compiler}"
+            # ccache 路径含空格（如 Windows 用户目录）时须引号包裹，
+            # 否则 scons 解析 CC 会按空格切分导致编译器路径截断
+            env["CC"] = f'"{ccache_exe}" {compiler}'
             # ccache 缓存目录：默认 ~/.cache/ccache，显式指定到 fspack 缓存根便于管理
             from fspack.config.cache import cache_root
 

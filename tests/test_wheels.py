@@ -40,6 +40,17 @@ from fspack.progress import StageRecorder
 from tests._stubs import CompletedStub
 
 
+@pytest.fixture(autouse=True)
+def _clear_pip_python_cache() -> None:
+    """每个测试前清空 ``_find_pip_python`` 的 lru_cache，避免跨测试缓存污染.
+
+    ``_find_pip_python`` 成功结果进程内缓存（iter 修复），而本文件各测试通过
+    monkeypatch 替换 ``sys.executable``/``PATH`` 构造不同候选集，若不清缓存，
+    前一测试缓存的解释器路径会让后续测试命中旧值而不触发探测。
+    """
+    _find_pip_python.cache_clear()
+
+
 def test_download_wheels_cmd_construction(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """--no-index 成功路径：命令含 --no-index，不含 -i index."""
     captured: dict[str, list[str]] = {}
@@ -429,6 +440,21 @@ def test_load_deps_cache_deletes_corrupt_wheels_field(tmp_path: Path) -> None:
     assert not corrupt_file.is_file()
 
 
+def test_load_deps_cache_deletes_non_str_wheel_element(tmp_path: Path) -> None:
+    """wheels 列表含非 str 元素（如 int）时删除缓存文件并返回 None 重解析.
+
+    回归场景：``cache_dir / name`` 遇非 str 元素触发未捕获 TypeError，导致构建
+    崩溃。修复后与"非 list"同等视为损坏，走删除缓存返回 None 分支。
+    """
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    corrupt_file = cache / ".deps-corrupt.json"
+    # wheels 是 list 但第二个元素是 int（手工编辑/异常写入产生的脏数据）
+    corrupt_file.write_text('{"wheels": ["numpy-1.0.whl", 123]}', encoding="utf-8")
+    assert _load_deps_cache(cache, "corrupt") is None
+    assert not corrupt_file.is_file()
+
+
 def test_load_deps_cache_deletes_invalid_utf8(tmp_path: Path) -> None:
     """缓存文件含非法 UTF-8 字节时删除文件（iter-128）.
 
@@ -733,6 +759,70 @@ def test_find_pip_python_skips_unresolvable_dir(monkeypatch: pytest.MonkeyPatch,
 
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
     assert _find_pip_python() == str(sys_py.resolve())
+
+
+def test_find_pip_python_result_is_cached(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """成功结果进程内缓存：第二次调用不再 spawn 子进程探测."""
+    venv_py = tmp_path / "venv" / "python"
+    venv_py.parent.mkdir(parents=True)
+    venv_py.write_text("")
+    monkeypatch.setattr("fspack.packaging.wheels.sys.executable", str(venv_py))
+    monkeypatch.setattr("fspack.packaging.wheels.os.environ", {"PATH": ""})
+
+    probe_count = {"n": 0}
+
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
+        probe_count["n"] += 1
+        return CompletedStub()
+
+    monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
+    assert _find_pip_python() == str(venv_py)
+    assert _find_pip_python() == str(venv_py)
+    # 两次调用只触发一次 ``python -m pip --version`` 探测
+    assert probe_count["n"] == 1
+
+
+def test_find_pip_python_timeout_continues_to_next_candidate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """候选解释器探测超时（TimeoutExpired）时中断并继续下一个候选."""
+    from fspack.packaging.wheels.downloader import _PIP_PROBE_TIMEOUT
+
+    venv_py = tmp_path / "venv" / "python"
+    venv_py.parent.mkdir(parents=True)
+    venv_py.write_text("")
+    sys_bin = tmp_path / "sysbin"
+    sys_bin.mkdir()
+    sys_py = sys_bin / _PIP_PYTHON_NAMES[0]
+    sys_py.write_text("")
+    monkeypatch.setattr("fspack.packaging.wheels.sys.executable", str(venv_py))
+    monkeypatch.setattr("fspack.packaging.wheels.os.environ", {"PATH": str(sys_bin)})
+
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
+        assert kw.get("timeout") == _PIP_PROBE_TIMEOUT, "探测命令必须带 timeout"
+        if cmd[0] == str(venv_py):
+            # 模拟网络盘/损坏解释器探测卡死：超时被中断
+            raise subprocess.TimeoutExpired(cmd, timeout=kw.get("timeout", 0))
+        return CompletedStub()
+
+    monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
+    assert _find_pip_python() == str(sys_py.resolve())
+
+
+def test_find_pip_python_timeout_all_candidates_fail(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """所有候选探测均超时时最终抛 DependencyError（而非 TimeoutExpired 逃逸）."""
+    from fspack.packaging.wheels.downloader import _PIP_PROBE_TIMEOUT
+
+    venv_py = tmp_path / "venv" / "python"
+    venv_py.parent.mkdir(parents=True)
+    venv_py.write_text("")
+    monkeypatch.setattr("fspack.packaging.wheels.sys.executable", str(venv_py))
+    monkeypatch.setattr("fspack.packaging.wheels.os.environ", {"PATH": ""})
+
+    def fake_run(cmd: list[str], **kw: Any) -> object:
+        raise subprocess.TimeoutExpired(cmd, timeout=_PIP_PROBE_TIMEOUT)
+
+    monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
+    with pytest.raises(DependencyError, match="未找到可用的 pip"):
+        _find_pip_python()
 
 
 # ---------- _filter_by_python_version ----------
@@ -1135,6 +1225,39 @@ def test_resolve_with_uv_linux_platform(monkeypatch: pytest.MonkeyPatch) -> None
     assert "linux" in captured["cmd"]
 
 
+def test_uv_python_platform_mapping() -> None:
+    """平台标签到 uv --python-platform 三值映射：windows/macos/linux."""
+    from fspack.packaging.wheels.resolver import _uv_python_platform
+
+    # Windows：任一 tag 含 win
+    assert _uv_python_platform(("win_amd64",)) == "windows"
+    assert _uv_python_platform(("win32", "win_amd64")) == "windows"
+    # macOS：任一 tag 以 macosx 开头（含 x86_64 与 arm64 变体）
+    assert _uv_python_platform(("macosx_11_0_arm64",)) == "macos"
+    assert _uv_python_platform(("macosx_10_15_x86_64", "macosx_11_0_arm64")) == "macos"
+    # Linux：manylinux/musllinux 等
+    assert _uv_python_platform(("manylinux2014_x86_64",)) == "linux"
+    assert _uv_python_platform(("manylinux_2_28_x86_64", "musllinux_1_1_x86_64")) == "linux"
+    # 空列表回退 linux（与旧行为一致）
+    assert _uv_python_platform(()) == "linux"
+
+
+def test_resolve_with_uv_macos_platform(monkeypatch: pytest.MonkeyPatch) -> None:
+    """macosx 平台标签映射到 --python-platform macos（而非 linux）."""
+    monkeypatch.setattr("fspack.packaging.wheels.resolver._find_uv", lambda: "/usr/bin/uv")
+    captured: dict[str, list[str]] = {}
+
+    def fake_run(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, stdout="pkg==1.0\n", stderr="")
+
+    monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
+    _resolve_with_uv(("pkg",), "3.11.9", ("macosx_11_0_arm64",), "https://idx/simple")
+    cmd = captured["cmd"]
+    assert "macos" in cmd
+    assert "linux" not in cmd
+
+
 def test_resolve_with_uv_no_uv_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     """uv 不可用时抛 DependencyError."""
     monkeypatch.setattr("fspack.packaging.wheels.resolver._find_uv", lambda: None)
@@ -1217,6 +1340,37 @@ def test_download_online_uv_fails_falls_back_to_pip(tmp_path: Path, monkeypatch:
     monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
     base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
     _download_online(["numpy"], base_args, "/py/python", "3.11.9", ("win_amd64",), "https://idx/simple", cache)
+    cmd = captured["cmd"]
+    assert "--no-deps" not in cmd
+    assert "-i" in cmd
+    assert "https://idx/simple" in cmd
+
+
+def test_download_online_uv_empty_resolved_falls_back_to_pip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """uv 解析输出无有效 name==version 行（空列表）时回退到 pip 完整解析.
+
+    回归场景：``_extract_resolved_lines`` 返回 ``[]``（非 None）时旧实现继续走
+    并行下载，``min(8, 0)`` 使 ``ThreadPoolExecutor(max_workers=0)`` 抛 ValueError
+    且跳过 pip 回退。修复后空列表视为解析失败，赋 ``resolved=None`` 走 pip。
+    """
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setattr("fspack.packaging.wheels.resolver._find_uv", lambda: "/usr/bin/uv")
+    # 输出非空（通过 _resolve_with_uv 的空输出检查）但无有效 name==version 行
+    monkeypatch.setattr(
+        "fspack.packaging.wheels.resolver._resolve_with_uv",
+        lambda pkgs, pv, pt, idx, **kw: "  # via -r -\n# frozen requirements\n",
+    )
+    captured: dict[str, list[str]] = {}
+
+    def fake_stream(cmd: list[str]) -> CompletedStub:
+        captured["cmd"] = cmd
+        return CompletedStub()
+
+    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
+    _download_online(["numpy"], base_args, "/py/python", "3.11.9", ("win_amd64",), "https://idx/simple", cache)
+    # 走 pip 完整解析路径：含 -i index，不含并行 --no-deps
     cmd = captured["cmd"]
     assert "--no-deps" not in cmd
     assert "-i" in cmd
@@ -1637,6 +1791,68 @@ def test_download_resolved_parallel_multi_sdist_fallback(tmp_path: Path, monkeyp
     assert "Saved numpy-wheel.whl" in result.stdout
     assert "Saved odfpy-wheel.whl" in result.stdout
     assert "Saved win_unicode_console-wheel.whl" in result.stdout
+
+
+def test_download_resolved_parallel_dependency_error_collected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """worker 内 DependencyError（如 pip 消失）也收集进 failed 走 sdist 回退，不逃逸.
+
+    回归场景：``_download_one_resolved`` 将 FileNotFoundError 转为
+    :class:`DependencyError`，旧实现 ``except subprocess.CalledProcessError`` 捕不到，
+    异常从 ``future.result()`` 逃逸直接崩溃，跳过 sdist 回退。修复后 except 元组
+    扩为 ``(CalledProcessError, DependencyError)``，DependencyError 以 ``str(e)``
+    参与合并 stderr。
+    """
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setattr("fspack.packaging.wheels.resolver._find_uv", lambda: "/usr/bin/uv")
+    monkeypatch.setattr("fspack.packaging.wheels.resolver._uv_supports_download", lambda uv_path: False)
+    monkeypatch.setattr(
+        "fspack.packaging.wheels.resolver._resolve_with_uv",
+        lambda pkgs, pv, pt, idx, **kw: "numpy==1.24.0\nodfpy==1.4.1\n",
+    )
+    # numpy 成功，odfpy 首次抛 FileNotFoundError（→ DependencyError），重试成功
+    odfpy_calls = {"count": 0}
+    fallback_messages: list[str] = []
+
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
+        req = cmd[-1]
+        if "numpy==1.24.0" in req:
+            r = CompletedStub()
+            r.stdout = "Saved numpy-wheel.whl\n"
+            return r
+        if "odfpy==1.4.1" in req:
+            odfpy_calls["count"] += 1
+            if odfpy_calls["count"] == 1:
+                # 模拟 pip 解释器消失：_download_one_resolved 转 DependencyError
+                raise FileNotFoundError("no such file or directory: /py/python")
+            r = CompletedStub()
+            r.stdout = "Saved odfpy-wheel.whl\n"
+            return r
+        return CompletedStub()
+
+    def fake_fallback(e: DependencyError, py: str, pypi_index: str, cache_dir: Path, **kw: object) -> list[str]:
+        fallback_messages.append(str(e))
+        return []
+
+    monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.wheels.resolver._handle_sdist_fallback", fake_fallback)
+    base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache), "--only-binary=:all:"]
+    result = _download_online(
+        ["numpy>=1.0", "odfpy>=1.4.1"],
+        base_args,
+        "/py/python",
+        "3.8.10",
+        ("win_amd64",),
+        "https://idx/simple",
+        cache,
+    )
+    # DependencyError 未逃逸：触发 sdist 回退（合并 str(e) 作为 stderr 文本）
+    assert len(fallback_messages) == 1
+    assert "未找到 pip" in fallback_messages[0]
+    # odfpy 首次失败（DependencyError 收集）+ sdist 后重试成功
+    assert odfpy_calls["count"] == 2
+    assert "Saved numpy-wheel.whl" in result.stdout
+    assert "Saved odfpy-wheel.whl" in result.stdout
 
 
 def test_download_one_resolved_with_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2513,6 +2729,33 @@ def test_download_one_with_uv_failure_raises(tmp_path: Path, monkeypatch: pytest
             pypi_index="https://idx/simple",
             with_index=False,
         )
+
+
+def test_download_one_with_uv_macos_platform(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """macosx 平台标签映射到 --python-platform macos（而非 linux）."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    captured: dict[str, list[str]] = {}
+
+    def fake_run(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="Downloaded a.whl\n", stderr="")
+
+    monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
+    _download_one_with_uv(
+        "/usr/bin/uv",
+        "numpy==1.24.0",
+        cache,
+        [],
+        py_version="3.11.9",
+        platform_tags=("macosx_11_0_arm64",),
+        pypi_index="https://idx/simple",
+        with_index=False,
+    )
+    cmd = captured["cmd"]
+    assert "--python-platform" in cmd
+    assert "macos" in cmd
+    assert "linux" not in cmd
 
 
 def test_download_online_shares_uv_path_detection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

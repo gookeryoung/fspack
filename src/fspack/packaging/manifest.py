@@ -33,6 +33,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -106,11 +107,11 @@ def collect_manifest(dist_dir: Path, info: ProjectInfo) -> dict[str, Any]:
     """
     dist_dir = Path(dist_dir)
     dist_str = str(dist_dir)
-    entries: list[ManifestEntry] = []
-    total_size = 0
     # manifest 自身文件名（用于扫描时跳过），与 generate_manifest 保持一致
     self_name = f"{info.name}-{info.version}-manifest.json"
 
+    # 第一遍：物化目录条目并过滤（scandir_tree 为生成器，二次遍历会重复扫描）
+    collected: list[tuple[str, os.DirEntry[str]]] = []
     for dir_entry in scandir_tree(dist_dir):
         try:
             rel = os.path.relpath(dir_entry.path, dist_str).replace(os.sep, "/")
@@ -120,18 +121,40 @@ def collect_manifest(dist_dir: Path, info: ProjectInfo) -> dict[str, Any]:
         # 跳过 manifest 自身：避免每次生成后 sha256 变化
         if rel == f"release/{self_name}":
             continue
-        size = dir_entry.stat(follow_symlinks=False).st_size
-        sha256 = _sha256_file(Path(dir_entry.path))
-        category = _categorize(rel)
-        entries.append(
-            ManifestEntry(
-                path=rel,
-                size=size,
-                sha256=sha256,
-                category=category,
+        # 跳过 release/ 下隐藏文件与 SBOM 文件：manifest 与 SBOM 并行生成时，
+        # mkstemp 临时文件（".tmp_" 前缀）与半成品 SBOM 可能被扫到导致内容抖动
+        if rel.startswith("release/.") or rel.endswith("-sbom.json"):
+            continue
+        collected.append((rel, dir_entry))
+
+    # 第二遍：并行计算 SHA256（hashlib.sha256 释放 GIL 可真并行），
+    # 结果按 scandir 顺序聚合保序；条目组装留在主线程（避免共享可变状态）。
+    # symlink 条目不跟随链接计算哈希（size 已用 follow_symlinks=False），
+    # sha256 记空串保持条目存在，修复口径不一致。
+    entries: list[ManifestEntry] = []
+    total_size = 0
+    max_workers = min(8, os.cpu_count() or 4)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [
+            None if dir_entry.is_symlink() else executor.submit(_sha256_file, Path(dir_entry.path))
+            for _, dir_entry in collected
+        ]
+        for (rel, dir_entry), future in zip(collected, futures):
+            try:
+                size = dir_entry.stat(follow_symlinks=False).st_size
+            except OSError:
+                # 扫描后文件被并发删除/权限变化：跳过该条目
+                continue
+            sha256 = "" if future is None else future.result()
+            entries.append(
+                ManifestEntry(
+                    path=rel,
+                    size=size,
+                    sha256=sha256,
+                    category=_categorize(rel),
+                )
             )
-        )
-        total_size += size
+            total_size += size
 
     # 按相对路径排序：保证同一 dist 多次生成 manifest 字段顺序一致
     entries.sort(key=lambda e: e.path)

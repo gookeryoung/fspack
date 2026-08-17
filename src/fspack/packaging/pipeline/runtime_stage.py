@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
 from fspack.config import standalone_cache_dir, win7_dll_cache_dir
+from fspack.exceptions import EmbedError
 from fspack.packaging.pyc import (
     _inject_win7_compat_dll,
     _needs_win7_compat_dll,
@@ -188,7 +189,10 @@ def _prepare_standalone_runtime(ctx: BuildContext, *, macos_arch: str | None = N
             st.hit_cache()
             st.set_detail("runtime 已就绪")
         else:
-            assert tar_path is not None
+            if tar_path is None:
+                # runtime 未就绪时 download_standalone 应返回路径或抛异常，
+                # 此分支仅防御（assert 在 python -O 下会被剥离）
+                raise EmbedError("下载运行时未返回 python-build-standalone tar.gz 路径")
             extract_standalone(tar_path, ctx.runtime_dir)
             st.processed(1)
             st.set_detail("python-build-standalone")
@@ -214,7 +218,10 @@ def _prepare_windows_runtime(ctx: BuildContext) -> Path:
             st.hit_cache()
             st.set_detail("runtime 已就绪")
         else:
-            assert zip_path is not None
+            if zip_path is None:
+                # runtime 未就绪时 download_embed 应返回路径或抛异常，
+                # 此分支仅防御（assert 在 python -O 下会被剥离）
+                raise EmbedError("下载运行时未返回 embed python zip 路径")
             extract_embed(zip_path, ctx.runtime_dir)
             st.processed(1)
             st.set_detail("embed python")

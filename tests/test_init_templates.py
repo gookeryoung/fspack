@@ -518,6 +518,64 @@ def test_init_project_web_flask_vue(tmp_path: Path) -> None:
     assert 'web-static-dirs = ["frontend"]' in pyproject
 
 
+# --- ``--python-version`` 覆盖 requires-python 的三层兜底 ---
+
+
+def _init_with_pyproject(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pyproject: str) -> str:
+    """monkeypatch render_template 返回指定 pyproject 内容，执行带版本覆盖的 init_project.
+
+    绕过真实模板（均有 requires-python 行），用于构造缺键的兜底场景。
+    """
+    from fspack import cli_init
+
+    monkeypatch.setattr(
+        cli_init,
+        "render_template",
+        lambda template, variables: {Path("pyproject.toml"): pyproject},
+    )
+    target = init_project("ver-app", template_id="helloworld", directory=tmp_path, python_version="3.10")
+    return (target / "pyproject.toml").read_text(encoding="utf-8")
+
+
+def test_init_project_python_version_replaces_existing_line(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """pyproject 已有 requires-python 行时：直接整行替换为用户指定版本."""
+    pyproject = '[project]\nname = "ver-app"\ndescription = "d"\nrequires-python = ">=3.8"\nversion = "0.1.0"\n'
+    result = _init_with_pyproject(tmp_path, monkeypatch, pyproject)
+    assert 'requires-python = ">=3.10"' in result
+    assert ">=3.8" not in result  # 旧约束被替换，不得残留
+
+
+def test_init_project_python_version_appends_after_description(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """无 requires-python 行但有 description 行时：追加到 description 行后."""
+    pyproject = '[project]\nname = "ver-app"\ndescription = "demo"\nversion = "0.1.0"\n'
+    result = _init_with_pyproject(tmp_path, monkeypatch, pyproject)
+    # 追加位置：description 行之后（TOML 键仍位于 [project] 节内）
+    desc_idx = result.index('description = "demo"')
+    req_idx = result.index('requires-python = ">=3.10"')
+    assert req_idx > desc_idx
+    assert result.count("requires-python") == 1
+
+
+def test_init_project_python_version_inserts_after_project_header(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """requires-python 与 description 行均缺失时：兜底插入 [project] 节头后."""
+    pyproject = '[project]\nname = "ver-app"\nversion = "0.1.0"\n'
+    result = _init_with_pyproject(tmp_path, monkeypatch, pyproject)
+    lines = result.splitlines()
+    assert lines[0] == "[project]"
+    assert lines[1] == 'requires-python = ">=3.10"'  # 紧随节头插入，保持在 [project] 节内
+
+
+def test_init_project_python_version_no_project_section_keeps_original(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """无 [project] 节时无法定位插入点：保持原样（不强行追加避免 TOML 错位）."""
+    pyproject = 'name = "ver-app"\nversion = "0.1.0"\n'
+    result = _init_with_pyproject(tmp_path, monkeypatch, pyproject)
+    assert "requires-python" not in result
+
+
 # ---- 加载器错误处理与边界场景 ----
 
 
@@ -641,9 +699,15 @@ def test_load_all_skips_non_category_directories(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(registry_mod, "_init_templates_root", lambda: tmp_path)
     # doctor 模板根目录指向不存在路径，避免污染测试
     monkeypatch.setattr(registry_mod, "_doctor_templates_root", lambda: tmp_path / "nonexistent_doctor")
-    templates = registry_mod._load_all()
-    assert len(templates) == 1
-    assert templates[0].id == "helloworld"
+    # _load_all 进程内缓存：注入自定义根目录后须清缓存强制重扫，结束时再清
+    # 恢复真实资产目录，避免污染后续依赖真实模板的测试
+    registry_mod.clear_template_cache()
+    try:
+        templates = registry_mod._load_all()
+        assert len(templates) == 1
+        assert templates[0].id == "helloworld"
+    finally:
+        registry_mod.clear_template_cache()
 
 
 def test_load_all_when_root_missing_returns_empty(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -652,7 +716,11 @@ def test_load_all_when_root_missing_returns_empty(monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setattr(registry_mod, "_init_templates_root", lambda: tmp_path / "nonexistent")
     monkeypatch.setattr(registry_mod, "_doctor_templates_root", lambda: tmp_path / "nonexistent_doctor")
-    assert registry_mod._load_all() == ()
+    registry_mod.clear_template_cache()
+    try:
+        assert registry_mod._load_all() == ()
+    finally:
+        registry_mod.clear_template_cache()
 
 
 def test_get_template_nonexistent_returns_none() -> None:

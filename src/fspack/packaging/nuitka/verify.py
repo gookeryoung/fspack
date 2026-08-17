@@ -27,6 +27,7 @@ facade，所有 ``cls.`` 调用经 MRO 自动派发。
 
 from __future__ import annotations
 
+import glob
 import logging
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
@@ -42,6 +43,11 @@ _logger = logging.getLogger("fspack.packaging.nuitka")
 # 逐个验证并发数上限：subprocess 释放 GIL，线程并行启动多个 python 子进程。
 # 与 _MAX_COMPILE_WORKERS 一致（4），平衡并行收益与 Windows 资源限制。
 _MAX_VERIFY_WORKERS = 4
+
+# 单次 import 验证 subprocess 超时（秒）：模块顶层含 input()/死循环/GUI 启动代码
+# 时 subprocess 永不退出，无超时会使构建永久挂起。超时按"该模块验证失败"处理
+# （batch 场景返回 None 触发逐个定位；individual 场景记该 .pyd 验证失败保留 .py）。
+_IMPORT_TEST_TIMEOUT = 30.0
 
 # 嵌入验证 subprocess 测试脚本的导入失败分类函数：判定失败是否源于 .pyd 二进制自身。
 #
@@ -148,7 +154,8 @@ class NuitkaVerify:
             if module_name.endswith(".__init__"):
                 module_name = module_name[:-9]
             module_to_py[module_name] = py_file
-            stem = py_file.stem
+            # glob.escape 转义文件名中的 glob 特殊字符（如 "report[v2].py" 的 []）
+            stem = glob.escape(py_file.stem)
             artifacts = list(py_file.parent.glob(f"{stem}.*.pyd"))
             artifacts.extend(py_file.parent.glob(f"{stem}.*.so"))
             py_to_artifacts[py_file] = artifacts
@@ -197,6 +204,10 @@ class NuitkaVerify:
 
         ``search_roots`` 支持多个包根（src layout 下可能有 ``dist/src/src/`` 与
         ``dist/src/`` 等多个根），测试脚本会把所有根加入 sys.path。
+
+        超时（:data:`_IMPORT_TEST_TIMEOUT`）按验证失败处理：返回 None 让调用方
+        回退到逐个测试定位（模块顶层含 input()/死循环/GUI 时 subprocess 永不退出，
+        无超时会使构建永久挂起）。
         """
         import json
 
@@ -217,13 +228,20 @@ class NuitkaVerify:
             "        results[mod] = not _fspack_binary_load_failure(mod, e)\n"
             "print('FSPACK_VERIFY_RESULT:' + json.dumps(results))\n"
         )
-        result = subprocess.run(
-            [str(py_exe), "-c", test_code],
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
-        )
+        try:
+            result = subprocess.run(
+                [str(py_exe), "-c", test_code],
+                capture_output=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+                timeout=_IMPORT_TEST_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            # 模块顶层含 input()/死循环/GUI 等阻塞代码：按验证失败处理，
+            # 返回 None 触发逐个测试定位真正阻塞的模块
+            _logger.warning("批量 import 验证超时（%ds），按失败处理并回退逐个定位", int(_IMPORT_TEST_TIMEOUT))
+            return None
         if result.returncode != 0:
             # subprocess 崩溃（如访问违例 0xC0000005），无法获取结果
             return None
@@ -260,6 +278,10 @@ class NuitkaVerify:
         从串行 ~5s 降到并发 ~1.25s。
 
         ``search_roots`` 支持多个包根，测试脚本会把所有根加入 sys.path。
+
+        超时（:data:`_IMPORT_TEST_TIMEOUT`）按该模块验证失败处理（返回 None 不进
+        结果集合）：模块顶层含 input()/死循环/GUI 时 subprocess 永不退出，无超时
+        会使构建永久挂起；验证失败的模块保留 .py 回退到 .pyc，不影响其他模块。
         """
         path_inserts = ";".join(f"sys.path.insert(0, r'{root}')" for root in search_roots)
         importable: set[str] = set()
@@ -279,11 +301,18 @@ class NuitkaVerify:
                 "except Exception as e:\n"
                 f"    print('FSPACK_ONE_RESULT:' + ('0' if _fspack_binary_load_failure({mod!r}, e) else '1'))\n"
             )
-            result = subprocess.run(
-                [str(py_exe), "-c", test_code],
-                capture_output=True,
-                check=False,
-            )
+            try:
+                result = subprocess.run(
+                    [str(py_exe), "-c", test_code],
+                    capture_output=True,
+                    check=False,
+                    timeout=_IMPORT_TEST_TIMEOUT,
+                )
+            except subprocess.TimeoutExpired:
+                # 模块顶层含 input()/死循环/GUI 等阻塞代码：记该模块验证失败
+                # （.pyd 判损坏，保留 .py 回退到 .pyc），不阻断其他模块测试
+                _logger.warning("模块 %s import 验证超时（%ds），按验证失败处理", mod, int(_IMPORT_TEST_TIMEOUT))
+                return None
             if result.returncode != 0:
                 # 硬崩溃（访问违例等），判定损坏
                 return None

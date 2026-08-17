@@ -67,9 +67,10 @@ def _load_deps_cache(cache_dir: Path, key: str) -> list[Path] | None:
     if data is None:
         return None
     names = data.get("wheels", [])
-    if not isinstance(names, list):
-        # wheels 字段类型错误：视为损坏，删除文件避免下次重复解析
-        _logger.warning("依赖解析缓存 wheels 字段非 list，删除并重新解析: %s", cache_file)
+    if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+        # wheels 字段类型错误（非 list，或元素含非 str 如 int）：视为损坏，删除文件
+        # 避免下次重复解析时 ``cache_dir / name`` 触发未捕获 TypeError
+        _logger.warning("依赖解析缓存 wheels 字段非法（非 list 或元素非 str），删除并重新解析: %s", cache_file)
         try:
             cache_file.unlink()
         except OSError as unlink_err:  # pragma: no cover - 删除失败极罕见

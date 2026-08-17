@@ -96,7 +96,10 @@ def _parse_pe_imports(path: Path) -> list[str] | None:  # noqa: PLR0911, PLR0912
     cursor = import_offset
     while cursor + 20 <= len(data):
         try:
-            name_rva, _, _, _, _ = struct.unpack_from("<IIIII", data, cursor)
+            # IMAGE_IMPORT_DESCRIPTOR 布局：OriginalFirstThunk(0) / TimeDateStamp(4) /
+            # ForwarderChain(8) / Name(12) / FirstThunk(16)。DLL 名在 Name 字段
+            # （第 4 字段，offset 12），此前误取第 1 字段导致依赖名解析为乱码。
+            _, _, _, name_rva, _ = struct.unpack_from("<IIIII", data, cursor)
         except struct.error:  # pragma: no cover
             break
 

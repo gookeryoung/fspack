@@ -440,6 +440,18 @@ def test_make_zip_linux_platform_suffix(tmp_path: Path) -> None:
     assert result.name == "app-1.0-py3.11.9-linux-slim.zip"
 
 
+def test_make_zip_macos_platform_suffix(tmp_path: Path) -> None:
+    """macOS 目标 zip 文件名含 -macos 后缀（修复前误用 linux）."""
+    info = _make_info(tmp_path, name="app")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "app").write_bytes(b"")
+    release = dist / "release"
+    release.mkdir()
+    result = _make_zip(dist, info, release, Platform.MACOS)
+    assert result.name == "app-1.0-py3.11.9-macos-slim.zip"
+
+
 def test_make_zip_overwrites_existing(tmp_path: Path) -> None:
     """重复构建时覆盖已有 zip."""
     info = _make_info(tmp_path, name="app")
@@ -657,6 +669,47 @@ def test_build_release_all_windows_generates_two_formats(tmp_path: Path, monkeyp
     assert outputs[1].name == "app-1.0-py3.11.9-windows-slim.zip"
     # no_build=True 时不应触发 build()
     assert "build" not in build_calls
+
+
+def test_build_release_all_linux_shares_tar_zip_staging(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """fmt=all + Linux → tar.gz 与 zip 共享同一 staging，zip 复用（copytree 仅 tar/deb 各一次）."""
+    import shutil as _shutil
+
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0"\n')
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "app").write_bytes(b"#!/bin/sh\nexit 0\n")
+
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
+        # dpkg-deb --build <staging> <deb_path>：模拟产出 .deb
+        deb_path = Path(cmd[-1])
+        deb_path.parent.mkdir(parents=True, exist_ok=True)
+        deb_path.write_bytes(b"fake deb")
+        return CompletedStub()
+
+    monkeypatch.setattr("fspack.packaging.installer.linux.subprocess.run", fake_run)
+
+    # 统计 base 模块内 copytree 调用次数（tar.gz 与 deb 各 1 次，zip 复用 staging 0 次）
+    copy_calls: list[str] = []
+    real_copytree = _shutil.copytree
+
+    def counting_copytree(src: Path, dst: Path, **kw: Any) -> Path:
+        copy_calls.append(str(src))
+        return Path(real_copytree(src, dst, **kw))
+
+    monkeypatch.setattr("fspack.packaging.installer.base.shutil.copytree", counting_copytree)
+
+    outputs = build_release(tmp_path, get_mirror("huawei"), "3.11.10", no_build=True, target=Platform.LINUX, fmt="all")
+
+    assert [p.name for p in outputs] == [
+        "app-1.0-py3.11.10-linux-slim.tar.gz",
+        "app_1.0-py3.11.10-slim_amd64.deb",
+        "app-1.0-py3.11.10-linux-slim.zip",
+    ]
+    assert len(copy_calls) == 2, f"期望 copytree 仅 2 次（tar/deb 各一次），实际 {len(copy_calls)} 次"
+    # 全部格式完成后共享 staging 已清理
+    assert not (dist / "release" / "app-1.0-py3.11.10-linux-slim").exists(), "共享 staging 未清理"
 
 
 def test_build_release_invalid_fmt_raises(tmp_path: Path) -> None:

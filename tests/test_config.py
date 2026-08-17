@@ -629,6 +629,48 @@ def test_satisfies_combined_operators() -> None:
     assert _satisfies("3.13.0", ">=3.11,<3.13,!=3.12.0") is False  # 被 < 排除
 
 
+# --- ``~=`` 兼容发行符（PEP 440 compatible release）测试 ---
+
+
+def test_satisfies_compatible_release_two_segments() -> None:
+    """``~=3.11`` 匹配 3.11 系列（``3.11 <= ver < 3.12``）."""
+    assert _satisfies("3.11", "~=3.11") is True
+    assert _satisfies("3.11.0", "~=3.11") is True
+    assert _satisfies("3.11.9", "~=3.11") is True
+    assert _satisfies("3.12.0", "~=3.11") is False  # 越 minor 上界
+    assert _satisfies("3.10.13", "~=3.11") is False  # 低于下界
+
+
+def test_satisfies_compatible_release_three_segments() -> None:
+    """``~=3.11.5`` 匹配 ``3.11.5 <= ver < 3.12.0``（下界含补丁号，上界仍限 minor）."""
+    assert _satisfies("3.11.5", "~=3.11.5") is True
+    assert _satisfies("3.11.13", "~=3.11.5") is True
+    assert _satisfies("3.11.5.1", "~=3.11.5") is True
+    assert _satisfies("3.11.4", "~=3.11.5") is False  # 低于补丁下界
+    assert _satisfies("3.12.0", "~=3.11.5") is False  # 越 minor 上界
+
+
+def test_satisfies_compatible_release_single_segment_warns(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """``~=3`` 单段非法（PEP 440 要求至少两段）：warning 后宽松放行."""
+    with caplog.at_level("WARNING", logger="fspack.config.versions"):
+        assert _satisfies("3.12.0", "~=3") is True
+    assert "单段兼容发行符" in caplog.text
+
+
+def test_satisfies_compatible_release_combined_with_other_specifiers() -> None:
+    """``~=`` 与其他规范符组合：全部满足才通过."""
+    assert _satisfies("3.11.8", "~=3.11,!=3.11.9") is True
+    assert _satisfies("3.11.9", "~=3.11,!=3.11.9") is False  # 被 != 排除
+    assert _satisfies("3.12.1", "~=3.11,!=3.11.9") is False  # 被 ~= 上界排除
+
+
+def test_satisfies_unparseable_specifiers_warns_and_passes(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """整串无可识别规范符（如 ``"abc"``）：warning 后宽松放行."""
+    with caplog.at_level("WARNING", logger="fspack.config.versions"):
+        assert _satisfies("3.11.9", "abc") is True
+    assert "无法解析" in caplog.text
+
+
 def test_resolve_py_version_wildcard_requires_python(tmp_path: Path) -> None:
     """``requires-python: ==3.12.*`` 自动选最高兼容 3.12.x 版本."""
     # Windows embed 最高 3.12.x 为 3.12.10

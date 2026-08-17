@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import abc
+import functools
 import logging
 import re
 from dataclasses import dataclass
@@ -34,9 +35,19 @@ __all__ = [
 # 共享 logger 名：保持与原 fspack.slim.base 一致，测试 caplog 按 logger 名过滤
 _logger = logging.getLogger("fspack.slim.base")
 
-# PEP 427 wheel 文件名正则：name-version(-build)?-py-abi-plat.whl
+# PEP 427 wheel 文件名正则：{name}-{version}(-{build})?-{py}-{abi}-{plat}.whl
+# 从右锚定：py/abi/plat 三段各不含 "-"，name 段贪婪 ``.+`` 从右留足——
+# 左锚非贪婪 ``.+?`` 会把含 "-" 的 name（如 python-dateutil）截断为 "python"。
+# 版本段以数字开头且不含 "-"（PEP 440 规范化后无 "-"）。
+# 先试带 build tag 的六段式（PEP 427 要求 build 以数字开头，避免把六段文件
+# 误吞进五段式的 name），不匹配再回退标准五段式。
+_WHEEL_RE_BUILD = re.compile(
+    r"^(?P<name>.+)-(?P<ver>\d[^-]*)-(?P<build>\d[^-]*)-"
+    r"(?P<py>[^-]+)-(?P<abi>[^-]+)-(?P<plat>[^-]+)\.whl$",
+    re.IGNORECASE,
+)
 _WHEEL_RE = re.compile(
-    r"^(?P<name>.+?)-(?P<ver>.+?)(-(?P<build>\d[^-]*?))?-"
+    r"^(?P<name>.+)-(?P<ver>\d[^-]*)-"
     r"(?P<py>[^-]+)-(?P<abi>[^-]+)-(?P<plat>[^-]+)\.whl$",
     re.IGNORECASE,
 )
@@ -54,8 +65,14 @@ class WheelInfo:
 
     @classmethod
     def from_filename(cls, filename: str) -> WheelInfo | None:
-        """从 wheel 文件名构造实例，无法解析返回 None."""
-        m = _WHEEL_RE.match(filename)
+        """从 wheel 文件名构造实例，无法解析返回 None.
+
+        先试带 build tag 的六段式（避免六段文件被五段式把 build 吞进
+        version），不匹配再回退标准五段式。
+        """
+        m = _WHEEL_RE_BUILD.match(filename)
+        if m is None:
+            m = _WHEEL_RE.match(filename)
         if m is None:
             return None
         return cls(
@@ -67,8 +84,13 @@ class WheelInfo:
         )
 
 
+@functools.lru_cache(maxsize=256)
 def normalize_name(name: str) -> str:
-    """PEP 503 名称归一化：小写，连续的 ``-_.`` 合并为 ``-``."""
+    """PEP 503 名称归一化：小写，连续的 ``-_.`` 合并为 ``-``.
+
+    纯函数无副作用，``lru_cache`` 缓存高频重复的包名归一化（wheel 解包
+    链路对同一 ``top_pkg`` 反复归一化）。
+    """
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
@@ -247,13 +269,21 @@ class SlimSpec(abc.ABC):
         return ("metadata", None)
 
     @classmethod
-    def _classify_top_or_meta(cls, entry: str, top_pkg: str) -> tuple[str, str | None] | None:
+    def _classify_top_or_meta(
+        cls,
+        entry: str,
+        top_pkg: str,
+        parts: list[str] | None = None,
+    ) -> tuple[str, str | None] | None:
         """通用 metadata、STRIP_EXTS 剥离与跨包 shared 分类。
 
         返回 ``None`` 表示不属于这三类，需交由具体规则继续分类。``STRIP_EXTS``
         在此统一处理（含跨包），调用方（如 Qt spec）无需重复实现扩展名剥离。
+        ``parts`` 传入调用方已 ``split("/")`` 的结果避免重复 split，``None``
+        时内部自行 split（兼容直接调用）。
         """
-        parts = entry.split("/")
+        if parts is None:
+            parts = entry.split("/")
         if parts[0].endswith(".dist-info"):
             return cls._classify_dist_info(entry)
         if cls._is_strip_ext(entry):
@@ -271,6 +301,7 @@ class SlimSpec(abc.ABC):
         extra_excludes: frozenset[str] = frozenset(),
         nested_excludes: frozenset[str] = frozenset(),
         top_ext_always_shared: bool = False,
+        parts: list[str] | None = None,
     ) -> tuple[str, str | None]:
         """默认分类逻辑（供 ``DefaultSlimSpec`` 与简单 spec 复用）。
 
@@ -297,9 +328,12 @@ class SlimSpec(abc.ABC):
         如 scipy 各子模块下的 tests、matplotlib 跨包 mpl_toolkits 下的 tests）；
         ``top_ext_always_shared`` 用于顶层 C 扩展不可选择性剥离的库（matplotlib
         的 ``ft2font`` 是 ``__init__._check_versions()`` 硬依赖，剥离即 ImportError）。
-        Qt 等复杂 spec 不用此方法。
+        ``parts`` 传入调用方已 ``split("/")`` 的结果避免重复 split（numpy spec
+        等 split 过的调用方复用），``None`` 时内部自行 split。Qt 等复杂 spec
+        不用此方法。
         """
-        parts = entry.split("/")
+        if parts is None:
+            parts = entry.split("/")
         if parts[0].endswith(".dist-info"):
             return cls._classify_dist_info(entry)
 

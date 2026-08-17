@@ -106,11 +106,15 @@ def _build_run_cmd(exe: Path) -> list[str]:
     return [str(exe)]
 
 
-def _find_debug_python(proj_dir: Path) -> Path | None:
+def _find_debug_python(proj_dir: Path, py_version: str | None = None) -> Path | None:
     """查找 debug 模式用的 embed python 路径.
 
     Windows 用 ``dist/runtime/python.exe``，Linux/macOS 用
     ``dist/runtime/python/bin/python3.X``（standalone python）。
+
+    Linux/macOS 侧用 glob 枚举 ``bin/`` 下条目后按候选集精确匹配
+    （``pythonX.Y`` > ``pythonX`` > ``python3`` > ``python``），避免
+    ``python3.11-config`` 等带后缀工具被 ``sorted(glob)[0]`` 误选。
     """
     from fspack.platform import Platform, detect_platform
 
@@ -118,9 +122,10 @@ def _find_debug_python(proj_dir: Path) -> Path | None:
     if detect_platform() is Platform.WINDOWS:
         py = dist / "runtime" / "python.exe"
         return py if py.is_file() else None
-    bin_dir = dist / "runtime" / "python" / "bin"
-    pys = sorted(bin_dir.glob("python3.*"))
-    return pys[0] if pys else None
+    # 延迟导入：复用 runner 的候选集匹配实现，避免模块级拉起 runner 及其重依赖
+    from fspack.runner import _find_bin_python
+
+    return _find_bin_python(dist, py_version)
 
 
 def _find_wrapper(proj_dir: Path, name: str) -> Path | None:
@@ -129,7 +134,11 @@ def _find_wrapper(proj_dir: Path, name: str) -> Path | None:
     return wrapper if wrapper.is_file() else None
 
 
-def _build_debug_cmd(proj_dir: Path, name: str) -> tuple[list[str], dict[str, str]] | None:
+def _build_debug_cmd(
+    proj_dir: Path,
+    name: str,
+    py_version: str | None = None,
+) -> tuple[list[str], dict[str, str]] | None:
     """构造 debug 模式运行命令：embed python + 入口包装器.
 
     模拟 ``fsp r --debug`` 行为：用 console 子系统的 embed python 直跑
@@ -147,11 +156,13 @@ def _build_debug_cmd(proj_dir: Path, name: str) -> tuple[list[str], dict[str, st
 
     :param proj_dir: 项目根目录（含 ``dist/``）
     :param name: 入口名（``pyproject.toml`` 的 ``name``）
+    :param py_version: 项目 Python 版本（如 ``3.11.9``），用于 Linux/macOS
+        侧 ``bin/`` 下解释器候选集精确匹配；``None`` 时仅匹配通用候选名
     :return: ``(cmd, env)`` 或 ``None``（wrapper/embed python 缺失，调用方回退直跑 exe）
     """
     from fspack.platform import Platform, detect_platform
 
-    py = _find_debug_python(proj_dir)
+    py = _find_debug_python(proj_dir, py_version)
     wrapper = _find_wrapper(proj_dir, name)
     if py is None or wrapper is None:
         return None
@@ -287,19 +298,29 @@ def _build_single_template(  # pragma: no cover
     elapsed = time.perf_counter() - start
     dist_dir = proj_dir / "dist"
     dist_size = _dir_size(dist_dir) if dist_dir.is_dir() else 0
-    entry_count = len(list(dist_dir.glob("*.exe"))) if dist_dir.is_dir() else 0
 
     # 构建成功后解析项目入口：多入口项目产出的 exe 名是 [tool.fspack.entries]
     # 的键（如 cli/gui/web），不等于 template.name。用 ProjectInfo.default_entry
     # 取默认入口名（GUI 优先、同类型按字母排序，与 `fsp r` 默认行为一致），
     # 避免多入口项目跳过运行验证。
-    entry_name = ProjectInfo.from_dir(proj_dir).default_entry.name
+    info = ProjectInfo.from_dir(proj_dir)
+    entry_name = info.default_entry.name
+
+    # 入口计数：按项目声明的入口逐个检查 dist 顶层产物（<name>.exe 或无后缀
+    # <name>）。Linux/macOS 产物无 .exe 后缀，仅统计 *.exe 会漏计；且多入口
+    # 项目（cli/gui/web）非默认入口的无后缀产物也须计入，故按入口名精确匹配
+    if dist_dir.is_dir():
+        entry_count = sum(
+            1 for ep in info.all_entries if (dist_dir / f"{ep.name}.exe").is_file() or (dist_dir / ep.name).is_file()
+        )
+    else:
+        entry_count = 0
 
     # 运行验证：优先用 debug 模式（embed python + wrapper），模拟 `fsp r --debug`：
     # console 子系统 stdout 可见，wrapper 设置 Qt 插件路径、Tcl/Tk 环境变量、
     # site-packages sys.path 等，避免 GUI 应用因环境变量缺失启动失败。
     # debug 模式不可用（wrapper/embed python 缺失）时回退直跑 loader exe。
-    debug = _build_debug_cmd(proj_dir, entry_name)
+    debug = _build_debug_cmd(proj_dir, entry_name, info.py_version)
     if debug is not None:
         cmd, env = debug
         run_result = _run_template(cmd, env)

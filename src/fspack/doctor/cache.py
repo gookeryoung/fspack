@@ -50,7 +50,7 @@ CACHE_TYPES: tuple[str, ...] = (
 )
 
 
-def run_cache_status(target: str | None = None) -> tuple[CacheHealthReport, ...]:
+def run_cache_status(target: str | None = None, *, full_verify: bool = False) -> tuple[CacheHealthReport, ...]:
     """扫描 cache 目录健康状态，渲染详细报告到控制台.
 
     iter-139 引入：``fsp cache status`` 调用，仅扫描 wheels。
@@ -64,15 +64,18 @@ def run_cache_status(target: str | None = None) -> tuple[CacheHealthReport, ...]
     - 返回 :class:`CacheHealthReport` 元组，调用方可基于字段做后续处理
 
     :param target: 指定单 cache 类型扫描；``None`` 扫描全部类型
+    :param full_verify: True 时对 zip 归档类缓存（embed/tkinter）启用全量
+        CRC 校验（逐文件 ``testzip``，慢但可发现数据区损坏），默认 False
+        快检中心目录（``fsp cache status --verify`` 启用全量）
     :return: 报告元组（单 target 时为 1 元组）
     """
     from fspack.console import console
 
     if target is not None:
         _validate_cache_type(target)
-        reports = (_scan_cache_by_type(target),)
+        reports = (_scan_cache_by_type(target, full_verify=full_verify),)
     else:
-        reports = _scan_all_caches()
+        reports = _scan_all_caches(full_verify=full_verify)
 
     console.step(f"缓存健康扫描：{len(reports)} 个目录")
     for report in reports:
@@ -93,11 +96,13 @@ def run_cache_clean(
 
     清理规则：
 
-    - 损坏文件（zip/tar 结构损坏、PE 头缺失、空文件）：扫描期已删除
+    - 损坏文件（zip/tar 结构损坏、PE 头缺失、空文件）：``dry_run=False`` 时
+      扫描期删除（扫描器带 ``delete_corrupt=True``）；``dry_run=True`` 只报告
     - wheels 类型：``stale_deps``（引用缺失 wheel）+ ``orphan_wheels``（孤儿 wheel）
       始终清理（iter-139 既有行为，与 ``include_stale`` 无关）
     - 非 wheels 类型：``stale_files``（旧版本 zip/tar/子目录）仅在
       ``include_stale=True`` 时清理，默认保留（用户可能需要多版本切换）
+    - 缺失文件（如 ccache 二进制未下载）无文件可删，不计入 ``total_cleaned``
     - ``dry_run=True``：仅扫描不删除，预览结果与实际清理一致（共享扫描入口）
 
     :param dry_run: ``True`` 时仅扫描不删除
@@ -153,7 +158,7 @@ def _render_status_report(report: CacheHealthReport) -> None:
         console.warn("  目录不存在")
         return
 
-    if _is_empty_report(report):
+    if _is_empty_report(report) and not report.missing_files:
         console.success("  目录为空（无缓存文件）")
         return
 
@@ -178,7 +183,7 @@ def _render_clean_report(report: CacheHealthReport, *, dry_run: bool) -> None:
         console.warn("  目录不存在")
         return
 
-    if not report.has_issues:
+    if not report.has_issues and not report.missing_files:
         console.success("  健康，无需清理")
         return
 
@@ -210,7 +215,7 @@ def _format_wheels_summary(report: CacheHealthReport) -> str:
         valid = report.total_deps_files - len(report.corrupt_deps_files) - len(report.stale_deps_files)
         detail = f"deps {report.total_deps_files} 个（有效 {valid}"
         if report.corrupt_deps_files:
-            detail += f"，损坏已删除 {len(report.corrupt_deps_files)}"
+            detail += f"，损坏 {len(report.corrupt_deps_files)}"
         if report.stale_deps_files:
             detail += f"，stale {len(report.stale_deps_files)}"
         parts.append(detail + "）")
@@ -226,7 +231,7 @@ def _format_generic_summary(report: CacheHealthReport) -> str:
     """非 wheels 类型概要：文件总数 + 损坏/过期计数 + 可释放体积."""
     parts: list[str] = [f"文件 {report.total_files} 个"]
     if report.corrupt_files:
-        parts.append(f"损坏 {len(report.corrupt_files)}（已删除）")
+        parts.append(f"损坏 {len(report.corrupt_files)}")
     if report.stale_files:
         parts.append(f"过期 {len(report.stale_files)}")
     if report.orphan_files:
@@ -237,7 +242,7 @@ def _format_generic_summary(report: CacheHealthReport) -> str:
 
 
 def _print_cache_detail_lists(report: CacheHealthReport) -> None:
-    """渲染缓存扫描的详细文件名列表（损坏/stale/orphan 各一行）."""
+    """渲染缓存扫描的详细文件名列表（损坏/缺失/stale/orphan 各一行）."""
     from fspack.console import console
 
     if report.cache_type == "wheels":
@@ -245,7 +250,9 @@ def _print_cache_detail_lists(report: CacheHealthReport) -> None:
         return
 
     if report.corrupt_files:
-        console.error(f"  损坏文件（已删除）: {_preview_names(report.corrupt_files)}")
+        console.error(f"  损坏文件: {_preview_names(report.corrupt_files)}")
+    if report.missing_files:
+        console.warn(f"  缺失文件: {_preview_names(report.missing_files)}")
     if report.stale_files:
         console.warn(f"  过期文件（旧版本，需 --stale 清理）: {_preview_names(report.stale_files)}")
     if report.orphan_files:
@@ -257,7 +264,7 @@ def _print_wheels_detail_lists(report: CacheHealthReport) -> None:
     from fspack.console import console
 
     if report.corrupt_deps_files:
-        console.error(f"  损坏 deps（已删除）: {_preview_names(report.corrupt_deps_files)}")
+        console.error(f"  损坏 deps: {_preview_names(report.corrupt_deps_files)}")
     if report.stale_deps_files:
         console.warn(f"  stale deps（引用缺失 wheel）: {_preview_names(report.stale_deps_files)}")
         if report.missing_wheels:
@@ -276,6 +283,9 @@ def _print_cache_clean_lists(report: CacheHealthReport, action: str) -> None:
 
     if report.corrupt_files:
         console.rich.print(f"  损坏文件（扫描阶段{action}）: {_preview_names(report.corrupt_files)}")
+    if report.missing_files:
+        # 缺失文件无文件可删，不参与 action（删除）统计，单独提示需重新下载
+        console.warn(f"  缺失文件（下次使用时自动重新下载）: {_preview_names(report.missing_files)}")
     if report.stale_files:
         console.rich.print(f"  过期文件 {action}: {_preview_names(report.stale_files)}")
     if report.orphan_files:

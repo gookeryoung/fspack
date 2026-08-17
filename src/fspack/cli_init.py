@@ -46,6 +46,25 @@ _WIN7_UNSUPPORTED_TEMPLATES = frozenset({"fastapi"})
 _REQUIRES_PYTHON_RE = re.compile(r'^requires-python = "[^"]*"$', re.MULTILINE)
 
 
+def _insert_after_project_header(content: str, new_line: str) -> str:
+    """在 pyproject.toml 的 ``[project]`` 节头后插入一行.
+
+    requires-python 行与 description 行都不存在时（模板缺两者）的兜底：
+    按行扫描找 ``[project]`` 行，紧随其后插入 ``new_line``；未找到
+    ``[project]`` 节时原样返回（无法定位插入点，不强行追加避免 TOML 错位）。
+
+    :param content: pyproject.toml 原始内容
+    :param new_line: 待插入的行（如 ``requires-python = ">=3.10"``）
+    :return: 插入后的内容
+    """
+    lines = content.splitlines(keepends=True)
+    for i, line in enumerate(lines):
+        if line.strip() == "[project]":
+            lines.insert(i + 1, new_line + "\n")
+            return "".join(lines)
+    return content
+
+
 def _is_windows_7() -> bool:
     """检测当前系统是否是 Windows 7.
 
@@ -148,16 +167,22 @@ def init_project(
             content = files[pyproject_path]
             new_line = f'requires-python = "{requires_python}"'
             if _REQUIRES_PYTHON_RE.search(content):
+                # 已有 requires-python 行：直接替换
                 files[pyproject_path] = _REQUIRES_PYTHON_RE.sub(new_line, content)
             else:
-                # 无 requires-python 行时追加到 description 行后
-                files[pyproject_path] = re.sub(
+                # 无 requires-python 行：优先追加到 description 行后
+                new_content = re.sub(
                     r'(^description = "[^"]*"$)',
                     rf"\1\n{new_line}",
                     content,
                     count=1,
                     flags=re.MULTILINE,
                 )
+                if new_content == content:
+                    # description 行也不存在（sub 不命中时静默返回原串）：
+                    # 兜底在 [project] 节头后插入，避免覆盖静默失效
+                    new_content = _insert_after_project_header(content, new_line)
+                files[pyproject_path] = new_content
 
     target.mkdir(parents=True, exist_ok=False)
     for rel_path, content in files.items():

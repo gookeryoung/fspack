@@ -195,11 +195,22 @@ def _build_entry_loaders(ctx: BuildContext, resolved_icon: Path | None, has_tkin
 
             with ThreadPoolExecutor_dispatch(max_workers=max_workers) as pool:
                 futures = [pool.submit(_build_one, ep) for ep in entries]
-                # 按 submit 顺序取 result，保持 exes 顺序与 entries 一致
-                # future.result() 重抛 worker 异常（如 LoaderError），由 with 块 __exit__
-                # 的 shutdown(wait=True) 等待在途任务后传播
+                # 按 submit 顺序取 result，保持 exes 顺序与 entries 一致。
+                # future.result() 重抛 worker 异常（如 LoaderError）：首个异常
+                # 不立即抛出，先等待其余 future 完成并逐个记录其异常（多入口
+                # 并行编译时常见多个入口同时失败，静默丢弃会丢失诊断信息），
+                # 最终重抛首个异常由 with 块 __exit__ 的 shutdown 传播
+                first_exc: BaseException | None = None
                 for future in futures:
-                    exes.append(future.result())
+                    try:
+                        exes.append(future.result())
+                    except Exception as exc:
+                        if first_exc is None:
+                            first_exc = exc
+                        else:
+                            _logger.warning("其余 entry loader 编译异常: %s", exc)
+                if first_exc is not None:
+                    raise first_exc
         st.processed(len(exes))
     return exes
 

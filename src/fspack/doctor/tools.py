@@ -10,7 +10,8 @@ macOS 查 clang），通用工具 pip/uv/Pillow 两平台都查。
   超时 :data:`_VERSION_TIMEOUT`（5s）兜底防卡死，失败返回 :class:`CheckResult`
   标记缺失
 - 可选工具（wine/uv 等）缺失降级为 WARN（``warn_only=True``），不阻塞打包
-- pip 优先用 PATH 中的命令，回退 ``python -m pip`` 确保诊断当前解释器环境
+- pip 优先用 PATH 中的命令（pip 缺失时改用 pip3 探测），均不在 PATH 时
+  回退 ``python -m pip`` 确保诊断当前解释器环境
 """
 
 from __future__ import annotations
@@ -154,32 +155,31 @@ def _check_wine() -> CheckResult:
 
 def _check_pip() -> CheckResult:
     """检查 pip 模块（wheel 下载必备）."""
-    # 用 sys.executable 确保诊断当前解释器环境，非 PATH 中的 python
-    if shutil.which("pip") is None and shutil.which("pip3") is None:
-        # pip 命令不在 PATH 也可能以 python -m pip 形式可用
-        try:
-            result = subprocess.run(
-                [sys.executable, "-m", "pip", "--version"],
-                capture_output=True,
-                text=True,
-                timeout=_VERSION_TIMEOUT,
-                check=False,
-            )
-            if result.returncode == 0:
-                version_line = result.stdout.splitlines()[0] if result.stdout else "可用"
-                return CheckResult(name="pip", status=CheckStatus.OK, detail=version_line.strip())
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-        return CheckResult(
-            name="pip",
-            status=CheckStatus.ERROR,
-            detail="未找到",
-            suggestion="wheel 下载需要 pip。安装：python -m ensurepip --default-pip 或 https://pip.pypa.io/en/stable/installation/",
+    _install_suggestion = "wheel 下载需要 pip。安装：python -m ensurepip --default-pip"
+    if shutil.which("pip") is not None:
+        return _check_tool_version("pip", ["pip", "--version"], error_suggestion=_install_suggestion)
+    # pip 命令缺失时优先用 pip3 探测版本（部分环境只安装 pip3 入口脚本）
+    if shutil.which("pip3") is not None:
+        return _check_tool_version("pip", ["pip3", "--version"], error_suggestion=_install_suggestion)
+    # pip/pip3 命令均不在 PATH，回退 python -m pip 确保诊断当前解释器环境
+    try:
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=_VERSION_TIMEOUT,
+            check=False,
         )
-    return _check_tool_version(
-        "pip",
-        ["pip", "--version"],
-        error_suggestion="wheel 下载需要 pip。安装：python -m ensurepip --default-pip",
+        if result.returncode == 0:
+            version_line = result.stdout.splitlines()[0] if result.stdout else "可用"
+            return CheckResult(name="pip", status=CheckStatus.OK, detail=version_line.strip())
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return CheckResult(
+        name="pip",
+        status=CheckStatus.ERROR,
+        detail="未找到",
+        suggestion="wheel 下载需要 pip。安装：python -m ensurepip --default-pip 或 https://pip.pypa.io/en/stable/installation/",
     )
 
 

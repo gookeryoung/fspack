@@ -126,7 +126,9 @@ def atomic_write_text(target: Path, content: str, *, encoding: str = "utf-8") ->
 
     用 ``tempfile.mkstemp`` 在目标目录创建临时文件（同目录保证 ``Path.replace``
     是原子操作：POSIX rename(2) 原子，Windows ReplaceFile 原子），写入完成后
-    ``Path.replace`` 替换目标文件。任何失败都清理临时文件并重抛 ``OSError``。
+    ``f.flush() + os.fsync()`` 强制落盘（防掉电/系统崩溃后留下空文件或截断文件），
+    再 ``Path.replace`` 替换目标文件。任何失败（含 KeyboardInterrupt 等基础异常）
+    都清理临时文件后重抛，``OSError`` 语义分支保持不变。
 
     :param target: 目标文件路径（父目录不存在时自动创建）
     :param content: 待写入文本内容
@@ -139,8 +141,14 @@ def atomic_write_text(target: Path, content: str, *, encoding: str = "utf-8") ->
     try:
         with os.fdopen(fd, "w", encoding=encoding, newline="") as f:
             f.write(content)
+            # 刷缓冲并 fsync 落盘：rename 原子性只保证"新旧文件二选一"，
+            # 不保证数据已写回磁盘；掉电场景下未 fsync 的 rename 可能留下空文件
+            f.flush()
+            os.fsync(f.fileno())
         tmp_path.replace(target)
-    except OSError:
+    except BaseException:
+        # 捕获 BaseException（含 KeyboardInterrupt/SystemExit）：任何退出路径都
+        # 先清理临时文件再重抛，避免残留 .tmp_* 文件；OSError 语义与原先一致
         with contextlib.suppress(OSError):
             tmp_path.unlink()
         raise

@@ -285,3 +285,146 @@ def test_print_manifest_diff_both_paths(capsys: pytest.CaptureFixture[str]) -> N
     out = capsys.readouterr().out
     # 注意：rich 可能输出 ANSI 码，按关键字匹配即可
     assert "新增" in out or "n.py" in out or "差异概览" in out
+
+
+# ---- CLI 入口（``fsp manifest`` 子命令）：cli._run_generate / cli._run_diff ----
+
+
+def _make_cli_project(tmp_path: Path) -> Path:
+    """构造含 pyproject.toml 与 dist 产物的最小项目，供 CLI 入口测试."""
+    proj = tmp_path / "app"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n', encoding="utf-8")
+    (proj / "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
+    dist = proj / "dist"
+    (dist / "runtime").mkdir(parents=True)
+    (dist / "runtime" / "python3.11.exe").write_bytes(b"fake-python")
+    return proj
+
+
+def _write_manifest_json(path: Path, files: dict[str, tuple[int, str]]) -> None:
+    """手写最小合法 manifest JSON（load_manifest 仅校验 manifestVersion/entries）."""
+    data = {
+        "manifestVersion": 1,
+        "summary": {"total_files": len(files), "total_size": sum(s for s, _ in files.values())},
+        "entries": [{"path": p, "size": s, "sha256": h, "category": "other"} for p, (s, h) in sorted(files.items())],
+    }
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+
+def test_run_generate_creates_manifest_in_release(tmp_path: Path) -> None:
+    """_run_generate 默认输出到 dist/release/<name>-<version>-manifest.json."""
+    from argparse import Namespace
+
+    from fspack import cli
+
+    proj = _make_cli_project(tmp_path)
+    cli._run_generate(Namespace(project=str(proj), py_version=None, output=None))
+
+    out = proj / "dist" / "release" / "app-0.1-manifest.json"
+    assert out.is_file()
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert data["summary"]["total_files"] >= 1
+    assert any(e["path"].startswith("runtime/") for e in data["entries"])
+
+
+def test_run_generate_explicit_output(tmp_path: Path) -> None:
+    """_run_generate --output 显式路径写入指定文件."""
+    from argparse import Namespace
+
+    from fspack import cli
+
+    proj = _make_cli_project(tmp_path)
+    out = tmp_path / "custom-manifest.json"
+    cli._run_generate(Namespace(project=str(proj), py_version=None, output=str(out)))
+    assert out.is_file()
+
+
+def test_run_generate_missing_dist_exits(tmp_path: Path) -> None:
+    """dist 目录不存在时 _run_generate 以退出码 2 终止."""
+    from argparse import Namespace
+
+    from fspack import cli
+
+    proj = tmp_path / "app"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n', encoding="utf-8")
+    ns = Namespace(project=str(proj), py_version=None, output=None)
+    with pytest.raises(SystemExit) as ei:
+        cli._run_generate(ns)
+    assert ei.value.code == 2
+
+
+def test_run_generate_invalid_project_exits(tmp_path: Path) -> None:
+    """项目缺 pyproject.toml 时 ProjectError 转退出码 2 终止."""
+    from argparse import Namespace
+
+    from fspack import cli
+
+    proj = tmp_path / "empty"
+    proj.mkdir()
+    (proj / "dist").mkdir()
+    ns = Namespace(project=str(proj), py_version=None, output=None)
+    with pytest.raises(SystemExit) as ei:
+        cli._run_generate(ns)
+    assert ei.value.code == 2
+
+
+def test_run_diff_prints_difference(tmp_path: Path) -> None:
+    """_run_diff 正常对比两份 manifest 并打印差异（新增/修改均出现）."""
+    from argparse import Namespace
+
+    from fspack import cli
+
+    old = tmp_path / "old.json"
+    new = tmp_path / "new.json"
+    _write_manifest_json(old, {"a.txt": (10, "1" * 64)})
+    _write_manifest_json(new, {"a.txt": (20, "2" * 64), "b.bin": (5, "3" * 64)})
+    # 输出经 rich console 渲染，重点验证对比流程不抛异常（差异内容渲染由 print_manifest_diff 测试覆盖）
+    cli._run_diff(Namespace(old=str(old), new=str(new), exit_code=False))
+
+
+def test_run_diff_missing_file_exits(tmp_path: Path) -> None:
+    """旧 manifest 文件不存在时 _run_diff 以退出码 2 终止."""
+    from argparse import Namespace
+
+    from fspack import cli
+
+    new = tmp_path / "new.json"
+    _write_manifest_json(new, {"a.txt": (10, "1" * 64)})
+    ns = Namespace(old=str(tmp_path / "nope.json"), new=str(new), exit_code=False)
+    with pytest.raises(SystemExit) as ei:
+        cli._run_diff(ns)
+    assert ei.value.code == 2
+
+
+def test_run_diff_invalid_manifest_exits(tmp_path: Path) -> None:
+    """manifest 结构非法（缺 manifestVersion 键）时 ValueError 转退出码 2 终止."""
+    from argparse import Namespace
+
+    from fspack import cli
+
+    old = tmp_path / "old.json"
+    new = tmp_path / "new.json"
+    old.write_text('{"entries": {}}', encoding="utf-8")
+    _write_manifest_json(new, {"a.txt": (10, "1" * 64)})
+    ns = Namespace(old=str(old), new=str(new), exit_code=False)
+    with pytest.raises(SystemExit) as ei:
+        cli._run_diff(ns)
+    assert ei.value.code == 2
+
+
+def test_run_diff_exit_code_flag_exits_nonzero(tmp_path: Path) -> None:
+    """--exit-code 且存在差异时 _run_diff 以退出码 1 终止."""
+    from argparse import Namespace
+
+    from fspack import cli
+
+    old = tmp_path / "old.json"
+    new = tmp_path / "new.json"
+    _write_manifest_json(old, {"a.txt": (10, "1" * 64)})
+    _write_manifest_json(new, {"a.txt": (20, "2" * 64)})
+    ns = Namespace(old=str(old), new=str(new), exit_code=True)
+    with pytest.raises(SystemExit) as ei:
+        cli._run_diff(ns)
+    assert ei.value.code == 1

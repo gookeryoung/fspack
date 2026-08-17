@@ -6,9 +6,12 @@
 
 from __future__ import annotations
 
+import logging
 import subprocess as _default_subprocess
 from pathlib import Path
 from typing import Any
+
+_logger = logging.getLogger(__name__)
 
 # dep_analyzer facade 延迟 dispatch：subprocess 模块 patch 点
 _da_mod_holder: list[Any] = [None]
@@ -39,7 +42,12 @@ def _parse_otool_deps(path: Path) -> list[str] | None:
             timeout=10,
             check=False,
         )
-    except (FileNotFoundError, _default_subprocess.TimeoutExpired):
+    except _default_subprocess.TimeoutExpired:
+        _logger.warning("otool 解析超时（10s），跳过: %s", path)
+        return None
+    except OSError as e:
+        # otool 不存在（FileNotFoundError）或权限/IO 异常：跳过该文件
+        _logger.warning("otool 调用失败，跳过: %s（%s）", path, e)
         return None
 
     if result.returncode != 0:

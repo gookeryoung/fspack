@@ -109,7 +109,7 @@ class NuitkaProgress:
         cmd: list[str],
         *,
         env: dict[str, str] | None = None,
-        timeout: float = _COMPILE_TIMEOUT,
+        timeout: float | None = None,
     ) -> tuple[int, str, str]:
         """运行 nuitka 编译命令，实时流式输出 stdout/stderr 到终端.
 
@@ -126,8 +126,10 @@ class NuitkaProgress:
         层获取（默认 16MB），超过后停止累积（继续写终端实时显示），避免大型项目
         累积输出导致内存膨胀。
 
-        **超时防护**：``timeout`` 秒后子进程未退出则 ``kill()`` 终止。默认值在函数
-        定义时绑定为 :data:`_COMPILE_TIMEOUT`（600s），可通过调用参数显式覆盖。
+        **超时防护**：``timeout`` 秒后子进程未退出则终止整个进程树。默认值不在
+        函数定义时绑定（避免绕过 :func:`_C` dispatch 使 monkeypatch 失效），
+        None 时运行时 dispatch compile 层 ``_COMPILE_TIMEOUT``（默认 600s），
+        可通过调用参数显式覆盖。
 
         **死锁防护**：drain 线程持续 ``os.read`` 消费 PIPE 防止 PIPE 缓冲区满
         导致子进程 ``write()`` 阻塞。主线程 ``wait(timeout=)`` 控制总时长，
@@ -136,14 +138,18 @@ class NuitkaProgress:
         Args:
             cmd: 子进程命令列表.
             env: 子进程环境变量. None 继承当前进程环境.
-            timeout: 超时秒数. 默认 600s（:data:`_COMPILE_TIMEOUT`），可显式覆盖.
-                超时 kill 子进程并返回非零退出码.
+            timeout: 超时秒数. None 时运行时取 compile 层 ``_COMPILE_TIMEOUT``
+                （默认 600s），可显式覆盖. 超时 kill 进程树并返回非零退出码.
         """
         # 运行时 dispatch：优先 compile 层的同名属性（保证 monkeypatch 生效），
         # 否则 fallback 到本模块 _DEFAULT_* 常量。一次性 resolve 后通过默认参数
         # 传入闭包，避免闭包每次循环都重新 dispatch 增加开销。
         stream_accum_limit: int = _C("_STREAM_ACCUM_LIMIT", _DEFAULT_STREAM_ACCUM_LIMIT)
         drain_timeout: float = _C("_DRAIN_JOIN_TIMEOUT", _DEFAULT_DRAIN_JOIN_TIMEOUT)
+        if timeout is None:
+            # 默认值运行时 dispatch（同 stream_accum_limit 用法）：定义期绑定
+            # _COMPILE_TIMEOUT 常量会绕过 compile 层 monkeypatch
+            timeout = float(_C("_COMPILE_TIMEOUT", _DEFAULT_COMPILE_TIMEOUT))
 
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
         stdout_chunks: list[bytes] = []
@@ -189,8 +195,22 @@ class NuitkaProgress:
         except subprocess.TimeoutExpired:
             _logger.warning("Nuitka 编译超时（%ds），终止子进程: %s", int(timeout), " ".join(cmd[:3]))
             timed_out = True
-            process.kill()
-            returncode = process.wait()
+            # 杀整个进程树：nuitka 会衍生 scons→gcc 孙进程，仅 kill 直接子进程
+            # 时孙进程存活并持有 PIPE 写端，drain 线程无法收到 EOF 导致 join 卡住
+            if sys.platform == "win32":
+                # Windows 无进程组，用 taskkill /T 递归终止进程树
+                subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"], capture_output=True, check=False)
+            else:
+                # POSIX：Popen 未设 start_new_session（无独立进程组），无法
+                # os.killpg 杀组，回退仅杀直接子进程；孙进程由超时路径的
+                # PIPE 关闭与 nuitka 自身退出机制兜底
+                process.kill()
+            try:
+                # kill 后收尸加超时保护：进程树未完全退出时不无限阻塞
+                returncode = process.wait(timeout=5)
+            except subprocess.TimeoutExpired:  # pragma: no cover - taskkill /F 后残留极罕见
+                _logger.warning("超时 kill 后子进程 %d 5s 内未退出，放弃等待", process.pid)
+                returncode = -1
         finally:
             t_out.join(timeout=drain_timeout)
             t_err.join(timeout=drain_timeout)
@@ -245,9 +265,11 @@ class NuitkaProgress:
         （``as_completed`` 迭代）聚合，无共享可变状态竞争。``completed_count`` 用 list
         容器：主线程写、心跳线程读，GIL 下 int 读写原子。
 
-        **异常传播**：worker 内 ``_stream_compile`` 抛异常时 ``future.result()`` 重抛，
-        ``with ThreadPoolExecutor`` 的 ``__exit__`` 调 ``shutdown(wait=True)`` 等待
-        在途任务后传播异常。``finally`` 块确保心跳线程停止。
+        **异常传播**：worker 内 ``_stream_compile`` 抛 ``OSError``（Popen 启动失败）
+        时按"退出码非零"等价结果处理（仅告警记入失败列表），不中断其余文件编译；
+        非 ``OSError`` 异常经 ``future.result()`` 重抛，``with`` 块 ``__exit__`` 的
+        ``shutdown(wait=True)`` 等待在途任务后传播，传播前尽力取消排队任务。
+        ``finally`` 块确保心跳线程停止。
         """
         # dispatch 常量与类（保证 monkeypatch 生效）：一次性 resolve 后使用
         heartbeat_interval: float = _C("_HEARTBEAT_INTERVAL", _DEFAULT_HEARTBEAT_INTERVAL)
@@ -263,26 +285,37 @@ class NuitkaProgress:
         total = len(py_files)
 
         def _compile_one(py_file: Path) -> tuple[Path, int]:
-            """单文件编译 worker：调 nuitka --mode=module，返回 (文件路径, 退出码)."""
-            returncode, _stdout, _stderr = cls._stream_compile(
-                [
-                    str(py_exe),
-                    str(bootstrap_script),
-                    # Nuitka 4.x：--module 已废弃为兼容写法，须用 --mode=module，
-                    # 否则 --no-pyi-file 等模块模式专属选项触发无效果 WARNING
-                    "--mode=module",
-                    # 显式声明不跟随导入：单文件逐个编译本就不跟随（模块模式默认行为），
-                    # 显式传入避免 Nuitka "did not specify to follow or include anything" 警告
-                    "--nofollow-imports",
-                    f"--output-dir={py_file.parent}",
-                    "--no-pyi-file",
-                    "--remove-output",
-                    "--assume-yes-for-downloads",
-                    f"--jobs={jobs}",
-                    str(py_file),
-                ],
-                env=compile_env,
-            )
+            """单文件编译 worker：调 nuitka --mode=module，返回 (文件路径, 退出码).
+
+            ``_stream_compile`` 内 ``Popen`` 抛 ``OSError``（如 py_exe 不存在、
+            系统句柄耗尽）时按"退出码非零"等价结果处理（返回 -1），与
+            "单文件失败仅告警不中断构建"的承诺一致，不向上重抛中断整个构建。
+            """
+            try:
+                returncode, _stdout, _stderr = cls._stream_compile(
+                    [
+                        str(py_exe),
+                        str(bootstrap_script),
+                        # Nuitka 4.x：--module 已废弃为兼容写法，须用 --mode=module，
+                        # 否则 --no-pyi-file 等模块模式专属选项触发无效果 WARNING
+                        "--mode=module",
+                        # 显式声明不跟随导入：单文件逐个编译本就不跟随（模块模式默认行为），
+                        # 显式传入避免 Nuitka "did not specify to follow or include anything" 警告
+                        "--nofollow-imports",
+                        f"--output-dir={py_file.parent}",
+                        "--no-pyi-file",
+                        "--remove-output",
+                        "--assume-yes-for-downloads",
+                        f"--jobs={jobs}",
+                        str(py_file),
+                    ],
+                    env=compile_env,
+                )
+            except OSError as e:
+                # Popen 启动失败（FileNotFoundError/句柄不足等）：按该文件编译失败处理，
+                # 与 CalledProcessError（退出码非零）路径一致仅告警，不中断其余文件
+                _logger.warning("Nuitka 编译进程启动失败 %s: %s", py_file, e)
+                returncode = -1
             return py_file, returncode
 
         completed_count: list[int] = [0]
@@ -306,17 +339,25 @@ class NuitkaProgress:
         try:
             with tpe_cls(max_workers=max_workers) as pool:
                 futures = {pool.submit(_compile_one, f): f for f in py_files}
-                for future in as_completed(futures):
-                    py_file, returncode = future.result()
-                    completed_count[0] += 1
-                    idx = completed_count[0]
-                    if returncode == 0:
-                        compiled_files.add(py_file)
-                        stage.processed()
-                        _logger.info("编译 [%d/%d] %s 成功", idx, total, py_file.name)
-                    else:
-                        failed_files.append(py_file)
-                        _logger.warning("Nuitka 编译失败 %s（退出码 %s），详见上方输出", py_file, returncode)
+                try:
+                    for future in as_completed(futures):
+                        py_file, returncode = future.result()
+                        completed_count[0] += 1
+                        idx = completed_count[0]
+                        if returncode == 0:
+                            compiled_files.add(py_file)
+                            stage.processed()
+                            _logger.info("编译 [%d/%d] %s 成功", idx, total, py_file.name)
+                        else:
+                            failed_files.append(py_file)
+                            _logger.warning("Nuitka 编译失败 %s（退出码 %s），详见上方输出", py_file, returncode)
+                finally:
+                    # 异常传播（如 KeyboardInterrupt）时尽力取消尚未开始的排队任务，
+                    # 避免 with __exit__ 的 shutdown(wait=True) 等待全部排队任务执行完
+                    # 才退出（项目最低 Python 3.8，无 shutdown(cancel_futures=True)）。
+                    # 正常完成时所有 future 已结束，cancel 对已完成任务无副作用。
+                    for f in futures:
+                        f.cancel()
         finally:
             stop_heartbeat.set()
             hb_thread.join(timeout=1.0)

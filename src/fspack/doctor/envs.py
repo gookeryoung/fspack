@@ -18,19 +18,21 @@ iter-148 多 cache 类型扩展：新增 6 个扫描器覆盖 ``embed``/``standa
 
 from __future__ import annotations
 
-import contextlib
+import gzip
+import json
 import logging
 import re
+import shutil
 import sys
 import tarfile
+import time
 import zipfile
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Mapping
+from typing import TYPE_CHECKING, Callable, Mapping
 
 from fspack import __version__
 from fspack._util.format import format_size_bin
 from fspack._util.fsutil import walk_dir_size
-from fspack._util.jsoncache import load_json_dict
 from fspack.doctor.models import CacheHealthReport, CheckResult, CheckStatus
 
 if TYPE_CHECKING:
@@ -152,16 +154,14 @@ def _format_size(size_bytes: int) -> str:
 
 
 def _check_cache_integrity(cache_dir: Path) -> CheckResult:
-    """扫描 wheel 缓存目录，报告损坏/stale/orphan 概要并删除损坏文件.
+    """扫描 wheel 缓存目录，报告损坏/stale/orphan 概要（只读诊断，不删除文件）.
 
     iter-128 引入：``fsp doctor --check-cache`` 调用。
     iter-139 扩展：复用 :func:`_scan_cache_health` 的扫描结果，详情中追加
     stale deps（引用缺失 wheel）与 orphan wheels（未被任何 deps 引用）计数。
 
-    损坏文件（JSON 解析失败/结构非法）自动删除（与
-    :func:`fspack.packaging.wheels.cache._load_deps_cache` 行为一致）；
-    stale deps 与 orphan wheels 不在诊断阶段删除，仅提示用户用
-    ``fsp cache clean`` 清理。
+    诊断阶段不删除任何文件（损坏/stale/orphan 均仅报告），统一提示用户用
+    ``fsp cache clean`` 清理，避免只读诊断产生删除副作用。
 
     Args:
         cache_dir: wheel 缓存目录（通常是 :func:`fspack.config.cache.wheel_cache_dir`）。
@@ -189,7 +189,7 @@ def _check_cache_integrity(cache_dir: Path) -> CheckResult:
         valid_count = report.total_deps_files - len(report.corrupt_deps_files) - len(report.stale_deps_files)
         parts.append(f"{report.total_deps_files} 个 deps 缓存（{valid_count} 有效")
         if report.corrupt_deps_files:
-            parts[-1] += f"，{len(report.corrupt_deps_files)} 损坏已删除"
+            parts[-1] += f"，{len(report.corrupt_deps_files)} 损坏"
         if report.stale_deps_files:
             parts[-1] += f"，{len(report.stale_deps_files)} stale 引用缺失 wheel"
         parts[-1] += "）"
@@ -205,7 +205,7 @@ def _check_cache_integrity(cache_dir: Path) -> CheckResult:
 
     suggestion_parts: list[str] = []
     if report.corrupt_deps_files:
-        suggestion_parts.append("损坏 deps 已自动删除")
+        suggestion_parts.append(f"{len(report.corrupt_deps_files)} 个损坏 deps 待清理")
     if report.stale_deps_files or report.orphan_wheels:
         suggestion_parts.append(
             f"运行 `fsp cache clean` 清理 {len(report.stale_deps_files)} stale deps + {len(report.orphan_wheels)} 孤儿 wheel"
@@ -218,7 +218,65 @@ def _check_cache_integrity(cache_dir: Path) -> CheckResult:
     )
 
 
-def _scan_cache_health(cache_dir: Path) -> CacheHealthReport:
+def _parse_deps_entry(f: Path, corrupt_names: list[str], *, delete_corrupt: bool) -> tuple[str, list[str]] | None:
+    """解析单个 ``.deps-*.json`` 文件，返回 ``(文件名, wheel 名列表)``；损坏或跳过返回 ``None``.
+
+    供 :func:`_scan_cache_health` 第一遍循环调用，判定规则与其 docstring 一致：
+
+    - 读取失败：``FileNotFoundError``（glob 后被外部删除的竞态）静默跳过；
+      其余 ``OSError``（权限/文件锁等瞬时 IO）warning 后跳过——均不计损坏
+      也不删除，文件名不追加到 ``corrupt_names``
+    - 内容损坏（非 UTF-8 字节、JSON 非法、根对象非 dict、wheels 字段非 list）：
+      warning 后把 ``f.name`` 追加到 ``corrupt_names``，仅 ``delete_corrupt=True``
+      （清理路径）时 best-effort 删除
+    - 有效：返回 ``(f.name, wheels 中的字符串项列表)``（非字符串项过滤）
+
+    :param f: deps 缓存文件路径
+    :param corrupt_names: 损坏文件名收集列表（就地追加，调用方用于报告统计）
+    :param delete_corrupt: True 时损坏文件 best-effort 删除
+    :return: 有效条目 ``(文件名, wheel 名列表)``；损坏或跳过时 ``None``
+    """
+    try:
+        raw = f.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        # glob 后被外部删除（竞态）：无内容可判，跳过
+        return None
+    except OSError as e:
+        # 权限/文件锁等瞬时 IO 问题：不计损坏也不删除
+        _logger.warning("读取 deps 缓存失败，跳过判定: %s: %s", f, e)
+        return None
+    except ValueError as e:
+        # UnicodeDecodeError：文件含非法 UTF-8 字节，属内容损坏
+        _logger.warning("deps 缓存损坏: %s: %s", f, e)
+        corrupt_names.append(f.name)
+        if delete_corrupt:
+            _try_unlink(f)
+        return None
+
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            raise ValueError(f"根对象不是 dict: {type(data).__name__}")
+    except ValueError as e:
+        # JSON 非法或根对象非 dict：属内容损坏
+        _logger.warning("deps 缓存损坏: %s: %s", f, e)
+        corrupt_names.append(f.name)
+        if delete_corrupt:
+            _try_unlink(f)
+        return None
+
+    names = data.get("wheels", [])
+    if not isinstance(names, list):
+        # wheels 字段类型错误：属缓存损坏
+        _logger.warning("deps 缓存 wheels 字段非 list: %s", f)
+        corrupt_names.append(f.name)
+        if delete_corrupt:
+            _try_unlink(f)
+        return None
+    return f.name, [n for n in names if isinstance(n, str)]
+
+
+def _scan_cache_health(cache_dir: Path, *, delete_corrupt: bool = False) -> CacheHealthReport:
     """扫描 wheel 缓存目录健康状态，返回 :class:`CacheHealthReport`.
 
     iter-139 引入：``fsp doctor --check-cache``/``fsp cache status``/``fsp cache clean``
@@ -227,19 +285,25 @@ def _scan_cache_health(cache_dir: Path) -> CacheHealthReport:
     扫描规则：
 
     - ``.deps-*.json`` 文件：JSON 结构校验（根对象 dict、wheels 字段 list）。
-      损坏文件立即删除（best-effort，删除失败不影响扫描继续），记录到
-      ``corrupt_deps_files``。
+      损坏文件记录到 ``corrupt_deps_files``；仅 ``delete_corrupt=True``（清理路径）
+      时 best-effort 删除（删除失败不影响扫描继续），默认只报告不删除，
+      保证 status/dry-run 等只读路径无删除副作用。
     - 有效 deps 文件中 ``wheels`` 列表指向的 wheel 文件名聚合为 ``referenced`` 集合。
       若引用的 wheel 不在 cache_dir 中，该 deps 文件记入 ``stale_deps_files``，
       缺失的 wheel 名记入 ``missing_wheels``（不删除 deps 文件，由 ``fsp cache clean`` 处理）。
     - cache_dir 下的 ``*.whl`` 文件聚合为 ``existing`` 集合，未出现在任何 deps
       引用集合中的记入 ``orphan_wheels``，并累加 ``orphan_size_bytes``。
+    - 引用检查采用两遍法：第一遍解析全部 deps 收集 referenced 集合，第二遍
+      一次 glob 现有 wheel 求差集（orphan = existing - referenced，
+      missing = referenced - existing），避免 O(deps×wheels) 次 stat。
 
-    ``OSError``（权限/磁盘 I/O）不计为损坏也不删除：可能是瞬时问题，与
-    :func:`fspack.packaging.wheels.cache._load_deps_cache` 行为一致。
+    ``OSError``（权限/磁盘 I/O/文件锁）不计为损坏也不删除：可能是瞬时问题，
+    与 :func:`fspack.packaging.wheels.cache._load_deps_cache` 行为一致。
 
     Args:
         cache_dir: wheel 缓存目录。
+        :param delete_corrupt: True 时损坏的 ``.deps-*.json`` 扫描期 best-effort
+            删除；默认 False 只报告（只读路径/预览用）。
 
     :return: :class:`CacheHealthReport`，cache_dir 不存在时返回空报告
         （total_deps_files/total_wheels 均为 0）。
@@ -249,38 +313,31 @@ def _scan_cache_health(cache_dir: Path) -> CacheHealthReport:
 
     cache_files = sorted(cache_dir.glob(".deps-*.json"))
     corrupt_names: list[str] = []
-    stale_names: list[str] = []
-    missing_wheels: list[str] = []
+    valid_deps: list[tuple[str, list[str]]] = []
     referenced: set[str] = set()
 
+    # 第一遍：逐个解析 deps 文件（_parse_deps_entry 判定损坏并就地收集），
+    # 聚合有效条目引用的 wheel 名
     for f in cache_files:
-        data = load_json_dict(f)
-        if data is None:
-            # load_json_dict 对 JSON 非法/非 dict 根：损坏删除+返回 None；对 OSError：不删+返回 None
-            if not f.exists():
-                # 文件被删除 = 真正 JSON 损坏，计入 corrupt_names
-                corrupt_names.append(f.name)
-            # OSError 瞬时问题（仍存在）或缺文件：不计入 corrupt，跳过
+        parsed = _parse_deps_entry(f, corrupt_names, delete_corrupt=delete_corrupt)
+        if parsed is None:
             continue
-        names = data.get("wheels", [])
-        if not isinstance(names, list):
-            # wheels 字段类型错误：属缓存损坏，按同策略删除并计入
-            corrupt_names.append(f.name)
-            with contextlib.suppress(OSError):
-                f.unlink()
-            continue
+        valid_deps.append(parsed)
+        referenced.update(parsed[1])
 
-        # 有效 deps 文件：检查引用的 wheel 是否存在
-        wheel_names = [n for n in names if isinstance(n, str)]
-        referenced.update(wheel_names)
-        missing = [n for n in wheel_names if not (cache_dir / n).is_file()]
-        if missing:
-            stale_names.append(f.name)
-            missing_wheels.extend(missing)
-
-    # 枚举现有 wheel 文件（仅顶层目录，与 _save_deps_cache 写入位置一致）
+    # 第二遍：一次 glob 现有 wheel 求差集（仅顶层目录，与 _save_deps_cache 写入位置一致）
     existing_wheels = sorted(p.name for p in cache_dir.glob("*.whl"))
     existing_set = set(existing_wheels)
+    missing_set = referenced - existing_set
+
+    stale_names: list[str] = []
+    missing_wheels: list[str] = []
+    for deps_name, wheel_names in valid_deps:
+        missing = [n for n in wheel_names if n in missing_set]
+        if missing:
+            stale_names.append(deps_name)
+            missing_wheels.extend(missing)
+
     orphan_names = sorted(existing_set - referenced)
     orphan_size = 0
     for name in orphan_names:
@@ -310,14 +367,16 @@ def _clean_cache_issues(cache_dir: Path, *, dry_run: bool = False) -> CacheHealt
     清理规则：
 
     - 重新扫描（确保使用最新状态，避免清理期间被外部修改的文件误删）。
+      ``dry_run=False`` 时扫描带 ``delete_corrupt=True``，损坏的 ``.deps-*.json``
+      在扫描阶段即删除；``dry_run=True`` 时扫描不删除任何文件（纯预览）。
     - 删除 ``stale_deps_files``（引用缺失 wheel 的 ``.deps-*.json``）：deps 文件
       指向的 wheel 已不在 cache_dir，下次构建会重新解析依赖，删除安全。
     - 删除 ``orphan_wheels``（未被任何 deps 引用的 ``*.whl``）：可能来自历史
       项目已删除/依赖变更。``dry_run=True`` 时仅扫描不删除，输出待删除列表。
 
-    损坏的 ``.deps-*.json`` 在 :func:`_scan_cache_health` 阶段已删除，本函数
-    返回的报告中 ``corrupt_deps_files`` 通常为空（除非扫描后又新增损坏文件，
-    极罕见，仍按报告原样返回）。
+    非 dry_run 时损坏的 ``.deps-*.json`` 在 :func:`_scan_cache_health` 阶段已删除，
+    本函数返回的报告中 ``corrupt_deps_files`` 记录的是本次已删除的损坏文件
+    （供调用方统计清理量）。
 
     删除失败 best-effort：单个文件 ``OSError`` 不阻断其他文件清理，仅 warning 日志。
     仍返回扫描报告（用户可看到实际删除了哪些、哪些失败）。
@@ -330,7 +389,7 @@ def _clean_cache_issues(cache_dir: Path, *, dry_run: bool = False) -> CacheHealt
         调用方可基于 ``corrupt_deps_files``/``stale_deps_files``/``orphan_wheels``
         字段统计本次清理量。
     """
-    report = _scan_cache_health(cache_dir)
+    report = _scan_cache_health(cache_dir, delete_corrupt=not dry_run)
 
     if dry_run or not report.has_issues:
         return report
@@ -361,11 +420,15 @@ def _clean_cache_issues(cache_dir: Path, *, dry_run: bool = False) -> CacheHealt
 #
 # - 统一返回 :class:`CacheHealthReport`，wheels 专用字段保留为默认空，
 #   非 wheels cache 类型用通用字段 ``corrupt_files``/``stale_files``/``orphan_files``/
-#   ``total_files``/``issues_size_bytes`` 描述文件级健康状态。
-# - 损坏文件（zip/tar 结构非法、PE 头缺失、空文件）在扫描阶段 best-effort 删除
-#   （与 wheels ``_scan_cache_health`` 行为一致）。
+#   ``missing_files``/``total_files``/``issues_size_bytes`` 描述文件级健康状态。
+# - 损坏文件（zip/tar 结构非法、PE 头缺失、空文件）默认只报告不删除；扫描器
+#   仅在 ``delete_corrupt=True``（``_clean_cache_by_type`` 非 dry_run 清理路径
+#   传入）时才 best-effort 删除，status/dry-run 只读路径无删除副作用。
+# - 完整性检查函数（``_is_zip_intact``/``_is_tar_intact``/``_is_pe_file``）返回
+#   三态：``None`` 表示 OSError 等 IO 异常无法判定（杀软占用/文件锁），调用方
+#   不计损坏也不删除，仅记 warning 日志；只有明确的 ``False`` 才判损坏。
 # - 过期文件（如版本不在 ``KNOWN_*_VERSIONS`` 的旧 embed zip）扫描期不删除，
-#   由 ``_clean_*_issues(..., include_stale=True)`` 显式清理。
+#   由 ``_clean_cache_by_type(..., include_stale=True)`` 显式清理。
 # - 非 wheels cache 类型无引用关系，不识别 orphan，``orphan_files`` 始终为空。
 # ---------------------------------------------------------------------------
 
@@ -383,6 +446,11 @@ _TKINTER_ZIP_RE = re.compile(r"^tkinter-(\d+\.\d+\.\d+)\.zip$")
 
 # nuitka 目录名：``<py_version>``（如 ``3.11.15``），与 ``_build_python_cache_dir`` 一致
 _NUITKA_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
+
+# nuitka 解压进行中的宽限期（秒）：目录名匹配版本正则但暂无 python 可执行、
+# 且目录 mtime 距今不足该值时，视为另一进程正在解压 standalone，跳过判定
+# 不删除（避免并发竞态误删）。standalone tar.gz 解压耗时可达分钟级，取 10 分钟。
+_NUITKA_EXTRACT_GRACE_SEC = 600.0
 
 # PE 文件 MZ 头（DOS header magic）：用于识别"非空但损坏"的 exe/loader 缓存
 _PE_MZ_MAGIC = b"MZ"
@@ -404,55 +472,95 @@ def _file_size(path: Path) -> int:
         return 0
 
 
-def _is_zip_intact(path: Path) -> bool:
-    """检查 zip 文件完整性：``ZipFile`` 能否正常打开并读取中心目录.
+def _is_zip_intact(path: Path, *, full: bool = False) -> bool | None:
+    """检查 zip 文件完整性，``full`` 控制快检/全量校验两级深度.
 
-    ``zipfile.BadZipFile``/``KeyError``/``OSError`` 视为损坏。打开后调
-    ``testzip()`` 验证 CRC（小文件无影响，大文件耗时但准确）。
+    - 快检（``full=False``，默认）：仅验证 ``ZipFile`` 能打开并读取中心目录
+      （``namelist()`` 触发解析），不逐项读取数据。中心目录位于文件尾部，
+      可发现截断/垃圾数据等绝大多数损坏，且无需读取全文件（数百 MB 的
+      embed zip 全量 CRC 校验耗时可达秒级，``fsp cache status`` 默认快检）
+    - 全量（``full=True``）：调 ``testzip()`` 逐文件读取并校验 CRC，可发现
+      中心目录完好但数据区损坏的文件；``fsp cache status --verify`` 启用
+
+    ``zipfile.BadZipFile``/``KeyError``/CRC 校验失败视为损坏返回 ``False``。
+
+    ``OSError``（杀软占用/文件锁/权限）无法判定完整性，返回 ``None``：
+    调用方不应据此删除文件（与 :func:`_scan_cache_health` 既有
+    "OSError 不计损坏"策略一致）。
+
+    :param path: zip 文件路径
+    :param full: True 时全量 CRC 校验（testzip），False 时仅快检中心目录
+    :return: True 完整 / False 损坏 / None IO 异常无法判定
     """
     try:
         with zipfile.ZipFile(path) as zf:
-            return zf.testzip() is None
-    except (zipfile.BadZipFile, OSError, KeyError):
+            if full:
+                return zf.testzip() is None
+            zf.namelist()
+            return True
+    except (zipfile.BadZipFile, KeyError):
         return False
+    except OSError:
+        return None
 
 
-def _is_tar_intact(path: Path) -> bool:
-    """检查 tar.gz 文件完整性：``tarfile.open`` 能否正常打开并读取成员表."""
+def _is_tar_intact(path: Path) -> bool | None:
+    """检查 tar.gz 文件完整性：``tarfile.open`` 能否正常打开并读取成员表.
+
+    ``tarfile.TarError``/``EOFError``/``gzip.BadGzipFile``（内容损坏，注意其
+    为 ``OSError`` 子类需先匹配）视为损坏返回 ``False``；``OSError``（杀软
+    占用/文件锁/权限）无法判定返回 ``None``，调用方不应据此删除文件。
+
+    :return: True 完整 / False 损坏 / None IO 异常无法判定
+    """
     try:
         with tarfile.open(path, "r:gz") as tf:
             # getmembers 触发实际读取（仅读 header），不需要 extractall
             tf.getmembers()
             return True
-    except (tarfile.TarError, OSError, EOFError):
+    except (tarfile.TarError, EOFError, gzip.BadGzipFile):
         return False
+    except OSError:
+        return None
 
 
-def _is_pe_file(path: Path) -> bool:
+def _is_pe_file(path: Path) -> bool | None:
     """检查文件是否为合法 PE（Windows 可执行）：MZ 头 + 非空.
 
     loader exe 缓存为 mingw/gcc 编译产物，文件头应为 ``MZ``（DOS header magic）。
     0 字节文件或缺少 MZ 头视为损坏（如磁盘写满导致截断、缓存写入被中断）。
+
+    ``OSError``（杀软占用/文件锁/权限）无法判定，返回 ``None``，调用方
+    不应据此删除文件。
+
+    :return: True 合法 PE / False 损坏 / None IO 异常无法判定
     """
     try:
         with path.open("rb") as f:
             head = f.read(2)
-        return head == _PE_MZ_MAGIC
     except OSError:
-        return False
+        return None
+    return head == _PE_MZ_MAGIC
 
 
-def _scan_embed_health(cache_dir: Path) -> CacheHealthReport:
+def _scan_embed_health(
+    cache_dir: Path, *, delete_corrupt: bool = False, full_verify: bool = False
+) -> CacheHealthReport:
     """扫描 embed python zip 缓存目录健康状态.
 
     embed 缓存目录 ``~/.fspack/cache/embed/`` 存放 Windows embed python zip
     （``python-<version>-embed-amd64.zip``）。扫描规则：
 
-    - 损坏 zip（``BadZipFile``/CRC 校验失败）：扫描期删除，记入 ``corrupt_files``
+    - 损坏 zip（``BadZipFile``/CRC 校验失败）：记入 ``corrupt_files``，仅
+      ``delete_corrupt=True``（清理路径）时扫描期删除
+    - zip 完整性无法判定（IO 异常，:func:`_is_zip_intact` 返回 ``None``）：
+      跳过判定不删不计，仅 warning 日志
     - 版本不在 :data:`fspack.config.KNOWN_EMBED_VERSIONS` 中的旧版本 zip：
       记入 ``stale_files``（用户可能保留多版本故不自动删，需 ``--stale`` 启用清理）
     - 非预期文件名（不匹配 ``_EMBED_ZIP_RE``）：跳过（不视为问题，可能是 README）
 
+    :param full_verify: True 时 zip 完整性用全量 CRC 校验（``testzip``，慢但
+        准确），False 时快检中心目录（默认，``fsp cache status --verify`` 启用全量）
     :return: :class:`CacheHealthReport`，cache_dir 不存在时返回空报告
     """
     from fspack.config import KNOWN_EMBED_VERSIONS
@@ -471,10 +579,15 @@ def _scan_embed_health(cache_dir: Path) -> CacheHealthReport:
             continue  # 非预期文件名（README 等），跳过
         version = match.group(1)
         path = cache_dir / name
-        if not _is_zip_intact(path):
+        intact = _is_zip_intact(path, full=full_verify)
+        if intact is False:
             corrupt.append(name)
             issues_size += _file_size(path)
-            _try_unlink(path)
+            if delete_corrupt:
+                _try_unlink(path)
+        elif intact is None:
+            # IO 异常（杀软占用/文件锁）无法判定完整性：不删不计，仅告警
+            _logger.warning("zip 完整性无法判定（IO 异常），跳过: %s", path)
         elif version not in KNOWN_EMBED_VERSIONS.values():
             stale.append(name)
             issues_size += _file_size(path)
@@ -489,12 +602,13 @@ def _scan_embed_health(cache_dir: Path) -> CacheHealthReport:
     )
 
 
-def _scan_standalone_health(cache_dir: Path) -> CacheHealthReport:
+def _scan_standalone_health(cache_dir: Path, *, delete_corrupt: bool = False) -> CacheHealthReport:
     """扫描 python-build-standalone tarball 缓存目录健康状态.
 
     standalone 缓存目录 ``~/.fspack/cache/standalone/`` 存放 Linux/macOS
     python-build-standalone tar.gz（``cpython-<version>+<tag>-<platform>-install_only.tar.gz``）。
-    扫描规则与 :func:`_scan_embed_health` 类似：损坏 tar 删除+记 corrupt，
+    扫描规则与 :func:`_scan_embed_health` 类似：损坏 tar 记 corrupt（仅
+    ``delete_corrupt=True`` 时删除），完整性无法判定（IO 异常）跳过不删不计，
     版本不在 :data:`KNOWN_STANDALONE_VERSIONS` 的旧 tarball 记入 stale。
     """
     from fspack.config import KNOWN_STANDALONE_VERSIONS
@@ -513,10 +627,15 @@ def _scan_standalone_health(cache_dir: Path) -> CacheHealthReport:
             continue
         version = match.group(1)
         path = cache_dir / name
-        if not _is_tar_intact(path):
+        intact = _is_tar_intact(path)
+        if intact is False:
             corrupt.append(name)
             issues_size += _file_size(path)
-            _try_unlink(path)
+            if delete_corrupt:
+                _try_unlink(path)
+        elif intact is None:
+            # IO 异常（杀软占用/文件锁）无法判定完整性：不删不计，仅告警
+            _logger.warning("tar 完整性无法判定（IO 异常），跳过: %s", path)
         elif version not in KNOWN_STANDALONE_VERSIONS.values():
             stale.append(name)
             issues_size += _file_size(path)
@@ -531,7 +650,7 @@ def _scan_standalone_health(cache_dir: Path) -> CacheHealthReport:
     )
 
 
-def _scan_nuitka_health(cache_dir: Path) -> CacheHealthReport:
+def _scan_nuitka_health(cache_dir: Path, *, delete_corrupt: bool = False) -> CacheHealthReport:
     """扫描 Nuitka standalone python 缓存目录健康状态.
 
     nuitka 缓存目录 ``~/.fspack/cache/nuitka/`` 下按 py_version 分子目录
@@ -541,9 +660,13 @@ def _scan_nuitka_health(cache_dir: Path) -> CacheHealthReport:
     扫描规则：
 
     - 子目录名不匹配 ``_NUITKA_VERSION_RE``：跳过（可能是临时文件）
-    - 解压目录缺关键 python 可执行：记入 ``corrupt_files``，扫描期删除整个子目录
-    - 版本不在 :data:`KNOWN_STANDALONE_VERSIONS` 的旧版本子目录：记入 ``stale_files``
-    - 残留 tarball（``cpython-*.tar.gz``）记入 ``corrupt_files`` 删除
+    - 解压目录缺关键 python 可执行：记入 ``corrupt_files``，仅
+      ``delete_corrupt=True``（清理路径）时删除整个子目录；目录 mtime 距今
+      不足 :data:`_NUITKA_EXTRACT_GRACE_SEC` 秒视为另一进程解压进行中，
+      跳过判定不删不计（并发竞态防护）
+    - 版本不在 :data:`KNOWN_STANDALONE_VERSIONS` 的旧版本子目录：记入
+      ``stale_files`` 并累计 ``issues_size_bytes``
+    - 残留 tarball（``cpython-*.tar.gz``）记入 ``corrupt_files``
       （Nuitka 解压后应已删 tarball，残留表示解压流程中断）
     """
     from fspack.config import KNOWN_STANDALONE_VERSIONS
@@ -562,7 +685,8 @@ def _scan_nuitka_health(cache_dir: Path) -> CacheHealthReport:
             # 残留 tarball（Nuitka 解压后应已删，残留说明解压中断）
             corrupt.append(name)
             issues_size += _file_size(entry)
-            _try_unlink(entry)
+            if delete_corrupt:
+                _try_unlink(entry)
             continue
 
         if not entry.is_dir() or not _NUITKA_VERSION_RE.match(name):
@@ -574,15 +698,23 @@ def _scan_nuitka_health(cache_dir: Path) -> CacheHealthReport:
         win_py = entry / "python" / "python.exe"
         linux_py = entry / "python" / "bin" / f"python{major}.{minor}"
         if not win_py.is_file() and not linux_py.is_file():
+            # 并发竞态防护：目录名匹配版本正则但暂无 python 可执行，可能是
+            # 另一进程正在解压 standalone（解压耗时可达分钟级）。目录 mtime
+            # 距今不足宽限期视为解压进行中，跳过判定避免误删。
+            try:
+                extract_age = time.time() - entry.stat().st_mtime
+            except OSError:
+                extract_age = 0.0  # mtime 不可读时保守视为进行中，跳过不删
+            if extract_age < _NUITKA_EXTRACT_GRACE_SEC:
+                continue
             corrupt.append(name)
             issues_size += _dir_size(entry)
-            # best-effort 删除损坏的整个目录
-            with contextlib.suppress(OSError):
-                import shutil
-
+            if delete_corrupt:
+                # best-effort 删除损坏的整个目录
                 shutil.rmtree(entry, ignore_errors=True)
         elif version not in KNOWN_STANDALONE_VERSIONS.values():
             stale.append(name)
+            issues_size += _dir_size(entry)
 
     return CacheHealthReport(
         cache_dir=cache_dir,
@@ -594,7 +726,7 @@ def _scan_nuitka_health(cache_dir: Path) -> CacheHealthReport:
     )
 
 
-def _scan_loader_health(cache_dir: Path) -> CacheHealthReport:
+def _scan_loader_health(cache_dir: Path, *, delete_corrupt: bool = False) -> CacheHealthReport:
     """扫描 C loader 编译缓存目录健康状态.
 
     loader 缓存目录 ``~/.fspack/cache/loaders/`` 存放 mingw/gcc 编译的 exe
@@ -603,9 +735,11 @@ def _scan_loader_health(cache_dir: Path) -> CacheHealthReport:
 
     扫描规则：
 
-    - 0 字节文件（编译中断残留）：记入 ``corrupt_files``，扫描期删除
-    - 非 PE 的 exe 文件（缺 MZ 头）：记入 ``corrupt_files``，扫描期删除；
-      exe 为 mingw 编译产物（含 Linux 交叉编译场景），任何平台下都应为 PE
+    - 0 字节文件（编译中断残留）：记入 ``corrupt_files``，仅
+      ``delete_corrupt=True``（清理路径）时扫描期删除
+    - 非 PE 的 exe 文件（缺 MZ 头）：记入 ``corrupt_files``；exe 为 mingw
+      编译产物（含 Linux 交叉编译场景），任何平台下都应为 PE。PE 头无法
+      判定（IO 异常，:func:`_is_pe_file` 返回 ``None``）时跳过不删不计
     - Linux/macOS 路径下无扩展名文件为 ELF/Mach-O loader（无 MZ magic），仅检查非空
 
     loader 文件名是 hash 无版本概念，不识别 ``stale_files``；无引用关系不识别
@@ -617,26 +751,31 @@ def _scan_loader_health(cache_dir: Path) -> CacheHealthReport:
     all_files = sorted(p.name for p in cache_dir.iterdir() if p.is_file())
     corrupt: list[str] = []
     issues_size = 0
-    is_windows_target = sys.platform.startswith("win")
 
     for name in all_files:
         path = cache_dir / name
         size = _file_size(path)
-        is_corrupt = False
         if size == 0:
             is_corrupt = True
         elif name.endswith(".exe"):
             # exe 为 mingw 编译产物（含 Linux 交叉编译场景），任何平台下都应含 MZ 头
-            is_corrupt = not _is_pe_file(path)
-        elif is_windows_target:
-            # Windows 路径下非 exe 文件不应出现在 loader cache（可能是测试残留）
-            # 不计为 corrupt（无法判断语义），仅跳过
+            pe = _is_pe_file(path)
+            if pe is None:
+                # IO 异常（杀软占用/文件锁）无法判定 PE 头：不删不计，仅告警
+                _logger.warning("loader PE 头无法判定（IO 异常），跳过: %s", path)
+                continue
+            is_corrupt = pe is False
+        else:
+            # Windows 路径下非 exe 文件不应出现在 loader cache（可能是测试残留），
+            # 不计为 corrupt（无法判断语义）仅跳过；Linux/macOS 无扩展名 loader
+            # （ELF/Mach-O）非空即健康
             continue
 
         if is_corrupt:
             corrupt.append(name)
             issues_size += size
-            _try_unlink(path)
+            if delete_corrupt:
+                _try_unlink(path)
 
     return CacheHealthReport(
         cache_dir=cache_dir,
@@ -647,7 +786,7 @@ def _scan_loader_health(cache_dir: Path) -> CacheHealthReport:
     )
 
 
-def _scan_ccache_health(cache_dir: Path) -> CacheHealthReport:
+def _scan_ccache_health(cache_dir: Path, *, delete_corrupt: bool = False) -> CacheHealthReport:
     """扫描 ccache 二进制缓存目录健康状态.
 
     ccache 缓存目录 ``~/.fspack/cache/ccache/`` 存放从 GitHub releases 下载的
@@ -657,24 +796,28 @@ def _scan_ccache_health(cache_dir: Path) -> CacheHealthReport:
 
     扫描规则：
 
-    - ccache 二进制缺失：记入 ``corrupt_files``（不可用），不删除（无文件可删）
+    - ccache 二进制缺失：记入 ``missing_files``（与损坏分列：无文件可删，
+      不计入 ``corrupt_files``，避免渲染"已删除"误导与清理统计虚增）
     - 旧版子目录残留（``ccache-*/``）：记入 ``stale_files``，扫描期不删
       （可能正在被其他进程使用），由 ``--stale`` 显式清理
-    - 损坏归档残留（``ccache.tar.xz``/``ccache.zip``）：记入 ``corrupt_files`` 删除
+    - 损坏归档残留（``ccache.tar.xz``/``ccache.zip``）：记入 ``corrupt_files``，
+      仅 ``delete_corrupt=True``（清理路径）时删除
     """
     if not cache_dir.is_dir():
         return CacheHealthReport(cache_dir=cache_dir, cache_type="ccache")
 
     all_entries = sorted(p.name for p in cache_dir.iterdir())
     corrupt: list[str] = []
+    missing: list[str] = []
     stale: list[str] = []
     issues_size = 0
 
     exe_name = "ccache.exe" if sys.platform.startswith("win") else "ccache"
     ccache_exe = cache_dir / exe_name
     if not ccache_exe.is_file():
-        # 二进制缺失：记入 corrupt（不影响打包，仅无加速），无文件可删
-        corrupt.append(exe_name)
+        # 二进制缺失（不影响打包，仅无加速）：无文件可删，与损坏分列记入
+        # missing_files，不计入 corrupt_files
+        missing.append(exe_name)
 
     for name in all_entries:
         entry = cache_dir / name
@@ -682,7 +825,8 @@ def _scan_ccache_health(cache_dir: Path) -> CacheHealthReport:
             # 下载归档残留（解压后应已删，残留说明解压中断）
             corrupt.append(name)
             issues_size += _file_size(entry)
-            _try_unlink(entry)
+            if delete_corrupt:
+                _try_unlink(entry)
         elif entry.is_dir() and name.startswith("ccache-"):
             # 旧版子目录残留（新版应已迁移到根目录）
             stale.append(name)
@@ -694,11 +838,14 @@ def _scan_ccache_health(cache_dir: Path) -> CacheHealthReport:
         total_files=len(all_entries),
         corrupt_files=tuple(corrupt),
         stale_files=tuple(stale),
+        missing_files=tuple(missing),
         issues_size_bytes=issues_size,
     )
 
 
-def _scan_tkinter_health(cache_dir: Path) -> CacheHealthReport:
+def _scan_tkinter_health(
+    cache_dir: Path, *, delete_corrupt: bool = False, full_verify: bool = False
+) -> CacheHealthReport:
     """扫描 tkinter 补充包缓存目录健康状态.
 
     tkinter 缓存目录 ``~/.fspack/cache/tkinter/`` 存放从 python-build-standalone
@@ -706,8 +853,12 @@ def _scan_tkinter_health(cache_dir: Path) -> CacheHealthReport:
 
     扫描规则：
 
-    - 损坏 zip：扫描期删除，记入 ``corrupt_files``
+    - 损坏 zip：记入 ``corrupt_files``，仅 ``delete_corrupt=True``（清理路径）
+      时扫描期删除；完整性无法判定（IO 异常）跳过不删不计
     - 版本不在 :data:`KNOWN_STANDALONE_VERSIONS` 的旧 zip：记入 ``stale_files``
+
+    :param full_verify: True 时 zip 完整性用全量 CRC 校验（``testzip``），
+        False 时快检中心目录（默认）
     """
     from fspack.config import KNOWN_STANDALONE_VERSIONS
 
@@ -725,10 +876,15 @@ def _scan_tkinter_health(cache_dir: Path) -> CacheHealthReport:
             continue
         version = match.group(1)
         path = cache_dir / name
-        if not _is_zip_intact(path):
+        intact = _is_zip_intact(path, full=full_verify)
+        if intact is False:
             corrupt.append(name)
             issues_size += _file_size(path)
-            _try_unlink(path)
+            if delete_corrupt:
+                _try_unlink(path)
+        elif intact is None:
+            # IO 异常（杀软占用/文件锁）无法判定完整性：不删不计，仅告警
+            _logger.warning("zip 完整性无法判定（IO 异常），跳过: %s", path)
         elif version not in KNOWN_STANDALONE_VERSIONS.values():
             stale.append(name)
             issues_size += _file_size(path)
@@ -743,54 +899,62 @@ def _scan_tkinter_health(cache_dir: Path) -> CacheHealthReport:
     )
 
 
-# 各 cache 类型的扫描器与清理器分发注册表。
-# 每项为 ``(scan_fn, clean_fn)`` 元组；wheels 用现有 _scan_cache_health/_clean_cache_issues。
-_CACHE_TARGETS: tuple[tuple[str, str], ...] = (
-    ("wheels", "wheels"),
-    ("embed", "embed"),
-    ("standalone", "standalone"),
-    ("nuitka", "nuitka"),
-    ("loaders", "loaders"),
-    ("ccache", "ccache"),
-    ("tkinter", "tkinter"),
+# 各 cache 类型的扫描器分发注册表（模块级常量，避免每次调用重建 dict 与重复 import）。
+# 每项为 ``(cache_type, scanner_fn, dir_fn_name, supports_full_verify)`` 四元组：
+# scanner 为本模块函数；dir_fn_name 为 ``fspack.config.cache`` 模块中目录函数的名字，
+# 按名延迟解析（调用时 getattr），保持测试 monkeypatch ``fspack.config.cache.*_cache_dir``
+# 能动态生效，故不做模块级 from-import 绑定；supports_full_verify 标记扫描器是否
+# 接受 ``full_verify`` 参数（仅 zip 归档类扫描器实现快检/全量两级深度，其余类型
+# 的完整性检查本身无 CRC 快慢之分，分发器按标记决定是否透传该参数）。
+_CACHE_TARGETS: tuple[tuple[str, Callable[..., CacheHealthReport], str, bool], ...] = (
+    ("wheels", _scan_cache_health, "wheel_cache_dir", False),
+    ("embed", _scan_embed_health, "embed_cache_dir", True),
+    ("standalone", _scan_standalone_health, "standalone_cache_dir", False),
+    ("nuitka", _scan_nuitka_health, "nuitka_cache_dir", False),
+    ("loaders", _scan_loader_health, "loader_cache_dir", False),
+    ("ccache", _scan_ccache_health, "ccache_cache_dir", False),
+    ("tkinter", _scan_tkinter_health, "tkinter_cache_dir", True),
 )
 
 
-def _scan_cache_by_type(cache_type: str) -> CacheHealthReport:
+def _cache_dir_by_attr(dir_fn_name: str) -> Path:
+    """按函数名从 ``fspack.config.cache`` 解析缓存目录（延迟解析保持 monkeypatch 兼容）."""
+    from fspack.config import cache as _cache_module
+
+    dir_fn: Callable[[], Path] = getattr(_cache_module, dir_fn_name)
+    return dir_fn()
+
+
+def _scan_cache_by_type(
+    cache_type: str, *, delete_corrupt: bool = False, full_verify: bool = False
+) -> CacheHealthReport:
     """按 cache 类型分发到对应扫描器，返回 :class:`CacheHealthReport`.
 
     cache_type 不在已知列表中时抛 :class:`ValueError`。
+
+    :param delete_corrupt: 透传给扫描器；True 时扫描期 best-effort 删除损坏文件
+        （仅 ``_clean_cache_by_type`` 非 dry_run 清理路径传入），默认 False
+        只报告不删除（status 等只读路径）。
+    :param full_verify: True 时对支持全量校验的扫描器（embed/tkinter 的 zip）
+        启用逐项 CRC 校验（慢但准确，``fsp cache status --verify``），默认
+        False 快检中心目录；不支持该参数的扫描器忽略此开关。
     """
-    from fspack.config.cache import (
-        ccache_cache_dir,
-        embed_cache_dir,
-        loader_cache_dir,
-        nuitka_cache_dir,
-        standalone_cache_dir,
-        tkinter_cache_dir,
-        wheel_cache_dir,
-    )
-
-    # cache_type → (scanner_fn, cache_dir_fn) 分发表，避免多 if/return 分支
-    dispatch: dict[str, tuple[Any, Any]] = {
-        "wheels": (_scan_cache_health, wheel_cache_dir),
-        "embed": (_scan_embed_health, embed_cache_dir),
-        "standalone": (_scan_standalone_health, standalone_cache_dir),
-        "nuitka": (_scan_nuitka_health, nuitka_cache_dir),
-        "loaders": (_scan_loader_health, loader_cache_dir),
-        "ccache": (_scan_ccache_health, ccache_cache_dir),
-        "tkinter": (_scan_tkinter_health, tkinter_cache_dir),
-    }
-    entry = dispatch.get(cache_type)
+    entry = next((e for e in _CACHE_TARGETS if e[0] == cache_type), None)
     if entry is None:
-        raise ValueError(f"未知 cache 类型: {cache_type}，可选: {', '.join(t for t, _ in _CACHE_TARGETS)}")
-    scanner, dir_fn = entry
-    return scanner(dir_fn())
+        raise ValueError(f"未知 cache 类型: {cache_type}，可选: {', '.join(t for t, *_ in _CACHE_TARGETS)}")
+    _, scanner, dir_fn_name, supports_full = entry
+    cache_dir = _cache_dir_by_attr(dir_fn_name)
+    if supports_full and full_verify:
+        return scanner(cache_dir, delete_corrupt=delete_corrupt, full_verify=True)
+    return scanner(cache_dir, delete_corrupt=delete_corrupt)
 
 
-def _scan_all_caches() -> tuple[CacheHealthReport, ...]:
-    """扫描全部 cache 类型，返回报告元组（按注册表顺序）."""
-    return tuple(_scan_cache_by_type(cache_type) for cache_type, _ in _CACHE_TARGETS)
+def _scan_all_caches(*, full_verify: bool = False) -> tuple[CacheHealthReport, ...]:
+    """扫描全部 cache 类型，返回报告元组（按注册表顺序，只读不删除）.
+
+    :param full_verify: True 时对 zip 归档类扫描器启用全量 CRC 校验，默认快检。
+    """
+    return tuple(_scan_cache_by_type(cache_type, full_verify=full_verify) for cache_type, *_ in _CACHE_TARGETS)
 
 
 def _clean_cache_by_type(
@@ -801,7 +965,9 @@ def _clean_cache_by_type(
 ) -> CacheHealthReport:
     """按 cache 类型分发到对应清理器.
 
-    - ``dry_run=True``：仅扫描不删除（与 wheels 一致语义）
+    - ``dry_run=True``：仅扫描不删除（扫描器带默认 ``delete_corrupt=False``，
+      与 wheels 一致语义，预览结果与实际清理共享同一判定）
+    - ``dry_run=False``：扫描带 ``delete_corrupt=True``，损坏文件在扫描阶段删除
     - ``include_stale=True``：额外清理 ``stale_files``（旧版本 zip/tar/子目录），
       默认 ``False`` 仅清理损坏与 wheels 的 stale_deps/orphan_wheels
 
@@ -810,44 +976,23 @@ def _clean_cache_by_type(
     """
     if cache_type == "wheels":
         # wheels 的 stale_deps/orphan_wheels 始终清理（iter-139 既有行为）
-        from fspack.config.cache import wheel_cache_dir
+        return _clean_cache_issues(_cache_dir_by_attr("wheel_cache_dir"), dry_run=dry_run)
 
-        return _clean_cache_issues(wheel_cache_dir(), dry_run=dry_run)
-
-    # 非 wheels 类型：扫描后删除 corrupt（扫描期已删，这里再扫一次确认）+ 可选 stale
-    report = _scan_cache_by_type(cache_type)
+    # 非 wheels 类型：非 dry_run 时扫描带 delete_corrupt=True（损坏文件扫描期删除）
+    report = _scan_cache_by_type(cache_type, delete_corrupt=not dry_run)
     if dry_run or not report.has_issues:
         return report
     if not include_stale and not report.corrupt_files:
         return report
 
-    from fspack.config.cache import (
-        ccache_cache_dir,
-        embed_cache_dir,
-        loader_cache_dir,
-        nuitka_cache_dir,
-        standalone_cache_dir,
-        tkinter_cache_dir,
-    )
-
-    # 非 wheels 类型的 cache_dir 分发表，避免多 elif 分支
-    dir_dispatch: dict[str, Any] = {
-        "embed": embed_cache_dir,
-        "standalone": standalone_cache_dir,
-        "nuitka": nuitka_cache_dir,
-        "loaders": loader_cache_dir,
-        "ccache": ccache_cache_dir,
-        "tkinter": tkinter_cache_dir,
-    }
-    dir_fn = dir_dispatch.get(cache_type)
-    if dir_fn is None:
+    entry = next((e for e in _CACHE_TARGETS if e[0] == cache_type), None)
+    if entry is None:
         return report  # 未知类型不应到达此分支（_scan_cache_by_type 已校验）
-    cache_dir = dir_fn()
+    _, _, dir_fn_name, _ = entry
+    cache_dir = _cache_dir_by_attr(dir_fn_name)
 
     # corrupt_files 已在扫描阶段删除，这里仅处理 stale_files（include_stale=True 时）
     if include_stale:
-        import shutil
-
         for name in report.stale_files:
             target = cache_dir / name
             try:
@@ -858,8 +1003,9 @@ def _clean_cache_by_type(
             except OSError as e:
                 _logger.warning("清理 stale 文件失败: %s: %s", target, e)
 
-    # 重新扫描反映清理结果（corrupt 已删，stale 按 include_stale 处理后）
-    return _scan_cache_by_type(cache_type) if include_stale else report
+        # 重新扫描反映清理结果（corrupt 已删，stale 已按 include_stale 处理）
+        return _scan_cache_by_type(cache_type, delete_corrupt=True)
+    return report
 
 
 def _clean_all_caches(
@@ -870,5 +1016,5 @@ def _clean_all_caches(
     """清理全部 cache 类型，返回清理后报告元组（按注册表顺序）."""
     return tuple(
         _clean_cache_by_type(cache_type, dry_run=dry_run, include_stale=include_stale)
-        for cache_type, _ in _CACHE_TARGETS
+        for cache_type, *_ in _CACHE_TARGETS
     )

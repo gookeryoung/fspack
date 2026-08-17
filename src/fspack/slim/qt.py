@@ -65,6 +65,10 @@ __all__ = [
 # Qt 库归一化包名集合
 QT_PACKAGES = frozenset({"pyside2", "pyside6", "pyqt5", "pyqt6"})
 
+# QtWebEngine 顶层文件名小写集合：zip 条目大小写不保证与发布名一致
+# （部分 wheel 打包工具保留原始大小写变体），比较前统一 lower。
+_WEBENGINE_TOP_FILES_LOWER = frozenset(f.lower() for f in _QT_WEBENGINE_TOP_FILES)
+
 
 class QtSlimSpec(SlimSpec):
     """Qt 库精简规则：PySide2/PySide6/PyQt5/PyQt6 共享同一规则。
@@ -89,10 +93,11 @@ class QtSlimSpec(SlimSpec):
     @classmethod
     @override
     def expand_closure(cls, subs: set[str]) -> set[str]:
-        """Qt 子模块依赖闭包扩展（就地修改 ``subs`` 并返回）。
+        """Qt 子模块依赖闭包扩展（构造新集合返回，不修改入参 ``subs``）.
 
-        与基类约定不同：此处返回 ``subs`` 自身（已在 :func:`_qt_module_closure`
-        中就地扩展），调用方据此直接 ``subs.update(...)`` 累积闭包结果。
+        与基类"返回副本"约定一致：先复制入参再扩展，调用方入参保持原样。
+        调用方（:func:`fspack.slim.unpack.slim_unpack`）自行 ``update`` 累积
+        闭包结果。
 
         - **QtWidgets 始终保留**：QtWidgets 是 Qt GUI 基础依赖，QML 的
           Controls 1.x/Dialogs 插件（``qtquickcontrolsplugin.dll``/
@@ -104,13 +109,13 @@ class QtSlimSpec(SlimSpec):
           加载 SVG，``plugins/imageformats/qsvg.dll`` 保留需 ``Qt5Svg.dll``/
           ``Qt6Svg.dll`` 配套。故 ``Qml`` 在闭包中时自动加入 ``Svg``。
         """
-        if subs:
-            subs.add("Widgets")
-        if "Qml" in subs:
-            subs.add("Svg")
-        closure = _qt_module_closure(subs)
-        subs.update(closure)
-        return subs
+        merged = set(subs)
+        if merged:
+            merged.add("Widgets")
+        if "Qml" in merged:
+            merged.add("Svg")
+        merged.update(_qt_module_closure(merged))
+        return merged
 
     @classmethod
     @override
@@ -153,12 +158,13 @@ class QtSlimSpec(SlimSpec):
         # QtWebEngine 顶层文件特殊处理：须在 _classify_top_or_meta 之前拦截，
         # 否则 QtWebEngineProcess.exe 会被 STRIP_EXTS 中的 .exe 规则误剥离。
         # 仅当保留任一 WebEngine 子模块时保留，避免非 WebEngine 应用携带冗余 ICU 数据。
-        if len(parts) == 2 and parts[1] in _QT_WEBENGINE_TOP_FILES:
+        # 大小写不敏感比较：zip 条目名大小写不保证与发布名一致。
+        if len(parts) == 2 and parts[1].lower() in _WEBENGINE_TOP_FILES_LOWER:
             if _QT_RESOURCE_DEPS & keep_subs:
                 return ("shared", None)
             return ("exclude", None)
 
-        common = cls._classify_top_or_meta(entry, top_pkg)
+        common = cls._classify_top_or_meta(entry, top_pkg, parts)
         if common is not None:
             return common
 

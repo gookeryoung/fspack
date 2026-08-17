@@ -67,11 +67,6 @@ class NuitkaCompilerProtocol(Protocol):  # pragma: no cover - 纯类型契约，
         """构建编译环境变量（CC/CFLAGS）."""
         ...
 
-    @staticmethod
-    def _resolve_jobs() -> int:
-        """解析 C 编译并行度（CPU 核心数）."""
-        ...
-
     @classmethod
     def ensure_env(
         cls,

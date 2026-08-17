@@ -21,6 +21,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from fspack._util.fsutil import atomic_write_text
 from fspack.platform import Platform
 
 from .pyc_stamp import _pyc_stamp_key, _pyc_stamp_path
@@ -205,7 +206,7 @@ def _precompile_pyc(  # noqa: PLR0912, PLR0913
 
     sp_optimize = min(optimize, 1)
 
-    stamp_key = _pyc_stamp_key(src_dir, site_packages, strip_py, optimize, sp_optimize)
+    stamp_key = _pyc_stamp_key(src_dir, site_packages, strip_py, optimize, sp_optimize, entry_rels)
     stamp = _pyc_stamp_path(dist_dir)
     try:
         if stamp.is_file() and stamp.read_text(encoding="utf-8") == stamp_key:
@@ -249,9 +250,6 @@ def _precompile_pyc(  # noqa: PLR0912, PLR0913
     # 刷出"跳过非 UTF-8 模板文件"警告。故编译后删除 data_dirs 下的 __pycache__。
     _clean_data_dirs_pycache(data_dirs)
 
-    stamp.parent.mkdir(parents=True, exist_ok=True)
-    stamp.write_text(stamp_key, encoding="utf-8")
-
     stripped = (
         _strip_compiled_py(
             src_dir,
@@ -266,6 +264,10 @@ def _precompile_pyc(  # noqa: PLR0912, PLR0913
         if strip_py
         else 0
     )
+    # stamp 必须在 strip 完成后写入：若先写 stamp 再 strip，strip 中断（异常/断电）
+    # 后 stamp 已落盘，下次构建误判缓存命中跳过编译，.py 永不被剥离。
+    # 原子写入（tempfile + replace）：半写入的 stamp 不会被读为有效缓存。
+    atomic_write_text(stamp, stamp_key)
     if stripped:
         stage.skip(stripped)
         stage.set_detail(f"编译 {compiled} 目录，剥离 {stripped} 个 .py")

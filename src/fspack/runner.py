@@ -40,7 +40,7 @@ def run(
     rest = rest_args or []
     ep = _select_entry(info, entry)
     if debug:
-        cmd = _build_debug_cmd(project, ep) + rest
+        cmd = _build_debug_cmd(project, ep, info.py_version) + rest
         debug_env: dict[str, str] = {**os.environ, "PYTHONUNBUFFERED": "1"}
         if platform.system() != "Windows":
             debug_env["PYTHONHOME"] = str(Path(project) / "dist" / "runtime" / "python")
@@ -108,7 +108,7 @@ def _build_cmd(exe: Path) -> list[str]:
     return [str(exe)]
 
 
-def _build_debug_cmd(project: Path, ep: EntryPoint) -> list[str]:
+def _build_debug_cmd(project: Path, ep: EntryPoint, py_version: str | None = None) -> list[str]:
     """构造调试命令：用 embed python 直跑入口包装器（绕过 GUI loader）。
 
     Windows 用 ``dist/runtime/python.exe``，Linux 用 ``dist/runtime/python/bin/python3.X``。
@@ -116,6 +116,10 @@ def _build_debug_cmd(project: Path, ep: EntryPoint) -> list[str]:
     包装器（与 loader 一致），由 wrapper 设置 sys.path、Qt 插件路径与包上下文
     后调 :func:`runpy.run_module`/:func:`runpy.run_path` 执行用户入口，使相对
     导入可用。
+
+    Linux 侧用 glob 枚举 ``bin/`` 下条目后按候选集精确匹配（``pythonX.Y`` >
+    ``pythonX`` > ``python3`` > ``python``），避免 ``python3.11-config`` 等
+    带后缀工具被 ``sorted(glob)[0]`` 误选为解释器。
     """
     dist = Path(project) / "dist"
     wrapper = dist / f"_entry_{ep.name}.py"
@@ -124,11 +128,29 @@ def _build_debug_cmd(project: Path, ep: EntryPoint) -> list[str]:
     if platform.system() == "Windows":
         py = dist / "runtime" / "python.exe"
     else:
-        bin_dir = dist / "runtime" / "python" / "bin"
-        pys = sorted(bin_dir.glob("python3.*"))
-        if not pys:
-            raise FspackError(f"未找到 embed python: {bin_dir}（请先执行 fsp b）")
-        py = pys[0]
+        py = _find_bin_python(dist, py_version)
+        if py is None:
+            raise FspackError(f"未找到 embed python: {dist / 'runtime' / 'python' / 'bin'}（请先执行 fsp b）")
     if not py.is_file():
         raise FspackError(f"未找到 embed python: {py}（请先执行 fsp b）")
     return [str(py), str(wrapper)]
+
+
+def _find_bin_python(dist: Path, py_version: str | None) -> Path | None:
+    """从 ``dist/runtime/python/bin`` 中按候选集选取 python 可执行文件.
+
+    有版本信息时 glob 仅作枚举手段，从排序结果中选首个名字落在候选集内的条目：
+    ``python<major>.<minor>`` > ``python<major>`` > ``python3`` > ``python``，
+    排除 ``python3.11-config`` 等带后缀工具（其字典序可能先于裸解释器）。
+    无版本信息（或候选集未命中）时回退到首个无 ``-`` 后缀的 ``python*`` 条目
+    （如 ``python3.11``，同样排除 ``-config`` 等工具），与旧 sorted-glob 行为兼容。
+    """
+    bin_dir = dist / "runtime" / "python" / "bin"
+    entries = sorted(bin_dir.glob("python*"))
+    if py_version:
+        major, minor = [*py_version.split("."), "", ""][:2]
+        candidates = {f"python{major}.{minor}", f"python{major}", "python3", "python"}
+        exact = next((p for p in entries if p.name in candidates), None)
+        if exact is not None:
+            return exact
+    return next((p for p in entries if "-" not in p.name), None)

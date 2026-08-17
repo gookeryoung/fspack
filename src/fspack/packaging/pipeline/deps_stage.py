@@ -86,7 +86,12 @@ def _analyze_dependencies(ctx: BuildContext, *, save_cache: bool = True) -> Depe
     with ctx.tracker.stage("分析依赖") as st:
         # 源码指纹缓存：源码未变时跳过 AST 分析，重复构建加速 ~478ms
         from fspack.analyzer import source_fingerprint
+        from fspack.analyzer.fingerprint import clear_fingerprint_cache
         from fspack.config import expand_extras
+
+        # 每次构建入口失效构建级指纹缓存（cached_source_fingerprint）：
+        # 上一轮构建的 pyc 剥离等步骤修改过 dist/src 树，防止跨构建读到脏指纹
+        clear_fingerprint_cache()
 
         # 合并 base deps 与 enabled extras（展开自引用）
         expanded_deps = expand_extras(
@@ -179,7 +184,11 @@ def _dep_cache_path(dist_dir: Path) -> Path:
 
 
 def _dep_cache_load(dist_dir: Path, fingerprint: str, declared: tuple[str, ...]) -> DependencyReport | None:
-    """加载依赖分析缓存，指纹或声明依赖不匹配时返回 ``None``."""
+    """加载依赖分析缓存，指纹或声明依赖不匹配时返回 ``None``.
+
+    缓存 JSON 结构损坏（字段缺失/类型异常，如旧版本缓存或外部改写）时
+    返回 ``None`` 回退重新分析，不抛异常阻断构建。
+    """
     cache = _dep_cache_path(dist_dir)
     if not cache.is_file():
         return None
@@ -187,16 +196,24 @@ def _dep_cache_load(dist_dir: Path, fingerprint: str, declared: tuple[str, ...])
         data = json.loads(cache.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError, UnicodeDecodeError):
         return None
-    if data.get("fingerprint") != fingerprint or tuple(data.get("declared", [])) != declared:
+    if not isinstance(data, dict):
         return None
-    r = data["report"]
-    return DependencyReport(
-        declared=tuple(r["declared"]),
-        ast_third_party=tuple(r["ast_third_party"]),
-        ast_stdlib=tuple(r["ast_stdlib"]),
-        ast_local=tuple(r["ast_local"]),
-        ast_submodules={k: frozenset(v) for k, v in r["ast_submodules"].items()},
-    )
+    try:
+        if data["fingerprint"] != fingerprint or tuple(data["declared"]) != declared:
+            return None
+        r = data["report"]
+        return DependencyReport(
+            declared=tuple(r["declared"]),
+            ast_third_party=tuple(r["ast_third_party"]),
+            ast_stdlib=tuple(r["ast_stdlib"]),
+            ast_local=tuple(r["ast_local"]),
+            ast_submodules={k: frozenset(v) for k, v in r["ast_submodules"].items()},
+            # 旧缓存无 ast_errors 字段时回填空 tuple（兼容）
+            ast_errors=tuple(r.get("ast_errors", ())),
+        )
+    except (KeyError, TypeError, AttributeError):
+        # 结构损坏（字段缺失/类型不符）：视为缓存未命中，回退重新分析
+        return None
 
 
 def _dep_cache_save(dist_dir: Path, fingerprint: str, report: DependencyReport) -> None:
@@ -212,6 +229,8 @@ def _dep_cache_save(dist_dir: Path, fingerprint: str, report: DependencyReport) 
             "ast_stdlib": list(report.ast_stdlib),
             "ast_local": list(report.ast_local),
             "ast_submodules": {k: sorted(v) for k, v in report.ast_submodules.items()},
+            # AST 解析失败的诊断信息一并持久化，缓存命中时不丢失
+            "ast_errors": list(report.ast_errors),
         },
     }
     atomic_write_text(cache, json.dumps(payload, ensure_ascii=False))

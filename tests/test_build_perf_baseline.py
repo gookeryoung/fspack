@@ -73,12 +73,12 @@ def _mock_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
         "fspack.packaging.pipeline._prepare_runtime",
         lambda ctx: ctx.cfg.dist_dir / "site-packages",
     )
-    monkeypatch.setattr("fspack.packaging.pipeline._analyze_dependencies", lambda ctx, **kw: _empty_report())
-    monkeypatch.setattr("fspack.packaging.pipeline._download_dependencies", lambda *a, **kw: False)
-    monkeypatch.setattr("fspack.packaging.pipeline.write_pth", lambda *a, **kw: None)
-    monkeypatch.setattr("fspack.packaging.pipeline.copy_source", lambda *a, **kw: None)
-    monkeypatch.setattr("fspack.packaging.pipeline._compile_user_sources", lambda *a, **kw: None)
-    monkeypatch.setattr("fspack.packaging.pipeline._build_entry_loaders", lambda *a, **kw: [])
+    monkeypatch.setattr("fspack.packaging.pipeline.executor._analyze_dependencies", lambda ctx, **kw: _empty_report())
+    monkeypatch.setattr("fspack.packaging.pipeline.executor._download_dependencies", lambda *a, **kw: False)
+    monkeypatch.setattr("fspack.packaging.pipeline.executor.write_pth", lambda *a, **kw: None)
+    monkeypatch.setattr("fspack.packaging.pipeline.executor.copy_source", lambda *a, **kw: None)
+    monkeypatch.setattr("fspack.packaging.pipeline.executor._compile_user_sources", lambda *a, **kw: None)
+    monkeypatch.setattr("fspack.packaging.pipeline.executor._build_entry_loaders", lambda *a, **kw: [])
 
 
 # ---- 小项目样本：1 入口、3 依赖 ----

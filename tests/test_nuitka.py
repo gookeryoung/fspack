@@ -774,10 +774,11 @@ def test_compile_src_failure_cleans_build_dirs(tmp_path: Path, monkeypatch: pyte
 
 
 def test_compile_src_compile_files_exception_cleans_build_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """_compile_files 抛异常时 finally 块仍清理 .build 残留（iter-130）.
+    """worker OSError 按失败处理后，compile_src 仍清理 .build 残留（iter-130）.
 
-    _stream_compile 抛 FileNotFoundError（py_exe 不存在）时 _compile_files 传播异常，
-    compile_src 外层 finally 调 _cleanup_build_dirs 确保异常时也清理 .build 残留。
+    _stream_compile 抛 FileNotFoundError（py_exe 不存在）时 _compile_one 捕获
+    OSError 按失败文件处理（不中断构建），compile_src 的 finally 调
+    _cleanup_build_dirs 确保编译结束（含失败）后清理 .build 残留。
     """
     runtime = tmp_path / "runtime"
     runtime.mkdir()
@@ -797,12 +798,12 @@ def test_compile_src_compile_files_exception_cleans_build_dirs(tmp_path: Path, m
     monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(fake_stream))
 
     st = StageRecorder("Nuitka 编译")
-    # _compile_files 传播 FileNotFoundError
-    with pytest.raises(FileNotFoundError):
-        NuitkaCompiler.compile_src(src, runtime, "3.11.9", Platform.WINDOWS, cache, stage=st)
+    # OSError 按失败处理不抛异常，返回失败文件列表
+    failed = NuitkaCompiler.compile_src(src, runtime, "3.11.9", Platform.WINDOWS, cache, stage=st)
+    assert failed == ["app.py"]
 
-    # 异常时 .build 残留也应被清理（finally 块）
-    assert not build_dir.exists(), "异常时 .build 残留也应被 finally 块清理"
+    # .build 残留也应被清理（finally 块）
+    assert not build_dir.exists(), ".build 残留也应被 finally 块清理"
 
 
 def test_compile_src_linux_uses_python3_bin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1432,6 +1433,76 @@ def test_batch_import_test_returns_none_on_invalid_json(tmp_path: Path, monkeypa
     )
     result = NuitkaCompiler._batch_import_test(tmp_path / "python.exe", [tmp_path], ["rich.errors"])
     assert result is None
+
+
+def test_batch_import_test_timeout_returns_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """_batch_import_test 超时（模块顶层 input()/死循环/GUI）按验证失败处理返回 None.
+
+    无超时会使构建永久挂起；超时返回 None 让调用方回退逐个测试定位阻塞模块。
+    """
+
+    def raise_timeout(cmd: list[str], **kwargs: Any) -> Any:
+        # 模块顶层含 input()/死循环/GUI 启动代码，subprocess 永不退出
+        raise subprocess.TimeoutExpired(cmd=cmd, timeout=30.0)
+
+    monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", raise_timeout)
+
+    with caplog.at_level(logging.WARNING, logger="fspack.packaging.nuitka"):
+        result = NuitkaCompiler._batch_import_test(tmp_path / "python.exe", [tmp_path], ["rich.errors"])
+
+    assert result is None
+    assert any("超时" in r.message for r in caplog.records)
+
+
+def test_batch_import_test_timeout_passes_timeout_kwarg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_batch_import_test 调 subprocess.run 时传入模块级超时常量."""
+    from fspack.packaging.nuitka.verify import _IMPORT_TEST_TIMEOUT
+
+    captured_kwargs: list[float] = []
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
+        captured_kwargs.append(float(kwargs["timeout"]))
+        return _CrashResult()
+
+    monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", fake_run)
+    NuitkaCompiler._batch_import_test(tmp_path / "python.exe", [tmp_path], ["rich.errors"])
+
+    assert captured_kwargs == [_IMPORT_TEST_TIMEOUT]
+
+
+def test_individual_import_test_timeout_treated_as_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """_individual_import_test 单模块超时按该模块验证失败处理（不进结果集合）.
+
+    超时模块判损坏保留 .py 回退 .pyc；其余模块测试不受影响，构建不挂起。
+    """
+
+    class _MixedRunner:
+        """hanging 模块抛 TimeoutExpired，其余模块正常返回标记."""
+
+        def __call__(self, cmd: list[str], **kwargs: Any) -> Any:
+            script = cmd[cmd.index("-c") + 1]
+            if "hanging" in script:
+                raise subprocess.TimeoutExpired(cmd=cmd, timeout=30.0)
+            return _SubprocessResult(returncode=0, stdout=b"FSPACK_ONE_RESULT:1\n")
+
+    monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", _MixedRunner())
+
+    with caplog.at_level(logging.WARNING, logger="fspack.packaging.nuitka"):
+        result = NuitkaCompiler._individual_import_test(tmp_path / "python.exe", [tmp_path], ["hanging", "normal"])
+
+    assert result == {"normal"}
+    assert any("超时" in r.message for r in caplog.records)
+
+
+def test_import_test_timeout_constant_value() -> None:
+    """``_IMPORT_TEST_TIMEOUT`` 默认 30s：覆盖常规模块导入耗时并防永久挂起."""
+    from fspack.packaging.nuitka.verify import _IMPORT_TEST_TIMEOUT
+
+    assert _IMPORT_TEST_TIMEOUT == 30.0
 
 
 def test_verify_compiled_modules_strips_init_module_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -3249,14 +3320,15 @@ def test_compile_files_parallel_completes_all_files(
     assert st._items == 2
 
 
-def test_compile_files_parallel_exception_propagates(
+def test_compile_files_parallel_oserror_treated_as_failure(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """worker 内 _stream_compile 抛异常时 _compile_files 传播异常（如 FileNotFoundError）.
+    """worker 内 _stream_compile 抛 OSError（Popen 失败）时按失败文件处理，不中断构建.
 
-    并行模式下 future.result() 重抛 worker 异常，with 块 __exit__ 的 shutdown(wait=True)
-    等待在途任务后传播。验证心跳线程也正常停止（finally 块）。
+    与"单文件失败仅告警"承诺一致：OSError（如 py_exe 不存在的 FileNotFoundError）
+    等价于退出码非零，文件进 failed_files，其余文件继续编译。
     """
 
     def fake_stream(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int, str, str]:
@@ -3268,23 +3340,61 @@ def test_compile_files_parallel_exception_propagates(
     src = tmp_path / "src"
     src.mkdir()
     (src / "app.py").write_text("x = 1", encoding="utf-8")
+    (src / "ok.py").write_text("y = 2", encoding="utf-8")
 
     st = StageRecorder("编译")
-    with pytest.raises(FileNotFoundError, match="python exe not found"):
-        NuitkaCompiler._compile_files(
+    with caplog.at_level(logging.WARNING, logger="fspack.packaging.nuitka"):
+        compiled, failed = NuitkaCompiler._compile_files(
             tmp_path / "python.exe",
             tmp_path / "bootstrap.py",
-            [src / "app.py"],
+            [src / "app.py", src / "ok.py"],
             st,
             target=Platform.WINDOWS,
         )
+
+    # 两个文件均触发 OSError，全部按失败处理，不抛异常中断构建
+    assert compiled == set()
+    assert set(failed) == {src / "app.py", src / "ok.py"}
+    assert any("启动失败" in r.message for r in caplog.records)
+
+
+def test_compile_files_parallel_oserror_mixed_with_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OSError 文件按失败处理的同时，正常文件仍成功编译（互不干扰）."""
+
+    def fake_stream(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int, str, str]:
+        if "bad.py" in cmd[-1]:
+            raise FileNotFoundError("python exe not found")
+        return 0, "", ""
+
+    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(fake_stream))
+    monkeypatch.setattr(NuitkaCompiler, "_build_compile_env", classmethod(lambda cls, *a, **kw: {}))
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "bad.py").write_text("x = 1", encoding="utf-8")
+    (src / "good.py").write_text("y = 2", encoding="utf-8")
+
+    st = StageRecorder("编译")
+    compiled, failed = NuitkaCompiler._compile_files(
+        tmp_path / "python.exe",
+        tmp_path / "bootstrap.py",
+        [src / "bad.py", src / "good.py"],
+        st,
+        target=Platform.WINDOWS,
+    )
+
+    assert compiled == {src / "good.py"}
+    assert failed == [src / "bad.py"]
 
 
 def test_compile_files_parallel_heartbeat_stops_on_exception(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """异常时 finally 块停止心跳线程，不泄漏."""
+    """worker 内 OSError 全部按失败处理后，finally 块停止心跳线程，不泄漏."""
     import threading as _threading
 
     monkeypatch.setattr("fspack.packaging.nuitka.compile._HEARTBEAT_INTERVAL", 0.05)
@@ -3301,14 +3411,16 @@ def test_compile_files_parallel_heartbeat_stops_on_exception(
 
     active_before = _threading.active_count()
     st = StageRecorder("编译")
-    with pytest.raises(FileNotFoundError):
-        NuitkaCompiler._compile_files(
-            tmp_path / "python.exe",
-            tmp_path / "bootstrap.py",
-            [src / "app.py"],
-            st,
-            target=Platform.WINDOWS,
-        )
+    compiled, failed = NuitkaCompiler._compile_files(
+        tmp_path / "python.exe",
+        tmp_path / "bootstrap.py",
+        [src / "app.py"],
+        st,
+        target=Platform.WINDOWS,
+    )
+    # OSError 按失败处理，不抛异常
+    assert compiled == set()
+    assert failed == [src / "app.py"]
     # 心跳线程已停止（daemon=True 会在主线程退出时清理，但这里验证 finally 已 join）
     # 等待短暂时间让 daemon 线程完全退出
     import time as _time
@@ -3420,14 +3532,6 @@ def test_compile_files_parallel_global_heartbeat_format(
 # ---- ccache 相关测试 ----
 
 
-def test_resolve_jobs_returns_cpu_count() -> None:
-    """``_resolve_jobs`` 返回 CPU 核心数，最低 4."""
-    from fspack.packaging.nuitka import NuitkaCompiler
-
-    jobs = NuitkaCompiler._resolve_jobs()
-    assert jobs == (os.cpu_count() or 4)
-
-
 def test_build_compile_env_without_ccache_sets_cc_compiler() -> None:
     """ccache_exe 为 None 时仍设置 CC 指定 C 编译器，避免 Nuitka 选择 zig 触发下载."""
     from fspack.packaging.nuitka import NuitkaCompiler
@@ -3446,26 +3550,26 @@ def test_build_compile_env_without_ccache_sets_cc_compiler() -> None:
 
 
 def test_build_compile_env_with_ccache_linux(tmp_path: Path) -> None:
-    """Linux ccache 环境设置 CC="ccache gcc"."""
+    """Linux ccache 环境设置 CC='"ccache 路径" gcc'（路径引号包裹防空格截断）."""
     from fspack.packaging.nuitka import NuitkaCompiler
 
     ccache_exe = tmp_path / "ccache"
     ccache_exe.write_bytes(b"")
     env = NuitkaCompiler._build_compile_env(Platform.LINUX, ccache_exe)
     assert env is not None
-    assert env["CC"] == f"{ccache_exe} gcc"
+    assert env["CC"] == f'"{ccache_exe}" gcc'
     assert "CCACHE_DIR" in env
 
 
 def test_build_compile_env_with_ccache_windows_mingw(tmp_path: Path) -> None:
-    """Windows ccache 环境设置 CC="ccache x86_64-w64-mingw32-gcc"."""
+    """Windows ccache 环境设置 CC='"ccache 路径" x86_64-w64-mingw32-gcc'."""
     from fspack.packaging.nuitka import NuitkaCompiler
 
     ccache_exe = tmp_path / "ccache.exe"
     ccache_exe.write_bytes(b"")
     env = NuitkaCompiler._build_compile_env(Platform.WINDOWS, ccache_exe)
     assert env is not None
-    assert "x86_64-w64-mingw32-gcc" in env["CC"]
+    assert env["CC"] == f'"{ccache_exe}" x86_64-w64-mingw32-gcc'
 
 
 def test_build_compile_env_sets_win32_winnt_for_windows(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -3939,14 +4043,30 @@ def test_ensure_ccache_download_succeeds_but_exe_missing_returns_none(
 
 
 def test_stream_compile_timeout_default_value() -> None:
-    """``_stream_compile`` 默认超时为 ``_COMPILE_TIMEOUT``（600s），可被参数覆盖."""
+    """``_stream_compile`` timeout 默认 None（运行时 dispatch ``_COMPILE_TIMEOUT``），可被参数覆盖.
+
+    定义期绑定常量会绕过 compile 层 monkeypatch（dispatch 失效），故默认参数
+    必须为 None 哨兵，函数体内经 ``_C`` 解析。
+    """
     from fspack.packaging.nuitka.compile import _COMPILE_TIMEOUT
 
     assert _COMPILE_TIMEOUT == 600.0
     # 检查 timeout 参数默认值（通过 __defaults__ 或签名）
     sig = inspect.signature(NuitkaCompiler._stream_compile)
     timeout_param = sig.parameters["timeout"]
-    assert timeout_param.default == _COMPILE_TIMEOUT
+    assert timeout_param.default is None
+
+
+def test_stream_compile_timeout_none_dispatches_compile_constant(
+    capfd: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """timeout=None 时运行时 dispatch compile 层 ``_COMPILE_TIMEOUT``，monkeypatch 生效."""
+    monkeypatch.setattr("fspack.packaging.nuitka.compile._COMPILE_TIMEOUT", 0.5)
+    # 子进程 sleep 30s，dispatch 后的 0.5s 超时必然触发
+    cmd = [sys.executable, "-c", "import time; time.sleep(30)"]
+    returncode, _stdout, _stderr = NuitkaCompiler._stream_compile(cmd)
+    assert returncode != 0
 
 
 def test_stream_compile_timeout_kills_long_process(
@@ -4014,8 +4134,8 @@ def test_parse_parallel_timeout_warns_on_slow_worker(
     """
     from concurrent.futures import TimeoutError as FuturesTimeoutError
 
-    from fspack import analyzer
-    from fspack.analyzer import _parse_parallel
+    from fspack.analyzer import analysis
+    from fspack.analyzer.analysis import _parse_parallel
 
     # 构造 5 个 .py 文件
     for i in range(5):
@@ -4023,6 +4143,7 @@ def test_parse_parallel_timeout_warns_on_slow_worker(
     py_files = sorted(tmp_path.glob("*.py"))
 
     cancel_calls: list[bool] = []
+    shutdown_calls: list[bool] = []
 
     class _FakeFuture:
         def done(self) -> bool:
@@ -4048,12 +4169,15 @@ def test_parse_parallel_timeout_warns_on_slow_worker(
         def submit(self, fn: object, *args: object) -> _FakeFuture:
             return _FakeFuture()
 
-    monkeypatch.setattr(analyzer, "ProcessPoolExecutor", _FakePool)
+        def shutdown(self, wait: bool = True) -> None:
+            shutdown_calls.append(wait)
+
+    monkeypatch.setattr(analysis, "ProcessPoolExecutor", _FakePool)
 
     def fake_as_completed(futures: object, timeout: float | None = None) -> object:
         raise FuturesTimeoutError("simulated timeout")
 
-    monkeypatch.setattr(analyzer, "as_completed", fake_as_completed)
+    monkeypatch.setattr(analysis, "as_completed", fake_as_completed)
 
     all_imports_ord: dict[str, None] = {}
     all_stdlib_ord: dict[str, None] = {}
@@ -4078,15 +4202,15 @@ def test_parse_parallel_timeout_warns_on_slow_worker(
 
 def test_parse_parallel_normal_completes_without_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """正常完成的并行解析不触发超时，结果完整."""
-    from fspack import analyzer
-    from fspack.analyzer import _parse_parallel
+    from fspack.analyzer import analysis
+    from fspack.analyzer.analysis import _parse_parallel
 
     for i in range(5):
         (tmp_path / f"mod_{i}.py").write_text(f"import os\nx = {i}\n", encoding="utf-8")
     py_files = sorted(tmp_path.glob("*.py"))
 
     # 设较长 timeout 确保正常完成
-    monkeypatch.setattr(analyzer, "_PARSE_TOTAL_TIMEOUT", 60.0)
+    monkeypatch.setattr(analysis, "_PARSE_TOTAL_TIMEOUT", 60.0)
 
     all_imports_ord: dict[str, None] = {}
     all_stdlib_ord: dict[str, None] = {}
@@ -4113,8 +4237,9 @@ def test_parse_parallel_uses_initializer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``_parse_parallel`` 用 ``initializer`` 预加载 ``_STDLIB`` 传给 worker（iter-134）."""
-    from fspack import analyzer
-    from fspack.analyzer import _STDLIB, _init_parse_worker, _parse_parallel
+    from fspack.analyzer import analysis
+    from fspack.analyzer.analysis import _init_parse_worker, _parse_parallel
+    from fspack.analyzer.ast_scan import _STDLIB
 
     for i in range(5):
         (tmp_path / f"mod_{i}.py").write_text("x = 0\n", encoding="utf-8")
@@ -4145,8 +4270,11 @@ def test_parse_parallel_uses_initializer(
         def submit(self, fn: object, *args: object) -> _FakeFuture:
             return _FakeFuture()
 
-    monkeypatch.setattr(analyzer, "ProcessPoolExecutor", _Pool)
-    monkeypatch.setattr(analyzer, "as_completed", lambda futures, timeout=None: iter(futures))
+        def shutdown(self, wait: bool = True) -> None:
+            pass
+
+    monkeypatch.setattr(analysis, "ProcessPoolExecutor", _Pool)
+    monkeypatch.setattr(analysis, "as_completed", lambda futures, timeout=None: iter(futures))
     _parse_parallel(py_files, {}, {}, {}, [])
 
     assert captured.get("initializer") is _init_parse_worker
@@ -4157,27 +4285,17 @@ def test_parse_parallel_interleave_and_submit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """``_parse_parallel`` 调用 ``_interleave_by_size`` 且对每个文件 submit 一个 future（iter-138 改 submit）.
+    """``_parse_parallel`` 对每个文件 submit 一个 future（iter-138 改 submit 逐文件提交）.
 
-    iter-134 原检查 ``chunksize`` 参数，iter-138 改用 ``submit`` + ``as_completed``
-    后无 ``chunksize``，改为验证 ``submit`` 调用次数等于文件数。
+    旧 ``_interleave_by_size`` 为 ``map(chunksize=)`` 连续分块设计，submit 模式下
+    进程池 FIFO 队列天然负载均衡，已删除——本测试验证 submit 调用次数等于文件数。
     """
-    import os
-
-    from fspack import analyzer
-    from fspack.analyzer import _parse_parallel
+    from fspack.analyzer import analysis
+    from fspack.analyzer.analysis import _parse_parallel
 
     for i in range(20):
         (tmp_path / f"mod_{i}.py").write_text("x = 0\n", encoding="utf-8")
     py_files = sorted(tmp_path.glob("*.py"))
-
-    interleave_calls: list[tuple[int, int]] = []
-
-    def fake_interleave(files: list[Path], num_chunks: int) -> list[Path]:
-        interleave_calls.append((len(files), num_chunks))
-        return list(files)
-
-    monkeypatch.setattr(analyzer, "_interleave_by_size", fake_interleave)
 
     submit_calls: list[str] = []
 
@@ -4206,13 +4324,14 @@ def test_parse_parallel_interleave_and_submit(
             submit_calls.append(str(args[0]) if args else "")
             return _FakeFuture()
 
-    monkeypatch.setattr(analyzer, "ProcessPoolExecutor", _Pool)
-    monkeypatch.setattr(analyzer, "as_completed", lambda futures, timeout=None: iter(futures))
+        def shutdown(self, wait: bool = True) -> None:
+            pass
+
+    monkeypatch.setattr(analysis, "ProcessPoolExecutor", _Pool)
+    monkeypatch.setattr(analysis, "as_completed", lambda futures, timeout=None: iter(futures))
     _parse_parallel(py_files, {}, {}, {}, [])
 
-    cpu = os.cpu_count() or 4
-    assert interleave_calls == [(20, cpu * 4)]
-    # 20 个文件每个 submit 一次（submit 替代 map+chunksize）
+    # 20 个文件每个 submit 一次（submit 替代 map+chunksize，无需 interleave 重排）
     assert len(submit_calls) == 20
 
 
@@ -4227,8 +4346,8 @@ def test_parse_parallel_partial_timeout_aggregates_completed_results(
     """
     from concurrent.futures import TimeoutError as FuturesTimeoutError
 
-    from fspack import analyzer
-    from fspack.analyzer import _parse_parallel
+    from fspack.analyzer import analysis
+    from fspack.analyzer.analysis import _parse_parallel
 
     for i in range(5):
         (tmp_path / f"mod_{i}.py").write_text(f"x = {i}\n", encoding="utf-8")
@@ -4281,7 +4400,10 @@ def test_parse_parallel_partial_timeout_aggregates_completed_results(
         def submit(self, fn: object, *args: object) -> object:
             return futures_chain.pop(0)
 
-    monkeypatch.setattr(analyzer, "ProcessPoolExecutor", _FakePool)
+        def shutdown(self, wait: bool = True) -> None:
+            pass
+
+    monkeypatch.setattr(analysis, "ProcessPoolExecutor", _FakePool)
 
     def fake_as_completed(futures: object, timeout: float | None = None) -> Iterator[object]:
         # 前 3 个已完成的 yield，然后抛 TimeoutError 模拟后 2 个超时
@@ -4289,7 +4411,7 @@ def test_parse_parallel_partial_timeout_aggregates_completed_results(
         yield from futures_list[:3]
         raise FuturesTimeoutError("partial timeout")
 
-    monkeypatch.setattr(analyzer, "as_completed", fake_as_completed)
+    monkeypatch.setattr(analysis, "as_completed", fake_as_completed)
 
     all_imports_ord: dict[str, None] = {}
     all_stdlib_ord: dict[str, None] = {}
@@ -4304,6 +4426,28 @@ def test_parse_parallel_partial_timeout_aggregates_completed_results(
     assert "flask" in all_imports_ord
     assert "os" in all_stdlib_ord
     assert "sys" in all_stdlib_ord
+
+
+def test_protocol_methods_match_compiler_surface() -> None:
+    """Protocol 契约声明的全部方法在 NuitkaCompiler facade 上存在（防签名漂移）.
+
+    :mod:`fspack.packaging.nuitka.protocol` 为纯类型契约（运行时仅类型检查期
+    使用），各 mixin 用 ``cls: type[NuitkaCompilerProtocol]`` 注解跨类调用。
+    本测试守护契约与 facade 同步：Protocol 声明的方法必须在 NuitkaCompiler
+    的 MRO 上有真实实现，防止 mixin 重命名后 Protocol 漂移失真。
+    """
+    from fspack.packaging.nuitka import NuitkaCompiler
+    from fspack.packaging.nuitka.protocol import NuitkaCompilerProtocol
+
+    # 排除 typing.Protocol/ABCMeta 注入的机制属性（_is_protocol 为 bool、
+    # _abc_impl 为 abc 缓存），只收集契约方法
+    _TYPING_INTERNAL = {"_is_protocol", "_is_runtime_protocol", "_abc_impl"}
+    declared = {
+        name for name in vars(NuitkaCompilerProtocol) if not name.startswith("__") and name not in _TYPING_INTERNAL
+    }
+    assert declared, "Protocol 应声明方法集合"
+    for name in declared:
+        assert hasattr(NuitkaCompiler, name), f"Protocol 声明的 {name} 未由 NuitkaCompiler 提供"
 
 
 # ---- _precompile_pyc compileall 超时防护测试（iter-127） ----
@@ -4511,18 +4655,22 @@ def test_compile_with_stamp_writes_failed_files_after_compile(tmp_path: Path, mo
     assert "broken.py" in failed_file.read_text(encoding="utf-8")
 
 
-def test_compile_with_stamp_reads_failed_files_and_passes_to_compile_src(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """compile_with_stamp stamp 不命中时读取上次失败文件列表，传给 compile_src 的 skip_files（iter-137）."""
-    from fspack.packaging.nuitka.compile import _failed_files_path
+def test_compile_with_stamp_stamp_miss_retries_failed_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """stamp 未命中（源码已变化）时全量重试：不读取失败文件列表，skip_files 恒 None.
+
+    旧 BUG：stamp 未命中仍传 skip_files 跳过上次失败文件，且编译后用不含该文件的
+    新列表覆盖写入 + 照写 stamp，用户修复后的文件永远不被编译。新语义：编译路径
+    恒全量重试，失败列表仅作诊断记录写入。
+    """
+    from fspack.packaging.nuitka.compile import _failed_files_path, _load_failed_files
 
     src = tmp_path / "src"
     src.mkdir()
     (src / "app.py").write_text("print('hi')")
+    (src / "broken.py").write_text("fixed now")
     dist = tmp_path / "dist"
     dist.mkdir()
-    # 预置上次失败文件列表
+    # 预置上次失败文件列表（含本次已修复的 broken.py）
     _failed_files_path(dist).write_text('["broken.py"]', encoding="utf-8")
     runtime = tmp_path / "runtime"
     runtime.mkdir()
@@ -4547,7 +4695,10 @@ def test_compile_with_stamp_reads_failed_files_and_passes_to_compile_src(
     )
 
     assert captured_skip, "compile_src 应被调用"
-    assert captured_skip[0] == frozenset({"broken.py"}), "应传入上次失败文件列表"
+    # skip_files 恒 None：上次失败的 broken.py（已修复）参与全量重试
+    assert captured_skip[0] is None, "stamp 未命中时应全量重试（skip_files=None）"
+    # 失败文件列表仍被写入（诊断记录），内容为本次 compile_src 返回值
+    assert _load_failed_files(dist) == frozenset()
 
 
 def test_compile_with_stamp_cache_hit_does_not_read_failed_files(
@@ -4717,3 +4868,18 @@ def test_precompile_pyc_returncode_nonzero_skips_stamp(
     fail_logs = [r for r in caplog.records if "compileall 失败" in r.message]
     assert len(fail_logs) == 1
     assert "SyntaxError" in fail_logs[0].message
+
+
+# ---- NuitkaCompilerProtocol 类型契约模块（纯类型，运行时仅需可导入）----
+
+
+def test_nuitka_protocol_module_importable() -> None:
+    """类型契约模块可导入且定义 NuitkaCompilerProtocol.
+
+    Protocol 仅在类型检查期被 ``if TYPE_CHECKING`` 引用，运行时无人导入；
+    本测试保证其 import 依赖（config/platform/progress）始终完整，
+    避免 TYPE_CHECKING 引用掩盖模块级 import 断裂。
+    """
+    from fspack.packaging.nuitka.protocol import NuitkaCompilerProtocol
+
+    assert NuitkaCompilerProtocol is not None

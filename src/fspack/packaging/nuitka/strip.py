@@ -20,6 +20,7 @@ facade，所有 ``cls.`` 调用经 MRO 自动派发到对应 mixin。
 
 from __future__ import annotations
 
+import glob
 import logging
 import shutil
 from pathlib import Path
@@ -104,7 +105,9 @@ class NuitkaStrip:
 
         stripped = 0
         for py_file in files_to_strip:
-            stem = py_file.stem
+            # glob.escape 转义文件名中的 glob 特殊字符（如 "report[v2].py" 的 []），
+            # 未转义时 [v2] 被当作字符类匹配导致找不到已生成的产物
+            stem = glob.escape(py_file.stem)
             # 检查 .pyd/.so 产物是否真实存在（glob 的 * 跨 . 匹配所有命名变体）
             artifacts = list(py_file.parent.glob(f"{stem}.*.pyd"))
             artifacts.extend(py_file.parent.glob(f"{stem}.*.so"))

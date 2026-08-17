@@ -230,10 +230,10 @@ def _size_from_record(site_packages: Path, record: Path) -> tuple[int, int]:
         # RECORD 中路径用正斜杠，Path 自动处理跨平台
         target = site_packages / rel_path
         try:
-            if target.is_file():
-                # 用实际文件大小（RECORD 中的 size 可能与磁盘大小不一致，以磁盘为准）
-                total += target.stat().st_size
-                count += 1
+            # 单次 stat 替代 is_file()+stat() 双调用（EAFP：缺失/目录/权限异常均跳过），
+            # 用实际文件大小（RECORD 中的 size 可能与磁盘大小不一致，以磁盘为准）
+            total += target.stat().st_size
+            count += 1
         except OSError:
             continue
     return total, count

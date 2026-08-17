@@ -162,7 +162,12 @@ def _parse_project_cached(
         raise ProjectError("pyproject.toml [project] 节格式异常")
     name = str(proj.get("name") or project_dir.name)
     version = str(proj.get("version", "0.0.0"))
-    deps = tuple(str(d) for d in proj.get("dependencies", []))
+    # dependencies 须为字符串列表：标量字符串会被逐字符迭代成 ("r","i","c","h")，
+    # 非 list 时报错（与 _parse_optional_dependencies 的校验风格一致）
+    raw_deps = proj.get("dependencies", [])
+    if not isinstance(raw_deps, list):
+        raise ProjectError(f"[project] dependencies 必须是字符串列表，得到 {type(raw_deps).__name__}")
+    deps = tuple(str(d) for d in raw_deps)
     requires_python = str(proj.get("requires-python") or "") or None
     # [project].description 与 [project].authors[0].name：用于 Windows loader exe
     # 的 VS_VERSIONINFO 资源段（FileDescription/CompanyName），降低杀软启发式可疑度。
@@ -257,7 +262,14 @@ def _parse_project_cached(
 
 
 def clear_project_cache() -> None:
-    """清空 :func:`parse_project` 的解析缓存.
+    """清空 :func:`parse_project` 的双层解析缓存.
+
+    ProjectInfo 解析有两层缓存，均在此清空：
+
+    - 内层：本模块 :func:`_parse_project_cached`（parse_project 直连调用方）
+    - 外层：:func:`fspack.config.models._project_info_from_dir_cached`
+      （``ProjectInfo.from_dir`` 按 mtime 键控），仅清内层会导致 ``from_dir``
+      命中外层旧值，"清缓存后重解析"失效
 
     用于：
 
@@ -268,6 +280,10 @@ def clear_project_cache() -> None:
     - 内存管理：长期运行进程主动释放缓存条目
     """
     _parse_project_cached.cache_clear()
+    # 延迟导入避免 models ↔ parsing 模块级循环（models.from_dir 已延迟导入本模块）
+    from fspack.config.models import _clear_project_info_cache
+
+    _clear_project_info_cache()
 
 
 def _parse_author(authors: object) -> str:

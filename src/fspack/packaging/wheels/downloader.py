@@ -25,6 +25,7 @@ re-export 函数，保持 ``from fspack.packaging.wheels.downloader import X`` �
 
 from __future__ import annotations
 
+import functools
 import logging
 import os
 import re
@@ -48,6 +49,7 @@ from fspack.packaging.wheels.resolver import (
     _merge_parallel_results,  # noqa: F401
     _resolve_with_uv,  # noqa: F401
     _run_pip_download,
+    _uv_python_platform,  # noqa: F401
     _uv_supports_download,  # noqa: F401
 )
 
@@ -79,6 +81,10 @@ _PIP_WHEEL_LINE_RE = re.compile(r"(?:Saved|File was already downloaded)\s+(.+\.w
 # 正常输出用于错误诊断。超过上限后停止累积（继续写 sys.stderr 实时显示），
 # 避免长输出场景（如失控的 sdist 构建日志）导致内存膨胀。
 _STDERR_ACCUM_LIMIT = 4 * 1024 * 1024
+
+# pip 探测超时（秒）：候选解释器 ``python -m pip --version`` 卡死（如网络盘/
+# 损坏的解释器）时中断并继续下一个候选，避免拖慢构建
+_PIP_PROBE_TIMEOUT = 15
 
 
 def download_wheels(  # noqa: PLR0913
@@ -276,6 +282,7 @@ def _record_wheel_stage(stage: StageRecorder, wheels: list[Path], before: set[st
     stage.set_detail(f"{len(wheels)} wheels, {cache_status}")
 
 
+@functools.lru_cache(maxsize=1)
 def _find_pip_python() -> str:
     """找一个能跑 ``python -m pip`` 的解释器。
 
@@ -286,6 +293,15 @@ def _find_pip_python() -> str:
     支持跨版本下载，跑 pip 的 python 版本无需匹配目标版本。
 
     uv 管理的 venv 默认不含 pip（用 Rust 实现的 ``uv pip``），需回退系统 python。
+
+    每个候选解释器的 ``--version`` 探测加 ``timeout=_PIP_PROBE_TIMEOUT``（15s），
+    候选卡死（网络盘/损坏解释器）时抛 :class:`subprocess.TimeoutExpired` 中断，
+    继续探测下一个候选。
+
+    成功结果经 :func:`functools.lru_cache` 缓存（函数无参数，可直接哈希）：
+    同进程内多次构建共享一次探测结果，避免逐包下载反复 spawn 子进程探测。
+    失败抛 :class:`DependencyError` 不缓存，下次调用重新探测（环境可能已修复）。
+    测试需调用 ``_find_pip_python.cache_clear()`` 清理跨测试缓存污染。
     """
     candidates: list[str] = [sys.executable]
     venv_bin = Path(sys.executable).parent.resolve()
@@ -307,9 +323,14 @@ def _find_pip_python() -> str:
     for py in candidates:
         try:
             subprocess.run(
-                [py, "-m", "pip", "--version"], check=True, capture_output=True, encoding="utf-8", errors="replace"
+                [py, "-m", "pip", "--version"],
+                check=True,
+                capture_output=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=_PIP_PROBE_TIMEOUT,
             )
-        except (subprocess.CalledProcessError, FileNotFoundError):
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
             continue
         return py
     raise DependencyError("未找到可用的 pip，请在当前 venv 执行 `uv pip install pip`，或在系统安装 python3-pip 包")

@@ -36,6 +36,11 @@ _SYSTEM_PREFIXES: tuple[str, ...] = (
     "/usr/local/lib",
 )
 
+# 扫描时排除的 dist 根下一级目录名（与 win7_scan._EXCLUDE_PARTS 一致）：
+# release/ 是用户安装包与审计产物（SBOM/manifest/安装包），build/ 是打包中间
+# 产物，二者均非运行时二进制，参与依赖分析会误删用户安装包
+_EXCLUDE_PARTS = frozenset({"build", "release"})
+
 
 @dataclass(frozen=True)
 class BinaryInfo:
@@ -73,11 +78,19 @@ class DepGraph:
 
 
 def _iter_binary_files(dist_dir: Path, exts: frozenset[str]) -> list[Path]:
-    """递归扫描 dist_dir 下指定扩展名的文件，排序后返回."""
+    """递归扫描 dist_dir 下指定扩展名的文件（排除 dist 根下 release/build 子树），排序后返回.
+
+    排除规则与 :data:`win7_scan._EXCLUDE_PARTS` 一致：``release/`` 下的安装包与
+    审计产物、``build/`` 下的打包中间文件不参与依赖分析，避免依赖剥离误删
+    用户安装包（如 ``release/*.zip`` 内的 DLL）。
+    """
     result: list[Path] = []
     for path in dist_dir.rglob("*"):
-        if path.is_file() and path.suffix.lower() in exts:
-            result.append(path)
+        if not path.is_file() or path.suffix.lower() not in exts:
+            continue
+        if path.relative_to(dist_dir).parts[0] in _EXCLUDE_PARTS:
+            continue
+        result.append(path)
     return sorted(result)
 
 

@@ -69,12 +69,18 @@ static int read_entry(const wchar_t *exe_path, wchar_t *entry_out, size_t cap) {
     while (n > 0 && (buf[n-1] == '\n' || buf[n-1] == '\r')) {{
         buf[--n] = '\0';
     }}
-    if (n == 0 || n >= cap) {{
+    if (n == 0) {{
         fwprintf(stderr, L"入口路径无效\n");
         return 1;
     }}
-    for (size_t i = 0; i <= n; i++) {{
-        entry_out[i] = (wchar_t)(unsigned char)buf[i];
+    /* UTF-8 → UTF-16 转换：.entry 文件以 UTF-8 编码写入（构建侧
+       atomic_write_text 默认 utf-8），中文入口名若逐字节强转
+       (wchar_t)(unsigned char)buf[i] 会产生 mojibake 导致找不到入口文件，
+       必须经 MultiByteToWideChar 按代码页转换；返回 0 表示失败
+       （含 entry_out 缓冲区不足，覆盖原 n >= cap 字节级检查） */
+    if (MultiByteToWideChar(CP_UTF8, 0, buf, -1, entry_out, (int)cap) == 0) {{
+        fwprintf(stderr, L"入口路径 UTF-8 转换失败\n");
+        return 1;
     }}
     return 0;
 }}

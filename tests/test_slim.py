@@ -205,6 +205,16 @@ class TestClassifyEntry:
         result = classify_entry("PySide6/QtWebEngineProcess", "PySide6", {"WebEngineWidgets"})
         assert result == ("shared", None)
 
+    def test_qtwebengineprocess_case_insensitive(self) -> None:
+        """QtWebEngine 顶层文件大小写不敏感匹配（zip 条目名大小写不保证与发布名一致）."""
+        # 全大写变体 + WebEngine 依赖 → 保留
+        assert classify_entry("PySide6/QTWEBENGINEPROCESS.EXE", "PySide6", {"WebEngineCore"}) == ("shared", None)
+        # 全小写变体无依赖 → 剥离
+        assert classify_entry("PySide6/qtwebengineprocess.exe", "PySide6") == ("exclude", None)
+        # icudtl.dat 大写变体同样匹配
+        assert classify_entry("PySide6/ICUDTL.DAT", "PySide6", {"WebEngineCore"}) == ("shared", None)
+        assert classify_entry("PySide6/ICUDTL.DAT", "PySide6") == ("exclude", None)
+
     def test_designer_exe_still_excluded(self) -> None:
         """非 QtWebEngineProcess 的 .exe 仍归 STRIP_EXTS 剥离（如 designer.exe）."""
         result = classify_entry("PySide6/designer.exe", "PySide6", {"WebEngineCore"})
@@ -575,6 +585,17 @@ class TestQtModuleClosure:
         assert "Widgets" in QtSlimSpec.expand_closure({"Qml"})
         # 空闭包不加 Widgets（无 Qt 模块在用）
         assert "Widgets" not in QtSlimSpec.expand_closure(set())
+
+    def test_expand_closure_does_not_mutate_input(self) -> None:
+        """expand_closure 构造新集合返回，不就地修改入参（与基类约定一致）."""
+        from fspack.slim.qt import QtSlimSpec
+
+        src = {"Qml"}
+        result = QtSlimSpec.expand_closure(src)
+        # 入参保持原样，闭包扩展只体现在返回值中
+        assert src == {"Qml"}
+        assert "Svg" in result
+        assert "Widgets" in result
 
 
 class TestQtDllClassification:
@@ -2906,6 +2927,43 @@ class TestWheelInfoFromFilename:
 
         assert WheelInfo.from_filename("not-a-wheel.txt") is None
         assert WheelInfo.from_filename("missing-tags-1.0.whl") is None
+
+    def test_hyphen_name_wheel_right_anchored(self) -> None:
+        """name 段含连字符的 wheel 从右锚定解析，不再截断为 "python".
+
+        下划线规范名与连字符容错名均须解析出正确的 name/version。
+        """
+        from fspack.slim.base import WheelInfo, normalize_name
+
+        # 下划线规范名（PyPI 实际发布形式）
+        info = WheelInfo.from_filename("python_dateutil-2.8.2-py3-none-any.whl")
+        assert info is not None
+        assert info.name == "python_dateutil"
+        assert info.version == "2.8.2"
+        assert info.python_tags == ("py3",)
+        assert info.abi_tag == "none"
+        assert info.platform_tags == ("any",)
+
+        # 连字符容错：旧左锚非贪婪正则会解析 name="python"，须从右锚定
+        info2 = WheelInfo.from_filename("python-dateutil-2.8.2-py3-none-any.whl")
+        assert info2 is not None
+        assert normalize_name(info2.name) == "python-dateutil"
+        assert info2.version == "2.8.2"
+        assert info2.python_tags == ("py3",)
+        assert info2.abi_tag == "none"
+        assert info2.platform_tags == ("any",)
+
+    def test_hyphen_name_with_build_tag(self) -> None:
+        """name 段含连字符且有 build tag 的六段式 wheel 解析正确."""
+        from fspack.slim.base import WheelInfo
+
+        info = WheelInfo.from_filename("zope-interface-5.4.0-1-cp39-cp39-win_amd64.whl")
+        assert info is not None
+        assert info.name == "zope-interface"
+        assert info.version == "5.4.0"
+        assert info.python_tags == ("cp39",)
+        assert info.abi_tag == "cp39"
+        assert info.platform_tags == ("win_amd64",)
 
 
 class TestNormalizeName:

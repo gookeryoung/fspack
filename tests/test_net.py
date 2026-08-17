@@ -94,3 +94,34 @@ class TestDownloaderDownload:
         downloader = Downloader(ssl_ctx=ssl.create_default_context())
         with pytest.raises(OSError, match="boom"):
             downloader.download("https://x/d", tmp_path / "f.zip")
+
+    def test_content_length_non_numeric_treated_as_unknown(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Content-Length 非数字时不抛 ValueError，按未知大小完成下载."""
+
+        def fake_urlopen(req: Request, timeout: int, **kwargs: object) -> FakeResp:
+            resp = FakeResp(b"chunked body")
+            # 模拟部分镜像/代理返回非法 Content-Length
+            resp.headers = {"Content-Length": "not-a-number"}
+            return resp
+
+        monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+        dest = tmp_path / "f.zip"
+        downloader = Downloader(ssl_ctx=ssl.create_default_context())
+        written = downloader.download("https://x/d", dest)
+        assert written == len(b"chunked body")
+        assert dest.read_bytes() == b"chunked body"
+
+    def test_failed_download_cleans_dest(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """不可重试异常失败后清理半成品 dest，避免污染缓存."""
+
+        def fake_urlopen(req: object, timeout: int, **kwargs: object) -> object:
+            raise OSError("boom")
+
+        monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+        dest = tmp_path / "f.zip"
+        downloader = Downloader(ssl_ctx=ssl.create_default_context())
+        with pytest.raises(OSError, match="boom"):
+            downloader.download("https://x/d", dest)
+        assert not dest.exists()

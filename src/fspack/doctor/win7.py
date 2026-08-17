@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from functools import lru_cache
 from pathlib import Path
 
 from fspack.config import KNOWN_EMBED_VERSIONS
@@ -31,7 +32,22 @@ _HASH_CHUNK = 1 << 16
 
 
 def _file_sha256(path: Path) -> str:
-    """流式计算文件 sha256（hex 小写），避免大 zip 整读内存."""
+    """流式计算文件 sha256（hex 小写），按文件 stat 标识做进程内缓存.
+
+    同一进程重复校验同一（未修改）zip 时直接命中内存缓存，避免对
+    ~12MB embed zip 重复哈希；文件 size/mtime_ns 变化后缓存自动失效。
+    """
+    st = path.stat()
+    return _file_sha256_cached(path, st.st_size, st.st_mtime_ns)
+
+
+@lru_cache(maxsize=32)
+def _file_sha256_cached(path: Path, size: int, mtime_ns: int) -> str:  # noqa: ARG001 — size/mtime_ns 仅作 lru_cache 失效键
+    """``_file_sha256`` 的缓存实现：流式读取避免大 zip 整读内存.
+
+    缓存键为 ``(path, size, mtime_ns)`` 三元组，``size``/``mtime_ns``
+    仅作失效标识不参与计算；maxsize=32 覆盖清单全部版本绰绰有余。
+    """
     digest = hashlib.sha256()
     with path.open("rb") as f:
         while chunk := f.read(_HASH_CHUNK):

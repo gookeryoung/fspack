@@ -97,7 +97,8 @@ class NumpySlimSpec(SlimSpec):
             and parts[3] in cls._CORE_TESTS_RUNTIME_FILES
         ):
             return ("shared", None)
-        return cls._default_classify(entry, top_pkg, keep_subs, cls._EXTRA_EXCLUDES)
+        # 复用已 split 的 parts，避免 _default_classify 内部重复 split
+        return cls._default_classify(entry, top_pkg, keep_subs, cls._EXTRA_EXCLUDES, parts=parts)
 
 
 class LxmlSlimSpec(SlimSpec):

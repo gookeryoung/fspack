@@ -69,7 +69,7 @@ def _stub_write_operations(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
         monkeypatch.setattr(f"fspack.packaging.pipeline.stages.{fn}", lambda *a, **k: tmp_path / "fake")
     for fn in ("extract_embed", "extract_standalone", "unpack_wheels"):
         monkeypatch.setattr(f"fspack.packaging.pipeline.stages.{fn}", lambda *a, **k: None)
-    monkeypatch.setattr("fspack.packaging.pipeline.copy_source", lambda *a, **k: None)
+    monkeypatch.setattr("fspack.packaging.pipeline.executor.copy_source", lambda *a, **k: None)
     monkeypatch.setattr(
         "fspack.packaging.pipeline.stages.compile_loader",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("不应编译 loader")),

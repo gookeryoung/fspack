@@ -13,6 +13,7 @@ tar.gz 打包、.deb 构造（DEBIAN/control + /usr/lib + /usr/bin wrapper）、
 from __future__ import annotations
 
 import logging
+import platform
 import shutil
 import subprocess  # noqa: F401  # 保留 patch 路径 fspack.packaging.installer.linux.subprocess.run
 from pathlib import Path
@@ -46,6 +47,21 @@ __all__ = [
 ]
 
 _logger = logging.getLogger("fspack.packaging.installer")
+
+
+def _deb_arch() -> str:
+    """推导 .deb 包 Architecture 字段值（当前为主机构建，直接取本机架构）.
+
+    用 :func:`platform.machine` 取当前机器架构并映射为 Debian 命名：
+    ``x86_64``/``amd64``/``x64`` → ``amd64``，``aarch64``/``arm64`` → ``arm64``，
+    其余原样小写返回（如 ``riscv64``，Debian 侧字段名一致）。
+    """
+    machine = platform.machine().lower()
+    if machine in ("x86_64", "amd64", "x64"):
+        return "amd64"
+    if machine in ("aarch64", "arm64"):
+        return "arm64"
+    return machine
 
 
 class LinuxInstaller(Installer):
@@ -92,14 +108,17 @@ class LinuxInstaller(Installer):
         return result
 
 
-def build_tarball(dist_dir: Path, info: ProjectInfo, release_dir: Path) -> Path:
+def build_tarball(dist_dir: Path, info: ProjectInfo, release_dir: Path, *, keep_staging: bool = False) -> Path:
     """打包 dist 为 tar.gz 便携包，返回包路径。
 
     tar.gz 内顶层目录为 ``<name>-<version>-<py_tag>-linux-slim``，解压后即可运行。
     排除 dist/release/ 避免安装包递归打包自身。
+
+    ``keep_staging=True`` 时打包后保留 staging 目录（Linux ``all`` 场景 zip 复用，
+    消除一次 dist 全量 copytree；由最后一个复用格式负责清理）。
     """
     base = _release_base(info, "linux")
-    archive_path = _make_staged_archive(dist_dir, release_dir, base, "gztar")
+    archive_path = _make_staged_archive(dist_dir, release_dir, base, "gztar", keep_staging=keep_staging)
     _logger.info("已生成 tar.gz 便携包: %s", archive_path)
     return archive_path
 
@@ -111,7 +130,7 @@ def build_deb(dist_dir: Path, info: ProjectInfo, release_dir: Path) -> Path:
     排除 dist/release/ 避免安装包递归打包自身。
     """
     release_dir.mkdir(parents=True, exist_ok=True)
-    deb_base = f"{info.name}_{info.version}-{_py_tag(info)}-slim_amd64"
+    deb_base = f"{info.name}_{info.version}-{_py_tag(info)}-slim_{_deb_arch()}"
     staging = release_dir / deb_base
 
     if staging.exists():
@@ -131,7 +150,7 @@ def build_deb(dist_dir: Path, info: ProjectInfo, release_dir: Path) -> Path:
     (debian_dir / "control").write_text(
         f"Package: {info.name}\n"
         f"Version: {info.version}\n"
-        "Architecture: amd64\n"
+        f"Architecture: {_deb_arch()}\n"
         "Maintainer: fspack\n"
         f"Description: {info.name} 打包的应用\n",
         encoding="utf-8",
@@ -161,8 +180,12 @@ def build_tarball_release(  # noqa: PLR0913
     *,
     tracker: BuildTracker | None = None,
     extras: Sequence[str] | None = None,
+    keep_staging: bool = False,
 ) -> Path:
-    """编排：可选 build → 校验可执行文件 → 生成 tar.gz 便携包，返回包路径。"""
+    """编排：可选 build → 校验可执行文件 → 生成 tar.gz 便携包，返回包路径。
+
+    ``keep_staging`` 透传 :func:`build_tarball`（多格式共享 staging 场景）。
+    """
     own_tracker = tracker is None
     tk = tracker or BuildTracker(title="打包阶段汇总")
     dist, info = _prepare_dist(
@@ -174,7 +197,7 @@ def build_tarball_release(  # noqa: PLR0913
     result = _run_stage(
         tk,
         "生成 tar.gz 便携包",
-        lambda: build_tarball(dist, info, release),
+        lambda: build_tarball(dist, info, release, keep_staging=keep_staging),
         detail=tar_name,
     )
     console.success(f"tar.gz 便携包已生成: {result}")
@@ -257,7 +280,5 @@ def sign_deb_file(deb_path: Path, key_id: str | None = None) -> Path:
         not_found_msg="未找到 gpg，请安装 GnuPG（如 sudo apt install -y gnupg）",
         fail_prefix=f"gpg 签名失败 {deb_path.name}",
     )
-    asc_path = deb_path.with_suffix(".deb.asc")
-    if not asc_path.is_file():
-        asc_path = Path(str(deb_path) + ".asc")
-    return asc_path
+    # gpg --detach-sign 产出 "<deb>.asc"；原 with_suffix+回退写法两次结果恒相同，属死代码，此处简化
+    return Path(str(deb_path) + ".asc")

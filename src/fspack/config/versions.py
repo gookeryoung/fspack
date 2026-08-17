@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import codecs
 import logging
+import operator
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 from fspack.exceptions import ProjectError
@@ -239,36 +241,64 @@ def _satisfies_wildcard(ver_parts: tuple[int, ...], op: str, spec_parts: tuple[i
     return ver_head != spec_parts  # !=
 
 
+# 常序比较运算符 → operator 函数映射（_SPEC_RE 仅捕获这些运算符，直接查表无缺键风险）
+_OP_FUNCS: dict[str, Callable[[tuple[int, ...], tuple[int, ...]], bool]] = {
+    ">=": operator.ge,
+    "<=": operator.le,
+    ">": operator.gt,
+    "<": operator.lt,
+    "==": operator.eq,
+    "!=": operator.ne,
+}
+
+
+def _satisfies_compatible(ver_parts: tuple[int, ...], spec_parts: tuple[int, ...], spec_ver: str) -> bool:
+    """``~=`` 兼容发行符判定：下界为完整 spec，上界为 minor+1（限定 minor 系列）.
+
+    示例：``~=3.11`` 匹配 ``3.11 <= ver < 3.12``，``~=3.11.5`` 匹配
+    ``3.11.5 <= ver < 3.12.0``。PEP 440 要求 ``~=`` 至少两段（``~=3`` 非法），
+    单段时 warning 后宽松跳过（返回 ``True``）。
+    """
+    if len(spec_parts) < 2:
+        _logger.warning("忽略非法的单段兼容发行符: ~= %s", spec_ver)
+        return True
+    upper_parts = (spec_parts[0], spec_parts[1] + 1)
+    length = max(len(ver_parts), len(spec_parts), len(upper_parts))
+    ver_n = ver_parts + (0,) * (length - len(ver_parts))
+    lower_n = spec_parts + (0,) * (length - len(spec_parts))
+    upper_n = upper_parts + (0,) * (length - len(upper_parts))
+    return lower_n <= ver_n < upper_n
+
+
 def _satisfies(version: str, specifiers: str) -> bool:
     """检查版本是否满足 PEP 440 ``requires-python`` 规范符.
 
     支持通配符前缀匹配：``==3.12.*`` 匹配任意以 ``3.12`` 开头的版本
     （PEP 440 version prefix match），``!=3.12.*`` 则相反。
+    支持兼容发行符 ``~=``：限定 minor 系列，如 ``~=3.11`` 匹配
+    ``3.11 <= ver < 3.12``，``~=3.11.5`` 匹配 ``3.11.5 <= ver < 3.12.0``。
+
+    整串无可识别规范符（如 ``"abc"``）时保持宽松放行（返回 ``True``），
+    但记 warning 日志便于发现 ``requires-python`` 配置错误。
     """
     ver_parts = tuple(int(x) for x in version.split("."))
-    for op, spec_ver, wildcard in _SPEC_RE.findall(specifiers):
+    matches = _SPEC_RE.findall(specifiers)
+    if not matches:
+        _logger.warning("requires-python 规范符无法解析，宽松放行: %r", specifiers)
+        return True
+    for op, spec_ver, wildcard in matches:
         spec_parts = tuple(int(x) for x in spec_ver.split("."))
         if wildcard:
             if not _satisfies_wildcard(ver_parts, op, spec_parts):
                 return False
             continue
+        if op == "~=":
+            if not _satisfies_compatible(ver_parts, spec_parts, spec_ver):
+                return False
+            continue
         length = max(len(ver_parts), len(spec_parts))
         ver = ver_parts + (0,) * (length - len(ver_parts))
         spec = spec_parts + (0,) * (length - len(spec_parts))
-        if op == ">=":
-            ok = ver >= spec
-        elif op == "<=":
-            ok = ver <= spec
-        elif op == ">":
-            ok = ver > spec
-        elif op == "<":
-            ok = ver < spec
-        elif op == "==":
-            ok = ver == spec
-        elif op == "!=":
-            ok = ver != spec
-        else:  # pragma: no cover - ~= 兼容发行符未实现，正则匹配但静默跳过
-            continue
-        if not ok:
+        if not _OP_FUNCS[op](ver, spec):
             return False
     return True

@@ -36,11 +36,15 @@ from fspack.console import console
 from fspack.exceptions import DependencyError, LoaderError
 from fspack.packaging.pipeline import (
     _BUILD_FAILED,
+    _BUILD_OK,
     _clean_dist_dir,
     _handle_dist_incomplete,
+    _has_build_stamps,
     _load_build_failure,
     _remove_build_failure,
+    _remove_build_ok,
     _save_build_failure,
+    _save_build_ok,
 )
 from fspack.packaging.pipeline.stages import _MAX_LOADER_WORKERS, BuildContext, _build_entry_loaders
 from fspack.platform import Platform
@@ -2749,6 +2753,86 @@ def test_clean_dist_preserves_build_failed(tmp_path: Path) -> None:
     assert (dist / _BUILD_FAILED).read_text(encoding="utf-8") == '{"stage":"编译"}'
     assert (dist / "installer.nsi").read_text(encoding="utf-8") == 'Name "app"'
     assert not (dist / "runtime").exists()
+
+
+# --- .build_ok 完成标记测试（no_pyc/交叉构建二次构建误判修复） ---
+
+
+def test_has_build_stamps_recognizes_build_ok(tmp_path: Path) -> None:
+    """仅存在 .build_ok（无编译 stamp）时也视为已完成构建（no_pyc/交叉构建场景）."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    assert not _has_build_stamps(dist)
+
+    _save_build_ok(dist)
+    assert (dist / _BUILD_OK).is_file()
+    assert _has_build_stamps(dist)
+
+
+def test_remove_build_ok_deletes_marker(tmp_path: Path) -> None:
+    """_remove_build_ok 删除标记文件（构建开始时清旧标记），不存在时无操作."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    _save_build_ok(dist)
+    _remove_build_ok(dist)
+    assert not (dist / _BUILD_OK).is_file()
+    _remove_build_ok(dist)  # 不抛异常
+
+
+def test_clean_dist_dir_keeps_diagnostics_preserves_build_ok(tmp_path: Path) -> None:
+    """keep_diagnostics=True 时保留 .build_ok 标记（与 .build_failed 同等对待）."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "runtime").mkdir()
+    _save_build_ok(dist)
+
+    _clean_dist_dir(dist, keep_diagnostics=True)
+
+    assert (dist / _BUILD_OK).is_file()
+    assert not (dist / "runtime").exists()
+
+
+def test_build_success_writes_build_ok(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """build() 成功完成后写入 dist/.build_ok 并清除 .build_failed."""
+    proj = tmp_path / "app"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (proj / "app.py").write_text("def main():\n    pass\n")
+
+    _setup_embed_mocks(tmp_path, monkeypatch, "3.11.9")
+    runtime = proj / "dist" / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    (runtime / "python.exe").write_bytes(b"")
+    monkeypatch.setattr("subprocess.run", lambda cmd, **kw: _CompileCompleted())
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.detect_platform", lambda: Platform.WINDOWS)
+
+    build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
+
+    assert (proj / "dist" / _BUILD_OK).is_file()
+    assert not (proj / "dist" / _BUILD_FAILED).exists()
+
+
+def test_build_keyboard_interrupt_writes_build_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ctrl+C（KeyboardInterrupt，非 Exception 子类）也写入 .build_failed 标记."""
+    proj = tmp_path / "app"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (proj / "app.py").write_text("def main():\n    pass\n")
+    # 预置 dist 目录：_save_build_failure 要求 dist 存在才写入
+    (proj / "dist").mkdir()
+
+    def raise_interrupt(ctx: object) -> Path:
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr("fspack.packaging.pipeline.executor._prepare_runtime", raise_interrupt)
+
+    with pytest.raises(KeyboardInterrupt):
+        build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
+
+    failed = _load_build_failure(proj / "dist")
+    assert failed is not None, "KeyboardInterrupt 未写入 .build_failed"
+    assert "KeyboardInterrupt" in failed["error"]
+    assert not (proj / "dist" / _BUILD_OK).exists()
 
 
 # --- _trim_standalone_runtime 测试 ---

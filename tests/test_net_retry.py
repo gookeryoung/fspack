@@ -3,19 +3,20 @@
 覆盖 iter-126 新增的健壮性机制：
 
 - :class:`fspack.packaging.net.Downloader` 指数退避重试：
-  - 可重试错误（URLError/socket.timeout/HTTPError 502/503/504）重试 3 次
+  - 可重试错误（URLError/socket.timeout/HTTPError 502/503/504/读阶段连接中断）
+    首次 + 2 次重试后成功返回结果
   - 不可重试错误（HTTPError 404/403）立即失败
-  - 重试后成功返回结果
-  - 达到上限后抛出原始异常（reraise=True）
+  - 达到上限后抛出原始异常（reraise=True），并清理半成品 dest
 - :class:`fspack.packaging.runtime.RuntimeDownloader` sha256 校验：
   - 下载后 hash 匹配返回路径
   - 下载后 hash 不匹配删除文件抛 :class:`EmbedError`
   - 缓存命中但 hash 不匹配删除重下
   - 缓存命中且 hash 匹配直接复用
+  - 下载失败清理半成品归档再抛 :class:`EmbedError`
 - :func:`fspack.packaging.net._is_retryable_network_error` 错误分类单元测试
 
 测试通过 ``monkeypatch.setattr("tenacity.nap.sleep", ...)`` 跳过实际 sleep，
-避免指数退避等待（1s/2s/4s）导致测试耗时。
+避免指数退避等待（约 1s/2s）导致测试耗时。
 """
 
 from __future__ import annotations
@@ -65,7 +66,7 @@ def _make_http_error(code: int, msg: str = "Error") -> urllib.error.HTTPError:
 
 @pytest.fixture(autouse=True)
 def _patch_tenacity_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
-    """跳过 tenacity 重试等待，避免测试耗时（1s/2s/4s 累计 7s）."""
+    """跳过 tenacity 重试等待，避免测试耗时（首次 + 2 次重试退避约 1s/2s）."""
     import tenacity.nap
 
     monkeypatch.setattr(tenacity.nap, "sleep", lambda _: None)
@@ -85,6 +86,24 @@ class TestIsRetryableNetworkError:
     def test_socket_timeout_is_retryable(self) -> None:
         """socket.timeout（读超时）可重试."""
         exc = socket.timeout("read timed out")
+        assert _is_retryable_network_error(exc) is True
+
+    def test_connection_reset_error_is_retryable(self) -> None:
+        """ConnectionResetError（分块读阶段连接被重置）可重试."""
+        assert _is_retryable_network_error(ConnectionResetError("connection reset by peer")) is True
+
+    def test_remote_disconnected_is_retryable(self) -> None:
+        """http.client.RemoteDisconnected（服务端提前断开连接）可重试."""
+        import http.client
+
+        exc = http.client.RemoteDisconnected("Remote end closed connection without response")
+        assert _is_retryable_network_error(exc) is True
+
+    def test_incomplete_read_is_retryable(self) -> None:
+        """http.client.IncompleteRead（响应体未读完即断开）可重试."""
+        import http.client
+
+        exc = http.client.IncompleteRead(b"partial", expected=1024)
         assert _is_retryable_network_error(exc) is True
 
     @pytest.mark.parametrize("code", [502, 503, 504])
@@ -152,6 +171,72 @@ class TestDownloaderRetry:
         with pytest.raises(urllib.error.URLError, match="persistent failure"):
             downloader.download("https://x/d", tmp_path / "f.zip")
         assert len(calls) == 3
+
+    @pytest.mark.slow
+    def test_retry_exhausted_cleans_dest(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """重试耗尽失败后清理半成品 dest，避免残缺文件污染缓存."""
+        calls: list[int] = []
+
+        def fake_urlopen(req: object, timeout: int, **kwargs: object) -> object:
+            calls.append(len(calls) + 1)
+            raise urllib.error.URLError("persistent failure")
+
+        monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+        dest = tmp_path / "f.zip"
+        downloader = Downloader(ssl_ctx=ssl.create_default_context())
+        with pytest.raises(urllib.error.URLError, match="persistent failure"):
+            downloader.download("https://x/d", dest)
+        assert len(calls) == 3
+        assert not dest.exists()
+
+    @pytest.mark.slow
+    def test_cleanup_failure_does_not_mask_original(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """dest 清理自身失败（OSError）仅记 warning，仍抛出原始下载异常."""
+        monkeypatch.setattr(
+            "urllib.request.urlopen",
+            lambda req, timeout, **kw: (_ for _ in ()).throw(urllib.error.URLError("persistent failure")),
+        )
+
+        def raise_unlink(self: Path, missing_ok: bool = False) -> None:
+            raise OSError("unlink denied")
+
+        monkeypatch.setattr(Path, "unlink", raise_unlink)
+        downloader = Downloader(ssl_ctx=ssl.create_default_context())
+        with pytest.raises(urllib.error.URLError, match="persistent failure"):
+            downloader.download("https://x/d", tmp_path / "f.zip")
+
+    @pytest.mark.slow
+    def test_read_stage_connection_reset_retried(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """分块读阶段 ConnectionResetError 触发重试，恢复后下载成功."""
+        calls: list[int] = []
+
+        class _ResetResp:
+            """read 阶段抛 ConnectionResetError 的响应桩，模拟弱网连接被重置."""
+
+            headers: dict[str, str] = {"Content-Length": "16"}
+
+            def read(self, n: int = -1) -> bytes:
+                raise ConnectionResetError("connection reset by peer")
+
+            def __enter__(self) -> _ResetResp:
+                return self
+
+            def __exit__(self, *a: object) -> bool:
+                return False
+
+        def fake_urlopen(req: Request, timeout: int, **kwargs: object) -> object:
+            calls.append(len(calls) + 1)
+            if len(calls) == 1:
+                return _ResetResp()
+            return FakeResp(b"recovered data")
+
+        monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+        dest = tmp_path / "f.zip"
+        downloader = Downloader(ssl_ctx=ssl.create_default_context())
+        written = downloader.download("https://x/flaky", dest)
+        assert written == len(b"recovered data")
+        assert dest.read_bytes() == b"recovered data"
+        assert len(calls) == 2
 
     def test_http_404_not_retried(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """HTTP 404 立即失败，不重试."""
@@ -392,3 +477,16 @@ class TestRuntimeDownloaderHashCheck:
         monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout, **kw: FakeResp(data))
         path = EmbedRuntime.download("3.11.9", tmp_path / "cache", expected_hash=expected_hash, mirror=mirror)
         assert path.read_bytes() == data
+
+    def test_download_failure_cleans_archive(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mirror: MirrorConfig
+    ) -> None:
+        """下载抛 OSError 时转 EmbedError，且半成品归档被清理不污染缓存."""
+        monkeypatch.setattr(
+            "urllib.request.urlopen",
+            lambda req, timeout, **kw: (_ for _ in ()).throw(OSError("disk io error")),
+        )
+        cache = tmp_path / "cache"
+        with pytest.raises(EmbedError, match="下载 embed python 失败"):
+            download_embed("3.11.9", mirror, cache)
+        assert not (cache / "python-3.11.9-embed-amd64.zip").exists()

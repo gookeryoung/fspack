@@ -385,6 +385,27 @@ def test_check_pip_via_python_module() -> None:
     assert "pip 23.0" in result.detail
 
 
+def test_check_pip_via_pip3_command() -> None:
+    """pip 不在 PATH 但 pip3 存在时用 pip3 --version 探测（不再误报缺失）."""
+
+    class _FakePip3:
+        returncode = 0
+        stdout = "pip 24.1 from /usr/lib/python3.12/site-packages/pip (python 3.12)\n"
+        stderr = ""
+
+    def _which(name: str) -> str | None:
+        return "/usr/bin/pip3" if name == "pip3" else None
+
+    with patch("fspack.doctor.shutil.which", side_effect=_which), patch(
+        "fspack.doctor.subprocess.run", return_value=_FakePip3()
+    ) as mock_run:
+        result = _check_pip()
+    assert result.status is CheckStatus.OK
+    assert "pip 24.1" in result.detail
+    # 探测命令为 pip3 --version（而非 python -m pip）
+    assert mock_run.call_args[0][0] == ["pip3", "--version"]
+
+
 def test_check_pip_not_found() -> None:
     """pip 命令与 python -m pip 均不可用时返回 ERROR."""
 
@@ -521,7 +542,7 @@ def test_check_cache_integrity_all_valid(tmp_path: Path) -> None:
 
 
 def test_check_cache_integrity_corrupt_json_deleted(tmp_path: Path) -> None:
-    """JSON 损坏的缓存文件被删除并返回 WARN."""
+    """JSON 损坏的缓存文件计入 WARN，诊断阶段不删除（只读路径）."""
     from fspack.doctor import _check_cache_integrity
 
     cache = tmp_path / "cache"
@@ -534,15 +555,16 @@ def test_check_cache_integrity_corrupt_json_deleted(tmp_path: Path) -> None:
     result = _check_cache_integrity(cache)
     assert result.status is CheckStatus.WARN
     assert "1 有效" in result.detail
-    assert "1 损坏已删除" in result.detail
-    # 损坏文件被删除
-    assert not corrupt.is_file()
+    assert "1 损坏" in result.detail
+    assert "1 个损坏 deps 待清理" in result.suggestion
+    # 诊断阶段不删除损坏文件（由 fsp cache clean 清理）
+    assert corrupt.is_file()
     # 有效文件保留
     assert (cache / ".deps-good.json").is_file()
 
 
 def test_check_cache_integrity_non_dict_root_deleted(tmp_path: Path) -> None:
-    """JSON 根对象非 dict（如 list）的缓存文件被删除."""
+    """JSON 根对象非 dict（如 list）计入损坏，诊断阶段不删除."""
     from fspack.doctor import _check_cache_integrity
 
     cache = tmp_path / "cache"
@@ -552,11 +574,12 @@ def test_check_cache_integrity_non_dict_root_deleted(tmp_path: Path) -> None:
 
     result = _check_cache_integrity(cache)
     assert result.status is CheckStatus.WARN
-    assert not corrupt.is_file()
+    assert "1 损坏" in result.detail
+    assert corrupt.is_file()
 
 
 def test_check_cache_integrity_wrong_wheels_type_deleted(tmp_path: Path) -> None:
-    """wheels 字段非 list 的缓存文件被删除."""
+    """wheels 字段非 list 的缓存文件计入损坏，诊断阶段不删除."""
     from fspack.doctor import _check_cache_integrity
 
     cache = tmp_path / "cache"
@@ -566,7 +589,8 @@ def test_check_cache_integrity_wrong_wheels_type_deleted(tmp_path: Path) -> None
 
     result = _check_cache_integrity(cache)
     assert result.status is CheckStatus.WARN
-    assert not corrupt.is_file()
+    assert "1 损坏" in result.detail
+    assert corrupt.is_file()
 
 
 def test_check_cache_integrity_multiple_corrupt_count(tmp_path: Path) -> None:
@@ -580,7 +604,7 @@ def test_check_cache_integrity_multiple_corrupt_count(tmp_path: Path) -> None:
 
     result = _check_cache_integrity(cache)
     assert result.status is CheckStatus.WARN
-    assert "5 损坏已删除" in result.detail
+    assert "5 损坏" in result.detail
 
 
 def test_check_cache_integrity_oserror_skipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -718,7 +742,7 @@ def test_scan_cache_health_all_valid(tmp_path: Path) -> None:
 
 
 def test_scan_cache_health_corrupt_deleted(tmp_path: Path) -> None:
-    """损坏 deps 文件被删除并计入 corrupt_deps_files."""
+    """delete_corrupt=True 时损坏 deps 文件被删除并计入 corrupt_deps_files."""
     from fspack.doctor import _scan_cache_health
 
     cache = tmp_path / "cache"
@@ -728,12 +752,27 @@ def test_scan_cache_health_corrupt_deleted(tmp_path: Path) -> None:
     corrupt = cache / ".deps-bad.json"
     corrupt.write_text("{bad", encoding="utf-8")
 
-    report = _scan_cache_health(cache)
+    report = _scan_cache_health(cache, delete_corrupt=True)
     assert report.total_deps_files == 2
     assert report.corrupt_deps_files == (".deps-bad.json",)
     assert not corrupt.is_file()
     assert report.stale_deps_files == ()
     assert report.orphan_wheels == ()
+    assert report.has_issues
+
+
+def test_scan_cache_health_default_keeps_corrupt(tmp_path: Path) -> None:
+    """默认（delete_corrupt=False）只报告损坏 deps 不删除（只读路径无副作用）."""
+    from fspack.doctor import _scan_cache_health
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    corrupt = cache / ".deps-bad.json"
+    corrupt.write_text("{bad", encoding="utf-8")
+
+    report = _scan_cache_health(cache)
+    assert report.corrupt_deps_files == (".deps-bad.json",)
+    assert corrupt.is_file()
     assert report.has_issues
 
 
@@ -1207,7 +1246,7 @@ def test_cli_cache_status_dispatches() -> None:
     fake_report = CacheHealthReport(cache_dir=Path("/tmp/cache"))
     with patch("fspack.doctor.run_cache_status", return_value=(fake_report,)) as mock_status:
         main(["cache", "status"])
-    mock_status.assert_called_once_with(target=None)
+    mock_status.assert_called_once_with(target=None, full_verify=False)
 
 
 def test_cli_cache_status_with_target_dispatches() -> None:
@@ -1218,7 +1257,18 @@ def test_cli_cache_status_with_target_dispatches() -> None:
     fake_report = CacheHealthReport(cache_dir=Path("/tmp/cache"), cache_type="embed")
     with patch("fspack.doctor.run_cache_status", return_value=(fake_report,)) as mock_status:
         main(["cache", "status", "--target", "embed"])
-    mock_status.assert_called_once_with(target="embed")
+    mock_status.assert_called_once_with(target="embed", full_verify=False)
+
+
+def test_cli_cache_status_verify_dispatches() -> None:
+    """``fsp cache status --verify`` 透传 full_verify=True 启用全量 CRC 校验."""
+    from fspack.cli import main
+    from fspack.doctor.models import CacheHealthReport
+
+    fake_report = CacheHealthReport(cache_dir=Path("/tmp/cache"))
+    with patch("fspack.doctor.run_cache_status", return_value=(fake_report,)) as mock_status:
+        main(["cache", "status", "--verify"])
+    mock_status.assert_called_once_with(target=None, full_verify=True)
 
 
 def test_cli_cache_clean_dispatches() -> None:
@@ -1313,6 +1363,31 @@ def test_is_zip_intact_corrupt(tmp_path: Path) -> None:
     assert _is_zip_intact(z) is False
 
 
+def test_is_zip_intact_quick_vs_full_data_corrupt(tmp_path: Path) -> None:
+    """快检只读中心目录（数据区损坏仍 True），全量 CRC 校验检出数据区损坏."""
+    from fspack.doctor import _is_zip_intact
+
+    z = tmp_path / "bad_data.zip"
+    _make_zip(z)
+    data = bytearray(z.read_bytes())
+    # 翻转 local file header 中文件名之后的压缩数据首字节（不动文件尾的中心目录）
+    idx = data.find(b"test.txt")
+    assert idx > 0
+    data[idx + len(b"test.txt")] ^= 0xFF
+    z.write_bytes(bytes(data))
+    assert _is_zip_intact(z) is True  # 快检：中心目录完好，数据区损坏不可见
+    assert _is_zip_intact(z, full=True) is False  # 全量：CRC 校验失败
+
+
+def test_is_zip_intact_full_valid_zip(tmp_path: Path) -> None:
+    """full=True 对有效 zip 仍返回 True（testzip 通过）."""
+    from fspack.doctor import _is_zip_intact
+
+    z = tmp_path / "test.zip"
+    _make_zip(z)
+    assert _is_zip_intact(z, full=True) is True
+
+
 def test_is_tar_intact_valid(tmp_path: Path) -> None:
     """_is_tar_intact 对有效 tar.gz 返回 True."""
     from fspack.doctor import _is_tar_intact
@@ -1358,6 +1433,49 @@ def test_is_pe_file_empty(tmp_path: Path) -> None:
     assert _is_pe_file(p) is False
 
 
+def test_is_zip_intact_oserror_indeterminate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_is_zip_intact 对 OSError（杀软/文件锁）返回 None（无法判定，不判损坏）."""
+    from fspack.doctor import _is_zip_intact
+
+    z = tmp_path / "locked.zip"
+    z.write_bytes(b"x" * 10)
+
+    class _LockedZip:
+        def __init__(self, path: object, *args: object, **kwargs: object) -> None:
+            raise PermissionError("file locked by antivirus")
+
+    monkeypatch.setattr("fspack.doctor.envs.zipfile.ZipFile", _LockedZip)
+    assert _is_zip_intact(z) is None
+
+
+def test_is_tar_intact_oserror_indeterminate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_is_tar_intact 对 OSError（杀软/文件锁）返回 None（无法判定，不判损坏）."""
+    from fspack.doctor import _is_tar_intact
+
+    t = tmp_path / "locked.tar.gz"
+    t.write_bytes(b"x" * 10)
+
+    def _raise_open(*args: object, **kwargs: object) -> None:
+        raise PermissionError("file locked by antivirus")
+
+    monkeypatch.setattr("fspack.doctor.envs.tarfile.open", _raise_open)
+    assert _is_tar_intact(t) is None
+
+
+def test_is_pe_file_oserror_indeterminate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_is_pe_file 对 OSError（杀软/文件锁）返回 None（无法判定，不判损坏）."""
+    from fspack.doctor import _is_pe_file
+
+    p = tmp_path / "locked.exe"
+    p.write_bytes(b"MZ")
+
+    def _raise_open(self: Path, *args: object, **kwargs: object) -> None:
+        raise PermissionError("file locked by antivirus")
+
+    monkeypatch.setattr(Path, "open", _raise_open)
+    assert _is_pe_file(p) is None
+
+
 # ---- _scan_embed_health ----
 
 
@@ -1399,7 +1517,21 @@ def test_scan_embed_health_valid_zip(tmp_path: Path) -> None:
 
 
 def test_scan_embed_health_corrupt_zip_deleted(tmp_path: Path) -> None:
-    """损坏的 embed zip 在扫描期删除并计入 corrupt_files."""
+    """delete_corrupt=True 时损坏的 embed zip 在扫描期删除并计入 corrupt_files."""
+    from fspack.doctor import _scan_embed_health
+
+    cache = tmp_path / "embed"
+    cache.mkdir()
+    bad = cache / "python-3.11.9-embed-amd64.zip"
+    bad.write_bytes(b"not a zip")
+    report = _scan_embed_health(cache, delete_corrupt=True)
+    assert report.corrupt_files == ("python-3.11.9-embed-amd64.zip",)
+    assert not bad.is_file()
+    assert report.has_issues
+
+
+def test_scan_embed_health_default_keeps_corrupt(tmp_path: Path) -> None:
+    """默认（delete_corrupt=False）损坏的 embed zip 只报告不删除（只读路径）."""
     from fspack.doctor import _scan_embed_health
 
     cache = tmp_path / "embed"
@@ -1408,8 +1540,29 @@ def test_scan_embed_health_corrupt_zip_deleted(tmp_path: Path) -> None:
     bad.write_bytes(b"not a zip")
     report = _scan_embed_health(cache)
     assert report.corrupt_files == ("python-3.11.9-embed-amd64.zip",)
-    assert not bad.is_file()
+    assert bad.is_file()
     assert report.has_issues
+
+
+def test_scan_embed_health_indeterminate_zip_skipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """zip 完整性无法判定（IO 异常返回 None）时不计损坏也不删除."""
+    from fspack.doctor import _scan_embed_health
+    from fspack.doctor import envs as doctor_envs
+
+    cache = tmp_path / "embed"
+    cache.mkdir()
+    locked = cache / "python-3.11.9-embed-amd64.zip"
+    _make_zip(locked)
+
+    def _locked_zip(path: Path, **kwargs: object) -> bool | None:
+        return None  # 模拟杀软/文件锁导致 OSError 无法判定（兼容 full 等透传参数）
+
+    monkeypatch.setattr(doctor_envs, "_is_zip_intact", _locked_zip)
+    report = _scan_embed_health(cache, delete_corrupt=True)
+    assert report.corrupt_files == ()
+    assert report.stale_files == ()
+    assert locked.is_file()
+    assert not report.has_issues
 
 
 def test_scan_embed_health_stale_zip_detected(tmp_path: Path) -> None:
@@ -1442,6 +1595,31 @@ def test_scan_embed_health_non_zip_ignored(tmp_path: Path) -> None:
     assert not report.has_issues
 
 
+def _make_data_corrupt_zip(path: Path) -> None:
+    """创建中心目录完好但数据区损坏的 zip（快检不可见，全量 CRC 可检出）."""
+    _make_zip(path)
+    data = bytearray(path.read_bytes())
+    idx = data.find(b"test.txt")
+    assert idx > 0
+    data[idx + len(b"test.txt")] ^= 0xFF  # 翻转压缩数据首字节，不动文件尾中心目录
+    path.write_bytes(bytes(data))
+
+
+def test_scan_embed_health_full_verify_detects_data_corrupt(tmp_path: Path) -> None:
+    """full_verify=True 检出数据区损坏的 embed zip（默认快检不可见）."""
+    from fspack.doctor import _scan_embed_health
+
+    cache = tmp_path / "embed"
+    cache.mkdir()
+    _make_data_corrupt_zip(cache / "python-3.11.9-embed-amd64.zip")
+
+    quick = _scan_embed_health(cache)
+    assert quick.corrupt_files == ()  # 快检：中心目录完好，不报损坏
+
+    full = _scan_embed_health(cache, full_verify=True)
+    assert full.corrupt_files == ("python-3.11.9-embed-amd64.zip",)  # 全量：CRC 检出
+
+
 # ---- _scan_standalone_health ----
 
 
@@ -1470,14 +1648,14 @@ def test_scan_standalone_health_valid_tar(tmp_path: Path) -> None:
 
 
 def test_scan_standalone_health_corrupt_tar_deleted(tmp_path: Path) -> None:
-    """损坏的 standalone tar.gz 在扫描期删除并计入 corrupt_files."""
+    """delete_corrupt=True 时损坏的 standalone tar.gz 在扫描期删除并计入 corrupt_files."""
     from fspack.doctor import _scan_standalone_health
 
     cache = tmp_path / "standalone"
     cache.mkdir()
     bad = cache / "cpython-3.11.15+20260718-x86_64-unknown-linux-install_only.tar.gz"
     bad.write_bytes(b"not a tar")
-    report = _scan_standalone_health(cache)
+    report = _scan_standalone_health(cache, delete_corrupt=True)
     assert report.corrupt_files == ("cpython-3.11.15+20260718-x86_64-unknown-linux-install_only.tar.gz",)
     assert not bad.is_file()
     assert report.has_issues
@@ -1527,22 +1705,42 @@ def test_scan_nuitka_health_valid_dir(tmp_path: Path) -> None:
 
 
 def test_scan_nuitka_health_corrupt_dir_deleted(tmp_path: Path) -> None:
-    """缺 python 可执行的子目录视为损坏并删除."""
+    """delete_corrupt=True 且目录 mtime 超过宽限期时，缺 python 可执行的子目录删除."""
+    import os
+    import time as time_mod
+
     from fspack.doctor import _scan_nuitka_health
 
     cache = tmp_path / "nuitka"
     cache.mkdir()
-    # 已知版本但缺 python 可执行
+    # 已知版本但缺 python 可执行；mtime 回拨到 1 小时前（避开解压进行中宽限）
     bad_dir = cache / "3.11.15" / "python"
     bad_dir.mkdir(parents=True)
-    report = _scan_nuitka_health(cache)
+    old_ts = time_mod.time() - 3600
+    os.utime(cache / "3.11.15", (old_ts, old_ts))
+    report = _scan_nuitka_health(cache, delete_corrupt=True)
     assert "3.11.15" in report.corrupt_files
     assert not (cache / "3.11.15").is_dir()
     assert report.has_issues
 
 
+def test_scan_nuitka_health_recent_extract_skipped(tmp_path: Path) -> None:
+    """目录 mtime 距今不足宽限期（视为另一进程解压进行中）时跳过判定不删除."""
+    from fspack.doctor import _scan_nuitka_health
+
+    cache = tmp_path / "nuitka"
+    cache.mkdir()
+    # 目录刚创建（mtime 距今约 0 秒 < 600 秒宽限），缺 python 可执行
+    extracting = cache / "3.11.15" / "python"
+    extracting.mkdir(parents=True)
+    report = _scan_nuitka_health(cache, delete_corrupt=True)
+    assert report.corrupt_files == ()
+    assert (cache / "3.11.15").is_dir()
+    assert not report.has_issues
+
+
 def test_scan_nuitka_health_stale_dir_detected(tmp_path: Path) -> None:
-    """未知版本的子目录计入 stale_files 但不删除."""
+    """未知版本的子目录计入 stale_files、累计体积但不删除."""
     from fspack.doctor import _scan_nuitka_health
 
     cache = tmp_path / "nuitka"
@@ -1550,22 +1748,24 @@ def test_scan_nuitka_health_stale_dir_detected(tmp_path: Path) -> None:
     # 3.7.0 不在 KNOWN_STANDALONE_VERSIONS.values() 中
     stale_dir = cache / "3.7.0" / "python"
     stale_dir.mkdir(parents=True)
-    (stale_dir / "python.exe").write_bytes(b"MZ")
+    (stale_dir / "python.exe").write_bytes(b"MZ" + b"\x00" * 998)
     report = _scan_nuitka_health(cache)
     assert "3.7.0" in report.stale_files
     assert (cache / "3.7.0").is_dir()
+    # stale 目录体积（递归）累计到 issues_size_bytes
+    assert report.issues_size_bytes == 1000
     assert report.has_issues
 
 
 def test_scan_nuitka_health_residual_tarball_deleted(tmp_path: Path) -> None:
-    """残留 tarball（解压后未清理）视为损坏并删除."""
+    """delete_corrupt=True 时残留 tarball（解压后未清理）视为损坏并删除."""
     from fspack.doctor import _scan_nuitka_health
 
     cache = tmp_path / "nuitka"
     cache.mkdir()
     residual = cache / "cpython-3.11.15+20260718-x86_64-unknown-linux-install_only.tar.gz"
     _make_tar(residual)
-    report = _scan_nuitka_health(cache)
+    report = _scan_nuitka_health(cache, delete_corrupt=True)
     assert report.corrupt_files == ("cpython-3.11.15+20260718-x86_64-unknown-linux-install_only.tar.gz",)
     assert not residual.is_file()
     assert report.has_issues
@@ -1596,31 +1796,51 @@ def test_scan_loader_health_valid_pe(tmp_path: Path) -> None:
 
 
 def test_scan_loader_health_empty_file_deleted(tmp_path: Path) -> None:
-    """0 字节文件视为损坏并删除."""
+    """delete_corrupt=True 时 0 字节文件视为损坏并删除."""
     from fspack.doctor import _scan_loader_health
 
     cache = tmp_path / "loaders"
     cache.mkdir()
     empty = cache / "empty1234567890.exe"
     empty.write_bytes(b"")
-    report = _scan_loader_health(cache)
+    report = _scan_loader_health(cache, delete_corrupt=True)
     assert "empty1234567890.exe" in report.corrupt_files
     assert not empty.is_file()
     assert report.has_issues
 
 
 def test_scan_loader_health_non_pe_deleted(tmp_path: Path) -> None:
-    """非空但缺 MZ 头的 exe 视为损坏并删除."""
+    """delete_corrupt=True 时非空但缺 MZ 头的 exe 视为损坏并删除."""
     from fspack.doctor import _scan_loader_health
 
     cache = tmp_path / "loaders"
     cache.mkdir()
     bad = cache / "bad123456789abc.exe"
     bad.write_bytes(b"XX" + b"\x00" * 50)
-    report = _scan_loader_health(cache)
+    report = _scan_loader_health(cache, delete_corrupt=True)
     assert "bad123456789abc.exe" in report.corrupt_files
     assert not bad.is_file()
     assert report.has_issues
+
+
+def test_scan_loader_health_indeterminate_pe_skipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """PE 头无法判定（IO 异常返回 None）的 exe 不计损坏也不删除."""
+    from fspack.doctor import _scan_loader_health
+    from fspack.doctor import envs as doctor_envs
+
+    cache = tmp_path / "loaders"
+    cache.mkdir()
+    locked = cache / "locked1234567890.exe"
+    _make_pe(locked)
+
+    def _locked_pe(path: Path) -> bool | None:
+        return None  # 模拟杀软/文件锁导致 OSError 无法判定
+
+    monkeypatch.setattr(doctor_envs, "_is_pe_file", _locked_pe)
+    report = _scan_loader_health(cache, delete_corrupt=True)
+    assert report.corrupt_files == ()
+    assert locked.is_file()
+    assert not report.has_issues
 
 
 def test_scan_loader_health_non_exe_kept(tmp_path: Path) -> None:
@@ -1664,15 +1884,18 @@ def test_scan_ccache_health_valid(tmp_path: Path) -> None:
 
 
 def test_scan_ccache_health_missing_exe(tmp_path: Path) -> None:
-    """ccache 二进制缺失时计入 corrupt_files."""
+    """ccache 二进制缺失时计入 missing_files（与损坏分列，不计入 corrupt）."""
     from fspack.doctor import _scan_ccache_health
 
     cache = tmp_path / "ccache"
     cache.mkdir()
     report = _scan_ccache_health(cache)
     exe_name = "ccache.exe" if sys.platform.startswith("win") else "ccache"
-    assert exe_name in report.corrupt_files
-    assert report.has_issues
+    assert exe_name in report.missing_files
+    assert report.corrupt_files == ()
+    # 缺失无文件可删，不算需要清理的问题，不虚增 issues_count
+    assert not report.has_issues
+    assert report.issues_count == 0
 
 
 def test_scan_ccache_health_stale_subdir(tmp_path: Path) -> None:
@@ -1693,7 +1916,7 @@ def test_scan_ccache_health_stale_subdir(tmp_path: Path) -> None:
 
 
 def test_scan_ccache_health_residual_archive_deleted(tmp_path: Path) -> None:
-    """残留下载归档（ccache.tar.xz/ccache.zip）视为损坏并删除."""
+    """delete_corrupt=True 时残留下载归档（ccache.tar.xz/ccache.zip）视为损坏并删除."""
     from fspack.doctor import _scan_ccache_health
 
     cache = tmp_path / "ccache"
@@ -1702,7 +1925,7 @@ def test_scan_ccache_health_residual_archive_deleted(tmp_path: Path) -> None:
     _make_pe(cache / exe_name)
     archive = cache / "ccache.zip"
     archive.write_bytes(b"not a real zip")
-    report = _scan_ccache_health(cache)
+    report = _scan_ccache_health(cache, delete_corrupt=True)
     assert "ccache.zip" in report.corrupt_files
     assert not archive.is_file()
     assert report.has_issues
@@ -1736,14 +1959,14 @@ def test_scan_tkinter_health_valid_zip(tmp_path: Path) -> None:
 
 
 def test_scan_tkinter_health_corrupt_zip_deleted(tmp_path: Path) -> None:
-    """损坏的 tkinter zip 在扫描期删除并计入 corrupt_files."""
+    """delete_corrupt=True 时损坏的 tkinter zip 在扫描期删除并计入 corrupt_files."""
     from fspack.doctor import _scan_tkinter_health
 
     cache = tmp_path / "tkinter"
     cache.mkdir()
     bad = cache / "tkinter-3.11.15.zip"
     bad.write_bytes(b"not a zip")
-    report = _scan_tkinter_health(cache)
+    report = _scan_tkinter_health(cache, delete_corrupt=True)
     assert report.corrupt_files == ("tkinter-3.11.15.zip",)
     assert not bad.is_file()
     assert report.has_issues
@@ -1794,6 +2017,37 @@ def test_scan_cache_by_type_dispatches_embed(tmp_path: Path, monkeypatch: pytest
     report = _scan_cache_by_type("embed")
     assert report.cache_type == "embed"
     assert report.total_files == 1
+
+
+def test_scan_cache_by_type_embed_full_verify(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_scan_cache_by_type('embed', full_verify=True) 透传全量校验，快检不报全量报."""
+    from fspack.doctor import _scan_cache_by_type
+
+    cache = tmp_path / "embed"
+    cache.mkdir()
+    _make_data_corrupt_zip(cache / "python-3.11.9-embed-amd64.zip")
+    monkeypatch.setattr("fspack.config.cache.embed_cache_dir", lambda: cache)
+
+    quick = _scan_cache_by_type("embed")
+    assert quick.corrupt_files == ()
+
+    full = _scan_cache_by_type("embed", full_verify=True)
+    assert full.corrupt_files == ("python-3.11.9-embed-amd64.zip",)
+
+
+def test_scan_cache_by_type_wheels_ignores_full_verify(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """wheels 扫描器不支持 full_verify，分发器不透传该参数（不抛 TypeError）."""
+    from fspack.doctor import _scan_cache_by_type
+
+    cache = tmp_path / "wheels"
+    cache.mkdir()
+    (cache / ".deps-key.json").write_text('{"wheels": ["x.whl"]}', encoding="utf-8")
+    (cache / "x.whl").write_bytes(b"x")
+    monkeypatch.setattr("fspack.config.cache.wheel_cache_dir", lambda: cache)
+
+    report = _scan_cache_by_type("wheels", full_verify=True)
+    assert report.cache_type == "wheels"
+    assert report.total_deps_files == 1
 
 
 def test_scan_cache_by_type_unknown_raises() -> None:
@@ -1866,7 +2120,7 @@ def test_clean_cache_by_type_embed_with_stale_deletes(tmp_path: Path, monkeypatc
 
 
 def test_clean_cache_by_type_dry_run_no_delete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """dry_run=True 时仅扫描不删除."""
+    """dry_run=True 时仅扫描不删除（含损坏文件，扫描器不带 delete_corrupt）."""
     from fspack.doctor import _clean_cache_by_type
 
     cache = tmp_path / "embed"
@@ -1876,9 +2130,25 @@ def test_clean_cache_by_type_dry_run_no_delete(tmp_path: Path, monkeypatch: pyte
     monkeypatch.setattr("fspack.config.cache.embed_cache_dir", lambda: cache)
 
     report = _clean_cache_by_type("embed", dry_run=True)
-    # dry_run 时扫描器仍会删除损坏文件（_scan_embed_health 内 _try_unlink）
-    # 但 stale_files 不会被清理
+    # dry_run 下损坏文件只报告不删除（扫描器 delete_corrupt=False）
     assert "python-3.11.9-embed-amd64.zip" in report.corrupt_files
+    assert bad.is_file()
+
+
+def test_clean_cache_by_type_clean_deletes_corrupt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """非 dry_run 清理路径扫描器带 delete_corrupt=True，损坏文件被删除."""
+    from fspack.doctor import _clean_cache_by_type
+
+    cache = tmp_path / "embed"
+    cache.mkdir()
+    bad = cache / "python-3.11.9-embed-amd64.zip"
+    bad.write_bytes(b"not a zip")
+    monkeypatch.setattr("fspack.config.cache.embed_cache_dir", lambda: cache)
+
+    report = _clean_cache_by_type("embed", dry_run=False)
+    assert "python-3.11.9-embed-amd64.zip" in report.corrupt_files
+    assert not bad.is_file()
+    assert report.has_issues
 
 
 def test_clean_all_caches_returns_all_types(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2141,13 +2411,15 @@ def test_run_doctor_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     def _fake_ok(name: str, cmd: list[str], **kwargs: object) -> CheckResult:
         return CheckResult(name=name, status=CheckStatus.OK, detail="mocked")
 
-    monkeypatch.setattr("fspack.doctor._check_tool_version", _fake_ok)
-    monkeypatch.setattr("fspack.doctor._check_pillow", lambda: CheckResult("Pillow", CheckStatus.OK, "10.0"))
-    monkeypatch.setattr("fspack.doctor._check_pip", lambda: CheckResult("pip", CheckStatus.OK, "24.0"))
-    monkeypatch.setattr("fspack.doctor._check_uv", lambda: CheckResult("uv", CheckStatus.OK, "0.4"))
-    monkeypatch.setattr("fspack.doctor._check_mingw", lambda: CheckResult("mingw-w64", CheckStatus.OK, "13.2.0"))
-    monkeypatch.setattr("fspack.doctor._check_nsis", lambda: CheckResult("NSIS", CheckStatus.OK, "3.09"))
-    monkeypatch.setattr("fspack.doctor._check_win7_compat", lambda: CheckResult("Win7 兼容", CheckStatus.OK, "mocked"))
+    monkeypatch.setattr("fspack.doctor.tools._check_tool_version", _fake_ok)
+    monkeypatch.setattr("fspack.doctor.runner._check_pillow", lambda: CheckResult("Pillow", CheckStatus.OK, "10.0"))
+    monkeypatch.setattr("fspack.doctor.runner._check_pip", lambda: CheckResult("pip", CheckStatus.OK, "24.0"))
+    monkeypatch.setattr("fspack.doctor.runner._check_uv", lambda: CheckResult("uv", CheckStatus.OK, "0.4"))
+    monkeypatch.setattr("fspack.doctor.runner._check_mingw", lambda: CheckResult("mingw-w64", CheckStatus.OK, "13.2.0"))
+    monkeypatch.setattr("fspack.doctor.runner._check_nsis", lambda: CheckResult("NSIS", CheckStatus.OK, "3.09"))
+    monkeypatch.setattr(
+        "fspack.doctor.runner._check_win7_compat", lambda: CheckResult("Win7 兼容", CheckStatus.OK, "mocked")
+    )
 
     report = run_doctor()
 
@@ -2168,13 +2440,13 @@ def test_run_doctor_linux(monkeypatch: pytest.MonkeyPatch) -> None:
     """run_doctor 在 Linux 平台检查 gcc/wine，不查 mingw."""
     monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
 
-    monkeypatch.setattr("fspack.doctor._check_pillow", lambda: CheckResult("Pillow", CheckStatus.OK, "10.0"))
-    monkeypatch.setattr("fspack.doctor._check_pip", lambda: CheckResult("pip", CheckStatus.OK, "24.0"))
-    monkeypatch.setattr("fspack.doctor._check_uv", lambda: CheckResult("uv", CheckStatus.OK, "0.4"))
-    monkeypatch.setattr("fspack.doctor._check_gcc", lambda: CheckResult("gcc", CheckStatus.OK, "11.4"))
-    monkeypatch.setattr("fspack.doctor._check_wine", lambda: CheckResult("wine", CheckStatus.WARN, "未安装"))
+    monkeypatch.setattr("fspack.doctor.runner._check_pillow", lambda: CheckResult("Pillow", CheckStatus.OK, "10.0"))
+    monkeypatch.setattr("fspack.doctor.runner._check_pip", lambda: CheckResult("pip", CheckStatus.OK, "24.0"))
+    monkeypatch.setattr("fspack.doctor.runner._check_uv", lambda: CheckResult("uv", CheckStatus.OK, "0.4"))
+    monkeypatch.setattr("fspack.doctor.runner._check_gcc", lambda: CheckResult("gcc", CheckStatus.OK, "11.4"))
+    monkeypatch.setattr("fspack.doctor.runner._check_wine", lambda: CheckResult("wine", CheckStatus.WARN, "未安装"))
     monkeypatch.setattr(
-        "fspack.doctor._check_makensis_on_linux",
+        "fspack.doctor.runner._check_makensis_on_linux",
         lambda: CheckResult("NSIS (交叉打包)", CheckStatus.WARN, "未安装"),
     )
 
@@ -2195,10 +2467,10 @@ def test_run_doctor_macos(monkeypatch: pytest.MonkeyPatch) -> None:
     """run_doctor 在 macOS 平台检查 clang，不查 mingw/gcc/wine/NSIS."""
     monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.MACOS)
 
-    monkeypatch.setattr("fspack.doctor._check_pillow", lambda: CheckResult("Pillow", CheckStatus.OK, "10.0"))
-    monkeypatch.setattr("fspack.doctor._check_pip", lambda: CheckResult("pip", CheckStatus.OK, "24.0"))
-    monkeypatch.setattr("fspack.doctor._check_uv", lambda: CheckResult("uv", CheckStatus.OK, "0.4"))
-    monkeypatch.setattr("fspack.doctor._check_clang", lambda: CheckResult("clang", CheckStatus.OK, "15.0"))
+    monkeypatch.setattr("fspack.doctor.runner._check_pillow", lambda: CheckResult("Pillow", CheckStatus.OK, "10.0"))
+    monkeypatch.setattr("fspack.doctor.runner._check_pip", lambda: CheckResult("pip", CheckStatus.OK, "24.0"))
+    monkeypatch.setattr("fspack.doctor.runner._check_uv", lambda: CheckResult("uv", CheckStatus.OK, "0.4"))
+    monkeypatch.setattr("fspack.doctor.runner._check_clang", lambda: CheckResult("clang", CheckStatus.OK, "15.0"))
 
     report = run_doctor()
 
@@ -2215,19 +2487,19 @@ def test_run_doctor_has_error_when_tool_missing(monkeypatch: pytest.MonkeyPatch)
     """run_doctor 必备工具缺失时 has_error=True."""
     monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
 
-    monkeypatch.setattr("fspack.doctor._check_pillow", lambda: CheckResult("Pillow", CheckStatus.OK, "10.0"))
+    monkeypatch.setattr("fspack.doctor.runner._check_pillow", lambda: CheckResult("Pillow", CheckStatus.OK, "10.0"))
     monkeypatch.setattr(
-        "fspack.doctor._check_pip",
+        "fspack.doctor.runner._check_pip",
         lambda: CheckResult("pip", CheckStatus.ERROR, "未找到", "安装 pip"),
     )
-    monkeypatch.setattr("fspack.doctor._check_uv", lambda: CheckResult("uv", CheckStatus.OK, "0.4"))
+    monkeypatch.setattr("fspack.doctor.runner._check_uv", lambda: CheckResult("uv", CheckStatus.OK, "0.4"))
     monkeypatch.setattr(
-        "fspack.doctor._check_gcc",
+        "fspack.doctor.runner._check_gcc",
         lambda: CheckResult("gcc", CheckStatus.ERROR, "未找到", "安装 gcc"),
     )
-    monkeypatch.setattr("fspack.doctor._check_wine", lambda: CheckResult("wine", CheckStatus.WARN, "未安装"))
+    monkeypatch.setattr("fspack.doctor.runner._check_wine", lambda: CheckResult("wine", CheckStatus.WARN, "未安装"))
     monkeypatch.setattr(
-        "fspack.doctor._check_makensis_on_linux",
+        "fspack.doctor.runner._check_makensis_on_linux",
         lambda: CheckResult("NSIS (交叉打包)", CheckStatus.WARN, "未安装"),
     )
 
@@ -2315,6 +2587,28 @@ def test_cli_doctor_dispatches_to_run_doctor() -> None:
         main(["doctor"])
     mock_run.assert_called_once()
     mock_print.assert_called_once_with(fake_report)
+
+
+def test_cli_doctor_test_and_bench_mutex_warning() -> None:
+    """``fsp doctor --test --bench`` 同时指定时提示 --test 被忽略，仅执行 bench."""
+    from fspack.cli import main
+
+    fake_report = DoctorReport(
+        env_info=(CheckResult("Python", CheckStatus.OK, "3.11.9"),),
+        tool_checks=(CheckResult("pip", CheckStatus.OK, "24.0"),),
+    )
+    with patch("fspack.doctor.run_doctor", return_value=fake_report), patch("fspack.doctor.print_doctor_report"), patch(
+        "fspack.doctor.run_doctor_bench"
+    ) as mock_bench, patch("fspack.doctor.run_doctor_test") as mock_test, patch(
+        "fspack.console.console.warn"
+    ) as mock_warn:
+        main(["doctor", "--test", "--bench"])
+    mock_bench.assert_called_once()
+    mock_test.assert_not_called()
+    mock_warn.assert_called_once()
+    # warning 内容提示互斥语义：--bench 已包含 --test 的构建测试
+    assert "--bench" in mock_warn.call_args[0][0]
+    assert "--test" in mock_warn.call_args[0][0]
 
 
 def test_cli_doctor_in_help() -> None:

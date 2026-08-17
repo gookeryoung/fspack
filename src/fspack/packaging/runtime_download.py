@@ -157,6 +157,13 @@ class RuntimeDownloader(abc.ABC):
             downloader = Downloader(timeout=cls.download_timeout)
             downloader.download(url, archive_path, stage=stage, label=cls.download_label(version))
         except OSError as e:
+            # 下载失败：best-effort 清理半成品归档，避免残缺文件污染缓存目录
+            # （Downloader 内部已清理，此处兜底覆盖被 patch/其他实现绕过的场景）。
+            # 清理自身失败仅记 warning，不掩盖原异常。
+            try:
+                archive_path.unlink(missing_ok=True)
+            except OSError as unlink_err:  # pragma: no cover - 清理失败极罕见
+                _logger.warning("清理下载失败的半成品归档失败 %s: %s", archive_path, unlink_err)
             raise EmbedError(f"下载 {cls.runtime_label} 失败: {url} -> {e}") from e
         if expected_hash is not None:
             actual = _sha256_file(archive_path)

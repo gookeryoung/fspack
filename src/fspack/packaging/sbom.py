@@ -217,6 +217,26 @@ def _extract_license(metadata_text: str, pkg_name: str) -> str:
     return _NOASSERTION
 
 
+def _sha256_file(path: Path) -> str | None:
+    """分块（64KB）计算文件 SHA256，避免大文件 ``read_bytes`` 整体读入内存.
+
+    Returns:
+        64 字符十六进制字符串；文件缺失/不可读（含路径为目录的场景）返回
+        ``None``，调用方跳过该文件（单文件失败不应放弃整个包摘要）
+    """
+    h = hashlib.sha256()
+    try:
+        with path.open("rb") as f:
+            while True:
+                chunk = f.read(65536)
+                if not chunk:
+                    break
+                h.update(chunk)
+    except OSError:
+        return None
+    return h.hexdigest()
+
+
 def _compute_package_checksum(dist_info: Path) -> str | None:
     """计算包整体 SHA256 校验和（基于 RECORD 列出文件的内容拼接）.
 
@@ -249,9 +269,9 @@ def _compute_package_checksum(dist_info: Path) -> str | None:
                 if rel_path == "RECORD":
                     continue
                 abs_path = dist_info.parent / rel_path
-                if not abs_path.is_file():
+                file_hash = _sha256_file(abs_path)
+                if file_hash is None:
                     continue
-                file_hash = hashlib.sha256(abs_path.read_bytes()).hexdigest()
                 file_hashes.append((rel_path, file_hash))
     except (OSError, UnicodeDecodeError):
         # RECORD 非 UTF-8（损坏/异常 wheel）时 csv 迭代触发 UnicodeDecodeError

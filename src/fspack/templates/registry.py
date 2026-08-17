@@ -21,13 +21,14 @@
 
 from __future__ import annotations
 
+import functools
 import logging
 from dataclasses import dataclass
 from pathlib import Path
 
 from fspack._compat import tomllib
 
-__all__ = ["Template", "TemplateFile", "get_template", "list_templates"]
+__all__ = ["Template", "TemplateFile", "clear_template_cache", "get_template", "list_templates"]
 
 _logger = logging.getLogger(__name__)
 
@@ -151,6 +152,33 @@ def _load_template(tpl_dir: Path) -> Template | None:
         _logger.warning("解析 %s/template.toml 失败: %s", tpl_dir.name, e)
         return None
 
+    # 必填键校验：缺键或值非字符串时 warning 并跳过该模板，与"解析失败
+    # return None"处理一致，避免单个坏清单让 fsp init 全挂。
+    # description 允许空串（模板描述可选），id/name/category 必须非空
+    tpl_id = data.get("id")
+    missing = [
+        key
+        for key, value in (
+            ("id", tpl_id),
+            ("name", data.get("name")),
+            ("description", data.get("description")),
+            ("category", data.get("category")),
+        )
+        if not isinstance(value, str) or (key != "description" and not value)
+    ]
+    if missing:
+        _logger.warning("模板 %s 的 template.toml 缺少必填键: %s", tpl_dir.name, ", ".join(missing))
+        return None
+    # missing 检查已保证 id/name/category 为非空字符串；断言仅为类型收窄（Unknown | None → str）
+    assert isinstance(tpl_id, str)
+
+    # dependencies 须为字符串列表：标量字符串会被逐字符迭代成 ("r","i","c","h")，
+    # 非 list 时 warning 并按空依赖处理
+    raw_deps: list[object] = data.get("dependencies", [])
+    if not isinstance(raw_deps, list):
+        _logger.warning("模板 %s 的 dependencies 非列表，按空依赖处理", tpl_dir.name)
+        raw_deps = []
+
     # 扫描模板源文件（排除 template.toml），按相对路径排序保证 list 输出稳定
     files: list[TemplateFile] = []
     for file_path in sorted(tpl_dir.rglob("*")):
@@ -182,12 +210,12 @@ def _load_template(tpl_dir: Path) -> Template | None:
         return None
 
     return Template(
-        id=data["id"],
+        id=tpl_id,
         name=data["name"],
         description=data["description"],
         category=data["category"],
         files=tuple(files),
-        dependencies=tuple(data.get("dependencies", [])),
+        dependencies=tuple(str(d) for d in raw_deps),
         app_type=data.get("app_type", "cli"),
         py_version=data.get("py_version"),
         extra_config=data.get("extra_config", ""),
@@ -224,13 +252,19 @@ def _load_doctor_template(tpl_dir: Path) -> Template | None:
     parent_name = tpl_dir.parent.name
     category = parent_name if parent_name in _CATEGORIES else ""
 
+    # dependencies 须为字符串列表：标量字符串会被逐字符迭代，非 list 时按空依赖处理
+    raw_deps: list[object] = proj.get("dependencies", [])
+    if not isinstance(raw_deps, list):
+        _logger.warning("doctor 模板 %s 的 dependencies 非列表，按空依赖处理", tpl_dir.name)
+        raw_deps = []
+
     return Template(
         id=tpl_dir.name,
         name=proj.get("name", tpl_dir.name),
         description=proj.get("description", ""),
         category=category,
         files=(),
-        dependencies=tuple(proj.get("dependencies", [])),
+        dependencies=tuple(str(d) for d in raw_deps),
         app_type=fsp.get("app-type", "cli"),
         dir=tpl_dir,
         version=proj.get("version", "0.0.0"),
@@ -261,8 +295,13 @@ def _scan_category_dir(root: Path, loader: object) -> list[Template]:
     return templates
 
 
+@functools.lru_cache(maxsize=1)
 def _load_all() -> tuple[Template, ...]:
-    """扫描两个模板目录，加载所有模板（init + doctor）.
+    """扫描两个模板目录，加载所有模板（init + doctor），结果进程内缓存.
+
+    资产目录随进程不变，``lru_cache(maxsize=1)`` 避免 ``list_templates``/
+    ``get_template`` 每次全量扫描读取所有源文件（数十模板 × rglob + read_text）。
+    测试注入自定义根目录或替换资产后调 :func:`clear_template_cache` 强制重扫。
 
     :return: 模板元组，按 (category, id) 字母序排序
     """
@@ -276,6 +315,11 @@ def _load_all() -> tuple[Template, ...]:
         len(doctor_templates),
     )
     return tuple(all_templates)
+
+
+def clear_template_cache() -> None:
+    """清空模板注册表缓存（测试注入自定义根目录/替换资产后强制重扫）."""
+    _load_all.cache_clear()
 
 
 def list_templates(role: str | None = None) -> tuple[Template, ...]:

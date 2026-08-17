@@ -14,8 +14,10 @@
 
 from __future__ import annotations
 
+import os
 import struct
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -110,7 +112,9 @@ def _make_minimal_pe(deps: list[str]) -> bytes:
 
     for dep in deps:
         name_rva = names_rva_start + len(names_data)
-        descriptors.extend(struct.pack("<IIIII", name_rva, 0, 0, 0, 0))
+        # IMAGE_IMPORT_DESCRIPTOR：OriginalFirstThunk/TimeDateStamp/ForwarderChain/
+        # Name/FirstThunk，DLL 名在 Name 字段（第 4 字段，offset 12）
+        descriptors.extend(struct.pack("<IIIII", 0, 0, 0, name_rva, 0))
         names_data.extend(dep.encode("ascii") + b"\x00")
     descriptors.extend(b"\x00" * 20)  # 终止 descriptor
 
@@ -231,10 +235,10 @@ class TestParsePeImports:
     def test_returns_none_when_name_rva_unresolvable(self, tmp_path: Path) -> None:
         """descriptor Name RVA 无法映射时跳过该依赖，返回已解析部分."""
         pe = bytearray(_make_minimal_pe(["good.dll", "bad.dll"]))
-        # 第二个 descriptor 的 name_rva 改为无效值
+        # 第二个 descriptor 的 Name 字段（offset 12）改为无效值
         # descriptors 起始 @ 0x200，每个 20 字节
-        # 第二个 descriptor 的 name_rva @ 0x200 + 20 + 0 = 0x214
-        struct.pack_into("<I", pe, 0x214, 0xDEAD_BEEF)
+        # 第二个 descriptor 的 name_rva @ 0x200 + 20 + 12 = 0x220
+        struct.pack_into("<I", pe, 0x220, 0xDEAD_BEEF)
         path = tmp_path / "bad_name_rva.dll"
         path.write_bytes(bytes(pe))
         deps = _parse_pe_imports(path)
@@ -267,6 +271,75 @@ class TestParsePeImports:
         path.write_bytes(bytes(pe))
         deps = _parse_pe_imports(path)
         assert deps == []
+
+    def test_real_pe_name_field_offset_regression(self, tmp_path: Path) -> None:
+        """真实 PE 端到端回归：DLL 名取自 descriptor Name 字段（第 4 字段，offset 12）.
+
+        在测试内用 struct 构造最小合法 PE（DOS 头 + PE 头 + 1 个 section + 导入表
+        含 2 个 DLL 名），descriptor 的 OriginalFirstThunk/FirstThunk 填非零 thunk
+        RVA（指向无字符串区域）。若解析器误取第 1 字段（OriginalFirstThunk），
+        会把 thunk RVA 当作 DLL 名偏移解析出乱码/空串，本测试即失败——覆盖
+        「依赖解析乱码 → strip_unused_binaries 删光 dist DLL」回归点。
+        """
+        num_sections = 1
+        opt_header_size = 224
+        section_data_offset = 0x200
+        section_virtual_addr = 0x1000
+
+        # DOS header：e_lfanew = 0x40
+        dos_header = bytearray(64)
+        struct.pack_into("<I", dos_header, 0x3C, 0x40)
+
+        # PE signature + COFF header（Machine=I386，1 section，OptionalHeader=224）
+        coff_header = bytearray(20)
+        struct.pack_into("<H", coff_header, 0, 0x14C)
+        struct.pack_into("<H", coff_header, 2, num_sections)
+        struct.pack_into("<H", coff_header, 16, opt_header_size)
+
+        # Optional header PE32：DataDirectory[1]（Import Table）RVA 指向 section 起始
+        opt_header = bytearray(opt_header_size)
+        struct.pack_into("<H", opt_header, 0, 0x10B)
+        struct.pack_into("<I", opt_header, 96 + 8, section_virtual_addr)
+
+        # Section header：.rdata VA=0x1000，PointerToRawData=0x200
+        section_header = bytearray(40)
+        section_header[0:8] = b".rdata\x00\x00"
+        struct.pack_into("<I", section_header, 12, section_virtual_addr)
+        struct.pack_into("<I", section_header, 16, 0x200)
+        struct.pack_into("<I", section_header, 20, section_data_offset)
+
+        # 导入表 section data：
+        # - 2 个 descriptor + 1 个全零终止符（3 * 20 = 60 字节，RVA 0x1000 起）
+        # - 之后是 DLL 名字符串（RVA 0x103C 起）
+        # OriginalFirstThunk/FirstThunk 填 thunk 区域 RVA（0x1030，无字符串），
+        # Name 字段（第 4 字段）分别指向两个 DLL 名
+        dll_names = [b"USER32.dll\x00", b"Qt6Widgets.dll\x00"]
+        name_rva_base = section_virtual_addr + 60
+        thunk_rva = section_virtual_addr + 20  # 指向 descriptors 区内（非字符串区域）
+        # 布局：OriginalFirstThunk / TimeDateStamp / ForwarderChain / Name / FirstThunk
+        descriptors = bytearray()
+        descriptors.extend(struct.pack("<IIIII", thunk_rva, 0, 0, name_rva_base, thunk_rva))
+        descriptors.extend(struct.pack("<IIIII", thunk_rva, 0, 0, name_rva_base + len(dll_names[0]), thunk_rva))
+        descriptors.extend(b"\x00" * 20)  # 终止 descriptor
+        section_data = bytes(descriptors) + b"".join(dll_names)
+
+        pe = bytes(dos_header) + b"PE\x00\x00" + bytes(coff_header) + bytes(opt_header) + bytes(section_header)
+        pe += b"\x00" * (section_data_offset - len(pe))
+        pe += section_data
+
+        path = tmp_path / "real_layout.dll"
+        path.write_bytes(pe)
+        deps = _parse_pe_imports(path)
+        assert deps == ["USER32.dll", "Qt6Widgets.dll"]
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="仅 Windows 存在 kernel32.dll")
+    def test_parses_real_kernel32_dll(self) -> None:
+        """真实系统 kernel32.dll 实测：结果含 ntdll.dll 且全部条目为可打印 ASCII."""
+        dll_path = Path(os.environ.get("SYSTEMROOT", r"C:\Windows")) / "System32" / "kernel32.dll"
+        deps = _parse_pe_imports(dll_path)
+        assert deps is not None
+        assert "ntdll.dll" in [d.lower() for d in deps]
+        assert all(d and all(32 <= ord(c) < 127 for c in d) for d in deps)
 
 
 class TestReadAsciiString:
@@ -509,6 +582,24 @@ class TestIterBinaryFiles:
         """无匹配文件返回空列表."""
         (tmp_path / "a.txt").write_bytes(b"")
         assert _iter_binary_files(tmp_path, frozenset({".dll"})) == []
+
+    def test_excludes_release_and_build_dirs(self, tmp_path: Path) -> None:
+        """dist 根下 release/build 子树被排除（用户安装包/中间产物不参与剥离）."""
+        (tmp_path / "a.dll").write_bytes(b"")
+        (tmp_path / "release").mkdir()
+        (tmp_path / "release" / "app-1.0-windows-slim.zip").write_bytes(b"")  # 用户安装包
+        (tmp_path / "release" / "nested").mkdir()
+        (tmp_path / "release" / "nested" / "deep.dll").write_bytes(b"")
+        (tmp_path / "build").mkdir()
+        (tmp_path / "build" / "intermediate.dll").write_bytes(b"")
+        # 深层同名目录不排除（仅 dist 根下一级）
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "release").mkdir()
+        (tmp_path / "src" / "release" / "inner.dll").write_bytes(b"")
+
+        result = _iter_binary_files(tmp_path, frozenset({".dll", ".zip", ".exe"}))
+        names = [str(p.relative_to(tmp_path)).replace(os.sep, "/") for p in result]
+        assert names == ["a.dll", "src/release/inner.dll"]
 
 
 # ---------- analyze_binary_dependencies ----------

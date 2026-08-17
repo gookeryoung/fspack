@@ -108,7 +108,7 @@ class NuitkaCompile:
 
     依赖 :class:`fspack.packaging.nuitka.env.NuitkaEnv` 提供：
     ``_runtime_python`` / ``_is_nuitka_cached`` / ``_build_compile_env``
-    / ``_resolve_jobs`` / ``ensure_env`` / ``_nuitka_cache_dir``。
+    / ``ensure_env`` / ``_nuitka_cache_dir``。
 
     依赖 :class:`fspack.packaging.nuitka.standalone.NuitkaStandalone` 提供：
     ``_ensure_build_python``。
@@ -142,13 +142,14 @@ class NuitkaCompile:
         """编译 ``src_dir`` 下所有 ``.py`` 为 ``.pyd``/``.so``，编译后删除 ``.py`` 源码.
 
         返回失败文件的相对 POSIX 路径列表（相对 ``src_dir``），供调用方
-        :meth:`compile_with_stamp` 写入 ``.nuitka_failed_files.json``，
-        下次构建跳过这些文件避免反复尝试。
+        :meth:`compile_with_stamp` 写入 ``.nuitka_failed_files.json`` 作诊断记录
+        （stamp 未命中时下次构建全量重试，不据其跳过文件）。
 
         Args:
-            skip_files: 上次构建失败的文件相对 ``src_dir`` 的 POSIX 路径集合。
-                这些文件本次构建跳过（不编译不删除），由 :meth:`_collect_py_files` 排除。
-                None 表示不跳过任何文件（首次构建或上次无失败）。
+            skip_files: 需跳过的文件相对 ``src_dir`` 的 POSIX 路径集合，由
+                :meth:`_collect_py_files` 排除（不编译不删除）。
+                None 表示不跳过任何文件。``compile_with_stamp`` 恒传 None
+                （源码变化后失败文件可能已修复，须全量重试）。
 
         用 **standalone python**（``build_python_exe``）运行 nuitka，避免 embed runtime
         python 不完整导致 reExecute 进程衍生。``build_python_exe`` 为 None 或不存在时
@@ -363,9 +364,11 @@ class NuitkaCompile:
            字节码优化。跳过后 compiled_files 不含 __init__.py，删除循环天然跳过。
         3. 入口文件（``entry_rels``）：入口包装器用 ``runpy.run_path()`` 显式指定 .py 路径，
            编译后 .py 被删除会导致 FileNotFoundError。入口文件保留 .py 形态，由 .pyc 优化。
-        4. 上次失败文件（``skip_files``）：相对 ``src_dir`` 的 POSIX 路径集合，
-           这些文件上次构建编译失败，本次跳过避免反复尝试。用户修复后需删除
-           ``.nuitka_failed_files.json`` 或 stamp 文件强制重试。
+        4. 指定跳过文件（``skip_files``）：相对 ``src_dir`` 的 POSIX 路径集合，
+           这些文件本次构建不编译不删除。``compile_with_stamp`` 已不传该参数
+           （stamp 未命中即全量重试，避免已修复文件被永久跳过）。注意：仅删除
+           stamp 文件无法强制重试——hash 索引兜底命中会重建 stamp 跳过编译；
+           源码变化（stamp 键变化）才是全量重试的触发条件。
         """
         py_files = sorted(
             p
@@ -423,9 +426,9 @@ class NuitkaCompile:
         ``pyc_optimize`` 不纳入：Nuitka 编译不受 .pyc 优化级别影响，
         site-packages 的 .pyc 由 :func:`_precompile_pyc` 单独缓存。
         """
-        from fspack.analyzer import source_fingerprint
+        from fspack.analyzer.fingerprint import cached_source_fingerprint
 
-        src_fp = source_fingerprint(src_dir) if src_dir.is_dir() else ""
+        src_fp = cached_source_fingerprint(src_dir) if src_dir.is_dir() else ""
         entry_part = ",".join(sorted(entry_rels)) if entry_rels else ""
         pkg_part = ",".join(nuitka_packages) if nuitka_packages else ""
         return f"{nuitka_version}|{py_version}|{src_fp}|{entry_part}|{pkg_part}"
@@ -518,12 +521,10 @@ class NuitkaCompile:
             stage.set_detail(f"回退到 .pyc 模式: {e}")
             return
 
-        # 读取上次构建失败的文件列表，传给 compile_src 跳过这些文件
-        # 避免反复尝试（非源码原因失败的文件，如 Nuitka 不支持的语法）
-        skip_files = _load_failed_files(dist_dir)
-        if skip_files:
-            _logger.info("跳过上次失败的 %d 个 .py 文件: %s", len(skip_files), sorted(skip_files))
-
+        # stamp 未命中（源码已变化）时不读取上次失败文件列表：失败文件可能已被
+        # 用户修复，若继续传 skip_files 跳过且编译后用不含该文件的新列表覆盖写入，
+        # 该文件将永远不被编译（旧 BUG）。缓存命中路径（stamp/hash 索引命中）直接
+        # 早退不编译，无需 skip_files。故编译路径恒全量重试，失败列表仅作诊断记录。
         failed_files = cls.compile_src(
             src_dir,
             runtime_dir,
@@ -535,7 +536,6 @@ class NuitkaCompile:
             entry_rels=entry_rels,
             ccache=ccache,
             cache_root=cache_root,
-            skip_files=skip_files,
         )
 
         # 编译用户指定的第三方包（site-packages 中的纯 Python 包）
@@ -567,5 +567,11 @@ class NuitkaCompile:
         except OSError as e:
             _logger.warning("写入 Nuitka stamp 失败: %s", e)
         _update_hash_index(dist_dir, stamp_key)
-        # 写入失败文件列表，下次构建跳过这些文件避免反复尝试
+        # 写入失败文件列表（诊断记录：用户可据此定位反复失败的文件；
+        # stamp 未命中时下次构建全量重试，不再据其跳过）
         _save_failed_files(dist_dir, failed_files)
+        # Nuitka 编译已修改 dist/src 树（删除成功编译的 .py），失效构建级
+        # 指纹缓存，保证后续 pyc stamp 等阶段的指纹反映最新目录树状态
+        from fspack.analyzer.fingerprint import clear_fingerprint_cache
+
+        clear_fingerprint_cache()

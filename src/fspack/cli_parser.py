@@ -550,7 +550,17 @@ def _add_cache_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser
     )
 
     status_p = cache_sub.add_parser("status", help="扫描缓存目录健康状态（损坏/过期/孤儿）")
-    _add_options(status_p, (target_opt,))
+    _add_options(
+        status_p,
+        (
+            target_opt,
+            _Opt(
+                ("--verify",),
+                "全量校验 zip 归档完整性（embed/tkinter 逐文件 CRC 校验，慢但可发现数据区损坏；默认仅快检中心目录）",
+                action="store_true",
+            ),
+        ),
+    )
 
     clean_p = cache_sub.add_parser("clean", help="清理损坏文件与孤儿产物")
     _add_options(

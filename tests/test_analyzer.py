@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -243,6 +244,33 @@ def test_source_fingerprint_excludes_data_dirs(tmp_path: Path) -> None:
     assert fp_no_exclude != fp_no_exclude_after
 
 
+def test_is_excluded_build_and_egg_info_dirs(tmp_path: Path) -> None:
+    """构建产物、缓存目录与 egg-info 目录下的文件被排除，普通源码不排除."""
+    from fspack.analyzer.fingerprint import _is_excluded
+
+    assert _is_excluded(tmp_path / "build" / "a.py", tmp_path) is True
+    assert _is_excluded(tmp_path / "dist" / "a.py", tmp_path) is True
+    assert _is_excluded(tmp_path / "pkg.egg-info" / "a.py", tmp_path) is True
+    # 排除判断只看目录段（parts[:-1]），不误伤同名源文件
+    assert _is_excluded(tmp_path / "build.py", tmp_path) is False
+    assert _is_excluded(tmp_path / "src" / "a.py", tmp_path) is False
+
+
+def test_is_excluded_data_dirs_tree(tmp_path: Path) -> None:
+    """data-dirs 目录树内的文件被排除（含子目录），树外文件不受影响."""
+    from fspack.analyzer.fingerprint import _is_excluded, _is_in_data_dirs
+
+    data_dir = tmp_path / "assets"
+    assert _is_in_data_dirs(data_dir / "sub" / "x.py", (data_dir,)) is True
+    assert _is_in_data_dirs(data_dir / "top.py", (data_dir,)) is True  # 含 data-dir 自身
+    assert _is_in_data_dirs(tmp_path / "src" / "a.py", (data_dir,)) is False
+
+    assert _is_excluded(data_dir / "sub" / "x.py", tmp_path, (data_dir,)) is True
+    assert _is_excluded(tmp_path / "src" / "a.py", tmp_path, (data_dir,)) is False
+    # data_dirs 为空元组时不启用 data-dirs 排除（bool(()) 短路）
+    assert _is_excluded(data_dir / "x.py", tmp_path, ()) is False
+
+
 def test_analyze_dependencies_submodules(tmp_path: Path) -> None:
     """第三方包的子模块 import 被收集到 ast_submodules."""
     (tmp_path / "main.py").write_text("from PySide2.QtCore import QTimer\nfrom PySide2.QtWidgets import QApplication\n")
@@ -258,13 +286,47 @@ def test_analyze_dependencies_submodules_stdlib_filtered(tmp_path: Path) -> None
     assert "json" not in r.ast_submodules
 
 
+def test_fingerprint_excluded_and_data_dirs(tmp_path: Path) -> None:
+    """_is_excluded 排除构建产物目录与 data-dirs；_is_in_data_dirs 命中/未命中."""
+    from fspack.analyzer.fingerprint import _is_excluded, _is_in_data_dirs
+
+    (tmp_path / "build").mkdir()
+    (tmp_path / "app.egg-info").mkdir()
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    assert _is_excluded(tmp_path / "build" / "m.py", tmp_path) is True
+    assert _is_excluded(tmp_path / "app.egg-info" / "m.py", tmp_path) is True
+    assert _is_excluded(tmp_path / "main.py", tmp_path) is False
+    assert _is_excluded(assets / "t.py", tmp_path, (assets.resolve(),)) is True
+    assert _is_excluded(tmp_path / "main.py", tmp_path, (assets.resolve(),)) is False
+    assert _is_in_data_dirs(assets / "t.py", (assets.resolve(),)) is True
+    assert _is_in_data_dirs(tmp_path / "main.py", (assets.resolve(),)) is False
+
+
+def test_iter_py_entries_prunes_and_drops_out_of_tree_data_dir(tmp_path: Path) -> None:
+    """_iter_py_entries 排除 .egg-info/数据目录树；root 树外的 data-dir 被丢弃不报错."""
+    from fspack.analyzer.fingerprint import _iter_py_entries
+
+    (tmp_path / "main.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "app.egg-info").mkdir()
+    (tmp_path / "app.egg-info" / "meta.py").write_text("x = 1\n", encoding="utf-8")
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "tpl.py").write_text("x = 1\n", encoding="utf-8")
+    # root 树外的 data-dir：relative_to 触发 ValueError 被丢弃（不参与剪枝也不报错）
+    outside = (tmp_path / "..").resolve() / "fsp-out-of-tree-data"
+
+    entries = list(_iter_py_entries(tmp_path, tmp_path, (assets, outside)))
+    assert [rel for rel, _, _ in entries] == ["main.py"]
+
+
 def test_analyze_dependencies_parallel_matches_serial(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """并行解析路径与串行路径结果一致.
 
     通过 monkeypatch 调低 ``_PARALLEL_THRESHOLD`` 强制走并行路径，
     验证 ``ProcessPoolExecutor`` 分发与结果合并的正确性。
     """
-    from fspack import analyzer
+    from fspack.analyzer import analysis
 
     # 构造 10 个 .py 文件（足够触发并行路径，阈值调到 2）
     pkg = tmp_path / "myproj"
@@ -278,11 +340,11 @@ def test_analyze_dependencies_parallel_matches_serial(tmp_path: Path, monkeypatc
     (tmp_path / "main.py").write_text("import os\nimport myproj\n", encoding="utf-8")
 
     # 串行路径
-    monkeypatch.setattr(analyzer, "_PARALLEL_THRESHOLD", 10000)
+    monkeypatch.setattr(analysis, "_PARALLEL_THRESHOLD", 10000)
     serial = analyze_dependencies(tmp_path, "main", ())
 
     # 并行路径
-    monkeypatch.setattr(analyzer, "_PARALLEL_THRESHOLD", 2)
+    monkeypatch.setattr(analysis, "_PARALLEL_THRESHOLD", 2)
     parallel = analyze_dependencies(tmp_path, "main", ())
 
     assert serial == parallel
@@ -322,67 +384,14 @@ def test_parse_file_worker_normal(tmp_path: Path) -> None:
 # ---------- iter-134 AST 并行解析调优测试 ----------
 
 
-def test_interleave_by_size_distributes_large_files(tmp_path: Path) -> None:
-    """``_interleave_by_size`` 将大文件分散到不同 chunk，避免扎堆.
-
-    构造 8 个文件（4 大 4 小），``num_chunks=4``，验证每个 chunk 都含至少一个大文件。
-    """
-    from fspack.analyzer import _interleave_by_size
-
-    files: list[Path] = []
-    for i in range(4):
-        big = tmp_path / f"big_{i}.py"
-        big.write_text("x = 0\n" * 1000, encoding="utf-8")
-        files.append(big)
-    for i in range(4):
-        small = tmp_path / f"small_{i}.py"
-        small.write_text("x = 0\n", encoding="utf-8")
-        files.append(small)
-
-    num_chunks = 4
-    interleaved = _interleave_by_size(files, num_chunks)
-    chunk_size = len(interleaved) // num_chunks
-    # 每个 chunk 应含至少一个大文件（大文件分散，不扎堆）
-    for i in range(num_chunks):
-        chunk = interleaved[i * chunk_size : (i + 1) * chunk_size]
-        big_count = sum(1 for p in chunk if p.name.startswith("big_"))
-        assert big_count >= 1, f"chunk {i} 无大文件: {[p.name for p in chunk]}"
-
-
-def test_interleave_by_size_preserves_all_files(tmp_path: Path) -> None:
-    """``_interleave_by_size`` 重排后文件集合不变."""
-    from fspack.analyzer import _interleave_by_size
-
-    files = [(tmp_path / f"f{i}.py") for i in range(10)]
-    for f in files:
-        f.write_text("x = 0\n", encoding="utf-8")
-
-    interleaved = _interleave_by_size(files, 4)
-    assert set(interleaved) == set(files)
-    assert len(interleaved) == len(files)
-
-
-def test_interleave_by_size_empty_and_single_chunk(tmp_path: Path) -> None:
-    """``_interleave_by_size`` 空列表返回空，``num_chunks<=1`` 原序返回."""
-    from fspack.analyzer import _interleave_by_size
-
-    assert _interleave_by_size([], 4) == []
-    f1 = tmp_path / "a.py"
-    f1.write_text("x = 0\n", encoding="utf-8")
-    f2 = tmp_path / "b.py"
-    f2.write_text("y = 0\n", encoding="utf-8")
-    single = _interleave_by_size([f1, f2], 1)
-    assert single == [f1, f2]
-
-
 def test_init_parse_worker_sets_stdlib(monkeypatch: pytest.MonkeyPatch) -> None:
     """``_init_parse_worker`` 设置 worker 状态 ``_WORKER_STATE["stdlib"]``."""
-    from fspack import analyzer
+    from fspack.analyzer import analysis
 
-    monkeypatch.setattr(analyzer, "_WORKER_STATE", {"stdlib": frozenset()})
+    monkeypatch.setattr(analysis, "_WORKER_STATE", {"stdlib": frozenset()})
     custom = frozenset({"os", "sys", "json"})
-    analyzer._init_parse_worker(custom)
-    assert custom == analyzer._WORKER_STATE["stdlib"]
+    analysis._init_parse_worker(custom)
+    assert custom == analysis._WORKER_STATE["stdlib"]
 
 
 def test_parse_file_worker_uses_worker_stdlib(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -390,13 +399,13 @@ def test_parse_file_worker_uses_worker_stdlib(tmp_path: Path, monkeypatch: pytes
 
     设置自定义 ``_WORKER_STATE["stdlib"]`` 后，其中的模块应进入 stdlib_tops。
     """
-    from fspack import analyzer
+    from fspack.analyzer import analysis
 
     py = tmp_path / "ok.py"
     py.write_text("import os\nimport numpy\n", encoding="utf-8")
     # os 在自定义集合中，numpy 不在
-    monkeypatch.setattr(analyzer, "_WORKER_STATE", {"stdlib": frozenset({"os"})})
-    non_stdlib_tops, stdlib_tops, subs, errors = analyzer._parse_file_worker(str(py))
+    monkeypatch.setattr(analysis, "_WORKER_STATE", {"stdlib": frozenset({"os"})})
+    non_stdlib_tops, stdlib_tops, subs, errors = analysis._parse_file_worker(str(py))
     assert "os" in stdlib_tops
     assert "os" not in non_stdlib_tops
     assert "numpy" in non_stdlib_tops
@@ -407,12 +416,12 @@ def test_parse_file_worker_uses_worker_stdlib(tmp_path: Path, monkeypatch: pytes
 
 def test_parse_file_worker_falls_back_to_module_stdlib(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``_WORKER_STATE["stdlib"]`` 为空时回退到模块级 ``_STDLIB``（主进程直接调用）."""
-    from fspack import analyzer
+    from fspack.analyzer import analysis
 
     py = tmp_path / "ok.py"
     py.write_text("import os\n", encoding="utf-8")
-    monkeypatch.setattr(analyzer, "_WORKER_STATE", {"stdlib": frozenset()})
-    non_stdlib_tops, stdlib_tops, _subs, _errors = analyzer._parse_file_worker(str(py))
+    monkeypatch.setattr(analysis, "_WORKER_STATE", {"stdlib": frozenset()})
+    non_stdlib_tops, stdlib_tops, _subs, _errors = analysis._parse_file_worker(str(py))
     # 回退到模块级 _STDLIB（含 os）
     assert "os" in stdlib_tops
     assert non_stdlib_tops == []
@@ -599,12 +608,12 @@ def test_analyze_dependencies_records_multiple_ast_errors(tmp_path: Path) -> Non
 
 def test_analyze_dependencies_parallel_records_ast_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """并行路径下 AST 解析失败也记录到 ``ast_errors``（iter-138）."""
-    from fspack import analyzer
+    from fspack.analyzer import analysis
 
     (tmp_path / "bad.py").write_text("def bad(:\n", encoding="utf-8")
     (tmp_path / "good.py").write_text("import os\n", encoding="utf-8")
     # 强制走并行路径
-    monkeypatch.setattr(analyzer, "_PARALLEL_THRESHOLD", 1)
+    monkeypatch.setattr(analysis, "_PARALLEL_THRESHOLD", 1)
     r = analyze_dependencies(tmp_path, "good", ())
     assert "os" in r.ast_stdlib
     assert len(r.ast_errors) == 1
@@ -623,7 +632,7 @@ def test_analyze_dependencies_qml_parse_failure_does_not_block(tmp_path: Path, m
     def raise_oserror(qml_file: Path) -> set[str]:
         raise OSError("simulated permission error")
 
-    monkeypatch.setattr("fspack.analyzer.parse_qml_imports", raise_oserror)
+    monkeypatch.setattr("fspack.analyzer.analysis.parse_qml_imports", raise_oserror)
 
     # 不抛异常，PySide2.QtQml 仍被收集
     r = analyze_dependencies(tmp_path, "main", ())
@@ -655,3 +664,161 @@ def test_format_ast_errors_falls_back_to_abs_path(tmp_path: Path) -> None:
     assert len(formatted) == 1
     assert "syntax error" in formatted[0]
     assert outside_abs in formatted[0]
+
+
+# ---------- AST 解析异常容错增强测试（ValueError/RecursionError） ----------
+
+
+def test_analyze_dependencies_nul_byte_records_ast_error(tmp_path: Path) -> None:
+    """源码含 NUL 字节触发 ValueError，记入 ast_errors 而非崩溃."""
+    (tmp_path / "bad.py").write_bytes(b"import os\n\x00def f(:\n")
+    (tmp_path / "good.py").write_text("import sys\n", encoding="utf-8")
+    r = analyze_dependencies(tmp_path, "good", ())
+    assert "sys" in r.ast_stdlib
+    assert len(r.ast_errors) == 1
+    assert "bad.py" in r.ast_errors[0]
+
+
+def test_analyze_dependencies_deeply_nested_records_ast_error(tmp_path: Path) -> None:
+    """深度嵌套源码触发 RecursionError，记入 ast_errors 而非崩溃."""
+    (tmp_path / "deep.py").write_text("x = " + "(" * 50000 + "1" + ")" * 50000, encoding="utf-8")
+    (tmp_path / "good.py").write_text("import sys\n", encoding="utf-8")
+    r = analyze_dependencies(tmp_path, "good", ())
+    assert "sys" in r.ast_stdlib
+    assert len(r.ast_errors) == 1
+    assert "deep.py" in r.ast_errors[0]
+
+
+def test_parse_file_worker_catches_value_and_recursion_error(tmp_path: Path) -> None:
+    """worker 函数对 NUL 字节与深度嵌套源码返回错误记录（并行路径同等容错）."""
+    from fspack.analyzer import _parse_file_worker
+
+    nul = tmp_path / "nul.py"
+    nul.write_bytes(b"\x00import os\n")
+    _non_stdlib, _stdlib, _subs, errors = _parse_file_worker(str(nul))
+    assert len(errors) == 1
+
+    deep = tmp_path / "deep.py"
+    deep.write_text("y = " + "[" * 50000 + "]" * 50000, encoding="utf-8")
+    _non_stdlib, _stdlib, _subs, errors = _parse_file_worker(str(deep))
+    assert len(errors) == 1
+
+
+def test_stdlib_fallback_underscore_modules() -> None:
+    """3.8/3.9 回退集合含常见下划线 C 模块，避免误判为第三方依赖."""
+    for mod in ("_io", "_thread", "_weakref", "_collections", "_functools", "_socket", "_json", "__main__", "_ast"):
+        assert mod in STDLIB_FALLBACK, mod
+
+
+# ---------- 指纹纳入 QML 测试 ----------
+
+
+def test_source_fingerprint_includes_qml_changes(tmp_path: Path) -> None:
+    """QML 文件参与源码指纹：修改 .qml 触发指纹变化（与 analyze_dependencies 范围一致）.
+
+    QML 修改会改变依赖产物（Qt 子模块保留集合），指纹若不含 .qml 会导致
+    deps 缓存不失效、产物静默缺 DLL。
+    """
+    from fspack.analyzer import source_fingerprint
+
+    (tmp_path / "main.py").write_text("import os\n", encoding="utf-8")
+    (tmp_path / "Main.qml").write_text("import QtQuick 2.15\n", encoding="utf-8")
+    fp_before = source_fingerprint(tmp_path)
+
+    # 修改 QML（内容长度不同确保 size 变化，避免 mtime 精度问题）
+    (tmp_path / "Main.qml").write_text("import QtQuick 2.15\nimport QtCharts 2.15\n", encoding="utf-8")
+    fp_after = source_fingerprint(tmp_path)
+    assert fp_before != fp_after
+
+    # 新增 QML 文件同样触发指纹变化
+    (tmp_path / "Other.qml").write_text("import QtQuick 2.15\n", encoding="utf-8")
+    assert fp_after != source_fingerprint(tmp_path)
+
+
+# ---------- 并行解析容错测试（BrokenProcessPool / 超时 shutdown） ----------
+
+
+class _StubFuture:
+    """测试桩：预置 result 返回值或异常，done/cancel 固定返回（仅供 ``_parse_parallel`` 消费）."""
+
+    def __init__(self, payload: object) -> None:
+        self._payload = payload
+
+    def done(self) -> bool:
+        return True
+
+    def cancel(self) -> bool:
+        return False
+
+    def result(self) -> object:
+        if isinstance(self._payload, BaseException):
+            raise self._payload
+        return self._payload
+
+
+class _StubExecutor:
+    """测试桩：submit 按序弹回预置 payload，记录 shutdown 的 wait 参数."""
+
+    def __init__(self, payloads: list[object]) -> None:
+        self._payloads = list(payloads)
+        self.shutdown_waits: list[bool] = []
+
+    def submit(self, fn: object, arg: object) -> _StubFuture:
+        # 空 payload 默认值：与 _parse_file_worker 返回结构一致的空结果（注解供类型检查）
+        empty: tuple[list[str], list[str], dict[str, frozenset[str]], list[tuple[str, str]]] = ([], [], {}, [])
+        payload = self._payloads.pop(0) if self._payloads else empty
+        return _StubFuture(payload)
+
+    def shutdown(self, wait: bool = True) -> None:
+        self.shutdown_waits.append(wait)
+
+
+def _fake_as_completed(futures: list[_StubFuture], timeout: float | None = None) -> Iterator[_StubFuture]:
+    """测试桩：直接按序 yield futures，替代真实 as_completed 的完成顺序调度."""
+    yield from futures
+
+
+def test_parse_parallel_broken_pool_preserves_aggregated_results(monkeypatch: pytest.MonkeyPatch) -> None:
+    """worker 崩溃（BrokenProcessPool，如 OOM）时保留已聚合结果，不整单失败."""
+    from concurrent.futures.process import BrokenProcessPool
+
+    from fspack.analyzer import analysis
+
+    stub = _StubExecutor([(["os"], [], {}, []), BrokenProcessPool("simulated worker OOM")])
+    monkeypatch.setattr(analysis, "ProcessPoolExecutor", lambda **kwargs: stub)
+    monkeypatch.setattr(analysis, "as_completed", _fake_as_completed)
+
+    imports_ord: dict[str, None] = {}
+    stdlib_ord: dict[str, None] = {}
+    submodules: dict[str, list[str]] = {}
+    errors: list[tuple[str, str]] = []
+    analysis._parse_parallel([Path("a.py"), Path("b.py")], imports_ord, stdlib_ord, submodules, errors)
+    # 第一个 worker 的结果已聚合保留，第二个崩溃不吞掉已完成部分
+    assert "os" in imports_ord
+    # 正常结束路径：finally 中 shutdown(wait=True)
+    assert stub.shutdown_waits == [True]
+
+
+def test_parse_parallel_timeout_shutdowns_without_waiting(monkeypatch: pytest.MonkeyPatch) -> None:
+    """并行超时分支 cancel 后 shutdown(wait=False) 立即返回，不再无限等待卡死 worker."""
+    from concurrent.futures import TimeoutError as FuturesTimeoutError
+
+    from fspack.analyzer import analysis
+
+    def _as_completed_timeout(futures: list[_StubFuture], timeout: float | None = None) -> Iterator[_StubFuture]:
+        yield futures[0]
+        raise FuturesTimeoutError
+
+    stub = _StubExecutor([(["os"], [], {}, []), ([], [], {}, [])])
+    monkeypatch.setattr(analysis, "ProcessPoolExecutor", lambda **kwargs: stub)
+    monkeypatch.setattr(analysis, "as_completed", _as_completed_timeout)
+
+    imports_ord: dict[str, None] = {}
+    stdlib_ord: dict[str, None] = {}
+    submodules: dict[str, list[str]] = {}
+    errors: list[tuple[str, str]] = []
+    analysis._parse_parallel([Path("a.py"), Path("b.py")], imports_ord, stdlib_ord, submodules, errors)
+    # 超时前已完成的结果保留
+    assert "os" in imports_ord
+    # 超时分支 shutdown(wait=False)，timed_out 标志使 finally 跳过重复 shutdown
+    assert stub.shutdown_waits == [False]

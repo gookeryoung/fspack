@@ -404,12 +404,12 @@ def test_build_with_profile_outputs_report(tmp_path: Path, monkeypatch: pytest.M
         "fspack.packaging.pipeline._prepare_runtime",
         lambda ctx: ctx.cfg.dist_dir / "site-packages",
     )
-    monkeypatch.setattr("fspack.packaging.pipeline._analyze_dependencies", lambda ctx, **kw: _empty_report())
-    monkeypatch.setattr("fspack.packaging.pipeline._download_dependencies", lambda *a, **kw: False)
-    monkeypatch.setattr("fspack.packaging.pipeline.write_pth", lambda *a, **kw: None)
-    monkeypatch.setattr("fspack.packaging.pipeline.copy_source", lambda *a, **kw: None)
-    monkeypatch.setattr("fspack.packaging.pipeline._compile_user_sources", lambda *a, **kw: None)
-    monkeypatch.setattr("fspack.packaging.pipeline._build_entry_loaders", lambda *a, **kw: [])
+    monkeypatch.setattr("fspack.packaging.pipeline.executor._analyze_dependencies", lambda ctx, **kw: _empty_report())
+    monkeypatch.setattr("fspack.packaging.pipeline.executor._download_dependencies", lambda *a, **kw: False)
+    monkeypatch.setattr("fspack.packaging.pipeline.executor.write_pth", lambda *a, **kw: None)
+    monkeypatch.setattr("fspack.packaging.pipeline.executor.copy_source", lambda *a, **kw: None)
+    monkeypatch.setattr("fspack.packaging.pipeline.executor._compile_user_sources", lambda *a, **kw: None)
+    monkeypatch.setattr("fspack.packaging.pipeline.executor._build_entry_loaders", lambda *a, **kw: [])
 
     with console.rich.capture() as capture:
         build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, profile=True)
@@ -437,12 +437,12 @@ def test_build_without_profile_no_report(tmp_path: Path, monkeypatch: pytest.Mon
         "fspack.packaging.pipeline._prepare_runtime",
         lambda ctx: ctx.cfg.dist_dir / "site-packages",
     )
-    monkeypatch.setattr("fspack.packaging.pipeline._analyze_dependencies", lambda ctx, **kw: _empty_report())
-    monkeypatch.setattr("fspack.packaging.pipeline._download_dependencies", lambda *a, **kw: False)
-    monkeypatch.setattr("fspack.packaging.pipeline.write_pth", lambda *a, **kw: None)
-    monkeypatch.setattr("fspack.packaging.pipeline.copy_source", lambda *a, **kw: None)
-    monkeypatch.setattr("fspack.packaging.pipeline._compile_user_sources", lambda *a, **kw: None)
-    monkeypatch.setattr("fspack.packaging.pipeline._build_entry_loaders", lambda *a, **kw: [])
+    monkeypatch.setattr("fspack.packaging.pipeline.executor._analyze_dependencies", lambda ctx, **kw: _empty_report())
+    monkeypatch.setattr("fspack.packaging.pipeline.executor._download_dependencies", lambda *a, **kw: False)
+    monkeypatch.setattr("fspack.packaging.pipeline.executor.write_pth", lambda *a, **kw: None)
+    monkeypatch.setattr("fspack.packaging.pipeline.executor.copy_source", lambda *a, **kw: None)
+    monkeypatch.setattr("fspack.packaging.pipeline.executor._compile_user_sources", lambda *a, **kw: None)
+    monkeypatch.setattr("fspack.packaging.pipeline.executor._build_entry_loaders", lambda *a, **kw: [])
 
     with console.rich.capture() as capture:
         build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
@@ -468,7 +468,7 @@ def test_build_profile_cleans_up_on_exception(tmp_path: Path, monkeypatch: pytes
     def boom(*a: Any, **k: Any) -> None:
         raise RuntimeError("构建失败模拟")
 
-    monkeypatch.setattr("fspack.packaging.pipeline.resolve_project_info", boom)
+    monkeypatch.setattr("fspack.packaging.pipeline.executor.resolve_project_info", boom)
 
     was_tracing = tracemalloc.is_tracing()
     with pytest.raises(RuntimeError, match="构建失败模拟"):
@@ -504,12 +504,12 @@ def test_build_sbom_manifest_parallel_in_threads(tmp_path: Path, monkeypatch: py
         "fspack.packaging.pipeline._prepare_runtime",
         lambda ctx: ctx.cfg.dist_dir / "site-packages",
     )
-    monkeypatch.setattr("fspack.packaging.pipeline._analyze_dependencies", lambda ctx, **kw: _empty_report())
-    monkeypatch.setattr("fspack.packaging.pipeline._download_dependencies", lambda *a, **kw: False)
-    monkeypatch.setattr("fspack.packaging.pipeline.write_pth", lambda *a, **kw: None)
-    monkeypatch.setattr("fspack.packaging.pipeline.copy_source", lambda *a, **kw: None)
-    monkeypatch.setattr("fspack.packaging.pipeline._compile_user_sources", lambda *a, **kw: None)
-    monkeypatch.setattr("fspack.packaging.pipeline._build_entry_loaders", lambda *a, **kw: [])
+    monkeypatch.setattr("fspack.packaging.pipeline.executor._analyze_dependencies", lambda ctx, **kw: _empty_report())
+    monkeypatch.setattr("fspack.packaging.pipeline.executor._download_dependencies", lambda *a, **kw: False)
+    monkeypatch.setattr("fspack.packaging.pipeline.executor.write_pth", lambda *a, **kw: None)
+    monkeypatch.setattr("fspack.packaging.pipeline.executor.copy_source", lambda *a, **kw: None)
+    monkeypatch.setattr("fspack.packaging.pipeline.executor._compile_user_sources", lambda *a, **kw: None)
+    monkeypatch.setattr("fspack.packaging.pipeline.executor._build_entry_loaders", lambda *a, **kw: [])
 
     sbom_threads: set[int] = set()
     manifest_threads: set[int] = set()

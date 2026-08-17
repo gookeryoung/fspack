@@ -43,6 +43,7 @@ __all__ = [
     "_merge_parallel_results",
     "_resolve_with_uv",
     "_run_pip_download",
+    "_uv_python_platform",
     "_uv_supports_download",
 ]
 
@@ -109,6 +110,25 @@ def _find_uv() -> str | None:
     在复杂依赖图上报 ``resolution-too-deep``。uv 用 PubGrub 算法，能高效解析。
     """
     return shutil.which("uv")
+
+
+def _uv_python_platform(platform_tags: Sequence[str]) -> str:
+    """将 pip 平台标签列表映射为 uv ``--python-platform`` 粗粒度平台值.
+
+    uv 仅接受 ``windows``/``linux``/``macos`` 三值，映射规则（按优先级）：
+
+    - 任一 tag 含 ``win``（如 ``win_amd64``/``win32``）→ ``windows``
+    - 任一 tag 以 ``macosx`` 开头（如 ``macosx_11_0_arm64``）→ ``macos``
+    - 其余（manylinux/musllinux 等）→ ``linux``
+
+    ``_resolve_with_uv`` 与 ``_download_one_with_uv`` 两处调用点共用，
+    避免二值映射把 macOS 目标误解析为 linux wheel。
+    """
+    if any("win" in t for t in platform_tags):
+        return "windows"
+    if any(t.startswith("macosx") for t in platform_tags):
+        return "macos"
+    return "linux"
 
 
 def _uv_supports_download(uv_path: str | None) -> bool:
@@ -197,8 +217,8 @@ def _resolve_with_uv(  # noqa: PLR0913
     if uv is None:
         raise DependencyError("未找到 uv，无法执行在线依赖解析")
     major, minor = py_version.split(".")[:2]
-    # uv 的 --python-platform 只有 windows/linux/mac 粗粒度
-    py_platform = "windows" if any("win" in t for t in platform_tags) else "linux"
+    # uv 的 --python-platform 只有 windows/linux/macos 粗粒度，按标签映射
+    py_platform = _uv_python_platform(platform_tags)
     cmd: list[str] = [
         uv,
         "pip",
@@ -374,6 +394,11 @@ def _download_online(  # noqa: PLR0913
                 find_links=find_links,
             )
             resolved = _extract_resolved_lines(uv_output)
+            if not resolved:
+                # 空列表视为解析失败：若继续走并行下载，min(8, 0) 会让
+                # ThreadPoolExecutor(max_workers=0) 抛 ValueError 且跳过 pip 回退
+                _logger.warning("uv 解析输出无有效 name==version 行，回退到 pip 完整解析")
+                resolved = None
         except (DependencyError, subprocess.CalledProcessError) as e:
             _logger.warning("uv 解析失败，回退到 pip 完整解析: %s", e)
 
@@ -542,7 +567,7 @@ def _download_resolved_parallel(  # noqa: PLR0913
         py_version: 目标 Python 版本（如 ``3.11.9``），uv 下载时用于
             ``--python-version`` 跨版本解析。
         platform_tags: 目标平台标签列表（如 ``("win_amd64",)``），uv 下载时
-            映射为 ``--python-platform windows|linux``。
+            映射为 ``--python-platform windows|linux|macos``。
     """
 
     def _download_worker(req: str, *, stream: bool = False) -> subprocess.CompletedProcess[str]:
@@ -598,7 +623,10 @@ def _download_resolved_parallel(  # noqa: PLR0913
 
     workers = min(_PARALLEL_DOWNLOAD_WORKERS, len(resolved))
     succeeded: list[tuple[str, subprocess.CompletedProcess[str]]] = []
-    failed: list[tuple[str, subprocess.CalledProcessError]] = []
+    # worker 内可能抛 CalledProcessError（pip/uv 非零退出）或 DependencyError
+    # （pip/uv 消失，_download_one_with_uv/_download_one_resolved 转换），均需
+    # 收集进 failed 走 sdist 回退，不能逃逸跳过回退
+    failed: list[tuple[str, Exception]] = []
 
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="wheel-dl") as executor:
         future_to_req = {executor.submit(_download_worker, req): req for req in resolved}
@@ -607,7 +635,7 @@ def _download_resolved_parallel(  # noqa: PLR0913
             try:
                 result = future.result()
                 succeeded.append((req, result))
-            except subprocess.CalledProcessError as e:
+            except (subprocess.CalledProcessError, DependencyError) as e:
                 failed.append((req, e))
 
     if not failed:
@@ -617,7 +645,10 @@ def _download_resolved_parallel(  # noqa: PLR0913
     # 注意：并行模式下每个包的 stderr 独立捕获，必须合并才能解析出所有 sdist-only 包
     # （如 win-unicode-console==0.5 无 wheel，--only-binary=:all: 失败）
     _logger.warning("并行下载 %d 个失败，尝试 sdist 回退: %s", len(failed), [r for r, _ in failed])
-    combined_stderr = "\n".join(e.stderr or "" for _, e in failed)
+    # CalledProcessError 取 stderr；DependencyError 无 stderr 属性，取 str(e) 参与合并
+    combined_stderr = "\n".join(
+        (e.stderr or "") if isinstance(e, subprocess.CalledProcessError) else str(e) for _, e in failed
+    )
     fallback_err = DependencyError(f"依赖下载失败:\n{combined_stderr}")
     _handle_sdist_fallback(
         fallback_err, py, pypi_index, cache_dir, extra_index_urls=extra_index_urls, find_links=find_links
@@ -669,7 +700,7 @@ def _download_one_with_uv(  # noqa: PLR0913
         FileNotFoundError: uv 消失时转为 :class:`DependencyError`。
     """
     major, minor = py_version.split(".")[:2] if py_version else ("", "")
-    py_platform = "windows" if any("win" in t for t in platform_tags) else "linux"
+    py_platform = _uv_python_platform(platform_tags)
     cmd: list[str] = [
         uv_path,
         "pip",

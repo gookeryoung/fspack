@@ -1,7 +1,7 @@
 """``--dry-run`` 预览模式单元测试.
 
 覆盖 :func:`fspack.packaging.pipeline.build` 的 ``dry_run=True`` 分支与
-:func:`fspack.packaging.pipeline._print_build_plan` 行为：
+:func:`fspack.packaging.pipeline.plan_printer._print_build_plan` 行为：
 
 - ``dry_run=True``：仅执行项目解析与依赖分析，不触发下载/解压/复制/编译等写操作
 - ``_print_build_plan``：渲染项目信息/依赖分析/构建选项表格不抛异常
@@ -19,7 +19,8 @@ import pytest
 from fspack import cli
 from fspack.config import get_mirror
 from fspack.console import console
-from fspack.packaging.pipeline import BuildContext, _print_build_plan, build
+from fspack.packaging.pipeline import BuildContext, build
+from fspack.packaging.pipeline.executor import _print_build_plan
 from fspack.platform import Platform
 from fspack.templates.project_template import ProjectTemplate
 
@@ -57,7 +58,7 @@ def test_build_dry_run_skips_runtime_download(tmp_path: Path, monkeypatch: pytes
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("不应编译 loader")),
     )
     monkeypatch.setattr(
-        "fspack.packaging.pipeline.copy_source",
+        "fspack.packaging.pipeline.executor.copy_source",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("不应复制源码")),
     )
 
@@ -98,7 +99,7 @@ def test_build_dry_run_skips_linux_runtime_download(tmp_path: Path, monkeypatch:
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("不应编译 loader")),
     )
     monkeypatch.setattr(
-        "fspack.packaging.pipeline.copy_source",
+        "fspack.packaging.pipeline.executor.copy_source",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("不应复制源码")),
     )
 
@@ -120,7 +121,7 @@ def test_build_dry_run_returns_project_info(tmp_path: Path, monkeypatch: pytest.
         monkeypatch.setattr(f"fspack.packaging.pipeline.stages.{fn}", lambda *a, **k: tmp_path / "fake")
     for fn in ("extract_embed", "extract_standalone", "unpack_wheels"):
         monkeypatch.setattr(f"fspack.packaging.pipeline.stages.{fn}", lambda *a, **k: None)
-    monkeypatch.setattr("fspack.packaging.pipeline.copy_source", lambda *a, **k: None)
+    monkeypatch.setattr("fspack.packaging.pipeline.executor.copy_source", lambda *a, **k: None)
     monkeypatch.setattr(
         "fspack.packaging.pipeline.stages.compile_loader",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("不应编译 loader")),
@@ -143,7 +144,7 @@ def test_build_dry_run_prints_plan_summary(tmp_path: Path, monkeypatch: pytest.M
         monkeypatch.setattr(f"fspack.packaging.pipeline.stages.{fn}", lambda *a, **k: tmp_path / "fake")
     for fn in ("extract_embed", "extract_standalone", "unpack_wheels"):
         monkeypatch.setattr(f"fspack.packaging.pipeline.stages.{fn}", lambda *a, **k: None)
-    monkeypatch.setattr("fspack.packaging.pipeline.copy_source", lambda *a, **k: None)
+    monkeypatch.setattr("fspack.packaging.pipeline.executor.copy_source", lambda *a, **k: None)
     monkeypatch.setattr(
         "fspack.packaging.pipeline.stages.compile_loader",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("不应编译 loader")),
@@ -179,7 +180,7 @@ def test_build_dry_run_includes_missing_dependencies(tmp_path: Path, monkeypatch
         monkeypatch.setattr(f"fspack.packaging.pipeline.stages.{fn}", lambda *a, **k: tmp_path / "fake")
     for fn in ("extract_embed", "unpack_wheels"):
         monkeypatch.setattr(f"fspack.packaging.pipeline.stages.{fn}", lambda *a, **k: None)
-    monkeypatch.setattr("fspack.packaging.pipeline.copy_source", lambda *a, **k: None)
+    monkeypatch.setattr("fspack.packaging.pipeline.executor.copy_source", lambda *a, **k: None)
     monkeypatch.setattr(
         "fspack.packaging.pipeline.stages.compile_loader",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("不应编译 loader")),
@@ -202,7 +203,7 @@ def test_build_dry_run_no_write_operations(tmp_path: Path, monkeypatch: pytest.M
         monkeypatch.setattr(f"fspack.packaging.pipeline.stages.{fn}", lambda *a, **k: tmp_path / "fake")
     for fn in ("extract_embed", "unpack_wheels"):
         monkeypatch.setattr(f"fspack.packaging.pipeline.stages.{fn}", lambda *a, **k: None)
-    monkeypatch.setattr("fspack.packaging.pipeline.copy_source", lambda *a, **k: None)
+    monkeypatch.setattr("fspack.packaging.pipeline.executor.copy_source", lambda *a, **k: None)
     monkeypatch.setattr(
         "fspack.packaging.pipeline.stages.compile_loader",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("不应编译 loader")),
@@ -229,7 +230,7 @@ def test_build_dry_run_merges_private_sources(tmp_path: Path, monkeypatch: pytes
         monkeypatch.setattr(f"fspack.packaging.pipeline.stages.{fn}", lambda *a, **k: tmp_path / "fake")
     for fn in ("extract_embed", "unpack_wheels"):
         monkeypatch.setattr(f"fspack.packaging.pipeline.stages.{fn}", lambda *a, **k: None)
-    monkeypatch.setattr("fspack.packaging.pipeline.copy_source", lambda *a, **k: None)
+    monkeypatch.setattr("fspack.packaging.pipeline.executor.copy_source", lambda *a, **k: None)
     monkeypatch.setattr(
         "fspack.packaging.pipeline.stages.compile_loader",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("不应编译 loader")),

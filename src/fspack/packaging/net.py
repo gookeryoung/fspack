@@ -4,13 +4,14 @@
 
 - SSL 上下文创建（``SSL_CERT_FILE`` 环境变量 → certifi CA bundle → 系统默认 CA）
 - HTTP 下载（``urllib.request`` + ``rich.progress`` 实时进度条）
-- 指数退避重试（``tenacity``，3 次 1s/2s/4s + 抖动，仅对可重试错误）
+- 指数退避重试（``tenacity``，首次 + 2 次重试，退避约 1s/2s + 抖动，仅对可重试错误）
 
 供 :class:`fspack.packaging.runtime.RuntimeDownloader` 使用。
 
 重试策略：
 - 可重试：``URLError``（连接超时/DNS 失败/拒绝连接）、``socket.timeout``（读超时）、
-  ``HTTPError`` 502/503/504（服务端临时错误）
+  ``HTTPError`` 502/503/504（服务端临时错误）、弱网读阶段中断（``ConnectionResetError``、
+  ``http.client.RemoteDisconnected``、``http.client.IncompleteRead``）
 - 不可重试：``HTTPError`` 4xx（客户端错误，如 404/403，重试无意义）、其他 ``OSError``
 """
 
@@ -36,7 +37,7 @@ _logger = logging.getLogger(__name__)
 
 _BLOCK_SIZE = 64 * 1024
 
-# 重试配置：3 次尝试（首次 + 2 次重试），指数退避 1s/2s/4s + 0-1s 抖动
+# 重试配置：首次 + 2 次重试（共 3 次尝试），指数退避约 1s/2s + 抖动
 _MAX_ATTEMPTS = 3
 _RETRY_INITIAL_WAIT = 1.0
 _RETRY_MAX_WAIT = 4.0
@@ -48,12 +49,15 @@ def _is_retryable_network_error(exc: BaseException) -> bool:
     """判断异常是否可重试.
 
     可重试：连接超时/DNS 失败/拒绝连接（``URLError``）、读超时（``socket.timeout``）、
-    HTTP 502/503/504（服务端临时错误）。
+    HTTP 502/503/504（服务端临时错误）、弱网分块读阶段中断（``ConnectionResetError``
+    连接被重置、``http.client.RemoteDisconnected`` 服务端提前断开、
+    ``http.client.IncompleteRead`` 响应体不完整）。
     不可重试：HTTP 4xx（客户端错误，如 404/403）、其他 ``OSError``（如磁盘满）。
 
     ``urllib.error`` 与 ``socket`` 在函数内延迟导入，避免顶部触发 ``urllib.request``
     加载（守护测试 :func:`tests.test_cli.test_builder_import_does_not_load_urllib_request`）。
     """
+    import http.client
     import socket
     import urllib.error
 
@@ -62,11 +66,16 @@ def _is_retryable_network_error(exc: BaseException) -> bool:
     if isinstance(exc, urllib.error.URLError):
         # URLError 含连接拒绝、DNS 失败、超时等，均值得重试
         return True
+    # 弱网分块读阶段的连接中断均为瞬时故障，重试可恢复：
+    # ConnectionResetError（连接被重置）、RemoteDisconnected（服务端提前断开）、
+    # IncompleteRead（响应体未读完即断开）
+    if isinstance(exc, (ConnectionResetError, http.client.RemoteDisconnected, http.client.IncompleteRead)):
+        return True
     return isinstance(exc, socket.timeout)
 
 
 def _build_download_retryer() -> tenacity.Retrying:
-    """构造下载重试器：3 次尝试，指数退避 1s/2s/4s + 抖动，仅对可重试错误.
+    """构造下载重试器：首次 + 2 次重试，退避约 1s/2s + 抖动，仅对可重试错误.
 
     返回 :class:`tenacity.Retrying` 实例，调用方用 ``for attempt in retryer: with attempt:``
     模式包装可能失败的网络操作。``reraise=True`` 确保最终失败时抛出原始异常（而非
@@ -95,7 +104,8 @@ class Downloader:
     注入（测试场景）。
 
     下载失败时按 :func:`_is_retryable_network_error` 分类重试：连接超时/DNS 失败/
-    HTTP 502/503/504 重试 3 次（1s/2s/4s + 抖动），HTTP 4xx 等客户端错误立即失败。
+    读阶段连接中断/HTTP 502/503/504 重试（首次 + 2 次重试，退避约 1s/2s + 抖动），
+    HTTP 4xx 等客户端错误立即失败。失败后清理 ``dest`` 半成品文件避免污染缓存。
     """
 
     def __init__(
@@ -145,9 +155,11 @@ class Downloader:
         下载完成后若提供 ``stage``，调 ``stage.add_bytes`` 累加。
 
         网络错误按 :func:`_is_retryable_network_error` 分类重试：可重试错误（连接超时、
-        DNS 失败、HTTP 502/503/504）重试 3 次（指数退避 1s/2s/4s + 抖动），不可重试
-        错误（HTTP 4xx、磁盘满）立即失败。重试时 ``dest`` 以 ``wb`` 模式重新打开覆盖
-        上次部分写入，progress 任务重建（transient=True 不留痕）。
+        DNS 失败、读阶段连接中断、HTTP 502/503/504）重试（首次 + 2 次重试，退避约
+        1s/2s + 抖动），不可重试错误（HTTP 4xx、磁盘满）立即失败。重试时 ``dest``
+        以 ``wb`` 模式重新打开覆盖上次部分写入，progress 任务重建（transient=True
+        不留痕）。最终失败（重试耗尽或不可重试异常 reraise）后 best-effort 清理
+        ``dest`` 半成品文件，避免残缺归档污染缓存。
 
         ``urllib.request`` / ``rich.progress`` / ``fspack.console`` 在方法内延迟导入：
         ``import fspack.builder`` 热路径不触发 urllib.request（省 ~15ms）与
@@ -184,30 +196,45 @@ class Downloader:
         # 可重试异常触发下次循环，不可重试异常或达上限后 reraise 抛出原始异常。
         # progress 在循环内创建：每次重试新建 Progress（transient=True 退出时清除显示），
         # 避免重复进入 with 块的状态复用问题。
-        for attempt in retryer:
-            with attempt:
-                progress = Progress(
-                    SpinnerColumn(),
-                    TextColumn("[bold blue]{task.description}"),
-                    BarColumn(),
-                    DownloadColumn(),
-                    TransferSpeedColumn(),
-                    TimeRemainingColumn(),
-                    console=console.rich,
-                    transient=True,
-                )
-                with progress, urllib.request.urlopen(req, timeout=self._timeout, context=self._ssl_ctx) as resp:
-                    total = int(resp.headers.get("Content-Length") or 0)
-                    task_id = progress.add_task(label or url.rsplit("/", 1)[-1], total=total or None)
-                    written = 0
-                    with dest.open("wb") as f:
-                        while True:
-                            chunk = resp.read(_BLOCK_SIZE)
-                            if not chunk:
-                                break
-                            f.write(chunk)
-                            written += len(chunk)
-                            progress.update(task_id, advance=len(chunk))
+        try:
+            for attempt in retryer:
+                with attempt:
+                    progress = Progress(
+                        SpinnerColumn(),
+                        TextColumn("[bold blue]{task.description}"),
+                        BarColumn(),
+                        DownloadColumn(),
+                        TransferSpeedColumn(),
+                        TimeRemainingColumn(),
+                        console=console.rich,
+                        transient=True,
+                    )
+                    with progress, urllib.request.urlopen(req, timeout=self._timeout, context=self._ssl_ctx) as resp:
+                        try:
+                            total = int(resp.headers.get("Content-Length") or 0)
+                        except ValueError:
+                            # Content-Length 非数字（部分镜像/代理返回非法值）：按未知
+                            # 大小处理（total=0），进度条无 total 仅显示已下载量
+                            total = 0
+                        task_id = progress.add_task(label or url.rsplit("/", 1)[-1], total=total or None)
+                        written = 0
+                        with dest.open("wb") as f:
+                            while True:
+                                chunk = resp.read(_BLOCK_SIZE)
+                                if not chunk:
+                                    break
+                                f.write(chunk)
+                                written += len(chunk)
+                                progress.update(task_id, advance=len(chunk))
+        except Exception:
+            # 下载失败（重试耗尽或不可重试异常 reraise）：best-effort 清理半成品
+            # 文件，避免残缺归档留在缓存目录被下次构建误用。清理自身失败仅记
+            # warning，不掩盖原异常。
+            try:
+                dest.unlink(missing_ok=True)
+            except OSError as unlink_err:  # pragma: no cover - 清理失败极罕见
+                _logger.warning("清理下载失败的半成品文件失败 %s: %s", dest, unlink_err)
+            raise
         if stage:
             stage.add_bytes(written)
         return written

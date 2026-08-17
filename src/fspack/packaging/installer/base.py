@@ -128,7 +128,15 @@ def _run_tool(
         raise InstallerError(f"{cmd[0]} 未产出安装包: {produces}")
 
 
-def _make_staged_archive(dist_dir: Path, release_dir: Path, base: str, fmt: str) -> Path:
+def _make_staged_archive(  # noqa: PLR0913
+    dist_dir: Path,
+    release_dir: Path,
+    base: str,
+    fmt: str,
+    *,
+    keep_staging: bool = False,
+    reuse_staging: bool = False,
+) -> Path:
     """将 dist 复制到 ``release_dir/<base>`` staging 目录后打包为归档，返回归档路径.
 
     汇聚 tar.gz（``linux.build_tarball``）与 zip（``zip._make_zip``）逐行相同的打包流程：
@@ -141,17 +149,23 @@ def _make_staged_archive(dist_dir: Path, release_dir: Path, base: str, fmt: str)
         release_dir: 归档输出目录（同时用作 staging 父目录）
         base: 归档基础名与内顶层目录名（如 ``<name>-<version>-<py_tag>-<platform>-slim``）
         fmt: ``shutil.make_archive`` 格式，``"gztar"``（tar.gz）或 ``"zip"``
+        keep_staging: 打包后保留 staging 目录（供后续格式复用，消除重复全量
+            copytree；调用方须在最后一个复用格式完成后清理）
+        reuse_staging: 复用已存在的 staging 目录（跳过 copytree）；staging 不存在
+            时回退到正常 copytree 流程（防御前序格式未产出的场景）
 
     Returns:
         生成的归档文件路径
     """
-    release_dir.mkdir(parents=True, exist_ok=True)
     staging = release_dir / base
-    if staging.exists():
-        shutil.rmtree(staging)
-    shutil.copytree(dist_dir, staging, ignore=_DIST_IGNORE)
+    if not (reuse_staging and staging.is_dir()):
+        release_dir.mkdir(parents=True, exist_ok=True)
+        if staging.exists():
+            shutil.rmtree(staging)
+        shutil.copytree(dist_dir, staging, ignore=_DIST_IGNORE)
     archive = shutil.make_archive(str(release_dir / base), fmt, root_dir=release_dir, base_dir=base)
-    shutil.rmtree(staging)
+    if not keep_staging:
+        shutil.rmtree(staging)
     return Path(archive)
 
 
@@ -461,6 +475,9 @@ def build_release(  # noqa: PLR0913
     resolved_target = target or detect_platform()
     formats = _resolve_formats(fmt, resolved_target)
     tracker = BuildTracker(title="打包阶段汇总")
+    # Linux all 场景 tar.gz 与 zip 的 staging/顶层目录同名（<base>）：tar.gz 打包后
+    # 保留 staging、zip 直接复用，消除一次 dist 全量 copytree（tar/zip 仍各自 make_archive）
+    share_staging = resolved_target is Platform.LINUX and "tar.gz" in formats and "zip" in formats
     outputs: list[Path] = []
     for index, f in enumerate(formats):
         # 首个格式负责 build，后续格式 no_build=True 复用同一 dist
@@ -478,6 +495,7 @@ def build_release(  # noqa: PLR0913
                     target=resolved_target,
                     tracker=tracker,
                     extras=format_extras,
+                    reuse_staging=share_staging,
                 )
             )
         elif f == "nsis":
@@ -505,6 +523,7 @@ def build_release(  # noqa: PLR0913
                     dist_dir=dist_dir,
                     tracker=tracker,
                     extras=format_extras,
+                    keep_staging=share_staging,
                 )
             )
         elif f == "deb":

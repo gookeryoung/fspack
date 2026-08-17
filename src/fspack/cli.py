@@ -326,6 +326,7 @@ def _run_doctor(ns: argparse.Namespace) -> None:
     的依赖解析缓存文件并删除损坏文件（iter-128，可与 ``--test``/``--bench``
     组合使用）。
     """
+    from fspack.console import console
     from fspack.doctor import (
         print_doctor_report,
         run_doctor,
@@ -340,9 +341,15 @@ def _run_doctor(ns: argparse.Namespace) -> None:
     if getattr(ns, "check_cache", False):
         run_doctor_cache_check()
 
-    if getattr(ns, "bench", False):
+    bench = getattr(ns, "bench", False)
+    test = getattr(ns, "test", False)
+    if bench and test:
+        # --bench 已包含 --test 的模板构建测试，二者互斥：同时指定时
+        # --test 静默忽略易让用户误以为执行了两轮测试，显式提示
+        console.warn("--test 与 --bench 同时指定：--bench 已包含模板构建测试，--test 被忽略")
+    if bench:
         run_doctor_bench()
-    elif getattr(ns, "test", False):
+    elif test:
         run_doctor_test()
 
 
@@ -362,7 +369,7 @@ def _run_cache(ns: argparse.Namespace) -> None:
     action = getattr(ns, "cache_action", None)
     target = getattr(ns, "target", None)
     if action == "status":
-        run_cache_status(target=target)
+        run_cache_status(target=target, full_verify=getattr(ns, "verify", False))
     elif action == "clean":
         run_cache_clean(
             dry_run=getattr(ns, "dry_run", False),
@@ -485,7 +492,9 @@ def discover_subprojects(root: Path) -> list[Path]:
             projects.append(current)
 
         try:
-            entries = sorted(os.scandir(current), key=lambda e: e.name)
+            # with 显式关闭 scandir 迭代器：排序 key 抛异常时不依赖 GC 回收句柄
+            with os.scandir(current) as it:
+                entries = sorted(it, key=lambda e: e.name)
         except OSError:
             return
         for entry in entries:
@@ -547,6 +556,9 @@ def _run_recursive(root: Path, action: str, ns: argparse.Namespace) -> int:
             console.success(f"{rel} {action_verb}成功")
         except SystemExit:
             # _run_build/_run_package 不主动调 sys.exit，但防御性捕获
+            raise
+        except KeyboardInterrupt:
+            # Ctrl+C 必须立即中断整个递归构建，不得记为单项目失败后继续循环
             raise
         except BaseException as exc:
             err_msg = _format_error(exc)
