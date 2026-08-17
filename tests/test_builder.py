@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import zipfile
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Callable, cast
 
@@ -34,7 +36,7 @@ from fspack.builder import (
 )
 from fspack.config import AppType, BuildOptions, DependencyReport, EntryPoint, ProjectInfo, get_mirror
 from fspack.console import console
-from fspack.exceptions import DependencyError, LoaderError
+from fspack.exceptions import DependencyError, FspackError, LoaderError
 from fspack.packaging.pipeline import (
     _BUILD_FAILED,
     _BUILD_OK,
@@ -47,6 +49,7 @@ from fspack.packaging.pipeline import (
     _save_build_failure,
     _save_build_ok,
 )
+from fspack.packaging.pipeline.frontend_stage import _build_frontend, _detect_frontends, _run_cmd
 from fspack.packaging.pipeline.stages import _MAX_LOADER_WORKERS, BuildContext, _build_entry_loaders
 from fspack.platform import Platform
 from fspack.progress import StageRecorder
@@ -3680,3 +3683,167 @@ def test_strip_py_sources_skips_web_static_dirs(tmp_path: Path) -> None:
     assert stripped == 1
     assert not (src / "app.py").exists()
     assert (web_dir / "tool.py").is_file()
+
+
+# ---- 前端构建阶段（fsp b 自动识别 web 结构） ----
+
+
+def _write_frontend_pkg(root: Path, *, build: bool = True) -> Path:
+    """写入前端项目骨架：package.json（build 脚本按需）."""
+    root.mkdir(parents=True, exist_ok=True)
+    scripts = {"build": "vite build"} if build else {"dev": "vite"}
+    (root / "package.json").write_text(json.dumps({"name": root.name, "scripts": scripts}), encoding="utf-8")
+    return root
+
+
+def test_detect_frontends_configured_walk_up(tmp_path: Path) -> None:
+    """web-static-dirs 配置的产物目录向上定位最近 package.json（flask/fastapi 布局）."""
+    fe = _write_frontend_pkg(tmp_path / "frontend")
+    fps = _detect_frontends(tmp_path, ("frontend/deploy",))
+    assert len(fps) == 1
+    assert fps[0].root == fe.resolve()
+    assert fps[0].output_dirs == ((tmp_path / "frontend" / "deploy").resolve(),)
+
+
+def test_detect_frontends_auto_scan_nested(tmp_path: Path) -> None:
+    """未配置项目结构扫描：src/<pkg>/frontend 命中，node_modules 与超深目录剪枝."""
+    fe = _write_frontend_pkg(tmp_path / "src" / "webview_app" / "frontend")
+    # node_modules 内的 package.json 不触发识别
+    nm_pkg = fe / "node_modules" / "left-pad"
+    nm_pkg.mkdir(parents=True)
+    (nm_pkg / "package.json").write_text('{"scripts": {"build": "x"}}', encoding="utf-8")
+    # 超过扫描深度的目录不触发识别
+    _write_frontend_pkg(tmp_path / "a" / "b" / "c" / "d" / "frontend")
+
+    fps = _detect_frontends(tmp_path, ())
+    assert [fp.root for fp in fps] == [fe]
+    assert fps[0].output_dirs == (fe / "deploy", fe / "dist")
+
+
+def test_detect_frontends_pure_static_dir_not_detected(tmp_path: Path) -> None:
+    """纯手写 html 的最小模板（无 package.json/build 脚本）不识别、不构建."""
+    fe = tmp_path / "frontend"
+    fe.mkdir()
+    (fe / "index.html").write_text("<html/>", encoding="utf-8")
+    # 配置路径：向上找不到 package.json；扫描路径：无 build 脚本
+    assert _detect_frontends(tmp_path, ("frontend",)) == []
+    _write_frontend_pkg(tmp_path / "other" / "fe", build=False)
+    assert _detect_frontends(tmp_path, ()) == []
+
+
+def test_detect_frontends_configured_preferred_over_auto(tmp_path: Path) -> None:
+    """同根目录命中两条路径时按根目录去重，保留配置来源（产物目录精确）."""
+    _write_frontend_pkg(tmp_path / "frontend")
+    fps = _detect_frontends(tmp_path, ("frontend/deploy",))
+    assert len(fps) == 1
+    assert fps[0].output_dirs == ((tmp_path / "frontend" / "deploy").resolve(),)
+
+
+def test_build_frontend_skips_when_output_present(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """产物目录非空时跳过构建（增量语义，不执行任何命令）."""
+    fe = _write_frontend_pkg(tmp_path / "frontend")
+    deploy = fe / "deploy"
+    deploy.mkdir()
+    (deploy / "index.html").write_text("<html/>", encoding="utf-8")
+
+    calls: list[tuple[object, ...]] = []
+    monkeypatch.setattr("fspack.packaging.pipeline.frontend_stage._run_cmd", lambda *a: calls.append(a))
+    detail = _build_frontend(_detect_frontends(tmp_path, ()))
+    assert calls == []
+    assert "跳过" in detail
+
+
+def test_build_frontend_installs_and_builds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """产物缺失时先 install（node_modules 不存在）再 build，产物就绪."""
+    fe = _write_frontend_pkg(tmp_path / "frontend")
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run_cmd(exe: str, args: Sequence[str], cwd: Path) -> None:
+        calls.append(tuple(args))
+        if list(args) == ["run", "build"]:
+            deploy = fe / "deploy"
+            deploy.mkdir(parents=True, exist_ok=True)
+            (deploy / "index.html").write_text("<html/>", encoding="utf-8")
+
+    monkeypatch.setattr("fspack.packaging.pipeline.frontend_stage._run_cmd", fake_run_cmd)
+    monkeypatch.setattr("fspack.packaging.pipeline.frontend_stage._resolve_pm", lambda: ("pnpm", "C:/fake/pnpm.cmd"))
+    detail = _build_frontend(_detect_frontends(tmp_path, ()))
+    assert ("install",) in calls
+    assert ("run", "build") in calls
+    assert "pnpm" in detail and "frontend" in detail
+
+
+def test_build_frontend_existing_node_modules_skips_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """node_modules 已存在时直接 build（不重复 install）."""
+    fe = _write_frontend_pkg(tmp_path / "frontend")
+    (fe / "node_modules").mkdir()
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run_cmd(exe: str, args: Sequence[str], cwd: Path) -> None:
+        calls.append(tuple(args))
+        if list(args) == ["run", "build"]:
+            (fe / "dist").mkdir()
+            (fe / "dist" / "index.html").write_text("<html/>", encoding="utf-8")
+
+    monkeypatch.setattr("fspack.packaging.pipeline.frontend_stage._run_cmd", fake_run_cmd)
+    monkeypatch.setattr("fspack.packaging.pipeline.frontend_stage._resolve_pm", lambda: ("npm", "npm"))
+    _build_frontend(_detect_frontends(tmp_path, ()))
+    assert ("install",) not in calls
+    assert calls == [("run", "build")]
+
+
+def test_build_frontend_no_pm_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """产物缺失且无包管理器时报错并给出指引."""
+    _write_frontend_pkg(tmp_path / "frontend")
+    monkeypatch.setattr("fspack.packaging.pipeline.frontend_stage._resolve_pm", lambda: None)
+    with pytest.raises(FspackError, match="Node"):
+        _build_frontend(_detect_frontends(tmp_path, ()))
+
+
+def test_build_frontend_empty_output_after_build_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """构建命令成功但产物目录仍为空时报错（fail-fast，防打包出坏应用）."""
+    _write_frontend_pkg(tmp_path / "frontend")
+    monkeypatch.setattr("fspack.packaging.pipeline.frontend_stage._run_cmd", lambda *a: None)
+    monkeypatch.setattr("fspack.packaging.pipeline.frontend_stage._resolve_pm", lambda: ("npm", "npm"))
+    with pytest.raises(FspackError, match="产物目录仍为空"):
+        _build_frontend(_detect_frontends(tmp_path, ()))
+
+
+def test_run_cmd_success_passes_through(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """退出码 0 时正常返回（无异常）."""
+
+    class FakeProc:
+        returncode = 0
+        stderr = ""
+        stdout = ""
+
+    seen: dict[str, object] = {}
+
+    def fake_run(cmd: list[str], cwd: str, **kwargs: object) -> object:
+        seen["cmd"] = cmd
+        seen["cwd"] = cwd
+        seen["kwargs"] = kwargs
+        return FakeProc()
+
+    monkeypatch.setattr("fspack.packaging.pipeline.frontend_stage.subprocess.run", fake_run)
+    _run_cmd("C:/fake/npm", ["run", "build"], tmp_path)
+    assert seen["cmd"] == ["C:/fake/npm", "run", "build"]
+    assert seen["cwd"] == str(tmp_path)
+
+
+def test_run_cmd_failure_raises_with_tail(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """非零退出码抛 FspackError，含 stderr 尾部（截断到 800 字符）."""
+
+    class FakeProc:
+        returncode = 1
+        stderr = "E" * 1000
+        stdout = ""
+
+    monkeypatch.setattr(
+        "fspack.packaging.pipeline.frontend_stage.subprocess.run",
+        lambda *a, **k: FakeProc(),
+    )
+    with pytest.raises(FspackError, match="前端命令失败") as exc_info:
+        _run_cmd("npm", ["run", "build"], tmp_path)
+    assert "E" * 800 in str(exc_info.value)
+    assert "E" * 801 not in str(exc_info.value)

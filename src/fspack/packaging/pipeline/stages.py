@@ -1,11 +1,12 @@
 """构建阶段函数 re-export 门面，保持公开导入路径兼容.
 
-原 stages.py（744 行）按职责拆为四个聚焦模块：
+原 stages.py（744 行）按职责拆为多个聚焦模块：
 
 - :mod:`fspack.packaging.pipeline.context`：``BuildContext`` 数据类 + 路径常量
 - :mod:`fspack.packaging.pipeline.runtime_stage`：runtime 下载/解压/精简
 - :mod:`fspack.packaging.pipeline.deps_stage`：依赖分析/下载/缓存/wheel 解压
 - :mod:`fspack.packaging.pipeline.compile_stage`：源码编译/loader 生成/图标/二进制依赖分析
+- :mod:`fspack.packaging.pipeline.frontend_stage`：web 结构识别与前端自动构建
 
 本模块从四个子模块 re-export 所有名字，保持 ``fspack.packaging.pipeline.stages.*``
 与 ``fspack.packaging.pipeline.*`` 原 patch 路径不变，测试 monkeypatch 和外部
@@ -46,6 +47,11 @@ from fspack.packaging.pipeline.deps_stage import (
     _strip_version_specifier,
     unpack_wheels,
 )
+from fspack.packaging.pipeline.frontend_stage import (
+    FrontendProject,
+    _build_frontend,
+    _detect_frontends,
+)
 from fspack.packaging.pipeline.runtime_stage import (
     _prepare_runtime,
     _prepare_standalone_runtime,
@@ -67,15 +73,18 @@ __all__ = [
     "_DEFAULT_ICON",
     "_MAX_LOADER_WORKERS",
     "BuildContext",
+    "FrontendProject",
     "ThreadPoolExecutor",
     "TkinterBundler",
     "_analyze_binary_dependencies",
     "_analyze_dependencies",
     "_build_entry_loaders",
+    "_build_frontend",
     "_compile_user_sources",
     "_dep_cache_load",
     "_dep_cache_path",
     "_dep_cache_save",
+    "_detect_frontends",
     "_download_dependencies",
     "_normalize_pkg_name",
     "_prepare_runtime",

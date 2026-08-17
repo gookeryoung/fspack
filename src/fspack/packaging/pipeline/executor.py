@@ -44,7 +44,9 @@ from fspack.packaging.pipeline.stages import (
     _analyze_binary_dependencies,
     _analyze_dependencies,
     _build_entry_loaders,
+    _build_frontend,
     _compile_user_sources,
+    _detect_frontends,
     _download_dependencies,
     _prepare_runtime,
     _resolve_project_icon,
@@ -276,6 +278,14 @@ def _execute_build(  # noqa: PLR0912, PLR0913
     # 真实构建开始：删除旧的 .build_ok 完成标记（与 .build_failed 的
     # 成功后删除点对齐），保证本次构建中断/失败时不残留"成功完成"标记
     _remove_build_ok(cfg.dist_dir)
+
+    # 前端阶段：识别 web 结构（web-static-dirs 配置或 package.json 结构扫描），
+    # 产物缺失时在复制源码前就地构建——否则打出的应用会在终端用户机器上
+    # 尝试安装前端依赖（无 node 环境，必然失败）。无前端项目时整段跳过。
+    _frontends = _detect_frontends(project_dir, info.web_static_dirs)
+    if _frontends:
+        with tracker.stage("构建前端") as st:
+            st.set_detail(_build_frontend(_frontends))
 
     site_packages = _prepare_runtime(ctx)
     report = _analyze_dependencies(ctx)
