@@ -240,9 +240,7 @@ class NuitkaVerify:
         except subprocess.TimeoutExpired:
             # 模块顶层含 input()/死循环/GUI 等阻塞代码：按验证失败处理，
             # 返回 None 触发逐个测试定位真正阻塞的模块
-            _logger.warning(
-                "批量 import 验证超时（%ds），按失败处理并回退逐个定位", int(_IMPORT_TEST_TIMEOUT)
-            )
+            _logger.warning("批量 import 验证超时（%ds），按失败处理并回退逐个定位", int(_IMPORT_TEST_TIMEOUT))
             return None
         if result.returncode != 0:
             # subprocess 崩溃（如访问违例 0xC0000005），无法获取结果
