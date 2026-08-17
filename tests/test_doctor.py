@@ -1444,7 +1444,7 @@ def test_is_zip_intact_oserror_indeterminate(tmp_path: Path, monkeypatch: pytest
         def __init__(self, path: object, *args: object, **kwargs: object) -> None:
             raise PermissionError("file locked by antivirus")
 
-    monkeypatch.setattr("fspack.doctor.envs.zipfile.ZipFile", _LockedZip)
+    monkeypatch.setattr("fspack.doctor.integrity.zipfile.ZipFile", _LockedZip)
     assert _is_zip_intact(z) is None
 
 
@@ -1458,7 +1458,7 @@ def test_is_tar_intact_oserror_indeterminate(tmp_path: Path, monkeypatch: pytest
     def _raise_open(*args: object, **kwargs: object) -> None:
         raise PermissionError("file locked by antivirus")
 
-    monkeypatch.setattr("fspack.doctor.envs.tarfile.open", _raise_open)
+    monkeypatch.setattr("fspack.doctor.integrity.tarfile.open", _raise_open)
     assert _is_tar_intact(t) is None
 
 
@@ -1546,8 +1546,7 @@ def test_scan_embed_health_default_keeps_corrupt(tmp_path: Path) -> None:
 
 def test_scan_embed_health_indeterminate_zip_skipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """zip 完整性无法判定（IO 异常返回 None）时不计损坏也不删除."""
-    from fspack.doctor import _scan_embed_health
-    from fspack.doctor import envs as doctor_envs
+    from fspack.doctor import _scan_embed_health, cache_health
 
     cache = tmp_path / "embed"
     cache.mkdir()
@@ -1557,7 +1556,7 @@ def test_scan_embed_health_indeterminate_zip_skipped(tmp_path: Path, monkeypatch
     def _locked_zip(path: Path, **kwargs: object) -> bool | None:
         return None  # 模拟杀软/文件锁导致 OSError 无法判定（兼容 full 等透传参数）
 
-    monkeypatch.setattr(doctor_envs, "_is_zip_intact", _locked_zip)
+    monkeypatch.setattr(cache_health, "_is_zip_intact", _locked_zip)
     report = _scan_embed_health(cache, delete_corrupt=True)
     assert report.corrupt_files == ()
     assert report.stale_files == ()
@@ -1825,8 +1824,7 @@ def test_scan_loader_health_non_pe_deleted(tmp_path: Path) -> None:
 
 def test_scan_loader_health_indeterminate_pe_skipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """PE 头无法判定（IO 异常返回 None）的 exe 不计损坏也不删除."""
-    from fspack.doctor import _scan_loader_health
-    from fspack.doctor import envs as doctor_envs
+    from fspack.doctor import _scan_loader_health, cache_health
 
     cache = tmp_path / "loaders"
     cache.mkdir()
@@ -1836,7 +1834,7 @@ def test_scan_loader_health_indeterminate_pe_skipped(tmp_path: Path, monkeypatch
     def _locked_pe(path: Path) -> bool | None:
         return None  # 模拟杀软/文件锁导致 OSError 无法判定
 
-    monkeypatch.setattr(doctor_envs, "_is_pe_file", _locked_pe)
+    monkeypatch.setattr(cache_health, "_is_pe_file", _locked_pe)
     report = _scan_loader_health(cache, delete_corrupt=True)
     assert report.corrupt_files == ()
     assert locked.is_file()

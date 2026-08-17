@@ -2,8 +2,8 @@
 
 从 :mod:`fspack.doctor` facade（原 ``cli_doctor``）拆分而来，封装 ``fsp cache``
 子命令逻辑：扫描各 cache 子目录健康状态、清理 stale 与孤儿文件。
-底层扫描/清理委托 :mod:`fspack.doctor.envs` 中的扫描器与分发器，本模块仅负责
-命令编排与渲染。
+底层扫描/清理委托 :mod:`fspack.doctor.cache_health` 中的扫描器与分发器，本模块
+仅负责命令编排与渲染。
 
 iter-139：仅扫描 wheels 目录，``fsp cache status``/``fsp cache clean [--dry-run]``。
 iter-148 扩展为多 cache 类型：
@@ -23,13 +23,13 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from fspack.doctor.envs import (
+from fspack.doctor.cache_health import (
     _clean_all_caches,
     _clean_cache_by_type,
-    _format_size,
     _scan_all_caches,
     _scan_cache_by_type,
 )
+from fspack.doctor.envs import _format_size
 from fspack.doctor.models import CacheHealthReport
 
 __all__ = [
@@ -38,7 +38,7 @@ __all__ = [
     "run_cache_status",
 ]
 
-# 支持的 cache 类型清单（与 envs._CACHE_TARGETS 一致），用于 CLI 校验与默认迭代
+# 支持的 cache 类型清单（与 cache_health._CACHE_TARGETS 一致），用于 CLI 校验与默认迭代
 CACHE_TYPES: tuple[str, ...] = (
     "wheels",
     "embed",

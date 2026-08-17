@@ -57,22 +57,10 @@ from fspack.doctor.cache import (
     run_cache_clean,
     run_cache_status,
 )
-from fspack.doctor.envs import (
-    _check_cache_dir,
-    _check_cache_integrity,
-    _check_fspack_version,
-    _check_mirror_config,
-    _check_platform_info,
-    _check_python,
+from fspack.doctor.cache_health import (
     _clean_all_caches,
     _clean_cache_by_type,
     _clean_cache_issues,
-    _dir_size,
-    _file_size,
-    _format_size,
-    _is_pe_file,
-    _is_tar_intact,
-    _is_zip_intact,
     _scan_all_caches,
     _scan_cache_by_type,
     _scan_cache_health,
@@ -82,6 +70,22 @@ from fspack.doctor.envs import (
     _scan_nuitka_health,
     _scan_standalone_health,
     _scan_tkinter_health,
+)
+from fspack.doctor.envs import (
+    _check_cache_dir,
+    _check_cache_integrity,
+    _check_fspack_version,
+    _check_mirror_config,
+    _check_platform_info,
+    _check_python,
+    _dir_size,
+    _format_size,
+)
+from fspack.doctor.integrity import (
+    _file_size,
+    _is_pe_file,
+    _is_tar_intact,
+    _is_zip_intact,
     _try_unlink,
 )
 from fspack.doctor.models import (
