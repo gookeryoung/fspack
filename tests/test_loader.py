@@ -114,6 +114,7 @@ def test_compile_loader_mingw_missing(tmp_path: Path, monkeypatch: pytest.Monkey
         raise FileNotFoundError("no mingw")
 
     monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
+    _disable_windres(monkeypatch)
     with pytest.raises(LoaderError, match=r"请安装 mingw-w64"):
         compile_loader("x", tmp_path / "app.exe", AppType.CLI, tmp_path / "w", cache_dir=tmp_path / "cache")
 
@@ -125,6 +126,7 @@ def test_compile_loader_compile_error(tmp_path: Path, monkeypatch: pytest.Monkey
         raise err
 
     monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
+    _disable_windres(monkeypatch)
     with pytest.raises(LoaderError, match="loader 编译失败"):
         compile_loader("x", tmp_path / "app.exe", AppType.CLI, tmp_path / "w", cache_dir=tmp_path / "cache")
 

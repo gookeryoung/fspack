@@ -300,9 +300,11 @@ class WindowsLoader(LoaderCompiler):
         ``resource_obj`` 为 windres 编译的资源段（icon + 版本信息 + manifest），
         非 None 时追加到 gcc 命令末尾链接进 exe。
         """
-        # available() 前置检查已确保 mingw gcc 存在；断言仅为类型收窄（str | None → str）
+        # 无 mingw 前缀编译器时（如未装 mingw-w64 的 Linux）直接抛 LoaderError，
+        # 避免 python -O 剥离 assert 后 cmd[0]=None 产生模糊 TypeError
         gcc = _find_mingw_gcc()
-        assert gcc is not None
+        if gcc is None:
+            raise LoaderError(f"未找到编译器 {cls.compiler_name}，请安装 {cls.install_hint}")
         cmd: list[str] = [gcc, "-O2", "-municode", "-o", str(out_exe), str(c_file)]
         if app_type in (AppType.GUI, AppType.WEB):
             cmd.insert(1, "-mwindows")
