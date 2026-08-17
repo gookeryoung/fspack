@@ -23,7 +23,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from fspack._util.fsutil import atomic_write_text
+from fspack._util.fsutil import atomic_write_text, rmtree_longpath
 from fspack._util.jsoncache import load_json_dict
 
 if TYPE_CHECKING:
@@ -42,6 +42,7 @@ __all__ = [
     "_load_build_failure",
     "_remove_build_failure",
     "_remove_build_ok",
+    "_restore_moved",
     "_save_build_failure",
     "_save_build_ok",
     "clean_dist",
@@ -217,6 +218,28 @@ def _remove_build_failure(dist_dir: Path) -> None:
             _logger.warning("删除 .build_failed 失败: %s", e)
 
 
+def _restore_moved(dist_dir: Path, moved: list[tuple[Path, str]]) -> None:
+    """把已 move 出的保留文件恢复回 dist，避免 rmtree/move 失败时丢失.
+
+    成功路径下 ``src`` 已 move 回 dist，``exists()`` 为 False 自然跳过；
+    恢复失败仅告警（文件仍在临时目录，可人工找回）。
+
+    :param moved: ``(临时目录内路径, 原文件名)`` 列表（见 :func:`_clean_dist_dir`）
+    """
+    to_restore = [(src, name) for src, name in moved if src.exists()]
+    if not to_restore:
+        return
+    try:
+        dist_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        _logger.warning("重建 %s 失败: %s", dist_dir, e)
+    for src, name in to_restore:
+        try:
+            shutil.move(str(src), str(dist_dir / name))
+        except OSError as e:
+            _logger.warning("恢复 %s 失败: %s", name, e)
+
+
 def _clean_dist_dir(dist_dir: Path, *, keep_diagnostics: bool) -> None:
     """清空 dist 目录，按 keep_diagnostics 决定是否保留诊断文件.
 
@@ -225,16 +248,20 @@ def _clean_dist_dir(dist_dir: Path, *, keep_diagnostics: bool) -> None:
     rmtree 与写回之间崩溃导致保留文件丢失的窗口（move 方案下文件任一时刻
     都在磁盘上，崩溃后可恢复）。
 
-    :param keep_diagnostics: True 时保留 ``installer.nsi``/``.build_failed``/
-        ``.build_ok``（供 ``fsp c`` 使用，用户排查后保留诊断信息）；False 时
-        全清（供 ``--auto-clean`` 使用，全新开始构建）。
+    无保留文件时 dist 目录整体移除（不重建空目录）：清理语义上应"干净"，
+    且空 dist 配残留 ``.build_ok`` 会让 :func:`_has_build_stamps` 误判 dist 有效。
+
+    :param keep_diagnostics: True 时保留 ``installer.nsi``/``.build_failed``
+        （供 ``fsp c`` 使用，用户排查后保留诊断信息；``.build_ok`` 是完成标记
+        而非诊断信息，清理后无保留价值，一并删除）；False 时全清（供
+        ``--auto-clean`` 使用，全新开始构建）。
     """
     if not dist_dir.is_dir():
         return
 
     keep_names: list[str] = [_KEEP_NSI]
     if keep_diagnostics:
-        keep_names.extend((_BUILD_FAILED, _BUILD_OK))
+        keep_names.append(_BUILD_FAILED)
 
     keep_dir = dist_dir.parent / f".fspack_keep_{uuid.uuid4().hex}"
     # (临时目录内路径, 原文件名)：move 出的保留文件，rmtree 失败时据此恢复
@@ -248,24 +275,16 @@ def _clean_dist_dir(dist_dir: Path, *, keep_diagnostics: bool) -> None:
                 shutil.move(str(path), str(target))
                 moved.append((target, name))
                 _logger.info("保留: %s", path)
-        shutil.rmtree(dist_dir)
-        dist_dir.mkdir(parents=True, exist_ok=True)
-        for src, name in moved:
-            shutil.move(str(src), str(dist_dir / name))
+        # 长路径安全删除：node_modules/.pnpm 等深层路径超 MAX_PATH 260 时
+        # 普通 rmtree 抛 WinError 3 中途残留
+        rmtree_longpath(dist_dir)
+        if moved:
+            # 有保留文件才重建 dist 存放；无保留文件时 dist 整体移除
+            dist_dir.mkdir(parents=True, exist_ok=True)
+            for src, name in moved:
+                shutil.move(str(src), str(dist_dir / name))
     finally:
-        # rmtree/mkdir 失败等场景：把已 move 出的文件恢复回 dist，避免保留文件丢失
-        # （成功路径 src 已 move 回 dist，exists() 为 False 自然跳过）
-        to_restore = [(src, name) for src, name in moved if src.exists()]
-        if to_restore:
-            try:
-                dist_dir.mkdir(parents=True, exist_ok=True)
-            except OSError as e:
-                _logger.warning("重建 %s 失败: %s", dist_dir, e)
-            for src, name in to_restore:
-                try:
-                    shutil.move(str(src), str(dist_dir / name))
-                except OSError as e:
-                    _logger.warning("恢复 %s 失败: %s", name, e)
+        _restore_moved(dist_dir, moved)
         if keep_dir.is_dir():
             try:
                 keep_dir.rmdir()
@@ -282,8 +301,11 @@ def clean_dist(project: Path) -> None:
 
     - ``installer.nsi``：NSIS 脚本，保留便于改代码后 ``fsp p --no-build`` 重打包
     - ``.build_failed``：失败诊断标记，保留便于用户排查上次构建失败原因
+    - ``.build_ok``：成功完成标记，非诊断信息，随清理删除——避免残留标记让
+      ``_has_build_stamps`` 在空 dist 上误判"已完成构建"
 
-    全清场景（``fsp b --auto-clean``）调用 :func:`_clean_dist_dir` 并传
+    无保留文件时 dist 目录整体移除（不重建空目录）；全清场景
+    （``fsp b --auto-clean``）调用 :func:`_clean_dist_dir` 并传
     ``keep_diagnostics=False``。
     """
     dist = Path(project) / "dist"

@@ -20,6 +20,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Iterator
@@ -27,6 +28,7 @@ from typing import Iterator
 __all__ = [
     "atomic_write_text",
     "dir_size_with_count",
+    "rmtree_longpath",
     "safe_unlink",
     "scandir_dir_size",
     "scandir_tree",
@@ -164,3 +166,21 @@ def safe_unlink(path: Path, *, logger: logging.Logger | None = None) -> None:
         path.unlink()
     except OSError as e:
         (logger or _logger).warning("删除文件失败: %s: %s", path, e)
+
+
+def rmtree_longpath(path: Path) -> None:
+    """递归删除目录树，Windows 下加 ``\\\\?\\`` 前缀规避 MAX_PATH 260 限制.
+
+    node_modules/.pnpm 等深层目录的文件路径可超 260 字符，普通
+    ``shutil.rmtree`` 的 ``os.scandir`` 无法枚举超长路径，抛
+    ``FileNotFoundError(WinError 3)`` 中途残留。``\\\\?\\`` 前缀告知
+    Win32 跳过路径规范化与长度检查，要求绝对路径，故先
+    :meth:`Path.resolve`。非 Windows 平台退化为普通 ``shutil.rmtree``。
+
+    :param path: 待删除目录
+    :raises OSError: 删除失败
+    """
+    s = str(path.resolve())
+    if os.name == "nt" and not s.startswith("\\\\?\\"):
+        s = "\\\\?\\" + s
+    shutil.rmtree(s)

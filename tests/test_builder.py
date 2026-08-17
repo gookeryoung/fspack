@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import zipfile
 from pathlib import Path
@@ -2167,6 +2168,8 @@ def test_copy_source_data_dirs_still_excludes_build_artifacts(tmp_path: Path) ->
     (tpl / "dist" / "junk.txt").write_text("x")
     (tpl / ".venv").mkdir()
     (tpl / ".venv" / "pyvenv.cfg").write_text("x")
+    (tpl / "node_modules").mkdir()
+    (tpl / "node_modules" / ".pnpm").mkdir()
     dst = tmp_path / "out" / "src"
 
     copy_source(src, dst, data_dirs=("assets/templates",))
@@ -2176,6 +2179,8 @@ def test_copy_source_data_dirs_still_excludes_build_artifacts(tmp_path: Path) ->
     assert not (dst / "assets" / "templates" / "demo" / "__pycache__").exists()
     assert not (dst / "assets" / "templates" / "demo" / "dist").exists()
     assert not (dst / "assets" / "templates" / "demo" / ".venv").exists()
+    # 前端依赖缓存排除：pnpm install 可再生，.pnpm 超长路径会导致 fsp c 清理失败
+    assert not (dst / "assets" / "templates" / "demo" / "node_modules").exists()
 
 
 def test_copy_source_data_dirs_empty_keeps_default_behavior(tmp_path: Path) -> None:
@@ -2415,9 +2420,8 @@ def test_clean_dist_removes_dist(tmp_path: Path) -> None:
     dist.mkdir()
     (dist / "x.txt").write_text("x")
     clean_dist(tmp_path)
-    # clean 后 dist 目录重建为空（保留目录结构便于重新构建）
-    assert dist.is_dir()
-    assert not (dist / "x.txt").exists()
+    # 无保留文件时 dist 整体移除（不重建空目录），清理彻底
+    assert not dist.exists()
 
 
 def test_clean_dist_preserves_nsi(tmp_path: Path) -> None:
@@ -2436,6 +2440,24 @@ def test_clean_dist_preserves_nsi(tmp_path: Path) -> None:
 
 def test_clean_dist_no_dist(tmp_path: Path) -> None:
     clean_dist(tmp_path)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows MAX_PATH 260 长路径场景")
+def test_clean_dist_removes_over_maxpath(tmp_path: Path) -> None:
+    """dist 内含超 MAX_PATH 260 的深层路径时 clean 仍能整体删除.
+
+    场景来源：模板 frontend/node_modules/.pnpm 下路径超 260，普通
+    ``shutil.rmtree`` 抛 ``WinError 3`` 中途残留（fsp c 清理失败的根因）。
+    """
+    deep = tmp_path / "dist"
+    for i in range(18):
+        deep = deep / f"level_{i:02d}_padding_padding_padding"
+    assert len(str(deep)) > 260  # 前置：确认已触发长路径场景
+    Path("\\\\?\\" + str(deep)).mkdir(parents=True)
+    (Path("\\\\?\\" + str(deep)) / "f.js").write_text("x")
+
+    clean_dist(tmp_path)
+    assert not (tmp_path / "dist").exists()
 
 
 # --- _handle_dist_incomplete 测试（iter-140 扩展 iter-130 dist 半成品检测） ---
@@ -2516,11 +2538,8 @@ def test_handle_dist_incomplete_auto_clean_removes_artifacts(tmp_path: Path) -> 
 
     _handle_dist_incomplete(dist, auto_clean=True)
 
-    assert dist.is_dir()
-    assert not (dist / "runtime").exists()
-    assert not (dist / "src").exists()
-    assert not (dist / "app.exe").exists()
-    assert not (dist / _BUILD_FAILED).exists()
+    # 无保留文件（无 installer.nsi）时 dist 整体移除
+    assert not dist.exists()
 
 
 def test_handle_dist_incomplete_auto_clean_preserves_nsi(tmp_path: Path) -> None:
@@ -2788,8 +2807,8 @@ def test_remove_build_ok_deletes_marker(tmp_path: Path) -> None:
     _remove_build_ok(dist)  # 不抛异常
 
 
-def test_clean_dist_dir_keeps_diagnostics_preserves_build_ok(tmp_path: Path) -> None:
-    """keep_diagnostics=True 时保留 .build_ok 标记（与 .build_failed 同等对待）."""
+def test_clean_dist_dir_keeps_diagnostics_removes_build_ok(tmp_path: Path) -> None:
+    """.build_ok 是完成标记而非诊断信息，随清理删除（避免空 dist 被误判有效）."""
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "runtime").mkdir()
@@ -2797,8 +2816,8 @@ def test_clean_dist_dir_keeps_diagnostics_preserves_build_ok(tmp_path: Path) -> 
 
     _clean_dist_dir(dist, keep_diagnostics=True)
 
-    assert (dist / _BUILD_OK).is_file()
-    assert not (dist / "runtime").exists()
+    # 无保留文件时 dist 整体移除，.build_ok 一并消失
+    assert not dist.exists()
 
 
 def test_build_success_writes_build_ok(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

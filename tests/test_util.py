@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from fspack._util.format import format_bytes_dec, format_size_bin
 from fspack._util.fsutil import (
     atomic_write_text,
     dir_size_with_count,
+    rmtree_longpath,
     safe_unlink,
     scandir_dir_size,
     scandir_tree,
@@ -168,6 +170,37 @@ def test_safe_unlink_oserror_only_warns(
     with caplog.at_level("WARNING", logger="test.safe_unlink"):
         safe_unlink(f, logger=logger)
     assert any("删除文件失败" in r.message for r in caplog.records)
+
+
+# --- fsutil: rmtree_longpath ---------------------------------------------
+
+
+def test_rmtree_longpath_removes_tree(tmp_path: Path) -> None:
+    """删除普通目录树（含嵌套子目录与文件）."""
+    d = tmp_path / "tree"
+    (d / "sub" / "deeper").mkdir(parents=True)
+    (d / "sub" / "deeper" / "f.txt").write_text("x")
+    (d / "top.txt").write_text("x")
+    rmtree_longpath(d)
+    assert not d.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows MAX_PATH 260 长路径场景")
+def test_rmtree_longpath_removes_over_maxpath(tmp_path: Path) -> None:
+    """删除总长超 MAX_PATH 260 的深层目录树（node_modules/.pnpm 同类场景）.
+
+    创建超长路径同样受 260 限制，须用 ``\\\\?\\`` 前缀 ``os.makedirs``；
+    删除走 :func:`rmtree_longpath`（内部同为前缀路径）。
+    """
+    deep = tmp_path / "dist"
+    for i in range(18):
+        deep = deep / f"level_{i:02d}_padding_padding_padding"
+    assert len(str(deep)) > 260  # 前置：确认已触发长路径场景
+    Path("\\\\?\\" + str(deep)).mkdir(parents=True)
+    (Path("\\\\?\\" + str(deep)) / "f.js").write_text("x")
+
+    rmtree_longpath(tmp_path / "dist")
+    assert not (tmp_path / "dist").exists()
 
 
 # --- jsoncache: load_json_dict -------------------------------------------

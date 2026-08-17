@@ -42,6 +42,9 @@ _EXCLUDE_ALWAYS = shutil.ignore_patterns(
     ".pyrefly_cache",
     ".mypy_cache",
     ".uv-cache",
+    # 前端依赖缓存：pnpm install 可再生（.pnpm 内路径可超 MAX_PATH 260，
+    # 拷入 dist 会导致清理失败），模板用户创建项目后自行安装
+    "node_modules",
     # 版本控制
     ".git",
     ".gitignore",
