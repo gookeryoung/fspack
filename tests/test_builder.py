@@ -1367,17 +1367,20 @@ def _fake_compileall_runner(cmd: list[str], **kw: Any) -> Any:
     供 ``_precompile_pyc`` 测试使用，使 ``_strip_py_sources`` 能迁移真实的 .pyc。
     用 :func:`py_compile.compile` 生成指定 Python 版本标签的 .pyc 文件名
     （``cpython-{major}{minor}[-opt-N].pyc``），而非当前解释器版本。
-    需从命令中解析 ``-o <optimize>`` 与目标目录，py_version 由调用方在 ``cmd`` 中
-    无法获取，故用模块级 ``_FAKE_COMPILE_PY_VERSION`` 变量传递（默认 "3.11"）。
+    从命令中解析解释器优化标志 ``-O``/``-OO``（等价 ``compileall -o 1/2``）与
+    目标目录；py_version 由调用方在 ``cmd`` 中无法获取，故用模块级
+    ``_FAKE_COMPILE_PY_VERSION`` 变量传递（默认 "3.11"）。
 
-    支持多目录合并调用：``compileall dir1 dir2 -q -j 0 -o N``
+    支持多目录合并调用：``python [-O|-OO] -m compileall dir1 dir2 -q -j 0``
     一次编译多目录，本函数收集所有非 flag 的目录参数逐个编译。
     """
     optimize = 0
     target_dirs: list[Path] = []
-    for i, arg in enumerate(cmd):
-        if arg == "-o":
-            optimize = int(cmd[i + 1])
+    for arg in cmd:
+        if arg == "-OO":
+            optimize = 2
+        elif arg == "-O":
+            optimize = 1
         elif not arg.startswith("-") and Path(arg).is_dir():
             target_dirs.append(Path(arg))
     for target_dir in target_dirs:
@@ -1670,7 +1673,11 @@ def test_precompile_pyc_compileall_failure_warns_not_raises(
 
 
 def test_precompile_pyc_optimize_passes_o_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """optimize 参数透传为 compileall `-o` 标志，控制字节码优化级别."""
+    """optimize 参数透传为解释器 ``-O``/``-OO`` 标志，控制字节码优化级别.
+
+    用解释器标志而非 ``compileall -o N``：后者仅 Python 3.9+ CLI 支持，
+    embed Python 3.8 会报 "unrecognized arguments: -o"。
+    """
     runtime = tmp_path / "runtime"
     runtime.mkdir(parents=True, exist_ok=True)
     (runtime / "python.exe").write_bytes(b"")
@@ -1685,12 +1692,13 @@ def test_precompile_pyc_optimize_passes_o_flag(tmp_path: Path, monkeypatch: pyte
     st = StageRecorder("预编译字节码")
     _precompile_pyc(dist, runtime, "3.11.9", Platform.WINDOWS, strip_py=False, stage=st, optimize=2)
 
-    # 拆分两次调用：src 用 optimize=2，site-packages 降级到 1（保留 docstring）
+    # 拆分两次调用：src 用 optimize=2（-OO），site-packages 降级到 1（-O，保留 docstring）
     assert len(captured) == 2
     src_cmd = next(cmd for cmd in captured if str(dist / "src") in cmd)
-    assert src_cmd[src_cmd.index("-o") + 1] == "2"
+    assert "-OO" in src_cmd
     sp_cmd = next(cmd for cmd in captured if str(tmp_path / "dist" / "site-packages") in cmd)
-    assert sp_cmd[sp_cmd.index("-o") + 1] == "1"
+    assert "-O" in sp_cmd
+    assert "-OO" not in sp_cmd
 
 
 def test_pyc_stamp_key_includes_sp_optimize(tmp_path: Path) -> None:
@@ -1716,7 +1724,7 @@ def test_pyc_stamp_key_includes_sp_optimize(tmp_path: Path) -> None:
 
 
 def test_precompile_pyc_optimize_default_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """optimize 默认 0，compileall 命令含 `-o 0`."""
+    """optimize 默认 0，compileall 命令不含优化标志（生成无 opt 后缀的 .pyc）."""
     runtime = tmp_path / "runtime"
     runtime.mkdir(parents=True, exist_ok=True)
     (runtime / "python.exe").write_bytes(b"")
@@ -1732,7 +1740,8 @@ def test_precompile_pyc_optimize_default_zero(tmp_path: Path, monkeypatch: pytes
     _precompile_pyc(dist, runtime, "3.11.9", Platform.WINDOWS, strip_py=False, stage=st)
 
     for cmd in captured:
-        assert cmd[cmd.index("-o") + 1] == "0"
+        assert "-O" not in cmd
+        assert "-OO" not in cmd
 
 
 def test_pyc_stamp_key_includes_optimize(tmp_path: Path) -> None:

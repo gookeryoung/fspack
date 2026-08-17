@@ -75,19 +75,18 @@ def _run_compileall(py_exe: Path, target_dir: Path, optimize: int) -> tuple[bool
     """
     _COMPILEALL_TIMEOUT_dispatch: float = _P("_COMPILEALL_TIMEOUT", _COMPILEALL_TIMEOUT)
     subprocess_dispatch: Any = _P("subprocess", _default_subprocess)
+    # 用解释器级优化标志（-O/-OO）替代 compileall 的 `-o N`：后者仅 Python 3.9+
+    # CLI 支持，embed Python 3.8 会报 "unrecognized arguments: -o" 导致预编译
+    # 整体失败。两者产物一致：py_compile 的 optimize 默认 -1，跟随解释器
+    # sys.flags.optimize，-O → ``*.opt-1.pyc``、-OO → ``*.opt-2.pyc``，与
+    # ``compileall -o 1/2`` 生成的 PEP 488 布局完全相同。
+    cmd = [str(py_exe)]
+    if optimize > 0:
+        cmd.append("-" + "O" * optimize)
+    cmd += ["-m", "compileall", str(target_dir), "-q", "-j", "0"]
     try:
         result = subprocess_dispatch.run(
-            [
-                str(py_exe),
-                "-m",
-                "compileall",
-                str(target_dir),
-                "-q",
-                "-j",
-                "0",
-                "-o",
-                str(optimize),
-            ],
+            cmd,
             check=False,
             capture_output=True,
             encoding="utf-8",
@@ -165,8 +164,8 @@ def _precompile_pyc(  # noqa: PLR0912, PLR0913
     用 runtime 自身的 python 调用 ``compileall``，保证 ABI 一致。生成
     ``__pycache__/{name}.cpython-{ver}.pyc``，运行时默认加载。
 
-    ``optimize`` 控制 src 的 ``compileall -o`` 级别（CPython ``compile()`` 的 ``optimize``
-    参数）：
+    ``optimize`` 控制 src 的字节码优化级别（以解释器 ``-O``/``-OO`` 标志传给
+    ``compileall``，等价于 CPython ``compile()`` 的 ``optimize`` 参数）：
 
     - ``0``（默认）：保留 docstring 与 assert，最大兼容性
     - ``1``：剥离 assert，保留 docstring（``-O``）

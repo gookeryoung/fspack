@@ -417,7 +417,7 @@ class BuildOptions:
       删 python3.X 二进制 + 删 include/share + 非 tkinter 项目剥离 Tcl/Tk，省 ~100MB）
     - ``no_pyc``：关闭字节码预编译
     - ``pyc_strip``：剥离非 ``__init__.py`` 的 ``.py`` 源码
-    - ``pyc_optimize``：字节码优化级别 0/1/2（``compileall -o``）
+    - ``pyc_optimize``：字节码优化级别 0/1/2（解释器 ``-O``/``-OO`` 标志）
     - ``no_site``：禁用 ``site.py`` 加载（``_pth`` 省略 ``import site``）
     - ``nuitka``：启用 Nuitka 编译模式（用户源码编译为 ``.pyd``）
     - ``ccache``：Nuitka 编译启用 ccache 缓存（首次下载到本地，后续复用，加速重复编译）
