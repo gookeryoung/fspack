@@ -33,3 +33,5 @@ coverage.xml
 # Sphinx 文档构建输出
 docs/_build/
 refs/
+src/fspack/assets/templates/web/webview_app/src/webview_app/frontend/.pnpm-store
+.vscode

@@ -1,0 +1,13 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+uv.lock
+src/webview_app/frontend/pnpm-lock.yaml
+src/webview_app/frontend/package-lock.json

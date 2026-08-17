@@ -1,0 +1,7 @@
+# pnpm 设置（pnpm 10.6+ 从本文件读取配置）
+# 允许 esbuild 执行安装脚本，避免 ERR_PNPM_IGNORED_BUILDS 导致安装失败
+onlyBuiltDependencies:
+  - esbuild
+# pnpm 11+ 使用 allowBuilds 映射（项目级覆盖全局待定状态）
+allowBuilds:
+  esbuild: true

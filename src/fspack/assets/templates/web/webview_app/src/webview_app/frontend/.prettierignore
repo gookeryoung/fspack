@@ -1,0 +1,21 @@
+# 忽略构建输出
+output/
+dist/
+
+# 忽略依赖
+node_modules/
+
+# 忽略配置文件
+*.config.js
+*.config.ts
+
+# 忽略特定文件
+*.min.js
+*.min.css
+
+# 忽略覆盖率报告
+coverage/
+
+# 忽略日志
+*.log
+logs/
