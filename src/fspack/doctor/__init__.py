@@ -106,6 +106,12 @@ from fspack.doctor.runner import (
     run_doctor,
     run_doctor_cache_check,
 )
+from fspack.doctor.template_report import (
+    _format_run_status,
+    _print_performance_analysis,
+    _print_run_summary,
+    _print_template_build_summary,
+)
 from fspack.doctor.templates import (
     _build_debug_cmd,
     _build_run_cmd,
@@ -113,10 +119,6 @@ from fspack.doctor.templates import (
     _find_debug_python,
     _find_dist_exe,
     _find_wrapper,
-    _format_run_status,
-    _print_performance_analysis,
-    _print_run_summary,
-    _print_template_build_summary,
     _run_template,
     run_doctor_bench,
     run_doctor_test,
