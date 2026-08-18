@@ -33,6 +33,7 @@ from fspack.packaging.wheels import (
     _run_pip_download,
     download_wheels,
 )
+from fspack.packaging.wheels.resolver import DownloadContext
 from fspack.platform import Platform
 from fspack.progress import StageRecorder
 from tests._stubs import CompletedStub, fail_urlopen
@@ -188,12 +189,14 @@ def test_run_pip_download_offline_cache_miss_direct(tmp_path: Path, monkeypatch:
     with pytest.raises(DependencyError, match=r"离线模式下"):
         _run_pip_download(
             ["numpy"],
-            ["py", "-m", "pip", "download"],
-            "py",
-            "3.11.9",
-            ("win_amd64",),
-            "https://idx/simple",
-            tmp_path,
+            DownloadContext(
+                py="py",
+                py_version="3.11.9",
+                platform_tags=("win_amd64",),
+                pypi_index="https://idx/simple",
+                cache_dir=tmp_path,
+                base_args=["py", "-m", "pip", "download"],
+            ),
         )
 
 
@@ -210,13 +213,15 @@ def test_run_pip_download_offline_includes_user_find_links(tmp_path: Path, monke
     user_find_links = ["/custom/wheels", "/shared/wheels"]
     _run_pip_download(
         ["numpy"],
-        ["py", "-m", "pip", "download", "--find-links", str(tmp_path)],
-        "py",
-        "3.11.9",
-        ("win_amd64",),
-        "https://idx/simple",
-        tmp_path,
-        find_links=user_find_links,
+        DownloadContext(
+            py="py",
+            py_version="3.11.9",
+            platform_tags=("win_amd64",),
+            pypi_index="https://idx/simple",
+            cache_dir=tmp_path,
+            base_args=["py", "-m", "pip", "download", "--find-links", str(tmp_path)],
+            find_links=user_find_links,
+        ),
     )
     cmd = captured["cmd"]
     # 用户提供的 find-links 应出现在 --no-index 之前的命令中
@@ -235,13 +240,15 @@ def test_run_pip_download_offline_error_lists_searched_paths(tmp_path: Path, mon
     with pytest.raises(DependencyError) as exc_info:
         _run_pip_download(
             ["numpy"],
-            ["py", "-m", "pip", "download"],
-            "py",
-            "3.11.9",
-            ("win_amd64",),
-            "https://idx/simple",
-            tmp_path,
-            find_links=user_find_links,
+            DownloadContext(
+                py="py",
+                py_version="3.11.9",
+                platform_tags=("win_amd64",),
+                pypi_index="https://idx/simple",
+                cache_dir=tmp_path,
+                base_args=["py", "-m", "pip", "download"],
+                find_links=user_find_links,
+            ),
         )
     msg = str(exc_info.value)
     assert "已搜索路径" in msg

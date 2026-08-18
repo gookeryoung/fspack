@@ -1,10 +1,15 @@
-"""fspack wheel 下载 facade：从 downloader/cache/markers 三个模块 re-export 公开 API.
+"""fspack wheel 下载 facade：从各职责模块 re-export 公开 API.
 
 本模块是 :mod:`fspack.packaging.wheels` 的入口与 API 索引，无业务逻辑。原
-``wheels.py``（709 行）按职责拆分到三个模块：
+``wheels.py``（709 行）按职责拆分到多个模块：
 
-- :mod:`fspack.packaging.wheels.downloader`：pip/uv 调用 + sdist 回退 + 流式输出 +
-  ``download_wheels`` 入口 + wheel 文件名解析
+- :mod:`fspack.packaging.wheels.downloader`：``download_wheels`` 入口 + pip
+  解释器查找 + subprocess 包装（``_run_pip``/``_stream_subprocess``）+ wheel
+  文件名解析 + 依赖解析缓存调度
+- :mod:`fspack.packaging.wheels.resolver`：在线解析编排 + ``DownloadContext``
+- :mod:`fspack.packaging.wheels.uv_bridge`：uv CLI 集成（检测/解析/输出转换）
+- :mod:`fspack.packaging.wheels.parallel`：单包下载原语（pip/uv）+ 并行编排
+- :mod:`fspack.packaging.wheels.sdist`：sdist 回退构建
 - :mod:`fspack.packaging.wheels.cache`：依赖解析缓存（``.deps-<key>.json``）
 - :mod:`fspack.packaging.wheels.markers`：``python_version`` 环境标记预过滤
 

@@ -55,7 +55,7 @@ import pytest
 
 from fspack.packaging.wheels.cache import _deps_cache_key, _save_deps_cache
 from fspack.packaging.wheels.downloader import download_wheels
-from fspack.packaging.wheels.resolver import _download_resolved_parallel
+from fspack.packaging.wheels.resolver import DownloadContext, _download_resolved_parallel
 from fspack.progress import StageRecorder
 
 # ---- 测试样本 ----
@@ -134,22 +134,20 @@ def _run_parallel_download(
 ) -> subprocess.CompletedProcess[str]:
     """调用 ``_download_resolved_parallel`` 下载 50 包，返回合并结果.
 
-    构造最小化参数（``base_args``/``extra_args`` 仅满足函数签名，实际 pip/uv
+    构造最小化参数（``base_args`` 仅满足函数签名，实际 pip/uv
     子进程已被 mock 不会执行）。
     """
     base_args: list[str] = ["python", "-m", "pip", "download", "-d", str(cache_dir)]
-    extra_args: list[str] = []
-    return _download_resolved_parallel(
-        resolved,
-        base_args,
-        extra_args,
-        "python",
-        "https://pypi.org/simple",
-        cache_dir,
-        uv_path=uv_path,
+    ctx = DownloadContext(
+        py="python",
         py_version="3.11.9",
         platform_tags=("win_amd64",),
+        pypi_index="https://pypi.org/simple",
+        cache_dir=cache_dir,
+        base_args=base_args,
+        uv_path=uv_path,
     )
+    return _download_resolved_parallel(resolved, ctx)
 
 
 # ---- 基线测试 ----

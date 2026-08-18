@@ -3,24 +3,28 @@
 从 :mod:`fspack.packaging.wheels` facade 拆分而来，封装 wheel 下载入口与 pip 调用
 基础设施。依赖 :mod:`fspack.packaging.wheels.markers` 做 ``python_version`` 标记
 预过滤，依赖 :mod:`fspack.packaging.wheels.cache` 做依赖解析缓存，
-:mod:`fspack.packaging.wheels.resolver` 做在线依赖解析与下载，
+:mod:`fspack.packaging.wheels.resolver` 做在线解析编排（其下
+:mod:`fspack.packaging.wheels.uv_bridge` 做 uv 依赖图解析、
+:mod:`fspack.packaging.wheels.parallel` 做单包下载与并行编排），
 :mod:`fspack.packaging.wheels.sdist` 做 sdist 回退构建。
 
 核心流程：
 
-1. ``download_wheels`` 入口：预过滤标记 → 查缓存 → 调 ``_run_pip_download`` → 解析结果
-2. ``_run_pip``/``_stream_subprocess``：subprocess 包装，被 resolver/sdist 复用
+1. ``download_wheels`` 入口：预过滤标记 → 查缓存 → 构造 ``DownloadContext`` →
+   调 ``_run_pip_download`` → 解析结果
+2. ``_run_pip``/``_stream_subprocess``：subprocess 包装，被 resolver/parallel/sdist 复用
 3. ``_find_pip_python``：查找能跑 pip 的 python 解释器
 
 显式 ``import`` 标准库模块（``os``/``re``/``subprocess``/``sys``）
 是为了兼容测试中的 ``monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", ...)``
 等 patch 路径——patch 设置的是模块对象的属性，因标准库模块为单例，全局生效，
-对 :mod:`fspack.packaging.wheels.resolver` 与 :mod:`fspack.packaging.wheels.sdist`
-内的调用同样有效。
+对 :mod:`fspack.packaging.wheels.resolver`、:mod:`fspack.packaging.wheels.parallel`
+与 :mod:`fspack.packaging.wheels.sdist` 内的调用同样有效。
 
-从 :mod:`fspack.packaging.wheels.resolver` 与 :mod:`fspack.packaging.wheels.sdist`
+从 :mod:`fspack.packaging.wheels.resolver`、:mod:`fspack.packaging.wheels.parallel`、
+:mod:`fspack.packaging.wheels.uv_bridge` 与 :mod:`fspack.packaging.wheels.sdist`
 re-export 函数，保持 ``from fspack.packaging.wheels.downloader import X`` 路径兼容
-（``wheels.py`` facade 与部分测试仍通过本模块访问这些函数）。
+（``wheels`` facade 与部分测试仍通过本模块访问这些函数）。
 """
 
 from __future__ import annotations
@@ -37,20 +41,25 @@ from typing import TYPE_CHECKING, Sequence
 from fspack.exceptions import DependencyError
 from fspack.packaging.wheels.cache import _deps_cache_key, _load_deps_cache, _save_deps_cache
 from fspack.packaging.wheels.markers import _filter_by_python_version
+from fspack.packaging.wheels.parallel import (  # noqa: F401
+    _download_one_resolved,
+    _download_one_with_uv,
+    _download_resolved_parallel,
+    _merge_parallel_results,
+)
 from fspack.packaging.wheels.resolver import (
-    _UV_DOWNLOAD_WHEEL_RE,  # noqa: F401
-    _UV_RESOLVED_LINE_RE,  # noqa: F401
-    _convert_uv_output_to_pip_format,  # noqa: F401
-    _download_one_resolved,  # noqa: F401
-    _download_one_with_uv,  # noqa: F401
+    DownloadContext,
     _download_online,  # noqa: F401
-    _download_resolved_parallel,  # noqa: F401
-    _find_uv,  # noqa: F401
-    _merge_parallel_results,  # noqa: F401
-    _resolve_with_uv,  # noqa: F401
     _run_pip_download,
-    _uv_python_platform,  # noqa: F401
-    _uv_supports_download,  # noqa: F401
+)
+from fspack.packaging.wheels.uv_bridge import (  # noqa: F401
+    _UV_DOWNLOAD_WHEEL_RE,
+    _UV_RESOLVED_LINE_RE,
+    _convert_uv_output_to_pip_format,
+    _find_uv,
+    _resolve_with_uv,
+    _uv_python_platform,
+    _uv_supports_download,
 )
 
 if TYPE_CHECKING:
@@ -156,23 +165,22 @@ def download_wheels(  # noqa: PLR0913
 
     py = _find_pip_python()
     base_args = _build_pip_download_args(py, py_version, platform_tags, cache_dir)
+    ctx = DownloadContext(
+        py=py,
+        py_version=py_version,
+        platform_tags=tuple(platform_tags),
+        pypi_index=pypi_index,
+        cache_dir=cache_dir,
+        base_args=base_args,
+        extra_index_urls=tuple(extra_index_urls),
+        find_links=tuple(find_links),
+    )
 
     _logger.info("下载依赖 wheel: %s（镜像 %s）", " ".join(filtered), pypi_index)
     before = {f.name for f in cache_dir.glob("*.whl")}
 
     try:
-        result = _run_pip_download(
-            filtered,
-            base_args,
-            py,
-            py_version,
-            platform_tags,
-            pypi_index,
-            cache_dir,
-            extra_index_urls=extra_index_urls,
-            find_links=find_links,
-            require_hashes=require_hashes,
-        )
+        result = _run_pip_download(filtered, ctx, require_hashes=require_hashes)
     except DependencyError:
         # pip download 失败时清理本次部分下载的 .whl：pip 可能已下载部分 wheel
         # 才失败，残留的半成品 wheel 会被下次构建的 --no-index 离线解析错误命中，
@@ -452,7 +460,7 @@ def _stream_subprocess(cmd: list[str]) -> subprocess.CompletedProcess[str]:
         pip 在 ``stderr=PIPE`` 下检测到非 tty 不输出进度条，本函数的流式输出
         实际只传递 pip 的非进度条输出（如 ``Downloading X.whl`` 行）。实时下载
         速度由调用方通过 :class:`_DownloadMonitor` 监控 cache_dir 文件大小变化
-        显示（见 :func:`fspack.packaging.wheels.resolver._download_one_resolved`）。
+        显示（见 :func:`fspack.packaging.wheels.parallel._download_one_resolved`）。
     """
     # 延迟导入 threading：保持模块顶部零 stdlib 副作用约定（与 net.py/runtime.py
     # 等热路径模块一致）。site.py 启动期已加载 threading，此处为 dict 查询，无实际开销。
