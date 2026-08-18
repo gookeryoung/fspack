@@ -3,26 +3,26 @@
 从 :mod:`fspack.packaging.installer.base` 拆分而来，封装 zip 便携包逻辑：
 可选 build → 校验可执行文件 → 打包 zip（staging 目录 + make_archive）。
 
-zip 跨平台解压即用，无需安装。依赖 :mod:`fspack.packaging.installer.base` 提供：
-``_run_stage``/``_prepare_dist``/``_check_exe``/``_release_base``、
-``_make_staged_archive``（zip 打包）。
+zip 跨平台解压即用，无需安装。依赖 :mod:`fspack.packaging.installer.base` 提供
+``_run_stage``；:mod:`fspack.packaging.installer.dist_prep` 提供
+``_prepare_dist``/``_check_exe``/``_release_base``/``_make_staged_archive``（zip 打包）。
 """
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Sequence
 
-from fspack.config import MirrorConfig, ProjectInfo
+from fspack.config import ProjectInfo
 from fspack.console import console
-from fspack.packaging.installer.base import (
+from fspack.packaging.installer.base import _run_stage
+from fspack.packaging.installer.dist_prep import (
     _check_exe,
     _make_staged_archive,
     _prepare_dist,
     _release_base,
-    _run_stage,
 )
+from fspack.packaging.installer.request import ReleaseRequest
 from fspack.platform import Platform
 from fspack.progress import BuildTracker
 
@@ -43,16 +43,10 @@ def _zip_platform_suffix(target: Platform) -> str:
     return "linux"
 
 
-def build_zip(  # noqa: PLR0913
-    project_dir: Path,
-    mirror: MirrorConfig,
-    py_version: str | None = None,
-    no_build: bool = False,
-    dist_dir: Path | None = None,
-    target: Platform = Platform.WINDOWS,
+def build_zip(
+    req: ReleaseRequest,
     *,
-    tracker: BuildTracker | None = None,
-    extras: Sequence[str] | None = None,
+    target: Platform = Platform.WINDOWS,
     reuse_staging: bool = False,
 ) -> Path:
     """编排：可选 build → 校验可执行文件 → 打包 zip 便携包，返回 zip 路径。
@@ -63,9 +57,9 @@ def build_zip(  # noqa: PLR0913
     ``reuse_staging=True`` 时复用同 base 的既有 staging（Linux ``all`` 场景由
     tar.gz 保留，跳过一次 dist 全量 copytree；staging 不存在时自动回退）。
     """
-    own_tracker = tracker is None
-    tk = tracker or BuildTracker(title="打包阶段汇总")
-    dist, info = _prepare_dist(project_dir, mirror, py_version, no_build, dist_dir, target, extras=extras, tracker=tk)
+    own_tracker = req.tracker is None
+    tk = req.tracker or BuildTracker(title="打包阶段汇总")
+    dist, info = _prepare_dist(req, target)
     _check_exe(dist, info, target)
     release = dist / "release"
     zip_name = f"{_release_base(info, _zip_platform_suffix(target))}.zip"

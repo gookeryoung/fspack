@@ -12,6 +12,8 @@ import pytest
 from fspack.config import AppType, BuildOptions, EntryPoint, ProjectInfo, get_mirror
 from fspack.exceptions import InstallerError
 from fspack.packaging.installer import (
+    ReleaseRequest,
+    SignOptions,
     _make_zip,
     _resolve_formats,
     build_deb_release,
@@ -241,7 +243,7 @@ def test_compile_installer_success(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
 def test_build_installer_no_build_missing_dist(tmp_path: Path) -> None:
     with pytest.raises(InstallerError, match="未找到 dist"):
-        build_installer(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True)
+        build_installer(ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True))
 
 
 def test_build_installer_no_build_missing_exe(tmp_path: Path) -> None:
@@ -249,7 +251,7 @@ def test_build_installer_no_build_missing_exe(tmp_path: Path) -> None:
     (tmp_path / "app.py").write_text("def main():\n    pass\n")
     (tmp_path / "dist").mkdir()
     with pytest.raises(InstallerError, match="未找到已构建"):
-        build_installer(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True)
+        build_installer(ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True))
 
 
 def test_build_installer_no_build_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -266,7 +268,7 @@ def test_build_installer_no_build_success(tmp_path: Path, monkeypatch: pytest.Mo
         return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.installer.subprocess.run", fake_run)
-    result = build_installer(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True)
+    result = build_installer(ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True))
     assert result == out_setup
     assert (dist / "installer.nsi").is_file()
     assert "app-1.0-py3.11.9-windows-slim-setup.exe" in (dist / "installer.nsi").read_text(encoding="utf-8")
@@ -309,7 +311,7 @@ def test_build_installer_with_build(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.installer.subprocess.run", fake_run)
-    result = build_installer(tmp_path, get_mirror("huawei"), "3.11.9", no_build=False)
+    result = build_installer(ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9", no_build=False))
     assert result == out_setup
     assert (dist / "app.exe").is_file()
     assert (dist / "installer.nsi").is_file()
@@ -474,7 +476,7 @@ def test_make_zip_overwrites_existing(tmp_path: Path) -> None:
 def test_build_zip_no_build_missing_dist(tmp_path: Path) -> None:
     """no_build=True 且 dist 不存在时报错."""
     with pytest.raises(InstallerError, match="未找到 dist"):
-        build_zip(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True)
+        build_zip(ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True))
 
 
 def test_build_zip_no_build_missing_exe(tmp_path: Path) -> None:
@@ -483,7 +485,7 @@ def test_build_zip_no_build_missing_exe(tmp_path: Path) -> None:
     (tmp_path / "app.py").write_text("def main():\n    pass\n")
     (tmp_path / "dist").mkdir()
     with pytest.raises(InstallerError, match="未找到已构建"):
-        build_zip(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True)
+        build_zip(ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True))
 
 
 def test_build_zip_no_build_success(tmp_path: Path) -> None:
@@ -493,7 +495,7 @@ def test_build_zip_no_build_success(tmp_path: Path) -> None:
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "app.exe").write_bytes(b"")
-    result = build_zip(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True)
+    result = build_zip(ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True))
     assert result.is_file()
     assert result.name == "app-1.0-py3.11.9-windows-slim.zip"
 
@@ -527,7 +529,7 @@ def test_build_zip_with_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
         )
 
     monkeypatch.setattr("fspack.packaging.installer.build", fake_build)
-    result = build_zip(tmp_path, get_mirror("huawei"), "3.11.9", no_build=False)
+    result = build_zip(ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9", no_build=False))
     assert result.is_file()
     assert result.name == "app-1.0-py3.11.9-windows-slim.zip"
 
@@ -548,7 +550,7 @@ def test_build_tarball_release_no_build_success(tmp_path: Path) -> None:
     (dist / ".pyc_stamp").write_text("stamp")
     (dist / "src" / "pkg.build").mkdir(parents=True)
     (dist / "src" / "pkg.build" / "artifact.o").write_bytes(b"")
-    result = build_tarball_release(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True)
+    result = build_tarball_release(ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True))
     assert result.is_file()
     assert result.name == "app-1.0-py3.11.9-linux-slim.tar.gz"
     # 验证 tar.gz 中不包含构建中间文件
@@ -568,7 +570,7 @@ def test_build_tarball_release_missing_exe(tmp_path: Path) -> None:
     (tmp_path / "app.py").write_text("def main():\n    pass\n")
     (tmp_path / "dist").mkdir()
     with pytest.raises(InstallerError, match="未找到已构建"):
-        build_tarball_release(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True)
+        build_tarball_release(ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True))
 
 
 # ---- build_deb_release 编排测试 ----
@@ -590,7 +592,7 @@ def test_build_deb_release_no_build_success(tmp_path: Path, monkeypatch: pytest.
         return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.installer.subprocess.run", fake_run)
-    result = build_deb_release(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True)
+    result = build_deb_release(ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True))
     assert result.is_file()
     assert result.name == "app_1.0-py3.11.9-slim_amd64.deb"
     assert result.read_bytes() == b"deb-content"
@@ -620,7 +622,7 @@ def test_build_release_auto_windows_dispatches_nsis(tmp_path: Path, monkeypatch:
         "fspack.packaging.installer.NsisInstaller.build_installer", classmethod(fake_nsis_build_installer)
     )
     outputs = build_release(
-        tmp_path, get_mirror("huawei"), "3.11.9", no_build=True, target=Platform.WINDOWS, fmt="auto"
+        ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True), target=Platform.WINDOWS, fmt="auto"
     )
     assert calls == ["nsis"]
     assert len(outputs) == 1
@@ -633,7 +635,9 @@ def test_build_release_zip_only(tmp_path: Path) -> None:
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "app.exe").write_bytes(b"")
-    outputs = build_release(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True, target=Platform.WINDOWS, fmt="zip")
+    outputs = build_release(
+        ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True), target=Platform.WINDOWS, fmt="zip"
+    )
     assert len(outputs) == 1
     assert outputs[0].name == "app-1.0-py3.11.9-windows-slim.zip"
 
@@ -663,7 +667,9 @@ def test_build_release_all_windows_generates_two_formats(tmp_path: Path, monkeyp
         "fspack.packaging.installer.NsisInstaller.build_installer", classmethod(fake_nsis_build_installer)
     )
     monkeypatch.setattr("fspack.packaging.installer.build", fake_build)
-    outputs = build_release(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True, target=Platform.WINDOWS, fmt="all")
+    outputs = build_release(
+        ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True), target=Platform.WINDOWS, fmt="all"
+    )
     assert len(outputs) == 2
     assert outputs[0].name == "app-1.0-py3.11.9-windows-slim-setup.exe"
     assert outputs[1].name == "app-1.0-py3.11.9-windows-slim.zip"
@@ -698,9 +704,13 @@ def test_build_release_all_linux_shares_tar_zip_staging(tmp_path: Path, monkeypa
         copy_calls.append(str(src))
         return Path(real_copytree(src, dst, **kw))
 
-    monkeypatch.setattr("fspack.packaging.installer.base.shutil.copytree", counting_copytree)
+    # 拆分后 copytree 分布于 dist_prep（tar.gz staging）与 linux（deb staging）两处
+    monkeypatch.setattr("fspack.packaging.installer.dist_prep.shutil.copytree", counting_copytree)
+    monkeypatch.setattr("fspack.packaging.installer.linux.shutil.copytree", counting_copytree)
 
-    outputs = build_release(tmp_path, get_mirror("huawei"), "3.11.10", no_build=True, target=Platform.LINUX, fmt="all")
+    outputs = build_release(
+        ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.10", no_build=True), target=Platform.LINUX, fmt="all"
+    )
 
     assert [p.name for p in outputs] == [
         "app-1.0-py3.11.10-linux-slim.tar.gz",
@@ -715,13 +725,13 @@ def test_build_release_all_linux_shares_tar_zip_staging(tmp_path: Path, monkeypa
 def test_build_release_invalid_fmt_raises(tmp_path: Path) -> None:
     """fmt 取值非法时报错."""
     with pytest.raises(InstallerError, match="未知 --format 取值"):
-        build_release(tmp_path, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, fmt="rpm")
+        build_release(ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9"), target=Platform.WINDOWS, fmt="rpm")
 
 
 def test_build_release_platform_mismatch_raises(tmp_path: Path) -> None:
     """fmt=nsis + Linux 目标报错."""
     with pytest.raises(InstallerError, match="NSIS 安装包仅支持 Windows"):
-        build_release(tmp_path, get_mirror("huawei"), "3.11.9", target=Platform.LINUX, fmt="nsis")
+        build_release(ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9"), target=Platform.LINUX, fmt="nsis")
 
 
 def test_build_release_auto_macos_dispatches_pkg_dmg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -752,13 +762,10 @@ def test_build_release_auto_macos_dispatches_pkg_dmg(tmp_path: Path, monkeypatch
     monkeypatch.setattr("fspack.packaging.installer.build_dmg_release", fake_build_dmg_release)
 
     outputs = build_release(
-        tmp_path,
-        get_mirror("huawei"),
-        "3.11.9",
-        no_build=True,
+        ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True),
         target=Platform.MACOS,
         fmt="auto",
-        codesign=True,
+        sign=SignOptions(codesign=True),
     )
     assert len(outputs) == 2
     assert calls == [("pkg", True), ("dmg", True)]
@@ -783,7 +790,9 @@ def test_build_release_pkg_only_macos(tmp_path: Path, monkeypatch: pytest.Monkey
 
     monkeypatch.setattr("fspack.packaging.installer.build_pkg_release", fake_build_pkg_release)
 
-    outputs = build_release(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True, target=Platform.MACOS, fmt="pkg")
+    outputs = build_release(
+        ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True), target=Platform.MACOS, fmt="pkg"
+    )
     assert calls == ["pkg"]
     assert len(outputs) == 1
 
@@ -791,9 +800,9 @@ def test_build_release_pkg_only_macos(tmp_path: Path, monkeypatch: pytest.Monkey
 def test_build_release_macos_platform_mismatch_raises(tmp_path: Path) -> None:
     """fmt=pkg + Windows 目标报错（pkg 仅 macOS）."""
     with pytest.raises(InstallerError, match=r"pkg 格式仅支持 macOS"):
-        build_release(tmp_path, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, fmt="pkg")
+        build_release(ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9"), target=Platform.WINDOWS, fmt="pkg")
     with pytest.raises(InstallerError, match=r"dmg 格式仅支持 macOS"):
-        build_release(tmp_path, get_mirror("huawei"), "3.11.9", target=Platform.LINUX, fmt="dmg")
+        build_release(ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9"), target=Platform.LINUX, fmt="dmg")
 
 
 def test_prepare_dist_passes_build_defaults_to_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -846,7 +855,7 @@ def test_prepare_dist_passes_build_defaults_to_build(tmp_path: Path, monkeypatch
     monkeypatch.setattr("fspack.packaging.installer.subprocess.run", fake_run)
 
     # build_release → _prepare_dist → build()，options 应反映 [tool.fspack] 配置
-    build_release(tmp_path, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, fmt="nsis")
+    build_release(ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9"), target=Platform.WINDOWS, fmt="nsis")
     assert len(captured_options) == 1
     opts = captured_options[0]
     assert opts is not None
@@ -900,7 +909,7 @@ def test_prepare_dist_no_config_uses_default_options(tmp_path: Path, monkeypatch
         return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.installer.subprocess.run", fake_run)
-    build_release(tmp_path, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, fmt="nsis")
+    build_release(ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9"), target=Platform.WINDOWS, fmt="nsis")
     assert len(captured_options) == 1
     opts = captured_options[0]
     assert opts is not None
@@ -957,7 +966,7 @@ def test_prepare_dist_skips_build_when_dist_and_exe_ready(tmp_path: Path, monkey
 
     monkeypatch.setattr("fspack.packaging.installer.subprocess.run", fake_run)
     # 走 build_installer 路径（NsisInstaller），no_build=False
-    build_installer(tmp_path, get_mirror("huawei"), "3.11.9", no_build=False)
+    build_installer(ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9", no_build=False))
     assert build_calls == 0
 
 
@@ -1011,7 +1020,7 @@ def test_prepare_dist_rebuilds_when_dist_exists_but_exe_missing(
         return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.installer.subprocess.run", fake_run)
-    build_installer(tmp_path, get_mirror("huawei"), "3.11.9", no_build=False)
+    build_installer(ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9", no_build=False))
     assert build_calls == 1
 
 
@@ -1020,7 +1029,7 @@ def test_prepare_dist_no_build_true_still_errors_on_missing_dist(tmp_path: Path)
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0"\n')
     (tmp_path / "app.py").write_text("def main():\n    pass\n")
     with pytest.raises(InstallerError, match="未找到 dist"):
-        build_installer(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True)
+        build_installer(ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True))
 
 
 def test_exe_exists_and_exe_path_helpers(tmp_path: Path) -> None:

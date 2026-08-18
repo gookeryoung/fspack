@@ -92,22 +92,8 @@ def _capture_package_call(*, with_outputs: bool = False) -> tuple[list[Path], An
     """
     called_projects: list[Path] = []
 
-    def fake_build_release(  # noqa: PLR0913
-        project: Path,
-        mirror: object = None,
-        py_version: str | None = None,
-        no_build: bool = False,
-        dist_dir: Path | None = None,
-        target: object = None,
-        fmt: str = "auto",
-        codesign: bool = False,
-        extras: object = None,
-        sign_exe: bool = False,
-        sign_exe_certificate: Path | None = None,
-        sign_exe_password: str | None = None,
-        sign_deb: bool = False,
-        sign_deb_key: str | None = None,
-    ) -> list[Path]:
+    def fake_build_release(req: Any, *, target: object = None, fmt: str = "auto", sign: object = None) -> list[Path]:
+        project: Path = req.project_dir
         called_projects.append(project)
         if with_outputs:
             return [project / "dist" / "release" / f"{project.name}-setup.exe"]

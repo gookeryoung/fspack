@@ -251,23 +251,8 @@ def test_cli_package_extra_flag_propagates_to_build_release(tmp_path: Path, monk
 
     captured: dict[str, Any] = {}
 
-    def fake_build_release(  # noqa: PLR0913
-        project: Path,
-        mirror: object = None,
-        py_version: str | None = None,
-        no_build: bool = False,
-        dist_dir: Path | None = None,
-        target: object = None,
-        fmt: str = "auto",
-        codesign: bool = False,
-        extras: object = None,
-        sign_exe: bool = False,
-        sign_exe_certificate: Path | None = None,
-        sign_exe_password: str | None = None,
-        sign_deb: bool = False,
-        sign_deb_key: str | None = None,
-    ) -> list[Path]:
-        captured["extras"] = extras
+    def fake_build_release(req: object, *, target: object = None, fmt: str = "auto", sign: object = None) -> list[Path]:
+        captured["extras"] = getattr(req, "extras", None)
         return []
 
     monkeypatch.setattr("fspack.packaging.installer.build_release", fake_build_release)

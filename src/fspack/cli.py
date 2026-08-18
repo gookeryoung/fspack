@@ -219,11 +219,11 @@ def _run_package(project: Path, ns: argparse.Namespace) -> None:
 
     from fspack.config import ProjectInfo
     from fspack.exceptions import ProjectError
-    from fspack.packaging.installer import build_release
+    from fspack.packaging.installer import ReleaseRequest, SignOptions, build_release
 
     # extras 校验：CLI --extra 指定时校验未知分组（与 build 子命令一致）
     # 仅校验，不构造 BuildOptions——build_release 内部 _prepare_dist 用配置默认，
-    # CLI 指定时通过 extras 参数透传覆盖配置默认
+    # CLI 指定时通过 ReleaseRequest.extras 透传覆盖配置默认
     cli_extras = ns.extras if getattr(ns, "extras", None) else None
     if cli_extras:
         info = ProjectInfo.from_dir(project, ns.py_version)
@@ -250,21 +250,22 @@ def _run_package(project: Path, ns: argparse.Namespace) -> None:
         if ns.sign_deb_key is not None
         else (info_for_sign.build_defaults.sign_deb_key if info_for_sign else None)
     )
-    outputs = build_release(
-        project,
-        _resolve_mirror(ns.mirror),
-        ns.py_version,
+    req = ReleaseRequest(
+        project_dir=project,
+        mirror=_resolve_mirror(ns.mirror),
+        py_version=ns.py_version,
         no_build=ns.no_build,
-        target=_parse_target(ns.target),
-        fmt=ns.format,
-        codesign=ns.codesign,
         extras=cli_extras,
+    )
+    sign = SignOptions(
+        codesign=ns.codesign,
         sign_exe=ns.sign_exe,
         sign_exe_certificate=sign_exe_cert,
         sign_exe_password=sign_exe_pwd,
         sign_deb=ns.sign_deb,
         sign_deb_key=sign_deb_key,
     )
+    outputs = build_release(req, target=_parse_target(ns.target), fmt=ns.format, sign=sign)
     for out in outputs:
         _logger.info("发行包已生成: %s", out)
 

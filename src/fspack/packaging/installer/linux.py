@@ -4,10 +4,10 @@
 tar.gz 打包、.deb 构造（DEBIAN/control + /usr/lib + /usr/bin wrapper）、
 单格式编排（build_tarball_release / build_deb_release）。
 
-依赖 :mod:`fspack.packaging.installer.base` 提供：
-``Installer`` 基类、``_run_stage``/``_prepare_dist``/``_check_exe``/``_py_tag``/
-``_release_base``、``_run_tool``（dpkg-deb/gpg 调用）、``_make_staged_archive``
-（tar.gz 打包）、``_DIST_IGNORE``（打包排除模式）。
+依赖 :mod:`fspack.packaging.installer.base` 提供 ``Installer`` 基类与
+``_run_stage``/``_run_tool``；:mod:`fspack.packaging.installer.dist_prep` 提供
+``_prepare_dist``/``_check_exe``/``_py_tag``/``_release_base``、
+``_make_staged_archive``（tar.gz 打包）、``_DIST_IGNORE``（打包排除模式）。
 """
 
 from __future__ import annotations
@@ -17,23 +17,21 @@ import platform
 import shutil
 import subprocess  # noqa: F401  # 保留 patch 路径 fspack.packaging.installer.linux.subprocess.run
 from pathlib import Path
-from typing import Sequence
 
 from fspack._compat import override
-from fspack.config import MirrorConfig, ProjectInfo
+from fspack.config import ProjectInfo
 from fspack.console import console
 from fspack.exceptions import InstallerError
-from fspack.packaging.installer.base import (
+from fspack.packaging.installer.base import Installer, _run_stage, _run_tool
+from fspack.packaging.installer.dist_prep import (
     _DIST_IGNORE,
-    Installer,
     _check_exe,
     _make_staged_archive,
     _prepare_dist,
     _py_tag,
     _release_base,
-    _run_stage,
-    _run_tool,
 )
+from fspack.packaging.installer.request import _NO_SIGN, ReleaseRequest, SignOptions
 from fspack.platform import Platform
 from fspack.progress import BuildTracker
 
@@ -171,26 +169,14 @@ def build_deb(dist_dir: Path, info: ProjectInfo, release_dir: Path) -> Path:
 # ---- 单格式编排（tar.gz / deb）----
 
 
-def build_tarball_release(  # noqa: PLR0913
-    project_dir: Path,
-    mirror: MirrorConfig,
-    py_version: str | None = None,
-    no_build: bool = False,
-    dist_dir: Path | None = None,
-    *,
-    tracker: BuildTracker | None = None,
-    extras: Sequence[str] | None = None,
-    keep_staging: bool = False,
-) -> Path:
+def build_tarball_release(req: ReleaseRequest, *, keep_staging: bool = False) -> Path:
     """编排：可选 build → 校验可执行文件 → 生成 tar.gz 便携包，返回包路径。
 
     ``keep_staging`` 透传 :func:`build_tarball`（多格式共享 staging 场景）。
     """
-    own_tracker = tracker is None
-    tk = tracker or BuildTracker(title="打包阶段汇总")
-    dist, info = _prepare_dist(
-        project_dir, mirror, py_version, no_build, dist_dir, Platform.LINUX, extras=extras, tracker=tk
-    )
+    own_tracker = req.tracker is None
+    tk = req.tracker or BuildTracker(title="打包阶段汇总")
+    dist, info = _prepare_dist(req, Platform.LINUX)
     _check_exe(dist, info, Platform.LINUX)
     release = dist / "release"
     tar_name = f"{_release_base(info, 'linux')}.tar.gz"
@@ -206,29 +192,16 @@ def build_tarball_release(  # noqa: PLR0913
     return result
 
 
-def build_deb_release(  # noqa: PLR0913
-    project_dir: Path,
-    mirror: MirrorConfig,
-    py_version: str | None = None,
-    no_build: bool = False,
-    dist_dir: Path | None = None,
-    *,
-    tracker: BuildTracker | None = None,
-    extras: Sequence[str] | None = None,
-    sign_deb: bool = False,
-    sign_deb_key: str | None = None,
-) -> Path:
+def build_deb_release(req: ReleaseRequest, *, sign: SignOptions = _NO_SIGN) -> Path:
     """编排：可选 build → 校验可执行文件 → 构造 .deb → 可选 GPG 签名.
 
-    ``sign_deb=True`` 时用 ``gpg --detach-sign --armor`` 对 .deb 做分离签名，
-    产出 ``<deb>.asc`` 签名文件。``sign_deb_key`` 指定密钥 ID，未指定时用
+    ``sign.sign_deb=True`` 时用 ``gpg --detach-sign --armor`` 对 .deb 做分离签名，
+    产出 ``<deb>.asc`` 签名文件。``sign.sign_deb_key`` 指定密钥 ID，未指定时用
     GPG 默认密钥。签名失败降级为 warning 不阻断构建。
     """
-    own_tracker = tracker is None
-    tk = tracker or BuildTracker(title="打包阶段汇总")
-    dist, info = _prepare_dist(
-        project_dir, mirror, py_version, no_build, dist_dir, Platform.LINUX, extras=extras, tracker=tk
-    )
+    own_tracker = req.tracker is None
+    tk = req.tracker or BuildTracker(title="打包阶段汇总")
+    dist, info = _prepare_dist(req, Platform.LINUX)
     _check_exe(dist, info, Platform.LINUX)
     release = dist / "release"
     deb_name = f"{info.name}_{info.version}-{_py_tag(info)}-slim_amd64.deb"
@@ -238,10 +211,10 @@ def build_deb_release(  # noqa: PLR0913
         lambda: build_deb(dist, info, release),
         detail=deb_name,
     )
-    if sign_deb:
+    if sign.sign_deb:
         with tk.stage("签名 .deb") as st:
             try:
-                sign_deb_file(result, sign_deb_key)
+                sign_deb_file(result, sign.sign_deb_key)
                 st.processed(1)
                 st.set_detail(f"{result.name}.asc")
             except InstallerError as e:

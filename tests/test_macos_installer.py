@@ -12,6 +12,7 @@ from fspack.config import AppType, BuildOptions, ProjectInfo, get_mirror
 from fspack.exceptions import InstallerError
 from fspack.packaging.installer import (
     MacInstaller,
+    ReleaseRequest,
     build_dmg,
     build_dmg_release,
     build_mac_installer,
@@ -256,7 +257,7 @@ def test_mac_installer_exe_filename() -> None:
 def test_build_mac_installer_no_build_missing_dist(tmp_path: Path) -> None:
     """build_mac_installer no_build=True 时 dist 缺失抛 InstallerError."""
     with pytest.raises(InstallerError, match="未找到 dist"):
-        build_mac_installer(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=True)
+        build_mac_installer(ReleaseRequest(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=True))
 
 
 def test_build_mac_installer_no_build_missing_exe(tmp_path: Path) -> None:
@@ -265,7 +266,7 @@ def test_build_mac_installer_no_build_missing_exe(tmp_path: Path) -> None:
     (tmp_path / "app.py").write_text("def main():\n    pass\n")
     (tmp_path / "dist").mkdir()
     with pytest.raises(InstallerError, match="未找到已构建"):
-        build_mac_installer(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=True)
+        build_mac_installer(ReleaseRequest(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=True))
 
 
 def test_build_mac_installer_no_build_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -289,7 +290,7 @@ def test_build_mac_installer_no_build_success(tmp_path: Path, monkeypatch: pytes
     monkeypatch.setattr("fspack.packaging.installer.macos.build_pkg", fake_build_pkg)
     monkeypatch.setattr("fspack.packaging.installer.macos.build_dmg", fake_build_dmg)
 
-    result = build_mac_installer(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=True)
+    result = build_mac_installer(ReleaseRequest(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=True))
     assert result == dist / "release" / "app-1.0-py3.11.10-macos-slim.dmg"
     assert captured["pkg"] is not None
     assert captured["dmg"] is not None
@@ -316,7 +317,7 @@ def test_build_mac_installer_with_codesign_passthrough(tmp_path: Path, monkeypat
     monkeypatch.setattr("fspack.packaging.installer.macos.build_pkg", fake_build_pkg)
     monkeypatch.setattr("fspack.packaging.installer.macos.build_dmg", fake_build_dmg)
 
-    build_mac_installer(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=True, codesign=True)
+    build_mac_installer(ReleaseRequest(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=True), codesign=True)
     assert codesign_calls == [True, True]
 
 
@@ -326,7 +327,7 @@ def test_build_mac_installer_with_codesign_passthrough(tmp_path: Path, monkeypat
 def test_build_pkg_release_no_build_missing_dist(tmp_path: Path) -> None:
     """build_pkg_release no_build=True 时 dist 缺失抛 InstallerError."""
     with pytest.raises(InstallerError, match="未找到 dist"):
-        build_pkg_release(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=True)
+        build_pkg_release(ReleaseRequest(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=True))
 
 
 def test_build_dmg_release_no_build_missing_exe(tmp_path: Path) -> None:
@@ -335,7 +336,7 @@ def test_build_dmg_release_no_build_missing_exe(tmp_path: Path) -> None:
     (tmp_path / "app.py").write_text("def main():\n    pass\n")
     (tmp_path / "dist").mkdir()
     with pytest.raises(InstallerError, match="未找到已构建"):
-        build_dmg_release(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=True)
+        build_dmg_release(ReleaseRequest(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=True))
 
 
 def test_build_pkg_release_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -352,7 +353,7 @@ def test_build_pkg_release_success(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr("fspack.packaging.installer.macos.build_pkg", fake_build_pkg)
 
-    result = build_pkg_release(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=True)
+    result = build_pkg_release(ReleaseRequest(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=True))
     assert result == release / "app-1.0-py3.11.10-macos-slim.pkg"
 
 
@@ -370,7 +371,7 @@ def test_build_dmg_release_success(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr("fspack.packaging.installer.macos.build_dmg", fake_build_dmg)
 
-    result = build_dmg_release(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=True)
+    result = build_dmg_release(ReleaseRequest(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=True))
     assert result == release / "app-1.0-py3.11.10-macos-slim.dmg"
 
 
@@ -411,6 +412,6 @@ def test_build_mac_installer_with_build(tmp_path: Path, monkeypatch: pytest.Monk
         lambda *a, **kw: dist / "release" / "app-1.0-py3.11.10-macos-slim.dmg",
     )
 
-    result = build_mac_installer(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=False)
+    result = build_mac_installer(ReleaseRequest(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=False))
     assert result == dist / "release" / "app-1.0-py3.11.10-macos-slim.dmg"
     assert (dist / "app").is_file()

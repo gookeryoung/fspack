@@ -12,7 +12,7 @@ import pytest
 
 from fspack.config import AppType, BuildOptions, ProjectInfo, get_mirror
 from fspack.exceptions import InstallerError
-from fspack.packaging.installer import build_deb, build_linux_installer, build_tarball
+from fspack.packaging.installer import ReleaseRequest, SignOptions, build_deb, build_linux_installer, build_tarball
 from fspack.packaging.installer.linux import build_deb_release, sign_deb_file
 from tests._stubs import CompletedStub
 
@@ -165,7 +165,7 @@ def test_build_deb_dpkg_deb_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
 def test_build_linux_installer_no_build_missing_dist(tmp_path: Path) -> None:
     with pytest.raises(InstallerError, match="未找到 dist"):
-        build_linux_installer(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=True)
+        build_linux_installer(ReleaseRequest(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=True))
 
 
 def test_build_linux_installer_no_build_missing_exe(tmp_path: Path) -> None:
@@ -173,7 +173,7 @@ def test_build_linux_installer_no_build_missing_exe(tmp_path: Path) -> None:
     (tmp_path / "app.py").write_text("def main():\n    pass\n")
     (tmp_path / "dist").mkdir()
     with pytest.raises(InstallerError, match="未找到已构建"):
-        build_linux_installer(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=True)
+        build_linux_installer(ReleaseRequest(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=True))
 
 
 def test_build_linux_installer_no_build_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -196,7 +196,7 @@ def test_build_linux_installer_no_build_success(tmp_path: Path, monkeypatch: pyt
     monkeypatch.setattr("fspack.packaging.installer.linux.build_tarball", fake_build_tarball)
     monkeypatch.setattr("fspack.packaging.installer.linux.build_deb", fake_build_deb)
 
-    result = build_linux_installer(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=True)
+    result = build_linux_installer(ReleaseRequest(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=True))
     assert result == dist / "release" / "app_1.0-py3.11.10-slim_amd64.deb"
     assert captured["tarball"] is not None
 
@@ -237,7 +237,7 @@ def test_build_linux_installer_with_build(tmp_path: Path, monkeypatch: pytest.Mo
         lambda *a, **kw: dist / "release" / "app_1.0-py3.11.10-slim_amd64.deb",
     )
 
-    result = build_linux_installer(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=False)
+    result = build_linux_installer(ReleaseRequest(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=False))
     assert result == dist / "release" / "app_1.0-py3.11.10-slim_amd64.deb"
     assert (dist / "app").is_file()
 
@@ -352,12 +352,8 @@ def test_build_deb_release_passes_sign_deb_to_sign_deb_file(tmp_path: Path, monk
     monkeypatch.setattr("fspack.packaging.installer.linux.subprocess.run", fake_run)
 
     result = build_deb_release(
-        tmp_path,
-        get_mirror("huawei"),
-        "3.11.10",
-        no_build=True,
-        sign_deb=True,
-        sign_deb_key="0xABCD1234",
+        ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.10", no_build=True),
+        sign=SignOptions(sign_deb=True, sign_deb_key="0xABCD1234"),
     )
 
     assert result == deb_path
@@ -393,7 +389,9 @@ def test_build_deb_release_sign_deb_failure_does_not_block_build(
     monkeypatch.setattr("fspack.packaging.installer.linux.subprocess.run", fake_run)
 
     with caplog.at_level("WARNING", logger="fspack.packaging.installer"):
-        result = build_deb_release(tmp_path, get_mirror("huawei"), "3.11.10", no_build=True, sign_deb=True)
+        result = build_deb_release(
+            ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.10", no_build=True), sign=SignOptions(sign_deb=True)
+        )
 
     # .deb 仍生成
     assert result.is_file()
@@ -424,6 +422,6 @@ def test_build_deb_release_without_sign_deb_does_not_call_gpg(tmp_path: Path, mo
 
     monkeypatch.setattr("fspack.packaging.installer.linux.subprocess.run", fake_run)
 
-    build_deb_release(tmp_path, get_mirror("huawei"), "3.11.10", no_build=True)
+    build_deb_release(ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.10", no_build=True))
 
     assert not gpg_called, "未启用 sign_deb 不应调用 gpg"

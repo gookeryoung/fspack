@@ -405,37 +405,31 @@ def test_clean_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
 
 def _capture_build_release() -> tuple[dict[str, Any], Any]:
     """构造 fake_build_release 与 captured dict，签名匹配 installer.build_release()."""
+    from fspack.packaging.installer import ReleaseRequest, SignOptions
+
     called: dict[str, Any] = {}
 
-    def fake_build_release(  # noqa: PLR0913
-        project: Path,
-        mirror: object = None,
-        py_version: str | None = None,
-        no_build: bool = False,
-        dist_dir: Path | None = None,
+    def fake_build_release(
+        req: ReleaseRequest,
+        *,
         target: object = None,
         fmt: str = "auto",
-        codesign: bool = False,
-        extras: object = None,
-        sign_exe: bool = False,
-        sign_exe_certificate: Path | None = None,
-        sign_exe_password: str | None = None,
-        sign_deb: bool = False,
-        sign_deb_key: str | None = None,
+        sign: SignOptions | None = None,
     ) -> list[Path]:
-        called["project"] = project
-        called["mirror"] = mirror
-        called["py_version"] = py_version
-        called["no_build"] = no_build
+        so = sign or SignOptions()
+        called["project"] = req.project_dir
+        called["mirror"] = req.mirror
+        called["py_version"] = req.py_version
+        called["no_build"] = req.no_build
         called["target"] = target
         called["fmt"] = fmt
-        called["codesign"] = codesign
-        called["extras"] = extras
-        called["sign_exe"] = sign_exe
-        called["sign_exe_certificate"] = sign_exe_certificate
-        called["sign_exe_password"] = sign_exe_password
-        called["sign_deb"] = sign_deb
-        called["sign_deb_key"] = sign_deb_key
+        called["codesign"] = so.codesign
+        called["extras"] = req.extras
+        called["sign_exe"] = so.sign_exe
+        called["sign_exe_certificate"] = so.sign_exe_certificate
+        called["sign_exe_password"] = so.sign_exe_password
+        called["sign_deb"] = so.sign_deb
+        called["sign_deb_key"] = so.sign_deb_key
         return []
 
     return called, fake_build_release

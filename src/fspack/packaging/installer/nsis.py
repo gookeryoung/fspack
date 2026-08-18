@@ -3,8 +3,9 @@
 从 :mod:`fspack.packaging.installer.base` 拆分而来，封装 NSIS 安装包全部逻辑：
 NSIS 模板、快捷方式块、注册表块、脚本生成与 makensis 编译。
 
-依赖 :mod:`fspack.packaging.installer.base` 提供：
-``Installer`` 基类、``_run_stage``/``_release_base``/``_DIST_INTERMEDIATE_EXCLUDES``。
+依赖 :mod:`fspack.packaging.installer.base` 提供 ``Installer`` 基类与
+``_run_stage``/``_run_tool``；:mod:`fspack.packaging.installer.dist_prep` 提供
+``_prepare_dist``/``_check_exe``/``_release_base``/``_DIST_INTERMEDIATE_EXCLUDES``。
 """
 
 from __future__ import annotations
@@ -12,21 +13,19 @@ from __future__ import annotations
 import logging
 import subprocess  # noqa: F401  # 保留 patch 路径 fspack.packaging.installer.nsis.subprocess.run
 from pathlib import Path
-from typing import Sequence
 
 from fspack._compat import override
-from fspack.config import MirrorConfig, ProjectInfo
+from fspack.config import ProjectInfo
 from fspack.console import console
 from fspack.exceptions import InstallerError
-from fspack.packaging.installer.base import (
+from fspack.packaging.installer.base import Installer, _run_stage, _run_tool
+from fspack.packaging.installer.dist_prep import (
     _DIST_INTERMEDIATE_EXCLUDES,
-    Installer,
     _check_exe,
     _prepare_dist,
     _release_base,
-    _run_stage,
-    _run_tool,
 )
+from fspack.packaging.installer.request import _NO_SIGN, ReleaseRequest, SignOptions
 from fspack.packaging.win7_scan import iter_pe_files
 from fspack.platform import Platform
 from fspack.progress import BuildTracker
@@ -180,47 +179,32 @@ class NsisInstaller(Installer):
 
     @classmethod
     @override
-    def build_installer(  # noqa: PLR0913
-        cls,
-        project_dir: Path,
-        mirror: MirrorConfig,
-        py_version: str | None = None,
-        no_build: bool = False,
-        dist_dir: Path | None = None,
-        *,
-        tracker: BuildTracker | None = None,
-        extras: Sequence[str] | None = None,
-        sign_exe: bool = False,
-        sign_exe_certificate: Path | None = None,
-        sign_exe_password: str | None = None,
-    ) -> Path:
+    def build_installer(cls, req: ReleaseRequest, *, sign: SignOptions = _NO_SIGN) -> Path:
         """编排：可选 build → 签名 dist exe → 生成 NSIS → 签名 setup.exe.
 
-        ``sign_exe=True`` 且 ``sign_exe_certificate`` 非空时：
+        ``sign.sign_exe=True`` 且 ``sign.sign_exe_certificate`` 非空时：
         1. 在 NSIS 编译前签名 dist 下所有入口 exe（使安装包内打包签名 exe）
         2. 在 NSIS 编译后签名 setup.exe（使安装包自身携带签名）
 
         签名失败降级为 warning 不阻断构建（签名仅为分发增强）。
         """
-        own_tracker = tracker is None
-        tk = tracker or BuildTracker(title="打包阶段汇总")
-        dist, info = _prepare_dist(
-            project_dir, mirror, py_version, no_build, dist_dir, Platform.WINDOWS, extras=extras, tracker=tk
-        )
+        own_tracker = req.tracker is None
+        tk = req.tracker or BuildTracker(title="打包阶段汇总")
+        dist, info = _prepare_dist(req, Platform.WINDOWS)
         _check_exe(dist, info, Platform.WINDOWS)
 
         # 签名 dist exe（NSIS 编译前，使安装包内打包签名 exe）
-        if sign_exe and sign_exe_certificate is not None:
-            sign_exe_files(dist, info, sign_exe_certificate, sign_exe_password, tracker=tk)
+        if sign.sign_exe and sign.sign_exe_certificate is not None:
+            sign_exe_files(dist, info, sign.sign_exe_certificate, sign.sign_exe_password, tracker=tk)
 
         release = dist / "release"
         result = cls.build_package(dist, info, release, tracker=tk)
 
         # 签名 setup.exe（NSIS 编译后，使安装包自身携带签名）
-        if sign_exe and sign_exe_certificate is not None:
+        if sign.sign_exe and sign.sign_exe_certificate is not None:
             with tk.stage("签名安装包") as st:
                 try:
-                    sign_exe_file(result, sign_exe_certificate, sign_exe_password)
+                    sign_exe_file(result, sign.sign_exe_certificate, sign.sign_exe_password)
                     st.processed(1)
                     st.set_detail(result.name)
                 except InstallerError as e:

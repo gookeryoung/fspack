@@ -4,9 +4,9 @@
 .pkg 通过 ``pkgbuild`` 生成、.dmg 通过 ``hdiutil`` 生成、可选 ``codesign``
 ad-hoc 签名。单格式编排（build_pkg_release / build_dmg_release）。
 
-依赖 :mod:`fspack.packaging.installer.base` 提供：
-``Installer`` 基类、``_run_stage``/``_prepare_dist``/``_check_exe``/``_release_base``、
-``_run_tool``（pkgbuild/hdiutil/codesign 调用）、``_DIST_IGNORE``（打包排除模式）。
+依赖 :mod:`fspack.packaging.installer.base` 提供 ``Installer`` 基类与
+``_run_stage``/``_run_tool``；:mod:`fspack.packaging.installer.dist_prep` 提供
+``_prepare_dist``/``_check_exe``/``_release_base``/``_DIST_IGNORE``（打包排除模式）。
 
 工具链（均为 macOS 系统自带，无需额外安装）：
 
@@ -28,21 +28,19 @@ import logging
 import shutil
 import subprocess  # noqa: F401  # 保留 patch 路径 fspack.packaging.installer.macos.subprocess.run
 from pathlib import Path
-from typing import Sequence
 
 from fspack._compat import override
-from fspack.config import MirrorConfig, ProjectInfo
+from fspack.config import ProjectInfo
 from fspack.console import console
 from fspack.exceptions import InstallerError
-from fspack.packaging.installer.base import (
+from fspack.packaging.installer.base import Installer, _run_stage, _run_tool
+from fspack.packaging.installer.dist_prep import (
     _DIST_IGNORE,
-    Installer,
     _check_exe,
     _prepare_dist,
     _release_base,
-    _run_stage,
-    _run_tool,
 )
+from fspack.packaging.installer.request import ReleaseRequest
 from fspack.platform import Platform
 from fspack.progress import BuildTracker
 
@@ -149,27 +147,14 @@ class MacInstaller(Installer):
 
     @classmethod
     @override
-    def build_installer(  # noqa: PLR0913
-        cls,
-        project_dir: Path,
-        mirror: MirrorConfig,
-        py_version: str | None = None,
-        no_build: bool = False,
-        dist_dir: Path | None = None,
-        *,
-        tracker: BuildTracker | None = None,
-        codesign: bool = False,
-        extras: Sequence[str] | None = None,
-    ) -> Path:
+    def build_installer(cls, req: ReleaseRequest, *, codesign: bool = False) -> Path:
         """编排：可选 build → 校验可执行文件 → build_package，返回 .dmg 路径.
 
         重写基类以透传 ``codesign`` 到 :meth:`build_package`。
         """
-        own_tracker = tracker is None
-        tk = tracker or BuildTracker(title="打包阶段汇总")
-        dist, info = _prepare_dist(
-            project_dir, mirror, py_version, no_build, dist_dir, cls.target_platform(), extras=extras, tracker=tk
-        )
+        own_tracker = req.tracker is None
+        tk = req.tracker or BuildTracker(title="打包阶段汇总")
+        dist, info = _prepare_dist(req, cls.target_platform())
         exe = dist / cls.exe_filename(info)
         if not exe.is_file():
             raise InstallerError(f"未找到已构建的可执行文件: {exe}（请先执行 fsp b）")
@@ -292,23 +277,11 @@ def build_dmg(
 # ---- 单格式编排（pkg / dmg）----
 
 
-def build_pkg_release(  # noqa: PLR0913
-    project_dir: Path,
-    mirror: MirrorConfig,
-    py_version: str | None = None,
-    no_build: bool = False,
-    dist_dir: Path | None = None,
-    *,
-    tracker: BuildTracker | None = None,
-    codesign: bool = False,
-    extras: Sequence[str] | None = None,
-) -> Path:
+def build_pkg_release(req: ReleaseRequest, *, codesign: bool = False) -> Path:
     """编排：可选 build → 校验可执行文件 → 构造 .pkg 安装包，返回 .pkg 路径。"""
-    own_tracker = tracker is None
-    tk = tracker or BuildTracker(title="打包阶段汇总")
-    dist, info = _prepare_dist(
-        project_dir, mirror, py_version, no_build, dist_dir, Platform.MACOS, extras=extras, tracker=tk
-    )
+    own_tracker = req.tracker is None
+    tk = req.tracker or BuildTracker(title="打包阶段汇总")
+    dist, info = _prepare_dist(req, Platform.MACOS)
     _check_exe(dist, info, Platform.MACOS)
     release = dist / "release"
     pkg_name = f"{_release_base(info, 'macos')}.pkg"
@@ -324,23 +297,11 @@ def build_pkg_release(  # noqa: PLR0913
     return result
 
 
-def build_dmg_release(  # noqa: PLR0913
-    project_dir: Path,
-    mirror: MirrorConfig,
-    py_version: str | None = None,
-    no_build: bool = False,
-    dist_dir: Path | None = None,
-    *,
-    tracker: BuildTracker | None = None,
-    codesign: bool = False,
-    extras: Sequence[str] | None = None,
-) -> Path:
+def build_dmg_release(req: ReleaseRequest, *, codesign: bool = False) -> Path:
     """编排：可选 build → 校验可执行文件 → 构造 .dmg 磁盘镜像，返回 .dmg 路径。"""
-    own_tracker = tracker is None
-    tk = tracker or BuildTracker(title="打包阶段汇总")
-    dist, info = _prepare_dist(
-        project_dir, mirror, py_version, no_build, dist_dir, Platform.MACOS, extras=extras, tracker=tk
-    )
+    own_tracker = req.tracker is None
+    tk = req.tracker or BuildTracker(title="打包阶段汇总")
+    dist, info = _prepare_dist(req, Platform.MACOS)
     _check_exe(dist, info, Platform.MACOS)
     release = dist / "release"
     dmg_name = f"{_release_base(info, 'macos')}.dmg"
@@ -356,25 +317,6 @@ def build_dmg_release(  # noqa: PLR0913
     return result
 
 
-def build_mac_installer(  # noqa: PLR0913
-    project_dir: Path,
-    mirror: MirrorConfig,
-    py_version: str | None = None,
-    no_build: bool = False,
-    dist_dir: Path | None = None,
-    *,
-    tracker: BuildTracker | None = None,
-    codesign: bool = False,
-    extras: Sequence[str] | None = None,
-) -> Path:
+def build_mac_installer(req: ReleaseRequest, *, codesign: bool = False) -> Path:
     """编排：可选 build → .pkg 安装包 → .dmg 磁盘镜像，返回 .dmg 路径。"""
-    return MacInstaller.build_installer(
-        project_dir,
-        mirror,
-        py_version,
-        no_build=no_build,
-        dist_dir=dist_dir,
-        tracker=tracker,
-        codesign=codesign,
-        extras=extras,
-    )
+    return MacInstaller.build_installer(req, codesign=codesign)
