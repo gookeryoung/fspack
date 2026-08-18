@@ -172,6 +172,56 @@ def test_dependency_report_missing_empty() -> None:
     assert r.missing == ()
 
 
+def test_dependency_report_missing_import_alias_static() -> None:
+    """导入名 ≠ PyPI 分发名时经静态映射表消除误报（如 yaml↔PyYAML）."""
+    r = DependencyReport(
+        declared=("PyYAML>=6.0", "Pillow", "scikit-learn", "opencv-python-headless"),
+        ast_third_party=("yaml", "PIL", "sklearn", "cv2"),
+        ast_stdlib=(),
+        ast_local=(),
+    )
+    assert r.missing == ()
+
+
+def test_dependency_report_missing_alias_not_swallow_unrelated() -> None:
+    """映射命中不吞掉真正的缺失依赖：声明 PyYAML 时 requests 仍报 missing."""
+    r = DependencyReport(
+        declared=("PyYAML",),
+        ast_third_party=("yaml", "requests"),
+        ast_stdlib=(),
+        ast_local=(),
+    )
+    assert r.missing == ("requests",)
+
+
+def test_dependency_report_missing_runtime_top_level_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """静态表未覆盖的分发经当前环境 top_level.txt 兜底消除误报.
+
+    patch 定义所在子模块 fspack.config.models 的 ``_installed_top_level_imports``
+    （经 facade patch 无法拦截 models 内部调用）。
+    """
+    monkeypatch.setattr(
+        "fspack.config.models._installed_top_level_imports",
+        lambda dist_name: ("mymod",) if dist_name == "fake-dist" else (),
+    )
+    r = DependencyReport(
+        declared=("fake-dist",),
+        ast_third_party=("mymod", "other"),
+        ast_stdlib=(),
+        ast_local=(),
+    )
+    assert r.missing == ("other",)
+
+
+def test_installed_top_level_imports_not_installed_returns_empty() -> None:
+    """未安装分发的 top_level.txt 兜底返回空元组且不抛异常."""
+    from fspack.config.models import _installed_top_level_imports
+
+    assert _installed_top_level_imports("fspack-definitely-not-a-dist-xyz") == ()
+
+
 def test_build_config_defaults() -> None:
     cfg = BuildConfig(
         project_dir=Path("/p"),

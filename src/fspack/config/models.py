@@ -42,6 +42,58 @@ __all__ = [
 
 _logger = logging.getLogger(__name__)
 
+# 常见「PyPI 分发名 ≠ 导入名」静态映射表（归一化 PyPI 名 → 导入名元组，均小写）。
+# AST 扫描得到的是导入名（如 ``yaml``），pyproject 声明的是 PyPI 分发名（如
+# ``PyYAML``），单纯归一化（``-``→``_``、小写）无法匹配，需显式映射消除
+# ``missing`` 误报。仅收录高频且无歧义的映射：多个分发共享的顶层导入名
+# （如 protobuf 的 ``google``）不收录，避免误吞真实缺失。
+_PYPI_IMPORT_ALIASES: dict[str, tuple[str, ...]] = {
+    "attrs": ("attr",),
+    "beautifulsoup4": ("bs4",),
+    "gitpython": ("git",),
+    "grpcio": ("grpc",),
+    "opencv_python": ("cv2",),
+    "opencv_python_headless": ("cv2",),
+    "opencv_contrib_python": ("cv2",),
+    "pdfminer_six": ("pdfminer",),
+    "psycopg2_binary": ("psycopg2",),
+    "pycryptodome": ("crypto",),
+    "pycryptodomex": ("cryptodome",),
+    "pyjwt": ("jwt",),
+    "pymupdf": ("fitz",),
+    "pyserial": ("serial",),
+    "python_dateutil": ("dateutil",),
+    "python_dotenv": ("dotenv",),
+    "python_multipart": ("multipart",),
+    "pyyaml": ("yaml",),
+    "scikit_learn": ("sklearn",),
+    "scikit_image": ("skimage",),
+    "setuptools": ("pkg_resources",),
+    "websocket_client": ("websocket",),
+    "pillow": ("pil",),
+    "paho_mqtt": ("paho",),
+}
+
+
+@functools.lru_cache(maxsize=128)
+def _installed_top_level_imports(dist_name: str) -> tuple[str, ...]:
+    """读取当前环境已安装分发的 ``top_level.txt`` 推导入名（未安装/无文件返回空元组）.
+
+    运行时兜底：静态映射表 :data:`_PYPI_IMPORT_ALIASES` 未覆盖的分发
+    （如 ``pywin32`` 的 ``win32api`` 等多个导入名），若恰好安装在当前
+    构建环境则从其 ``top_level.txt`` 读取顶层导入名。未安装时返回空元组，
+    不影响 ``missing`` 判定（仅少一层覆盖）。
+    """
+    import importlib.metadata as _im
+
+    try:
+        dist = _im.distribution(dist_name)
+    except (_im.PackageNotFoundError, OSError, ValueError):
+        # 未安装 / 元数据损坏 / 非法名：静默降级为无兜底信息
+        return ()
+    text = dist.read_text("top_level.txt") or ""
+    return tuple(line.strip().lower() for line in text.splitlines() if line.strip())
+
 
 class AppType(enum.Enum):
     """应用类型：CLI 控制台、GUI 窗口或 WEB 服务.
@@ -383,10 +435,25 @@ class DependencyReport:
 
     @property
     def missing(self) -> tuple[str, ...]:
-        """AST 发现但未在 pyproject 声明的第三方依赖."""
-        declared_top = {
-            re.split(r"[<>=!~;\[]", d, maxsplit=1)[0].strip().replace("-", "_").lower() for d in self.declared
-        }
+        """AST 发现但未在 pyproject 声明的第三方依赖.
+
+        导入名与 PyPI 分发名不一致（如 ``import yaml`` 对应声明 ``PyYAML``）
+        时，依次经名字归一化、静态映射表
+        :data:`_PYPI_IMPORT_ALIASES`、当前环境 ``top_level.txt`` 运行时
+        兜底三层匹配，命中任一层即视为已声明，不产生误报。
+        """
+        declared_top: set[str] = set()
+        for d in self.declared:
+            raw = re.split(r"[<>=!~;\[]", d, maxsplit=1)[0].strip()
+            if not raw:
+                continue
+            norm = raw.replace("-", "_").lower()
+            declared_top.add(norm)
+            aliases = _PYPI_IMPORT_ALIASES.get(norm)
+            if aliases is None:
+                # 静态表未覆盖：尝试当前环境 top_level.txt 兜底（未安装返回空）
+                aliases = _installed_top_level_imports(raw)
+            declared_top.update(aliases)
         return tuple(sorted(m for m in self.ast_third_party if m.lower() not in declared_top))
 
 
