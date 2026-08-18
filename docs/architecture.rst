@@ -136,7 +136,7 @@ fspack 支持通过环境变量启用的离线模式，适用于无网络环境�
 工作原理
 ~~~~~~~~
 
-离线模式在所有下载入口（``runtime.py``/``wheels/downloader.py``/``nuitka/env.py``/
+离线模式在所有下载入口（``runtime/download.py``/``wheels/downloader.py``/``nuitka/env.py``/
 ``builtin.py``）检查 ``is_offline()``，缓存命中时正常返回，缓存未命中时立即抛出
 包含"离线模式"关键字的明确异常，不尝试网络请求。错误信息包含：
 
@@ -198,7 +198,7 @@ fspack 支持通过环境变量启用的离线模式，适用于无网络环境�
    * - 下载层
      - 异常类型
      - 触发条件
-   * - ``runtime.py``
+   * - ``runtime/download.py``
      - ``EmbedError``
      - embed python / standalone tarball 缓存未命中
    * - ``wheels/downloader.py``
@@ -273,20 +273,22 @@ packaging/ 子包
 
    * - 子模块
      - 职责
-   * - ``pipeline/``（``__init__.py`` / ``stages.py``）
+   * - ``pipeline/``（``__init__.py`` / ``executor.py`` / ``*_stage.py`` / ``context.py``）
      - 构建流水线编排（``build()`` 入口，10+ 阶段调度）
-   * - ``runtime.py``
-     - ``RuntimeDownloader``：embed python / python-build-standalone 下载解压
-   * - ``loader/``（``__init__.py`` / ``source.py`` / ``compile.py``）
-     - C loader facade：源码模板 + 编译流程 + icon 资源 + MinGW 运行时 DLL 注入
-   * - ``installer/``（``__init__.py`` / ``base.py`` / ``linux.py`` / ``macos.py`` / ``nsis.py`` / ``zip.py``）
-     - 安装包 facade：NSIS / .deb + tar.gz / .pkg + .dmg / 跨平台 zip
-   * - ``wheels/``（``__init__.py`` / ``downloader.py`` / ``resolver.py`` / ``sdist.py`` / ``cache.py`` / ``markers.py``）
+   * - ``runtime/``（``__init__.py`` / ``download.py`` / ``extract.py`` / ``urls.py`` / ``trim.py`` / ``pth.py``）
+     - ``RuntimeDownloader``：embed python / python-build-standalone 下载解压 + 安全解压 + stdlib 精简 + ``._pth`` 生成
+   * - ``loader/``（``__init__.py`` / ``source.py`` / ``compile.py`` / ``toolchain.py`` / ``cache_keys.py`` / ``resource.py``）
+     - C loader facade：源码模板 + 编译器基类/平台子类 + 工具链发现 + 缓存键 + icon/版本信息资源
+   * - ``installer/``（``__init__.py`` / ``base.py`` / ``facade.py`` / ``dist_prep.py`` / ``request.py`` / ``linux.py`` / ``macos.py`` / ``nsis.py`` / ``zip.py``）
+     - 安装包 facade：NSIS / .deb + tar.gz / .pkg + .dmg / 跨平台 zip（``ReleaseRequest``/``SignOptions`` 参数收敛）
+   * - ``wheels/``（``__init__.py`` / ``downloader.py`` / ``resolver.py`` / ``uv_bridge.py`` / ``parallel.py`` / ``sdist.py`` / ``cache.py`` / ``markers.py``）
      - wheel 下载 facade：pip/uv 调用 + sdist 回退 + 并行下载 + 依赖解析缓存 + python_version 标记预过滤
    * - ``nuitka/``（``__init__.py`` / ``compiler.py`` / ``env.py`` / ``standalone.py`` / ``ccache.py`` / ``compile.py`` / ``strip.py`` / ``verify.py`` / ``protocol.py``）
      - Nuitka 编译 facade：环境就绪 + standalone python + ccache + 编译流程 + 产物剥离 + 验证
-   * - ``pyc.py``
-     - 字节码预编译（``compileall`` + stamp 缓存）
+   * - ``pyc/``（``__init__.py`` / ``compile.py`` / ``stamp.py`` / ``source_strip.py``）
+     - 字节码预编译（``compileall`` + stamp 缓存 + .py 源码剥离）
+   * - ``win7/``（``__init__.py`` / ``check.py`` / ``dll.py`` / ``scan.py``）
+     - Win7 兼容门禁：PE 导入表静态检查 + 重编译版 python3XX.dll 下载校验 + dist 全量扫描报告
    * - ``sync.py``
      - 源码同步（``copy_source`` + 增量同步 + site-packages 指纹）
    * - ``builtin.py``

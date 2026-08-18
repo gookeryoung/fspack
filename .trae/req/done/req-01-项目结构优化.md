@@ -2,13 +2,13 @@
 
 ## 需求清单
 
-- [ ] 拆分超大模块（>500 行），每个模块单一职责，提高可读性
-- [ ] packaging 顶层前缀家族模块（runtime/pyc/win7）归组为子包
-- [ ] 消除 PLR0913 noqa 泛滥（参数过多改为 dataclass 封装）
-- [ ] 健壮性专项：异常链、类型收紧、死代码交叉验证
-- [ ] 全程保持 `make check` 全绿，覆盖率不低于 95%
-- [ ] 同步迁移测试 patch 路径，不放宽任何断言
-- [ ] 同步更新 docs/architecture.rst 模块导览
+- [x] 拆分超大模块（>500 行），每个模块单一职责，提高可读性
+- [x] packaging 顶层前缀家族模块（runtime/pyc/win7）归组为子包
+- [x] 消除 PLR0913 noqa 泛滥（参数过多改为 dataclass 封装）
+- [x] 健壮性专项：异常链、类型收紧、死代码交叉验证
+- [x] 全程保持 `make check` 全绿，覆盖率不低于 95%
+- [x] 同步迁移测试 patch 路径，不放宽任何断言
+- [x] 同步更新 docs/architecture.rst 模块导览
 
 ## 背景
 
