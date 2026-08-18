@@ -25,9 +25,9 @@ from typing import TYPE_CHECKING
 
 from fspack._compat import override
 from fspack.exceptions import FspackError
-from fspack.packaging.runtime_download import RuntimeDownloader
-from fspack.packaging.runtime_urls import embed_dirname, embed_zip_name
-from fspack.packaging.win7_check import PeParseError, Win7CheckResult, check_win7_imports
+from fspack.packaging.runtime.download import RuntimeDownloader
+from fspack.packaging.runtime.urls import embed_dirname, embed_zip_name
+from fspack.packaging.win7.check import PeParseError, Win7CheckResult, check_win7_imports
 
 if TYPE_CHECKING:
     from fspack.progress import StageRecorder
@@ -54,7 +54,7 @@ WIN7_PYTHON_BASE_URL = "https://github.com/adang1345/PythonVista"
 
 # 清单：完整版本 → win7 embed-amd64 zip 的 sha256（GitHub release asset digest）。
 # 版本须与 config.KNOWN_EMBED_VERSIONS 对齐（"只替换 dll"要求 patch 完全一致）；
-# 升级版本时同步更新两处并复核 win7_check 通过。
+# 升级版本时同步更新两处并复核 win7.check 通过。
 WIN7_EMBED_SHA256: dict[str, str] = {
     "3.12.10": "6f4e1a6c607aaac0b052c9f8962a863ae23ddeab4502619dc0a151cf1bca1a60",
     "3.13.14": "bc02b825b073087c542c9c7158d85fb81ed35fd971efdf8f20223adb1b1add1d",
@@ -62,8 +62,8 @@ WIN7_EMBED_SHA256: dict[str, str] = {
 }
 
 # 内置 api-ms-win-core-path shim（随 fspack 分发），dll 导入表校验时验证导出覆盖。
-# 公开常量：win7_scan 全量扫描复用同一 shim 做覆盖校验。
-WIN7_SHIM_DLL_PATH = Path(__file__).parent.parent / "assets" / "runtime" / "api-ms-win-core-path-l1-1-0.dll"
+# 公开常量：win7.scan 全量扫描复用同一 shim 做覆盖校验。
+WIN7_SHIM_DLL_PATH = Path(__file__).parent.parent.parent / "assets" / "runtime" / "api-ms-win-core-path-l1-1-0.dll"
 
 
 class Win7DllError(FspackError):

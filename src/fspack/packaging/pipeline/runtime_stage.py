@@ -39,7 +39,7 @@ from fspack.packaging.runtime import (
 from fspack.packaging.runtime import (
     extract_standalone as _default_extract_standalone,
 )
-from fspack.packaging.win7_dll import ensure_win7_dll, needs_win7_dll
+from fspack.packaging.win7.dll import ensure_win7_dll, needs_win7_dll
 from fspack.platform import Platform
 
 from .context import BuildContext

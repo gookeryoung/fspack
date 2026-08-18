@@ -122,7 +122,7 @@ def cached_source_fingerprint(src_dir: Path, data_dirs: tuple[str, ...] = ()) ->
     """带构建级缓存的 :func:`source_fingerprint`：同键目录树只扫描一次.
 
     同一次构建中 Nuitka stamp（:meth:`NuitkaCompile._stamp_key`）与 pyc stamp
-    （:func:`fspack.packaging.pyc_stamp._pyc_stamp_key`）会对同一 ``dist/src``
+    （:func:`fspack.packaging.pyc.stamp._pyc_stamp_key`）会对同一 ``dist/src``
     各算一次全树指纹，缓存命中场景（stamp 命中早退、dist/src 未被修改）下
     第二次直接复用，省一次全树扫描。
 

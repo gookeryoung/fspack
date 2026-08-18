@@ -22,7 +22,7 @@
 
 CLI 用法::
 
-    python -m fspack.packaging.win7_check [--shim <shim.dll>] [--json] <python3XX.dll>...
+    python -m fspack.packaging.win7.check [--shim <shim.dll>] [--json] <python3XX.dll>...
 
 退出码：0 通过（含"需 shim"且覆盖校验通过）；1 存在违规或解析失败。
 """
@@ -341,7 +341,7 @@ def _render_report(result: Win7CheckResult) -> list[str]:
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI 入口：校验若干 PE 文件导入表的 Win7 兼容性，返回进程退出码."""
     parser = argparse.ArgumentParser(
-        prog="python -m fspack.packaging.win7_check",
+        prog="python -m fspack.packaging.win7.check",
         description="校验 PE 导入表不含 Win7 SP1 缺失的 Win8+ 静态导入（只替换 python3XX.dll 方案的门禁）",
     )
     parser.add_argument("files", nargs="+", type=Path, help="待校验的 PE 文件（python3XX.dll/.pyd/.exe）")

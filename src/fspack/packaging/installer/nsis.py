@@ -26,7 +26,7 @@ from fspack.packaging.installer.dist_prep import (
     _release_base,
 )
 from fspack.packaging.installer.request import _NO_SIGN, ReleaseRequest, SignOptions
-from fspack.packaging.win7_scan import iter_pe_files
+from fspack.packaging.win7.scan import iter_pe_files
 from fspack.platform import Platform
 from fspack.progress import BuildTracker
 

@@ -24,9 +24,8 @@ from typing import TYPE_CHECKING, Any
 from fspack._compat import override
 from fspack.config import MirrorConfig, is_offline
 from fspack.exceptions import EmbedError
-
-from .runtime_extract import extract_tar_safe, extract_zip_safe
-from .runtime_urls import (
+from fspack.packaging.runtime.extract import extract_tar_safe, extract_zip_safe
+from fspack.packaging.runtime.urls import (
     _sha256_file,
     embed_dirname,
     embed_zip_name,

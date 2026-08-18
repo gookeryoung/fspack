@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from fspack.packaging.win7_scan import (
+from fspack.packaging.win7.scan import (
     Win7ScanError,
     enforce_win7_loaders,
     render_win7_report,

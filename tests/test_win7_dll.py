@@ -14,9 +14,9 @@ from pathlib import Path
 import pytest
 
 from fspack.exceptions import EmbedError
-from fspack.packaging import win7_dll
-from fspack.packaging.win7_check import Win7ApiViolation, Win7CheckResult
-from fspack.packaging.win7_dll import (
+from fspack.packaging.win7 import dll as win7_dll
+from fspack.packaging.win7.check import Win7ApiViolation, Win7CheckResult
+from fspack.packaging.win7.dll import (
     Win7DllError,
     Win7EmbedRuntime,
     download_win7_embed,
@@ -262,7 +262,7 @@ def test_ensure_blocks_downloaded_violations(tmp_path: Path, monkeypatch: pytest
 
 def test_ensure_wraps_pe_parse_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """dll 非 PE 镜像时包装为 Win7DllError."""
-    from fspack.packaging.win7_check import PeParseError
+    from fspack.packaging.win7.check import PeParseError
 
     zip_bytes = _make_zip_bytes({"python312.dll": b"not-a-pe"})
     _patch_manifest(monkeypatch, _VER, zip_bytes)

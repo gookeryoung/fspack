@@ -10,7 +10,7 @@ P1 产物门禁补全的两道防线（配合 win7_dll 的 python3XX.dll 门禁�
   扫描。第三方依赖（site-packages 的 pyd/dll）与 Nuitka 用户产物违规
   无法自动修复（只能更换依赖版本），故不阻断构建，聚合渲染为文本报告
   （``dist/release/win7-compat-report.txt``）供人工决策。python3XX.dll
-  已由 :func:`fspack.packaging.win7_dll.ensure_win7_dll` 单独硬门禁。
+  已由 :func:`fspack.packaging.win7.dll.ensure_win7_dll` 单独硬门禁。
 
 报告包含：违规文件与 API 明细、需 shim 文件数（fspack 已内置注入）、
 api-ms-win-crt-* 依赖提示（Win7 SP1 需 KB2999226 UCRT）。
@@ -23,8 +23,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from fspack.exceptions import FspackError
-from fspack.packaging.win7_check import PeParseError, Win7CheckResult, check_win7_imports
-from fspack.packaging.win7_dll import WIN7_SHIM_DLL_PATH
+from fspack.packaging.win7.check import PeParseError, Win7CheckResult, check_win7_imports
+from fspack.packaging.win7.dll import WIN7_SHIM_DLL_PATH
 
 __all__ = [
     "Win7ScanError",

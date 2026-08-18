@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 
 import fspack
-from fspack.packaging.win7_check import PeParseError, check_win7_imports, main
+from fspack.packaging.win7.check import PeParseError, check_win7_imports, main
 
 # 内置 api-ms-win-core-path shim（随 fspack 分发，LGPL-2.1）
 _ASSETS_SHIM = Path(fspack.__file__).parent / "assets" / "runtime" / "api-ms-win-core-path-l1-1-0.dll"

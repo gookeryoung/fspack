@@ -133,7 +133,7 @@ def _inject_win7_compat_dll(runtime_dir: Path) -> None:
     if dest.is_file():
         _logger.info("Win7 兼容 DLL 已就绪: %s", dest)
         return
-    src = Path(__file__).parent.parent / "assets" / "runtime" / _WIN7_COMPAT_DLL_NAME_dispatch
+    src = Path(__file__).parent.parent.parent / "assets" / "runtime" / _WIN7_COMPAT_DLL_NAME_dispatch
     if not src.is_file():
         _logger.warning("Win7 兼容 DLL 缺失: %s，跳过注入", src)
         return

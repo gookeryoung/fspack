@@ -24,8 +24,8 @@ from typing import TYPE_CHECKING, Any
 from fspack._util.fsutil import atomic_write_text
 from fspack.platform import Platform
 
-from .pyc_stamp import _pyc_stamp_key, _pyc_stamp_path
 from .source_strip import _strip_compiled_py
+from .stamp import _pyc_stamp_key, _pyc_stamp_path
 
 if TYPE_CHECKING:
     from fspack.progress import StageRecorder

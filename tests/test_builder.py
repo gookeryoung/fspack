@@ -1252,7 +1252,7 @@ def test_precompile_pyc_parallel_one_failure_skips_stamp(
     from fspack.packaging.pyc import _precompile_pyc
 
     st = StageRecorder("预编译字节码")
-    with caplog.at_level(logging.WARNING, logger="fspack.packaging.pyc_compile"):
+    with caplog.at_level(logging.WARNING, logger="fspack.packaging.pyc.compile"):
         _precompile_pyc(dist, runtime, "3.11.9", Platform.WINDOWS, strip_py=False, stage=st)
 
     stamp = dist / ".pyc_stamp"

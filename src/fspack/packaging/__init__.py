@@ -23,17 +23,21 @@
   子模块：``compile`` / ``source``
 - :mod:`fspack.packaging.pipeline` —— 构建流水线编排入口（``build`` 主入口 +
   阶段函数 re-export）；子模块：``stages``
+- :mod:`fspack.packaging.runtime` —— :class:`RuntimeDownloader` 基类，
+  封装 ``download → extract → ensure`` 三步流程（embed python / python-build-standalone）；
+  子模块：``download`` / ``extract`` / ``urls`` / ``trim`` / ``pth``
+- :mod:`fspack.packaging.pyc` —— pyc 预编译与 .py 源码剥离；
+  子模块：``compile`` / ``stamp`` / ``source_strip``
+- :mod:`fspack.packaging.win7` —— Win7 兼容性（PE 导入表检查 + 重编译版
+  python3XX.dll 下载 + dist 全量扫描）；子模块：``check`` / ``dll`` / ``scan``
 
 **顶层模块（跨子包基础设施或独立职责）：**
 
-- :mod:`fspack.packaging.runtime` —— :class:`RuntimeDownloader` 基类，
-  封装 ``download → extract → ensure`` 三步流程（embed python / python-build-standalone）
 - :mod:`fspack.packaging.net` —— :class:`Downloader` HTTP 下载器（SSL + 进度条）
 - :mod:`fspack.packaging.builtin` —— :class:`TkinterBundler` 内置库打包（为 embed python 补充 tkinter）
 - :mod:`fspack.packaging.entry` —— :class:`EntryWrapper` 入口包装器源码生成
 - :mod:`fspack.packaging.icon` —— :func:`find_favicon` 自动搜索 favicon 与
   :func:`ensure_ico` 图片格式转换（Pillow 可选）
-- :mod:`fspack.packaging.pyc` —— pyc 预编译与 .py 源码剥离
 - :mod:`fspack.packaging.dep_analyzer` —— 二进制依赖分析与未用二进制剥离
 - :mod:`fspack.packaging.size_report` —— 构建产物体积统计
 - :mod:`fspack.packaging.sbom` —— SBOM（软件物料清单）生成

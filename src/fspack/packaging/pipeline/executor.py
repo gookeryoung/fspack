@@ -346,7 +346,7 @@ def _execute_build(  # noqa: PLR0912, PLR0913
     # Win7 门禁（硬）：loader exe 由 fspack 内置 C 源码 + mingw 编译，导入表
     # 引入 Win8+ API 属 fspack 回归，违规即阻断构建，不允许带病出包。
     if target is Platform.WINDOWS:
-        from fspack.packaging.win7_scan import enforce_win7_loaders
+        from fspack.packaging.win7.scan import enforce_win7_loaders
 
         with tracker.stage("Win7 loader 校验") as st:
             enforce_win7_loaders(exes)
@@ -423,7 +423,7 @@ def _execute_build(  # noqa: PLR0912, PLR0913
     # 不阻断构建，生成文本报告到 dist/release/win7-compat-report.txt。
     # 仅 Windows 目标（Linux/macOS 产物不运行于 Win7）。
     if target is Platform.WINDOWS and not opts.no_win7_scan:
-        from fspack.packaging.win7_scan import scan_dist_win7, write_win7_report
+        from fspack.packaging.win7.scan import scan_dist_win7, write_win7_report
 
         with tracker.stage("Win7 兼容扫描") as st:
             report = scan_dist_win7(cfg.dist_dir)
