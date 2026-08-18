@@ -33,28 +33,32 @@ from __future__ import annotations
 import shutil  # noqa: F401 # 测试 monkeypatch 通过 fspack.packaging.loader.shutil.which 访问
 import subprocess  # noqa: F401 # 测试 monkeypatch 通过 fspack.packaging.loader.subprocess.run 访问
 
+from fspack.packaging.loader.cache_keys import (
+    _icon_hash,  # noqa: F401 # 测试通过 fspack.packaging.loader._icon_hash 访问
+    _loader_cache_key,  # noqa: F401 # 测试通过 fspack.packaging.loader._loader_cache_key 访问
+    _version_info_hash,  # noqa: F401 # 测试通过 fspack.packaging.loader._version_info_hash 访问
+    loader_cache_dir,
+)
 from fspack.packaging.loader.compile import (
-    LINUX_GCC,
-    MACOS_CLANG,
-    MINGW_GCC,
-    MINGW_WINDRES,
     LinuxLoader,
     LoaderCompiler,
     LoaderVersionInfo,
     MacLoader,
     WindowsLoader,
-    _compile_resource_obj,  # noqa: F401 # 测试通过 fspack.packaging.loader._compile_resource_obj 访问
-    _find_mingw_gcc,  # noqa: F401 # 测试 monkeypatch 通过 fspack.packaging.loader._find_mingw_gcc 访问
-    _find_windres,  # noqa: F401 # 测试通过 fspack.packaging.loader._find_windres 访问
-    _icon_hash,  # noqa: F401 # 测试通过 fspack.packaging.loader._icon_hash 访问
-    _loader_cache_key,  # noqa: F401 # 测试通过 fspack.packaging.loader._loader_cache_key 访问
-    _version_info_hash,  # noqa: F401 # 测试通过 fspack.packaging.loader._version_info_hash 访问
     clang_available,
     compile_loader,
     gcc_available,
     generate_loader_source,
-    loader_cache_dir,
     mingw_available,
+)
+from fspack.packaging.loader.toolchain import (
+    LINUX_GCC,
+    MACOS_CLANG,
+    MINGW_GCC,
+    MINGW_WINDRES,
+    _compile_resource_obj,  # noqa: F401 # 测试通过 fspack.packaging.loader._compile_resource_obj 访问
+    _find_mingw_gcc,  # noqa: F401 # 测试 monkeypatch 通过 fspack.packaging.loader._find_mingw_gcc 访问
+    _find_windres,  # noqa: F401 # 测试通过 fspack.packaging.loader._find_windres 访问
 )
 
 __all__ = [

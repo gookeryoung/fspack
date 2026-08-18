@@ -1,35 +1,38 @@
-"""C loader 编译流程：基类、平台子类、编译命令构造、icon 处理.
+"""C loader 编译器基类与平台子类：``generate → compile → cache`` 通用流程.
 
-从 :mod:`fspack.packaging.loader` 拆分而来，封装 ``generate → compile → cache``
-通用流程与平台差异：
+从 :mod:`fspack.packaging.loader` 拆分而来，封装平台差异：
 
 - :class:`LoaderCompiler` 基类：缓存检查 → 命中复制 → 未命中编译 → 回写
 - :class:`WindowsLoader`：mingw 交叉编译，GUI 加 -mwindows，icon 用 windres 嵌入
 - :class:`LinuxLoader`：gcc 链接 libdl
+- :class:`MacLoader`：clang，dlopen libpython3.X.dylib
 
-C 源码模板从 :mod:`fspack.packaging.loader.source` 导入。
+工具链发现与 windres 资源编译见 :mod:`fspack.packaging.loader.toolchain`，
+缓存键计算见 :mod:`fspack.packaging.loader.cache_keys`。C 源码模板从
+:mod:`fspack.packaging.loader.source` 导入。
 """
 
 from __future__ import annotations
 
 import abc
-import hashlib
 import logging
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fspack._compat import override
 from fspack.config import AppType
 from fspack.exceptions import LoaderError
-from fspack.packaging.loader.resource import (
-    LoaderVersionInfo,
-    generate_app_manifest,
-    generate_resource_rc,
+from fspack.packaging.loader.cache_keys import (
+    _icon_hash,
+    _loader_cache_key,
+    _version_info_hash,
+    loader_cache_dir,
 )
+from fspack.packaging.loader.resource import LoaderVersionInfo
 from fspack.packaging.loader.source import _LOADER_C_LINUX, _LOADER_C_MACOS, _LOADER_C_WINDOWS
+from fspack.packaging.loader.toolchain import LINUX_GCC, MACOS_CLANG, MINGW_GCC, _compile_resource_obj, _find_mingw_gcc
 from fspack.platform import Platform
 
 if TYPE_CHECKING:
@@ -38,9 +41,6 @@ if TYPE_CHECKING:
     from fspack.progress import StageRecorder
 
 __all__ = [
-    "LINUX_GCC",
-    "MACOS_CLANG",
-    "MINGW_GCC",
     "LinuxLoader",
     "LoaderCompiler",
     "LoaderVersionInfo",
@@ -50,63 +50,11 @@ __all__ = [
     "compile_loader",
     "gcc_available",
     "generate_loader_source",
-    "loader_cache_dir",
     "mingw_available",
 ]
 
 # 共享 logger 名：保持与原 loader.py 一致，测试 caplog 按 logger 名过滤
 _logger = logging.getLogger("fspack.packaging.loader")
-MINGW_GCC = "x86_64-w64-mingw32-gcc"
-MINGW_WINDRES = "x86_64-w64-mingw32-windres"
-LINUX_GCC = "gcc"
-MACOS_CLANG = "clang"
-
-
-def loader_cache_dir() -> Path:
-    """返回 fspack loader 缓存目录（``FSPACK_CACHE_DIR`` 环境变量 > 默认 ``~/.fspack/cache/loaders``）."""
-    from fspack.config.cache import loader_cache_dir as _cache_dir
-
-    return _cache_dir()
-
-
-def _loader_cache_key(
-    source: str,
-    app_type: AppType,
-    platform: Platform,
-    icon_hash: str = "",
-    version_info_hash: str = "",
-) -> str:
-    """计算 loader 缓存键：sha256(source + app_type + platform + icon_hash + version_info_hash) 前 16 字符 hex。
-
-    源码仅依赖 ``py_xy`` 与平台（入口路径运行时从 ``<exe_basename>.entry``
-    或回退 ``.entry`` 读取），应用类型影响 ``-mwindows`` 编译选项，icon_hash
-    区分不同 icon（空串表示无 icon），version_info_hash 区分不同版本信息元数据
-    （CompanyName/ProductVersion 等变化时资源段变化需重编）。五者组合哈希作为
-    缓存文件名，保证同配置命中、改配置失效。
-    """
-    h = hashlib.sha256()
-    h.update(source.encode("utf-8"))
-    h.update(app_type.value.encode("utf-8"))
-    h.update(platform.value.encode("utf-8"))
-    h.update(icon_hash.encode("utf-8"))
-    h.update(version_info_hash.encode("utf-8"))
-    return h.hexdigest()[:16]
-
-
-def _version_info_hash(info: LoaderVersionInfo) -> str:
-    """计算版本信息元数据的哈希（sha256 前 16 字符），用于 loader 缓存键.
-
-    五字段（name/version/description/author/exe_filename）任一变化即视为不同配置，
-    触发资源段重编。``exe_filename`` 纳入使多入口项目不同入口的 exe 资源段独立缓存
-    （OriginalFilename 字段不同）。
-    """
-    h = hashlib.sha256()
-    h.update(info.name.encode("utf-8"))
-    h.update(info.version.encode("utf-8"))
-    h.update(info.description.encode("utf-8"))
-    h.update(info.author.encode("utf-8"))
-    h.update(info.exe_filename.encode("utf-8"))
-    return h.hexdigest()[:16]
 
 
 # ---- 基类 ----
@@ -167,7 +115,8 @@ class LoaderCompiler(abc.ABC):
         """编译资源（icon/版本信息/manifest）为 .o 文件，返回路径。
 
         默认无资源处理（Linux/macOS 无 PE 资源段概念），Windows 子类覆盖为
-        调用 :func:`_compile_resource_obj` 生成 windres COFF ``.o``。
+        调用 :func:`fspack.packaging.loader.toolchain._compile_resource_obj`
+        生成 windres COFF ``.o``。
         """
         return None
 
@@ -476,98 +425,3 @@ def gcc_available() -> bool:
 def clang_available() -> bool:
     """检测 clang 编译器是否可用（macOS）。"""
     return MacLoader.available()
-
-
-# ---- icon 资源处理（Windows 专用）----
-
-
-def _icon_hash(icon: Path) -> str:
-    """计算 icon 文件内容的 sha256 前 16 字符 hex，用于缓存键。"""
-    h = hashlib.sha256()
-    h.update(icon.read_bytes())
-    return h.hexdigest()[:16]
-
-
-def _find_windres() -> str:
-    """查找可用的 windres，优先交叉前缀，回退无前缀。
-
-    Windows mingw64 发行版通常命名 ``windres``（无前缀），Linux 交叉编译
-    环境命名 ``x86_64-w64-mingw32-windres``（带前缀）。两者都查找不到时
-    返回默认名，让后续 subprocess 报 FileNotFoundError。
-    """
-    for name in (MINGW_WINDRES, "windres"):
-        if shutil.which(name):
-            return name
-    return MINGW_WINDRES
-
-
-def _find_mingw_gcc() -> str | None:
-    """查找可用的 mingw gcc，优先交叉前缀。
-
-    与 :func:`_find_windres` 类似但回退受限：Windows 原生 mingw64 发行版
-    （MSYS2、WinLibs、chocolatey mingw 包）通常命名 ``gcc``（无前缀），
-    仅在 ``sys.platform == "win32"`` 时回退 ``"gcc"``。Linux/macOS 的
-    ``gcc`` 是 host 编译器（产出 ELF/Mach-O 而非 PE），交叉构建 Windows
-    exe 时不能回退，无 mingw 前缀编译器时返回 ``None``（调用方据此判
-    ``available()`` 为 False）。
-    """
-    if shutil.which(MINGW_GCC):
-        return MINGW_GCC
-    if sys.platform == "win32" and shutil.which("gcc"):
-        return "gcc"
-    return None
-
-
-def _compile_resource_obj(
-    icon: Path | None,
-    work_dir: Path,
-    *,
-    version_info: LoaderVersionInfo | None = None,
-) -> Path | None:
-    """用 windres 编译 Windows 资源（icon + 版本信息 + manifest）为 COFF ``.o``，返回路径.
-
-    生成 ``resource.rc``（icon 引用 + VS_VERSIONINFO + manifest 引用）与
-    ``app.manifest``，windres 编译为 ``resource.o`` 供 gcc 链接到 exe。
-
-    - ``icon`` 非 None 且文件存在时复制到 work_dir 并在 rc 中引用；不存在则 warning
-      并跳过 icon（其余资源仍编译）
-    - ``version_info`` 非 None 时 rc 含 VERSIONINFO 块；为 None 时省略版本信息
-    - manifest 总是生成并引用（asInvoker + DPI + supportedOS），单独嵌入即降低可疑度
-
-    windres 不可用时 warning 并返回 None（exe 仍可编译，仅无资源段）。windres
-    编译失败（如 rc 语法错误）时同样返回 None，不阻断构建。
-    """
-    windres = _find_windres()
-    if not shutil.which(windres):
-        _logger.warning("未找到 windres，跳过资源嵌入（版本信息/manifest/icon，请安装 mingw-w64）")
-        return None
-    work_dir.mkdir(parents=True, exist_ok=True)
-    # icon 复制到 work_dir（windres 解析相对路径，统一文件名 icon.ico）
-    has_icon = False
-    if icon is not None and icon.is_file():
-        shutil.copy2(icon, work_dir / "icon.ico")
-        has_icon = True
-    elif icon is not None:
-        _logger.warning("icon 文件不存在，跳过图标嵌入（其余资源仍编译）: %s", icon)
-    # 写 resource.rc 与 app.manifest（UTF-8；rc 顶部 #pragma code_page(65001) 声明编码，
-    # 使中文 CompanyName/FileDescription 被 windres 正确转为 UTF-16LE 存入 PE 资源段）
-    rc_content = generate_resource_rc(version_info, has_icon=has_icon)
-    rc_file = work_dir / "resource.rc"
-    rc_file.write_text(rc_content, encoding="utf-8")
-    manifest_name = version_info.name if version_info is not None else "app"
-    manifest_version = version_info.version if version_info is not None else "1.0.0"
-    manifest_content = generate_app_manifest(manifest_name, manifest_version)
-    manifest_file = work_dir / "app.manifest"
-    manifest_file.write_text(manifest_content, encoding="utf-8")
-    obj_file = work_dir / "resource.o"
-    cmd = [windres, "--input", str(rc_file), "--output", str(obj_file), "--output-format=coff"]
-    _logger.info("编译 Windows 资源: %s", " ".join(cmd))
-    try:
-        subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8", errors="replace", cwd=work_dir)
-    except FileNotFoundError as e:
-        _logger.warning("windres 不可用，跳过资源嵌入: %s", e)
-        return None
-    except subprocess.CalledProcessError as e:
-        _logger.warning("资源编译失败，跳过资源嵌入:\n%s", e.stderr)
-        return None
-    return obj_file
