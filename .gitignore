@@ -26,6 +26,9 @@ coverage.xml
 .idea/
 *_profile.html
 
+# 本地协作产物（需求/迭代/规则记录），不提交
+/.trae/
+
 # 环境变量与凭证（勿提交）
 .env
 .env.*
