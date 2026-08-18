@@ -116,8 +116,8 @@ class EntryPoint:
         仅按脚本自身 import 推断（多入口项目共享 declared，不能据项目级
         依赖判断单个入口类型）。
         """
-        # 延迟导入打破 config ↔ parsing 循环依赖
-        from fspack.config.parsing import infer_app_type
+        # 延迟导入打破 config ↔ app_type 循环依赖（app_type 顶层导入本模块）
+        from fspack.config.app_type import infer_app_type
 
         return cls(
             name=name,

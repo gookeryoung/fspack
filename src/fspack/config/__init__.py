@@ -7,9 +7,11 @@
   ``EntryPoint``/``ProjectInfo``/``DependencyReport``/``BuildConfig``/
   ``BuildOptions``/``SlimRules``/``BuildDefaults``）+ 镜像源 + 工具函数
   （``_parse_string_list_cfg``/``_match_any_glob``）
-- :mod:`fspack.config.parsing`：pyproject.toml 解析（``parse_project``）+
-  入口识别（``detect_entry``/``infer_app_type``）+
+- :mod:`fspack.config.parsing`：pyproject.toml 解析编排（``parse_project``）+
   ``[tool.fspack]`` 配置项解析（``_parse_build_defaults``/``_resolve_icon`` 等）
+- :mod:`fspack.config.entries`：入口识别（``detect_entry``/``_parse_entries``/
+  ``_parse_project_scripts``/``_merge_entries``）
+- :mod:`fspack.config.app_type`：应用类型推断（``infer_app_type``）
 - :mod:`fspack.config.versions`：Python embed/standalone 版本映射 +
   Nuitka 版本锁定 + PEP 440 ``requires-python`` 匹配
 
@@ -26,6 +28,12 @@
 
 from __future__ import annotations
 
+from fspack.config.app_type import (
+    _GUI_HINTS,  # noqa: F401
+    _WEB_HINTS,  # noqa: F401
+    infer_app_type,
+)
+
 # 公开 API 与私有辅助：re-export 保持 ``from fspack.config import X`` 路径兼容
 from fspack.config.cache import (
     cache_root,
@@ -38,6 +46,15 @@ from fspack.config.cache import (
     tkinter_cache_dir,
     wheel_cache_dir,
     win7_dll_cache_dir,
+)
+from fspack.config.entries import (
+    _has_entry,  # noqa: F401
+    _is_main_check,  # noqa: F401
+    _merge_entries,  # noqa: F401
+    _parse_entries,  # noqa: F401
+    _parse_project_scripts,  # noqa: F401
+    _resolve_module_script,  # noqa: F401
+    detect_entry,
 )
 from fspack.config.models import (
     DEFAULT_MIRROR,
@@ -59,21 +76,12 @@ from fspack.config.models import (
 )
 from fspack.config.parsing import (
     _BUILD_DEFAULT_KEYS,  # noqa: F401
-    _GUI_HINTS,  # noqa: F401
-    _has_entry,  # noqa: F401
-    _is_main_check,  # noqa: F401
-    _merge_entries,  # noqa: F401
     _parse_build_defaults,  # noqa: F401
-    _parse_entries,  # noqa: F401
     _parse_exclude_dirs,  # noqa: F401
     _parse_optional_dependencies,  # noqa: F401
-    _parse_project_scripts,  # noqa: F401
     _resolve_icon,  # noqa: F401
-    _resolve_module_script,  # noqa: F401
     clear_project_cache,
-    detect_entry,
     expand_extras,
-    infer_app_type,
     parse_project,
 )
 from fspack.config.versions import (
