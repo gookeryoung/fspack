@@ -86,18 +86,19 @@ def _make_resolved_packages(count: int = _WHEEL_COUNT) -> list[str]:
     return [f"pkg_{i:03d}==1.0.0" for i in range(count)]
 
 
-def _make_sleep_download_one(sleep_seconds: float, *, mode: str) -> Any:
+def _make_sleep_download_one(sleep_seconds: float) -> Any:
     """构造 mock 单包下载函数：sleep 指定秒数后返回成功结果.
 
     ``time.sleep`` 释放 GIL，与真实 ``subprocess.run`` 阻塞行为一致，让
     ``ThreadPoolExecutor`` 线程并行收益可观测（并行模式下多个 worker 同时
     sleep，总耗时接近单包耗时 * ceil(N/workers) 而非 N 倍）。
 
+    P3 引入 :class:`DownloadContext` 后两条路径函数签名统一，req 均在
+    ``args[0]``：``_download_one_resolved(req, ctx, *, ...)`` /
+    ``_download_one_with_uv(req, ctx, *, ...)``。
+
     Args:
         sleep_seconds: 模拟下载耗时（秒）.
-        mode: ``"pip"`` 或 ``"uv"``，决定从 args 提取 req 的位置（pip 路径
-            ``_download_one_resolved(req, ...)`` req 在 args[0]；uv 路径
-            ``_download_one_with_uv(uv_path, req, ...)`` req 在 args[1]）.
 
     Returns:
         fake 下载函数，签名与真实函数一致，返回带 ``Saved <name>.whl`` stdout
@@ -107,12 +108,10 @@ def _make_sleep_download_one(sleep_seconds: float, *, mode: str) -> Any:
 
     def fake_download(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
         time.sleep(sleep_seconds)
-        # 从 args 提取 req（位置因函数而异）
+        # 从 args 提取 req（两条路径均在 args[0]）
         req = kwargs.get("req")
         if req is None and args:
-            # _download_one_resolved(req, base_args, extra_args, pypi_index, *, with_index)
-            # _download_one_with_uv(uv_path, req, cache_dir, extra_args, *, ...)
-            req = args[1] if mode == "uv" else args[0]
+            req = args[0]
         # 提取包名（name==version → name）
         pkg_name = req.split("==")[0] if req else "pkg"
         wheel_name = f"{pkg_name}-1.0.0-py3-none-any.whl"
@@ -185,8 +184,8 @@ class TestWheelDownloadBaseline:
         cache_dir.mkdir()
         resolved = _make_resolved_packages()
         monkeypatch.setattr(
-            "fspack.packaging.wheels.resolver._download_one_resolved",
-            _make_sleep_download_one(_DOWNLOAD_SLEEP_PIP, mode="pip"),
+            "fspack.packaging.wheels.parallel._download_one_resolved",
+            _make_sleep_download_one(_DOWNLOAD_SLEEP_PIP),
         )
 
         def _run() -> int:
@@ -216,8 +215,8 @@ class TestWheelDownloadBaseline:
         cache_dir.mkdir()
         resolved = _make_resolved_packages()
         monkeypatch.setattr(
-            "fspack.packaging.wheels.resolver._download_one_with_uv",
-            _make_sleep_download_one(_DOWNLOAD_SLEEP_UV, mode="uv"),
+            "fspack.packaging.wheels.parallel._download_one_with_uv",
+            _make_sleep_download_one(_DOWNLOAD_SLEEP_UV),
         )
 
         def _run() -> int:
@@ -317,8 +316,8 @@ class TestWheelDownloadBaseline:
             lambda *a, **kw: "".join(f"{r}\n" for r in resolved),
         )
         monkeypatch.setattr(
-            "fspack.packaging.wheels.resolver._download_one_with_uv",
-            _make_sleep_download_one(_DOWNLOAD_SLEEP_UV, mode="uv"),
+            "fspack.packaging.wheels.parallel._download_one_with_uv",
+            _make_sleep_download_one(_DOWNLOAD_SLEEP_UV),
         )
 
         def _run() -> int:
