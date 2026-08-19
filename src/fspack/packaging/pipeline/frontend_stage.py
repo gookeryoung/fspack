@@ -33,10 +33,12 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
+import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 from fspack._util.jsoncache import load_json_dict
 from fspack.exceptions import FspackError
@@ -49,6 +51,16 @@ __all__ = [
 ]
 
 _logger = logging.getLogger(__name__)
+
+# 单条前端命令超时（秒）：pnpm install 冷缓存下载依赖 + vite/vue-tsc 构建
+# 在慢网络/慢 CI 可达数分钟；600s 与 Nuitka 编译超时一致，超时终止进程树
+_FE_CMD_TIMEOUT_SEC = 600.0
+
+# drain 线程 join 超时（秒）：进程树被杀后管道写端未全部关闭时不无限等待
+_FE_DRAIN_JOIN_TIMEOUT = 5.0
+
+# 输出累积上限（4MB）：pnpm/vite 单命令输出远小于此，超限停止累积（继续透传终端）
+_FE_ACCUM_LIMIT = 4 * 1024 * 1024
 
 # 包管理器探测顺序：pnpm（模板推荐，workspace 配置就绪）→ yarn → npm
 _PM_CANDIDATES: tuple[str, ...] = ("pnpm", "yarn", "npm")
@@ -171,22 +183,82 @@ def _resolve_pm() -> tuple[str, str] | None:
 
 
 def _run_cmd(exe: str, args: Sequence[str], cwd: Path) -> None:
-    """在前端目录执行包管理器命令，非零退出码抛 FspackError（含输出尾部）.
+    """在前端目录执行包管理器命令，流式透传输出，非零退出/超时抛 FspackError.
+
+    用 ``Popen`` + 守护线程实时透传 stdout/stderr 到终端：vite/vue-tsc 构建
+    可达数分钟，静默捕获输出会被误认为卡死（与 Nuitka ``_stream_compile``
+    同模式）。输出累积供失败诊断（上限 :data:`_FE_ACCUM_LIMIT`）。
+
+    超时防护：``_FE_CMD_TIMEOUT_SEC``（600s）后终止整棵进程树——Windows 上
+    ``pnpm.CMD`` 经 cmd 包装派生 node/vite 孙进程，仅 kill 直接子进程时
+    孙进程持有管道写端，drain 线程等不到 EOF 会永久阻塞，须 ``taskkill /T``
+    递归终止。
 
     :param exe: 包管理器可执行文件路径（:func:`_resolve_pm` 的结果）
     :param args: 命令参数（如 ``("install",)``/``("run", "build")``）
     :param cwd: 工作目录（前端项目根）
-    :raises FspackError: 命令启动失败或退出码非零
+    :raises FspackError: 命令启动失败、退出码非零、或超时被终止
     """
     cmd = [exe, *args]
     _logger.info("执行: %s（目录 %s）", " ".join(cmd), cwd)
     try:
-        proc = subprocess.run(cmd, cwd=str(cwd), capture_output=True, text=True, errors="replace", check=False)
+        proc = subprocess.Popen(cmd, cwd=str(cwd), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except OSError as e:
         raise FspackError(f"执行 {exe} 失败: {e}") from e
-    if proc.returncode != 0:
-        tail = (proc.stderr or proc.stdout or "").strip()[-800:]
-        raise FspackError(f"前端命令失败（{' '.join(args)}，目录 {cwd}）:\n{tail}")
+
+    stdout_chunks: list[bytes] = []
+    stderr_chunks: list[bytes] = []
+
+    def _drain(stream: IO[bytes] | None, chunks: list[bytes], out: Any) -> None:
+        """消费管道防写端阻塞：os.read 字节块实时写终端并累积（超限停积）."""
+        assert stream is not None
+        fd = stream.fileno()
+        total = 0
+        while True:
+            try:
+                chunk = os.read(fd, 4096)
+            except OSError:  # pragma: no cover - fd 被关闭的竞态防御
+                break
+            if not chunk:
+                break
+            if total < _FE_ACCUM_LIMIT:
+                chunks.append(chunk)
+                total += len(chunk)
+            out.buffer.write(chunk)
+            out.buffer.flush()
+
+    t_out = threading.Thread(target=_drain, args=(proc.stdout, stdout_chunks, sys.stdout), daemon=True)
+    t_err = threading.Thread(target=_drain, args=(proc.stderr, stderr_chunks, sys.stderr), daemon=True)
+    t_out.start()
+    t_err.start()
+
+    timed_out = False
+    try:
+        returncode = proc.wait(timeout=_FE_CMD_TIMEOUT_SEC)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        _logger.warning("前端命令超时（%ds），终止进程树: %s", int(_FE_CMD_TIMEOUT_SEC), " ".join(cmd[:3]))
+        if sys.platform == "win32":
+            # Windows 无进程组：taskkill /T 递归终止 pnpm.CMD → node → vite 全链
+            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True, check=False)
+        else:
+            # POSIX：Popen 无独立进程组，仅杀直接子进程；孙进程随管道关闭兜底退出
+            proc.kill()
+        try:
+            returncode = proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:  # pragma: no cover - kill 后残留极罕见
+            _logger.warning("超时 kill 后子进程 %d 5s 内未退出，放弃等待", proc.pid)
+            returncode = -1
+    finally:
+        t_out.join(timeout=_FE_DRAIN_JOIN_TIMEOUT)
+        t_err.join(timeout=_FE_DRAIN_JOIN_TIMEOUT)
+
+    if timed_out or returncode != 0:
+        stdout = b"".join(stdout_chunks).decode("utf-8", errors="replace")
+        stderr = b"".join(stderr_chunks).decode("utf-8", errors="replace")
+        tail = (stderr or stdout or "").strip()[-800:]
+        kind = "前端命令超时" if timed_out else "前端命令失败"
+        raise FspackError(f"{kind}（{' '.join(args)}，目录 {cwd}）:\n{tail}")
 
 
 def _output_ready(fp: FrontendProject) -> bool:

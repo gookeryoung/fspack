@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import zipfile
 from collections.abc import Sequence
 from pathlib import Path
@@ -3809,23 +3810,57 @@ def test_build_frontend_empty_output_after_build_raises(tmp_path: Path, monkeypa
         _build_frontend(_detect_frontends(tmp_path, ()))
 
 
+class _FakePipeStream:
+    """os.pipe 读端包装：drain 线程经 ``fileno`` + ``os.read`` 消费，可预置内容."""
+
+    def __init__(self, content: bytes = b"") -> None:
+        self._r, w = os.pipe()
+        if content:
+            os.write(w, content)
+        os.close(w)
+
+    def fileno(self) -> int:
+        return self._r
+
+
+class _FakeProc:
+    """``_run_cmd`` 的 Popen 替身：管道流 + 可编程 wait/kill 行为."""
+
+    def __init__(
+        self,
+        *,
+        returncode: int = 0,
+        stderr: bytes = b"",
+        stdout: bytes = b"",
+        first_wait_exc: Exception | None = None,
+    ) -> None:
+        self.pid = 4242
+        self.stdout = _FakePipeStream(stdout)
+        self.stderr = _FakePipeStream(stderr)
+        self._returncode = returncode
+        self._first_wait_exc = first_wait_exc
+        self.kill_calls = 0
+
+    def wait(self, timeout: float | None = None) -> int:
+        if self._first_wait_exc is not None:
+            exc, self._first_wait_exc = self._first_wait_exc, None
+            raise exc
+        return self._returncode
+
+    def kill(self) -> None:
+        self.kill_calls += 1
+
+
 def test_run_cmd_success_passes_through(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """退出码 0 时正常返回（无异常）."""
-
-    class FakeProc:
-        returncode = 0
-        stderr = ""
-        stdout = ""
-
+    """退出码 0 时正常返回（无异常），命令与工作目录透传 Popen."""
     seen: dict[str, object] = {}
 
-    def fake_run(cmd: list[str], cwd: str, **kwargs: object) -> object:
+    def fake_popen(cmd: list[str], cwd: str, **kwargs: object) -> _FakeProc:
         seen["cmd"] = cmd
         seen["cwd"] = cwd
-        seen["kwargs"] = kwargs
-        return FakeProc()
+        return _FakeProc()
 
-    monkeypatch.setattr("fspack.packaging.pipeline.frontend_stage.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.pipeline.frontend_stage.subprocess.Popen", fake_popen)
     _run_cmd("C:/fake/npm", ["run", "build"], tmp_path)
     assert seen["cmd"] == ["C:/fake/npm", "run", "build"]
     assert seen["cwd"] == str(tmp_path)
@@ -3833,20 +3868,41 @@ def test_run_cmd_success_passes_through(tmp_path: Path, monkeypatch: pytest.Monk
 
 def test_run_cmd_failure_raises_with_tail(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """非零退出码抛 FspackError，含 stderr 尾部（截断到 800 字符）."""
-
-    class FakeProc:
-        returncode = 1
-        stderr = "E" * 1000
-        stdout = ""
-
+    proc = _FakeProc(returncode=1, stderr=b"E" * 1000)
     monkeypatch.setattr(
-        "fspack.packaging.pipeline.frontend_stage.subprocess.run",
-        lambda *a, **k: FakeProc(),
+        "fspack.packaging.pipeline.frontend_stage.subprocess.Popen",
+        lambda *a, **k: proc,
     )
     with pytest.raises(FspackError, match="前端命令失败") as exc_info:
         _run_cmd("npm", ["run", "build"], tmp_path)
     assert "E" * 800 in str(exc_info.value)
     assert "E" * 801 not in str(exc_info.value)
+
+
+def test_run_cmd_timeout_kills_process_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """超时抛 FspackError 并终止进程树：Windows taskkill /T /F，POSIX kill."""
+    import sys as _sys
+
+    proc = _FakeProc(
+        returncode=1,
+        first_wait_exc=subprocess.TimeoutExpired(cmd=["fake"], timeout=600),
+    )
+    kill_cmds: list[list[str]] = []
+    monkeypatch.setattr(
+        "fspack.packaging.pipeline.frontend_stage.subprocess.Popen",
+        lambda *a, **k: proc,
+    )
+    monkeypatch.setattr(
+        "fspack.packaging.pipeline.frontend_stage.subprocess.run",
+        lambda cmd, **k: kill_cmds.append(list(cmd)),
+    )
+    with pytest.raises(FspackError, match="前端命令超时"):
+        _run_cmd("npm", ["run", "build"], tmp_path)
+    if _sys.platform == "win32":
+        assert kill_cmds and kill_cmds[0][:1] == ["taskkill"]
+        assert "/T" in kill_cmds[0] and "/F" in kill_cmds[0]
+    else:
+        assert proc.kill_calls == 1
 
 
 # ---- copy_source 前端裁剪（dist 只发布产物，前端源码不进入） ----
