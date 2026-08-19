@@ -112,14 +112,6 @@ def _doctor_templates_root() -> Path:
     return Path(__file__).resolve().parent.parent / "assets" / "templates"
 
 
-def _templates_root() -> Path:
-    """返回 ``assets/init_templates/`` 目录的绝对路径.
-
-    .. deprecated:: 向后兼容别名，新代码用 :func:`_init_templates_root`.
-    """
-    return _init_templates_root()
-
-
 def _roles_from_data(data: dict[str, object]) -> frozenset[str]:
     """从 ``template.toml`` 解析的字典中提取 ``roles`` 字段.
 

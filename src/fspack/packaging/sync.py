@@ -299,19 +299,6 @@ def _build_ignore_fn(
     return ignore_fn
 
 
-def _merge_excludes(base: Callable[..., set[str]], extra: tuple[str, ...]) -> Callable[..., set[str]]:
-    """合并内置排除函数与配置额外排除模式.
-
-    返回的函数对同一 ``(directory, names)`` 取两者排除集的并集。
-    """
-    extra_fn = shutil.ignore_patterns(*extra)
-
-    def combined(directory: str, names: list[str]) -> set[str]:
-        return base(directory, names) | extra_fn(directory, names)
-
-    return combined
-
-
 def _sync_tree(src: Path, dst: Path, ignore_fn: Callable[..., set[str]]) -> None:
     """增量同步 src 到 dst，保留 dst 中的 ``__pycache__`` 以复用 .pyc 缓存.
 
