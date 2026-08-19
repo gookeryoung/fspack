@@ -3050,6 +3050,52 @@ def test_run_template_passes_env_to_popen(tmp_path: Path, monkeypatch: pytest.Mo
     assert captured["env"] == env
 
 
+# ---- _copy_ignore（模板复制过滤）----
+
+
+def test_copy_ignore_filters_dev_and_build_residue() -> None:
+    """回调过滤本地开发/构建残留：node_modules/dist/deploy/缓存目录与编译产物.
+
+    模板源目录中的这些条目均为本地测试残留（git 已忽略），带入 doctor 临时
+    环境会破坏构建语义（node_modules 触发 pnpm 交互式询问挂起、dist/deploy
+    非空让前端阶段误判产物就绪跳过构建）。
+    """
+    from fspack.doctor.templates import _copy_ignore
+
+    names = ["node_modules", "dist", "deploy", "__pycache__", ".venv", ".git", "a.pyc", "b.pyo", "c.pyd"]
+    assert _copy_ignore("src", names) == set(names)
+
+    kept = ["main.py", "package.json", "src", "public", "pyproject.toml"]
+    assert _copy_ignore("src", kept) == set()
+
+
+def test_copytree_with_copy_ignore_skips_residue(tmp_path: Path) -> None:
+    """copytree 挂载 _copy_ignore 后残留目录不进入目标，正常源文件完整复制."""
+    import shutil as _shutil
+
+    from fspack.doctor.templates import _copy_ignore
+
+    src = tmp_path / "tpl"
+    (src / "src" / "app").mkdir(parents=True)
+    (src / "src" / "app" / "main.py").write_text('print("hi")', encoding="utf-8")
+    (src / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
+    (src / "node_modules" / "vue").mkdir(parents=True)
+    (src / "node_modules" / "vue" / "package.json").write_text("{}", encoding="utf-8")
+    (src / "dist").mkdir()
+    (src / "dist" / "app.exe").write_bytes(b"bin")
+    (src / "__pycache__").mkdir()
+    (src / "__pycache__" / "m.pyc").write_bytes(b"pyc")
+
+    dst = tmp_path / "dst"
+    _shutil.copytree(src, dst, ignore=_copy_ignore)
+
+    assert (dst / "src" / "app" / "main.py").read_text(encoding="utf-8") == 'print("hi")'
+    assert (dst / "pyproject.toml").is_file()
+    assert not (dst / "node_modules").exists()
+    assert not (dst / "dist").exists()
+    assert not (dst / "__pycache__").exists()
+
+
 # ---- _format_run_status ----
 
 

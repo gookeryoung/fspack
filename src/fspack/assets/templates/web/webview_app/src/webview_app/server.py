@@ -41,12 +41,14 @@ class NativeServer:
         """启动服务."""
         assert self.DIR_FRONTEND.exists(), "前端目录不存在"
 
-        if not self.DIR_FRONTEND_NODE_MODULES.exists():
-            print("未找到前端依赖, 📦 尝试安装依赖...")
-            self.install_dependencies()
-
+        # 仅在构建产物（deploy）缺失时才走安装/构建流程（开发首跑场景）。
+        # 打包分发场景 deploy 已随包就绪，node_modules 不随包分发也不需要——
+        # 终端用户机器无 node 环境，按缺失即装会在启动时必然失败。
         if not self.DIR_FRONTEND_DIST.exists():
-            print("未找到前端发布文件, 📦 尝试构建前端...")
+            if not self.DIR_FRONTEND_NODE_MODULES.exists():
+                print("未找到前端依赖, 尝试安装依赖...")
+                self.install_dependencies()
+            print("未找到前端发布文件, 尝试构建前端...")
             self.build()
 
         assert self.PATH_INDEX.exists(), "未找到前端发布文件"

@@ -35,6 +35,7 @@ from fspack.doctor.bench import _save_and_compare_bench
 from fspack.doctor.envs import _dir_size, _format_size
 from fspack.doctor.models import TemplateBuildResult, TemplateRunResult
 from fspack.doctor.template_report import _print_template_build_summary
+from fspack.templates.registry import _TEMPLATE_SKIP_DIRS, _TEMPLATE_SKIP_SUFFIXES
 
 if TYPE_CHECKING:
     from fspack.templates.registry import Template
@@ -59,6 +60,23 @@ _RUN_TIMEOUT_SEC = 5.0
 
 # 终止进程后的等待时间（秒）：terminate 后给进程 2s 清理，仍不退出则 kill。
 _TERMINATE_GRACE_SEC = 2.0
+
+# copytree 复制模板时跳过的目录：在 registry 扫描过滤（node_modules/__pycache__ 等）
+# 基础上追加构建产物目录（dist/deploy 为 ``fsp b`` 与前端构建输出）。模板源目录中
+# 这些均为本地测试残留（git 已忽略），带入 doctor 临时环境会破坏构建语义——
+# node_modules 含 pnpm 硬链接且 virtualStoreDir 路径不匹配，触发交互式询问在
+# 非 TTY 下挂起直至超时；dist/deploy 非空会让前端阶段误判产物就绪跳过构建。
+_COPY_IGNORE_DIRS: frozenset[str] = _TEMPLATE_SKIP_DIRS | frozenset({"dist", "deploy"})
+
+
+def _copy_ignore(_src: str, names: list[str]) -> set[str]:
+    """copytree ignore 回调：跳过本地开发/构建残留目录与编译产物文件.
+
+    :param _src: copytree 传入的源目录（未使用）
+    :param names: 当前层级目录条目名列表
+    :return: 应忽略的条目名集合
+    """
+    return {n for n in names if n in _COPY_IGNORE_DIRS or Path(n).suffix in _TEMPLATE_SKIP_SUFFIXES}
 
 
 def _find_dist_exe(proj_dir: Path, name: str) -> Path | None:
@@ -268,7 +286,7 @@ def _build_single_template(  # pragma: no cover
     from fspack.platform import detect_platform
 
     proj_dir = work_dir / template.id
-    shutil.copytree(template.dir, proj_dir, dirs_exist_ok=True)
+    shutil.copytree(template.dir, proj_dir, dirs_exist_ok=True, ignore=_copy_ignore)
 
     opts = BuildOptions(no_size_report=True)
     mirror = get_mirror()
