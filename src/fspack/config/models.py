@@ -50,11 +50,13 @@ _logger = logging.getLogger(__name__)
 _PYPI_IMPORT_ALIASES: dict[str, tuple[str, ...]] = {
     "attrs": ("attr",),
     "beautifulsoup4": ("bs4",),
+    "djangorestframework": ("rest_framework",),
     "gitpython": ("git",),
     "grpcio": ("grpc",),
     "opencv_python": ("cv2",),
     "opencv_python_headless": ("cv2",),
     "opencv_contrib_python": ("cv2",),
+    "opencv_contrib_python_headless": ("cv2",),
     "pdfminer_six": ("pdfminer",),
     "psycopg2_binary": ("psycopg2",),
     "pycryptodome": ("crypto",),
@@ -64,8 +66,11 @@ _PYPI_IMPORT_ALIASES: dict[str, tuple[str, ...]] = {
     "pyserial": ("serial",),
     "python_dateutil": ("dateutil",),
     "python_dotenv": ("dotenv",),
+    "python_json_logger": ("pythonjsonlogger",),
     "python_multipart": ("multipart",),
+    "pywin32": ("win32api", "win32con", "win32gui", "win32com", "pythoncom", "pywintypes", "win32event", "win32file"),
     "pyyaml": ("yaml",),
+    "ruamel_yaml": ("ruamel",),
     "scikit_learn": ("sklearn",),
     "scikit_image": ("skimage",),
     "setuptools": ("pkg_resources",),
@@ -441,20 +446,35 @@ class DependencyReport:
         时，依次经名字归一化、静态映射表
         :data:`_PYPI_IMPORT_ALIASES`、当前环境 ``top_level.txt`` 运行时
         兜底三层匹配，命中任一层即视为已声明，不产生误报。
+
+        运行时兜底惰性求值：``importlib.metadata`` 首次导入约 220ms（dry-run
+        全链路实测占 ~58%），仅在归一化 + 静态表匹配后仍存在未命中导入、且
+        声明中含静态表未覆盖的分发时才触发——常见场景（声明与导入名一致或
+        静态表覆盖）零开销。
         """
         declared_top: set[str] = set()
+        unresolved_raws: list[str] = []
         for d in self.declared:
             raw = re.split(r"[<>=!~;\[]", d, maxsplit=1)[0].strip()
             if not raw:
                 continue
-            norm = raw.replace("-", "_").lower()
+            # PEP 503 语义：分发名中 ``-``/``.``/``_`` 等价（ruamel.yaml 与
+            # ruamel_yaml 同一分发），统一归一化为 ``_`` 再查静态表
+            norm = raw.replace("-", "_").replace(".", "_").lower()
             declared_top.add(norm)
             aliases = _PYPI_IMPORT_ALIASES.get(norm)
-            if aliases is None:
-                # 静态表未覆盖：尝试当前环境 top_level.txt 兜底（未安装返回空）
-                aliases = _installed_top_level_imports(raw)
-            declared_top.update(aliases)
-        return tuple(sorted(m for m in self.ast_third_party if m.lower() not in declared_top))
+            if aliases is not None:
+                declared_top.update(aliases)
+            else:
+                unresolved_raws.append(raw)
+        candidates = [m for m in self.ast_third_party if m.lower() not in declared_top]
+        if candidates and unresolved_raws:
+            # 仍有未匹配导入且存在静态表未覆盖的声明：当前环境 top_level.txt 兜底
+            # （未安装返回空）。兜底只会从 missing 中移除名字，不影响已匹配结果。
+            for raw in unresolved_raws:
+                declared_top.update(_installed_top_level_imports(raw))
+            candidates = [m for m in candidates if m.lower() not in declared_top]
+        return tuple(sorted(candidates))
 
 
 @dataclass(frozen=True)

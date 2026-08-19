@@ -194,6 +194,25 @@ def test_dependency_report_missing_alias_not_swallow_unrelated() -> None:
     assert r.missing == ("requests",)
 
 
+def test_dependency_report_missing_alias_common_entries() -> None:
+    """静态映射表覆盖高频无歧义别名：声明名与导入名不一致的分发不误报 missing."""
+    cases: list[tuple[str, str]] = [
+        ("djangorestframework", "rest_framework"),
+        ("ruamel.yaml", "ruamel"),
+        ("python-json-logger", "pythonjsonlogger"),
+        ("pywin32", "win32api"),
+        ("opencv-contrib-python-headless", "cv2"),
+    ]
+    for declared, imported in cases:
+        r = DependencyReport(
+            declared=(declared,),
+            ast_third_party=(imported,),
+            ast_stdlib=(),
+            ast_local=(),
+        )
+        assert r.missing == (), f"声明 {declared} 时导入 {imported} 不应报 missing"
+
+
 def test_dependency_report_missing_runtime_top_level_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -220,6 +239,50 @@ def test_installed_top_level_imports_not_installed_returns_empty() -> None:
     from fspack.config.models import _installed_top_level_imports
 
     assert _installed_top_level_imports("fspack-definitely-not-a-dist-xyz") == ()
+
+
+def test_missing_lazy_runtime_fallback_not_triggered_when_static_covers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """静态匹配已覆盖全部导入时不得触发运行时兜底（importlib.metadata 导入 ~220ms）.
+
+    回归防护：iter 前版本对每个静态表未覆盖的声明无条件调用兜底，
+    dry-run 链路实测 ~58% 耗时浪费在 importlib.metadata 首次导入上。
+    """
+    called: list[str] = []
+    monkeypatch.setattr(
+        "fspack.config.models._installed_top_level_imports",
+        lambda dist_name: (called.append(dist_name), ())[1],
+    )
+    # 声明 PyYAML（静态表覆盖 yaml）+ requests（声明名=导入名，归一化直配），
+    # 全部导入已被前两层匹配：兜底不应被调用
+    r = DependencyReport(
+        declared=("PyYAML", "requests"),
+        ast_third_party=("yaml", "requests"),
+        ast_stdlib=(),
+        ast_local=(),
+    )
+    assert r.missing == ()
+    assert called == []
+
+
+def test_missing_lazy_runtime_fallback_triggered_on_unresolved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """存在未匹配导入时才触发运行时兜底，且兜底可消除误报."""
+    called: list[str] = []
+    monkeypatch.setattr(
+        "fspack.config.models._installed_top_level_imports",
+        lambda dist_name: (called.append(dist_name), ("mymod",))[1],
+    )
+    r = DependencyReport(
+        declared=("fake-dist",),
+        ast_third_party=("mymod",),
+        ast_stdlib=(),
+        ast_local=(),
+    )
+    assert r.missing == ()
+    assert called == ["fake-dist"]
 
 
 def test_build_config_defaults() -> None:

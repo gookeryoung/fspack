@@ -38,6 +38,14 @@ if TYPE_CHECKING:
 # 共享 logger 名：测试用 caplog.at_level(..., logger="fspack.packaging.nuitka") 锁定
 _logger = logging.getLogger("fspack.packaging.nuitka")
 
+# ``python -c "import pip"`` 快速检查超时：正常 <1s，留余量兜底解释器冷启动/杀软扫描
+_PIP_CHECK_TIMEOUT = 60.0
+# ensurepip / uv pip install pip 自助安装超时：需网络下载 pip wheel，5 分钟足够
+_PIP_BOOTSTRAP_TIMEOUT = 300.0
+# pip install --target nuitka 超时：sdist 下载 + 构建 + 解压在慢网络/慢机需数分钟，
+# 无超时会使构建永久挂起（网络半开时 pip 可能不报错也不退出）
+_NUITKA_INSTALL_TIMEOUT = 1800.0
+
 
 class NuitkaEnv:
     """Nuitka 环境就绪 mixin：C 编译器、nuitka 安装、pip 可用性、编译环境变量.
@@ -157,12 +165,21 @@ class NuitkaEnv:
 
     @staticmethod
     def _has_pip(python_exe: str) -> bool:
-        """检查 python 是否有 pip 模块（``import pip`` 成功）."""
-        result = subprocess.run(
-            [python_exe, "-c", "import pip"],
-            check=False,
-            capture_output=True,
-        )
+        """检查 python 是否有 pip 模块（``import pip`` 成功）.
+
+        超时（:data:`_PIP_CHECK_TIMEOUT`）按无 pip 处理：网络盘/损坏解释器
+        卡死时中断探测，交由调用方进入自助安装或报错，不永久挂起。
+        """
+        try:
+            result = subprocess.run(
+                [python_exe, "-c", "import pip"],
+                check=False,
+                capture_output=True,
+                timeout=_PIP_CHECK_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            _logger.warning("检查 pip 超时（%ds），按无 pip 处理: %s", int(_PIP_CHECK_TIMEOUT), python_exe)
+            return False
         return result.returncode == 0
 
     @staticmethod
@@ -174,13 +191,18 @@ class NuitkaEnv:
         False，由调用方进入第二轮自救。
         """
         _logger.info("尝试 ensurepip 自助安装 pip: %s", python_exe)
-        result = subprocess.run(
-            [python_exe, "-m", "ensurepip", "--default-pip"],
-            check=False,
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-        )
+        try:
+            result = subprocess.run(
+                [python_exe, "-m", "ensurepip", "--default-pip"],
+                check=False,
+                capture_output=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=_PIP_BOOTSTRAP_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            _logger.warning("ensurepip 超时（%ds），按失败处理", int(_PIP_BOOTSTRAP_TIMEOUT))
+            return False
         if result.returncode != 0:
             _logger.warning("ensurepip 失败: %s", result.stderr.strip()[:200])
         return result.returncode == 0
@@ -194,13 +216,18 @@ class NuitkaEnv:
         ``.venv`` 推断目标 venv）。需要 ``uv`` 命令在 PATH 中。
         """
         _logger.info("尝试 uv pip install pip 自助安装")
-        result = subprocess.run(
-            ["uv", "pip", "install", "pip"],
-            check=False,
-            capture_output=True,
-            encoding="utf-8",
-            errors="replace",
-        )
+        try:
+            result = subprocess.run(
+                ["uv", "pip", "install", "pip"],
+                check=False,
+                capture_output=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=_PIP_BOOTSTRAP_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            _logger.warning("uv pip install pip 超时（%ds），按失败处理", int(_PIP_BOOTSTRAP_TIMEOUT))
+            return False
         if result.returncode != 0:
             _logger.warning("uv pip install pip 失败: %s", result.stderr.strip()[:200])
         return result.returncode == 0
@@ -326,9 +353,22 @@ class NuitkaEnv:
         # stderr=None: pip 进度（Collecting/Downloading/Building wheel/Installing）实时
         # 输出到终端，避免 sdist 构建数分钟无输出被误认为卡死。stdout 捕获但 pip install
         # 的 stdout 通常为空（成功信息走 stderr），保留以备诊断。
-        result = subprocess.run(
-            cmd, check=False, encoding="utf-8", errors="replace", stdout=subprocess.PIPE, stderr=None
-        )
+        # timeout: 网络半开/挂起时 pip 可能既不报错也不退出，无超时会使构建永久挂起
+        try:
+            result = subprocess.run(
+                cmd,
+                check=False,
+                encoding="utf-8",
+                errors="replace",
+                stdout=subprocess.PIPE,
+                stderr=None,
+                timeout=_NUITKA_INSTALL_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            raise NuitkaError(
+                f"pip install nuitka=={nuitka_ver} 超时（{int(_NUITKA_INSTALL_TIMEOUT)}s），"
+                "请检查网络后重试，或手动执行上述命令确认可完成"
+            ) from None
         if result.returncode != 0:
             raise NuitkaError(f"pip install nuitka=={nuitka_ver} 失败（退出码 {result.returncode}），详见上方 pip 输出")
 

@@ -360,6 +360,10 @@ def _sync_entry(
     - 已存在文件：mtime_ns + size 相同跳过，否则 ``copy2`` 覆盖
     - 不存在文件：直接 ``copy2``
 
+    src 侧同名条目发生类型互换（文件↔目录）时先删除 dst 残留异类型条目：
+    ``mkdir(exist_ok=True)`` 只容忍已存在目录，遇同名文件抛 ``FileExistsError``；
+    ``copy2`` 落到同名目录抛 ``PermissionError``/``IsADirectoryError``。
+
     ``DirEntry.stat(follow_symlinks=False)`` 复用枚举缓存，避免独立 stat 调用。
     """
     try:
@@ -367,10 +371,14 @@ def _sync_entry(
     except OSError:
         return
     if is_dir:
+        if dst_item.is_file():
+            dst_item.unlink()
         dst_item.mkdir(exist_ok=True)
         _sync_tree(src_item, dst_item, ignore_fn)
         return
     if not dst_item.is_file():
+        if dst_item.is_dir():
+            shutil.rmtree(dst_item)
         shutil.copy2(src_item, dst_item)
         return
     # mtime_ns + size 相同视为未改动，跳过 copy2 避免不必要的磁盘写

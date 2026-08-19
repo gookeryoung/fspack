@@ -2037,6 +2037,36 @@ def test_has_pip_returns_bool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     assert NuitkaCompiler._has_pip(str(py)) is False
 
 
+def test_has_pip_timeout_returns_false(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_has_pip 探测超时按无 pip 处理，不抛异常不永久挂起."""
+
+    def fake_run(cmd: list[str], **kw: Any) -> object:
+        raise subprocess.TimeoutExpired(cmd, timeout=kw.get("timeout", 60))
+
+    monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", fake_run)
+    assert NuitkaCompiler._has_pip("C:/fake/python.exe") is False
+
+
+def test_try_ensurepip_timeout_returns_false(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_try_ensurepip 超时按失败处理，返回 False 交由调用方进入第二轮自救."""
+
+    def fake_run(cmd: list[str], **kw: Any) -> object:
+        raise subprocess.TimeoutExpired(cmd, timeout=kw.get("timeout", 300))
+
+    monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", fake_run)
+    assert NuitkaCompiler._try_ensurepip("C:/fake/python.exe") is False
+
+
+def test_try_uv_install_pip_timeout_returns_false(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_try_uv_install_pip 超时按失败处理，返回 False 交由调用方报错."""
+
+    def fake_run(cmd: list[str], **kw: Any) -> object:
+        raise subprocess.TimeoutExpired(cmd, timeout=kw.get("timeout", 300))
+
+    monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", fake_run)
+    assert NuitkaCompiler._try_uv_install_pip() is False
+
+
 def test_try_ensurepip_invokes_python_m_ensurepip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """_try_ensurepip 调用 `python -m ensurepip --default-pip`."""
     py = tmp_path / "python.exe"
@@ -2093,6 +2123,34 @@ def test_ensure_env_pip_install_fails_raises(tmp_path: Path, monkeypatch: pytest
 
     st = StageRecorder("Nuitka 环境")
     with pytest.raises(NuitkaError, match=r"pip install nuitka==4\.1\.3 失败"):
+        NuitkaCompiler.ensure_env(cache_root, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), stage=st)
+
+
+def test_ensure_env_pip_install_timeout_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """pip install nuitka 超时（网络半开挂起）时 raise NuitkaError，不永久阻塞."""
+    monkeypatch.setattr("fspack.packaging.loader.mingw_available", lambda: True)
+    cache_root = tmp_path / "nuitka_cache"
+
+    fake_build_python = "C:/fake/python.exe"
+    monkeypatch.setattr("fspack.packaging.nuitka.sys.executable", fake_build_python)
+
+    # 缓存未命中
+    monkeypatch.setattr(NuitkaCompiler, "_is_nuitka_cached", staticmethod(lambda cache_dir: False))
+
+    state = {"n": 0}
+
+    def stateful_run(cmd: list[str], **kw: Any) -> object:
+        state["n"] += 1
+        # 第 1 次：_has_pip → 成功
+        # 第 2 次：pip install → 超时挂起
+        if state["n"] == 2:
+            raise subprocess.TimeoutExpired(cmd, timeout=kw.get("timeout", 1800))
+        return _CompileOK()
+
+    monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", stateful_run)
+
+    st = StageRecorder("Nuitka 环境")
+    with pytest.raises(NuitkaError, match=r"pip install nuitka==4\.1\.3 超时"):
         NuitkaCompiler.ensure_env(cache_root, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), stage=st)
 
 

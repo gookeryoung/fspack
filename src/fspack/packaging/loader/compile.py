@@ -56,6 +56,11 @@ __all__ = [
 # 共享 logger 名：保持与原 loader.py 一致，测试 caplog 按 logger 名过滤
 _logger = logging.getLogger("fspack.packaging.loader")
 
+# 单次 loader C 编译超时（秒）：单文件 gcc/clang 链接实测 <5s（含资源段），
+# 300s 与 pyc compileall 超时一致，覆盖慢速 CI/杀软扫描延迟；超时抛
+# LoaderError 终止构建，避免编译器卡死（如杀软文件锁）无限阻塞
+_LOADER_COMPILE_TIMEOUT = 300.0
+
 
 # ---- 基类 ----
 
@@ -183,9 +188,21 @@ class LoaderCompiler(abc.ABC):
             from fspack.progress import spinner
 
             with spinner(f"编译 loader ({cls.compiler_name})"):
-                subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8", errors="replace")
+                subprocess.run(
+                    cmd,
+                    check=True,
+                    capture_output=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=_LOADER_COMPILE_TIMEOUT,
+                )
         except FileNotFoundError as e:
             raise LoaderError(f"未找到编译器 {cls.compiler_name}，请安装 {cls.install_hint}") from e
+        except subprocess.TimeoutExpired as e:
+            raise LoaderError(
+                f"loader 编译超时（{int(_LOADER_COMPILE_TIMEOUT)}s）: {cls.compiler_name}，"
+                "请检查杀软是否锁定输出文件后重试"
+            ) from e
         except subprocess.CalledProcessError as e:
             raise LoaderError(f"loader 编译失败:\n{e.stderr}") from e
         # 资源编译失败（windres 不可用或 rc 语法错误）时不缓存 exe：

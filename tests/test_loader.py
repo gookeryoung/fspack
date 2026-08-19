@@ -131,6 +131,33 @@ def test_compile_loader_compile_error(tmp_path: Path, monkeypatch: pytest.Monkey
         compile_loader("x", tmp_path / "app.exe", AppType.CLI, tmp_path / "w", cache_dir=tmp_path / "cache")
 
 
+def test_compile_loader_timeout_raises_loader_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """编译超时抛 LoaderError（含超时秒数），不再无限阻塞构建."""
+
+    def fake_run(cmd: list[str], **kw: Any) -> object:
+        raise subprocess.TimeoutExpired(cmd, timeout=kw.get("timeout", 300))
+
+    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
+    _disable_windres(monkeypatch)
+    with pytest.raises(LoaderError, match="loader 编译超时"):
+        compile_loader("x", tmp_path / "app.exe", AppType.CLI, tmp_path / "w", cache_dir=tmp_path / "cache")
+
+
+def test_compile_loader_timeout_passed_to_subprocess(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """gcc 编译命令带 timeout 参数（默认 300s），防编译器卡死无限阻塞."""
+    seen: dict[str, object] = {}
+
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
+        seen["timeout"] = kw.get("timeout")
+        _touch_out(cmd)
+        return CompletedStub()
+
+    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
+    _disable_windres(monkeypatch)
+    compile_loader("x", tmp_path / "app.exe", AppType.CLI, tmp_path / "w", cache_dir=tmp_path / "cache")
+    assert seen["timeout"] == 300.0
+
+
 def test_mingw_available_returns_bool() -> None:
     assert isinstance(mingw_available(), bool)
 

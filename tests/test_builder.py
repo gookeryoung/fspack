@@ -1993,6 +1993,48 @@ def test_copy_source_syncs_deleted_files(tmp_path: Path) -> None:
     assert (dst / "main.py").is_file()
 
 
+def test_sync_tree_file_to_dir_type_swap(tmp_path: Path) -> None:
+    """src 同名条目由文件改为目录时，先删 dst 残留文件再建目录，不抛 FileExistsError."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "foo").write_text("v1")
+    dst = tmp_path / "dst"
+    dst.mkdir()
+    _sync_tree(src, dst, shutil.ignore_patterns())
+    assert (dst / "foo").is_file()
+
+    # src 侧 foo 由文件改为目录
+    (src / "foo").unlink()
+    (src / "foo").mkdir()
+    (src / "foo" / "bar.py").write_text("in dir")
+
+    _sync_tree(src, dst, shutil.ignore_patterns())
+
+    assert (dst / "foo").is_dir(), "dst/foo 应被替换为目录"
+    assert (dst / "foo" / "bar.py").read_text() == "in dir"
+
+
+def test_sync_tree_dir_to_file_type_swap(tmp_path: Path) -> None:
+    """src 同名条目由目录改为文件时，先删 dst 残留目录再复制，不抛 IsADirectoryError."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "foo").mkdir()
+    (src / "foo" / "bar.py").write_text("in dir")
+    dst = tmp_path / "dst"
+    dst.mkdir()
+    _sync_tree(src, dst, shutil.ignore_patterns())
+    assert (dst / "foo").is_dir()
+
+    # src 侧 foo 由目录改为文件
+    shutil.rmtree(src / "foo")
+    (src / "foo").write_text("now a file")
+
+    _sync_tree(src, dst, shutil.ignore_patterns())
+
+    assert (dst / "foo").is_file(), "dst/foo 应被替换为文件"
+    assert (dst / "foo").read_text() == "now a file"
+
+
 def test_sync_tree_deletes_stale_directory(tmp_path: Path) -> None:
     """_sync_tree 删除 dst 中 src 不存在的目录（rmtree 分支）."""
     src = tmp_path / "src"

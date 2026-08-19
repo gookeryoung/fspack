@@ -30,6 +30,10 @@ MINGW_WINDRES = "x86_64-w64-mingw32-windres"
 LINUX_GCC = "gcc"
 MACOS_CLANG = "clang"
 
+# windres 单次资源编译超时（秒）：单 rc 文件实测 <1s，120s 裕量覆盖杀软
+# 扫描延迟；超时与编译失败同路径降级（warning + 跳过资源段，不阻断构建）
+_WINDRES_TIMEOUT = 120.0
+
 
 def _find_windres() -> str:
     """查找可用的 windres，优先交叉前缀，回退无前缀.
@@ -106,9 +110,20 @@ def _compile_resource_obj(
     cmd = [windres, "--input", str(rc_file), "--output", str(obj_file), "--output-format=coff"]
     _logger.info("编译 Windows 资源: %s", " ".join(cmd))
     try:
-        subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8", errors="replace", cwd=work_dir)
+        subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=work_dir,
+            timeout=_WINDRES_TIMEOUT,
+        )
     except FileNotFoundError as e:
         _logger.warning("windres 不可用，跳过资源嵌入: %s", e)
+        return None
+    except subprocess.TimeoutExpired:
+        _logger.warning("资源编译超时（%ds），跳过资源嵌入", int(_WINDRES_TIMEOUT))
         return None
     except subprocess.CalledProcessError as e:
         _logger.warning("资源编译失败，跳过资源嵌入:\n%s", e.stderr)

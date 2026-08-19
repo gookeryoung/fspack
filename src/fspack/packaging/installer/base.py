@@ -40,6 +40,11 @@ _logger = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
 
+# 安装包工具单命令超时（秒）：makensis/hdiutil 打包大体积 dist（数百 MB）
+# 可达数分钟，900s 裕量覆盖；超时抛 InstallerError 终止，避免工具卡死
+# （如杀软锁定输出文件）无限阻塞打包
+_INSTALLER_TOOL_TIMEOUT = 900.0
+
 
 def _run_stage(
     tracker: BuildTracker,
@@ -90,9 +95,21 @@ def _run_tool(
     """
     _logger.info("执行: %s", " ".join(cmd))
     try:
-        subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8", errors="replace", cwd=cwd)
+        subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            cwd=cwd,
+            timeout=_INSTALLER_TOOL_TIMEOUT,
+        )
     except FileNotFoundError as e:
         raise InstallerError(not_found_msg) from e
+    except subprocess.TimeoutExpired as e:
+        raise InstallerError(
+            f"{fail_prefix}: 命令超时（{int(_INSTALLER_TOOL_TIMEOUT)}s）被终止，请检查杀软是否锁定输出文件后重试"
+        ) from e
     except subprocess.CalledProcessError as e:
         raise InstallerError(f"{fail_prefix}:\n{e.stderr or e.stdout}") from e
     if produces is not None and not produces.is_file():

@@ -684,9 +684,20 @@ def _scan_cache_by_type(
 def _scan_all_caches(*, full_verify: bool = False) -> tuple[CacheHealthReport, ...]:
     """扫描全部 cache 类型，返回报告元组（按注册表顺序，只读不删除）.
 
+    7 类缓存目录相互独立，用 :class:`~concurrent.futures.ThreadPoolExecutor`
+    并行扫描：各扫描器为 I/O 密集（目录枚举/zip 中心目录读取/PE 头读取），
+    stat/open 等待释放 GIL，线程是真并行。串行 ~0.8s（Windows 下杀软对每次
+    open 实时扫描 ~15ms）并行后墙钟时间取决于最慢一类。``executor.map``
+    保序，返回顺序与 ``_CACHE_TARGETS`` 注册表顺序一致。
+
     :param full_verify: True 时对 zip 归档类扫描器启用全量 CRC 校验，默认快检。
     """
-    return tuple(_scan_cache_by_type(cache_type, full_verify=full_verify) for cache_type, *_ in _CACHE_TARGETS)
+    from concurrent.futures import ThreadPoolExecutor
+
+    types = [cache_type for cache_type, *_ in _CACHE_TARGETS]
+    with ThreadPoolExecutor(max_workers=min(len(types), 8)) as pool:
+        reports = pool.map(lambda t: _scan_cache_by_type(t, full_verify=full_verify), types)
+        return tuple(reports)
 
 
 def _clean_cache_by_type(
