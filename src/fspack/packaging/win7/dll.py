@@ -1,11 +1,18 @@
-"""Win7 重编译版 python3XX.dll 清单驱动下载与双重校验.
+"""Win7 重编译版 runtime 组件清单驱动下载与双重校验.
 
 背景（win7_check 模块结论）：Python 3.12+ 官方 python3XX.dll 静态导入 kernel32
 的 Win8+ API（CopyFile2/Pss*/GetSystemTimePreciseAsFileTime），shim 注入失效；
 可行方案是用 adang1345 重编译版（上游仓库 PythonWin7，现更名 PythonVista）
-仅替换 python3XX.dll，patch 版本须与官方 embed 完全一致（ABI 兼容前提）。
+替换运行时组件，patch 版本须与官方 embed 完全一致。
 
-重编译版 dll 每个 ~6MB，直入 git 仓库会使历史永久膨胀（二进制无 delta 压缩）。
+**整套组件同源替换**（而非仅替换 python3XX.dll）：重编译版与官方 embed 构建工具链
+不同（所有 pyd 体积均不同），官方 ``_ctypes.pyd``/``libffi-8.dll`` 与重编译版
+dll 混搭时 ``import ctypes`` 即访问冲突（0xC0000005，Win10/11 同样崩溃，实测
+3.13/3.14 均复现）。因此从 win7 embed zip 提取**全部成员**覆盖 runtime，
+保证 dll/pyd/exe/运行时 DLL 同源，并以 ``.win7_runtime`` 标记文件记录同源状态
+（缺失标记的旧版混搭 runtime 会被自动重新替换）。
+
+重编译版 zip 每个 ~12MB，直入 git 仓库会使历史永久膨胀（二进制无 delta 压缩）。
 本模块以"清单驱动构建期下载"替代入库：
 
 - 仓库仅存 :data:`WIN7_EMBED_SHA256` 清单（版本 → embed zip sha256，取自
@@ -19,13 +26,13 @@
 from __future__ import annotations
 
 import logging
-import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fspack._compat import override
-from fspack.exceptions import FspackError
+from fspack.exceptions import EmbedError, FspackError
 from fspack.packaging.runtime.download import RuntimeDownloader
+from fspack.packaging.runtime.extract import extract_zip_safe
 from fspack.packaging.runtime.urls import embed_dirname, embed_zip_name
 from fspack.packaging.win7.check import PeParseError, Win7CheckResult, check_win7_imports
 
@@ -45,6 +52,11 @@ __all__ = [
     "win7_zip_cache_name",
     "win7_zip_url",
 ]
+
+# win7 组件同源替换标记：runtime 根目录下的标记文件（内容为版本号）。
+# 仅 python3XX.dll 存在而标记缺失 = 旧版 fspack "只换 dll" 的混搭残留
+# （官方 pyd + 重编译版 dll，ABI 不兼容），须全量重新替换。
+_WIN7_RUNTIME_MARKER = ".win7_runtime"
 
 _logger = logging.getLogger(__name__)
 
@@ -100,7 +112,7 @@ def win7_zip_cache_name(version: str) -> str:
 
 
 class Win7EmbedRuntime(RuntimeDownloader):
-    """win7 重编译版 embed python 下载器（仅提取 python3XX.dll，其余组件用官方原件）."""
+    """win7 重编译版 embed python 下载器（全量提取覆盖 runtime，保证组件同源）."""
 
     runtime_label = "win7 python embed"
 
@@ -122,35 +134,13 @@ class Win7EmbedRuntime(RuntimeDownloader):
     @classmethod
     @override
     def extract_archive(cls, archive_path: Path, runtime_dir: Path) -> None:
-        with zipfile.ZipFile(archive_path) as zf:
-            _extract_dll_member(zf, runtime_dir, _dll_member_version(archive_path))
+        extract_win7_dll(archive_path, runtime_dir, _dll_member_version(archive_path))
 
 
 def _dll_member_version(archive_path: Path) -> str:
     """从缓存文件名 ``python-3.12.10-embed-amd64-win7.zip`` 解析版本号."""
     stem = archive_path.name.split("-")[1]
     return stem
-
-
-def _extract_dll_member(zf: zipfile.ZipFile, dest_dir: Path, version: str) -> Path:
-    """从已打开的 zip 提取 python3XX.dll 到 dest_dir，返回 dll 路径.
-
-    zip 内无该成员或 zip 损坏时抛 :class:`Win7DllError`。dll 经临时文件
-    原子替换落盘，避免中断留下半写文件被后续构建误判为就绪。
-    """
-    dll_name = win7_dll_name(version)
-    try:
-        data = zf.read(dll_name)
-    except KeyError as exc:
-        raise Win7DllError(f"win7 embed zip 内缺少 {dll_name}: {zf.filename}") from exc
-    except zipfile.BadZipFile as exc:
-        raise Win7DllError(f"win7 embed zip 损坏: {zf.filename} -> {exc}") from exc
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / dll_name
-    tmp = dest.with_suffix(".tmp")
-    tmp.write_bytes(data)
-    tmp.replace(dest)
-    return dest
 
 
 def download_win7_embed(version: str, cache_dir: Path, *, stage: StageRecorder | None = None) -> Path:
@@ -169,14 +159,21 @@ def download_win7_embed(version: str, cache_dir: Path, *, stage: StageRecorder |
 
 
 def extract_win7_dll(zip_path: Path, dest_dir: Path, version: str) -> Path:
-    """从 win7 embed zip 提取 python3XX.dll 到 dest_dir，zip 损坏时删除缓存并抛错."""
+    """全量提取 win7 embed zip 到 dest_dir（覆盖官方组件），返回 python3XX.dll 路径.
+
+    整套组件同源覆盖（dll/pyd/exe/运行时 DLL）：仅替换 python3XX.dll 会与官方
+    embed 的 ``_ctypes.pyd``/``libffi-8.dll`` 等组件工具链不匹配（ABI 不兼容，
+    ``import ctypes`` 即访问冲突）。zip 内无 python3XX.dll 或 zip 损坏时抛
+    :class:`Win7DllError`（损坏时删除缓存）。
+    """
     try:
-        with zipfile.ZipFile(zip_path) as zf:
-            dll = _extract_dll_member(zf, dest_dir, version)
-    except zipfile.BadZipFile as exc:
-        zip_path.unlink(missing_ok=True)
+        extract_zip_safe(zip_path, dest_dir, label="win7 embed zip")
+    except EmbedError as exc:
         raise Win7DllError(f"win7 embed zip 损坏，已删除缓存: {zip_path} -> {exc}") from exc
-    _logger.info("提取 %s: %s", win7_dll_name(version), dll)
+    dll = dest_dir / win7_dll_name(version)
+    if not dll.is_file():
+        raise Win7DllError(f"win7 embed zip 内缺少 {win7_dll_name(version)}: {zip_path}")
+    _logger.info("全量提取 win7 组件到 %s（%s 就绪）", dest_dir, dll.name)
     return dll
 
 
@@ -200,35 +197,44 @@ def ensure_win7_dll(
     stage: StageRecorder | None = None,
     replace_invalid: bool = False,
 ) -> Path:
-    """确保 dest_dir 内有经双重校验的 win7 重编译版 python3XX.dll，返回 dll 路径.
+    """确保 dest_dir 内有经双重校验的 win7 重编译版 runtime 组件，返回 dll 路径.
 
-    dest_dir 已有 dll 时重新校验导入表后复用（防误换/篡改，~6MB 解析耗时可忽略）；
-    否则按清单下载 zip（sha256 校验）→ 提取 dll → 导入表校验。
+    组件同源替换：从 win7 embed zip 全量提取覆盖 runtime（dll/pyd/exe/运行时
+    DLL 同源），并写 ``.win7_runtime`` 标记文件。复用判定：dll 与标记均存在
+    且 dll 导入表校验通过（防误换/篡改，~6MB 解析耗时可忽略）；仅 dll 存在
+    而标记缺失视为旧版"只换 dll"的混搭残留，无条件全量重新替换。
 
     Args:
         version: 完整 Python 版本号（须收录 :data:`WIN7_EMBED_SHA256`）。
         cache_dir: win7 embed zip 下载缓存目录。
-        dest_dir: dll 目标目录（runtime 根目录）。
+        dest_dir: 组件目标目录（runtime 根目录）。
         stage: 可选进度记录器（缓存命中/下载字节自动回写）。
-        replace_invalid: dest_dir 已有 dll 且校验不通过时的处理——False（默认）
-            抛错（独立调用时透明暴露篡改）；True 删除后重新下载提取。打包
-            pipeline 传 True：官方 embed 解压出的 python3XX.dll 必然含 Win8+
-            导入，需静默替换为重编译版而非报错。
+        replace_invalid: dest_dir 已有同源组件但 dll 校验不通过时的处理——
+            False（默认）抛错（独立调用时透明暴露篡改）；True 删除后重新
+            下载全量提取。打包 pipeline 传 True：官方 embed 解压出的
+            python3XX.dll 必然含 Win8+ 导入，需静默替换而非报错。
     """
     dll = dest_dir / win7_dll_name(version)
-    if dll.is_file():
+    marker = dest_dir / _WIN7_RUNTIME_MARKER
+    if dll.is_file() and marker.is_file():
         try:
             _check_dll(dll)
         except Win7DllError:
             if not replace_invalid:
                 raise
-            _logger.info("%s 校验未通过（官方 dll 或已损坏），删除后重新替换", dll.name)
+            _logger.info("%s 校验未通过（官方 dll 或已损坏），删除后全量重新替换", dll.name)
             dll.unlink(missing_ok=True)
+            marker.unlink(missing_ok=True)
         else:
-            _logger.info("win7 python dll 已就绪并校验通过: %s", dll)
+            _logger.info("win7 runtime 组件已就绪并校验通过: %s", dll)
             if stage is not None:
                 stage.hit_cache()
             return dll
+    elif dll.is_file():
+        # 仅 dll 无标记：旧版 fspack "只换 dll" 的混搭残留（官方 pyd 与重编译版
+        # dll ABI 不兼容），无条件全量重新替换
+        _logger.info("%s 存在但缺少组件同源标记，全量重新替换 win7 组件", dll.name)
+        dll.unlink(missing_ok=True)
     zip_path = download_win7_embed(version, cache_dir, stage=stage)
     dll = extract_win7_dll(zip_path, dest_dir, version)
     try:
@@ -236,5 +242,6 @@ def ensure_win7_dll(
     except Win7DllError:
         dll.unlink(missing_ok=True)
         raise
-    _logger.info("win7 python dll 校验通过: %s（需 shim: %s）", dll, ", ".join(result.shim_dlls) or "无")
+    marker.write_text(version, encoding="ascii")
+    _logger.info("win7 组件全量替换完成并校验通过: %s（需 shim: %s）", dll, ", ".join(result.shim_dlls) or "无")
     return dll

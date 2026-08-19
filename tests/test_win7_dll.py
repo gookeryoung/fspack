@@ -137,8 +137,8 @@ def test_extract_win7_dll(tmp_path: Path) -> None:
     dll = extract_win7_dll(zip_path, tmp_path / "dest", _VER)
     assert dll == tmp_path / "dest" / "python312.dll"
     assert dll.read_bytes() == b"dll"
-    # 仅提取 dll，其余成员不落盘
-    assert not (tmp_path / "dest" / "python.exe").exists()
+    # 全量提取：全部成员落盘（组件同源，仅换 dll 会与官方 pyd ABI 混搭不兼容）
+    assert (tmp_path / "dest" / "python.exe").read_bytes() == b"exe"
 
 
 def test_extract_win7_dll_missing_member(tmp_path: Path) -> None:
@@ -161,10 +161,11 @@ def test_extract_win7_dll_bad_zip_deleted(tmp_path: Path) -> None:
 
 
 def test_ensure_skips_download_when_dll_verified(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """dest 已有 dll 且导入表校验通过时复用，不下载."""
+    """dest 已有同源组件（dll+标记）且导入表校验通过时复用，不下载."""
     dest = tmp_path / "dest"
     dest.mkdir()
     (dest / "python312.dll").write_bytes(b"existing")
+    (dest / ".win7_runtime").write_text(_VER)
     checked = _patch_check_ok(monkeypatch)
     called = {"download": False}
     monkeypatch.setattr(win7_dll, "download_win7_embed", lambda *a, **k: called.__setitem__("download", True))
@@ -175,11 +176,12 @@ def test_ensure_skips_download_when_dll_verified(tmp_path: Path, monkeypatch: py
 
 
 def test_ensure_existing_dll_with_violations_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """dest 已有 dll 但导入表含 Win8+ 依赖时拒绝复用（防误换/篡改）."""
+    """dest 已有同源组件但 dll 导入表含 Win8+ 依赖时拒绝复用（防误换/篡改）."""
     dest = tmp_path / "dest"
     dest.mkdir()
     dll = dest / "python312.dll"
     dll.write_bytes(b"tampered")
+    (dest / ".win7_runtime").write_text(_VER)
 
     def fake_check(path: Path, *, shim: Path | None = None) -> Win7CheckResult:
         return Win7CheckResult(
@@ -193,15 +195,15 @@ def test_ensure_existing_dll_with_violations_rejected(tmp_path: Path, monkeypatc
 
 
 def test_ensure_replace_invalid_replaces_official_dll(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """replace_invalid=True 时官方 dll（校验必然违规）被静默替换为重编译版.
+    """replace_invalid=True 时官方 dll（无同源标记）被全量替换为重编译版组件.
 
-    打包 pipeline 场景：官方 embed 解压出的 python3XX.dll 含 Win8+ 导入，
-    应下载重编译版覆盖而非报错。
+    打包 pipeline 场景：官方 embed 解压出的 python3XX.dll 含 Win8+ 导入且
+    无同源标记，应下载 win7 embed zip 全量覆盖而非报错。
     """
     dest = tmp_path / "dest"
     dest.mkdir()
     (dest / "python312.dll").write_bytes(b"official-dll")
-    zip_bytes = _make_zip_bytes({"python312.dll": b"win7-dll"})
+    zip_bytes = _make_zip_bytes({"python312.dll": b"win7-dll", "_ctypes.pyd": b"win7-pyd"})
     _patch_manifest(monkeypatch, _VER, zip_bytes)
     monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout, **kw: FakeResp(zip_bytes))
 
@@ -209,24 +211,21 @@ def test_ensure_replace_invalid_replaces_official_dll(tmp_path: Path, monkeypatc
 
     def fake_check(path: Path, *, shim: Path | None = None) -> Win7CheckResult:
         check_calls.append(Path(path).read_bytes())
-        # 官方 dll 违规，重编译版通过
-        ok = Path(path).read_bytes() == b"win7-dll"
-        if ok:
-            return Win7CheckResult(path=Path(path))
-        return Win7CheckResult(
-            path=Path(path),
-            violations=(Win7ApiViolation("KERNEL32.dll!CopyFile2", "Win8+ API，Win7 SP1 不存在"),),
-        )
+        # 重编译版通过
+        return Win7CheckResult(path=Path(path))
 
     monkeypatch.setattr(win7_dll, "check_win7_imports", fake_check)
     dll = ensure_win7_dll(_VER, tmp_path / "cache", dest, replace_invalid=True)
     assert dll.read_bytes() == b"win7-dll"
-    # 官方 dll 先被校验（违规→删除），重编译版提取后再校验（通过）
-    assert check_calls == [b"official-dll", b"win7-dll"]
+    # 全量提取：win7 组件全部落盘（pyd 同源），并写同源标记
+    assert (dest / "_ctypes.pyd").read_bytes() == b"win7-pyd"
+    assert (dest / ".win7_runtime").read_text() == _VER
+    # 无标记的官方 dll 直接删除（无需校验），仅校验提取后的重编译版
+    assert check_calls == [b"win7-dll"]
 
 
 def test_ensure_downloads_extracts_and_checks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """完整流程：下载 → 哈希校验 → 提取 dll → 导入表校验通过."""
+    """完整流程：下载 → 哈希校验 → 全量提取组件 → 导入表校验通过 → 写同源标记."""
     zip_bytes = _make_zip_bytes({"python312.dll": b"dll-bytes", "python313._pth": b"x"})
     _patch_manifest(monkeypatch, _VER, zip_bytes)
     monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout, **kw: FakeResp(zip_bytes))
@@ -236,6 +235,9 @@ def test_ensure_downloads_extracts_and_checks(tmp_path: Path, monkeypatch: pytes
     assert result == dest / "python312.dll"
     assert result.read_bytes() == b"dll-bytes"
     assert checked == [result]
+    # 全量提取：非 dll 成员同样落盘
+    assert (dest / "python313._pth").read_bytes() == b"x"
+    assert (dest / ".win7_runtime").read_text() == _VER
 
 
 def test_ensure_blocks_downloaded_violations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -277,16 +279,40 @@ def test_ensure_wraps_pe_parse_error(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
 
 def test_ensure_records_stage_cache_hit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """dll 已就绪时 stage 记录缓存命中."""
+    """同源组件已就绪时 stage 记录缓存命中."""
     dest = tmp_path / "dest"
     dest.mkdir()
     (dest / "python312.dll").write_bytes(b"existing")
+    (dest / ".win7_runtime").write_text(_VER)
     _patch_check_ok(monkeypatch)
     rec = StageRecorder("test")
     ensure_win7_dll(_VER, tmp_path / "cache", dest, stage=rec)
     record = rec._finalize()
     assert record.cache_hit == 1
     assert record.bytes_downloaded == 0
+
+
+def test_ensure_replaces_legacy_mixed_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """dll 存在但缺同源标记（旧版"只换 dll"混搭残留）时全量重新替换.
+
+    旧版 fspack 仅替换 python3XX.dll，官方 ``_ctypes.pyd``/``libffi-8.dll`` 与
+    重编译版 dll ABI 混搭不兼容（``import ctypes`` 即访问冲突）；即使 dll 导入表
+    校验通过（dll 本身是 win7 版）也必须全量重新替换并补写标记。
+    """
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    (dest / "python312.dll").write_bytes(b"legacy-win7-dll")
+    # 模拟官方残留组件（与 win7 版不同源）
+    (dest / "_ctypes.pyd").write_bytes(b"official-pyd")
+    zip_bytes = _make_zip_bytes({"python312.dll": b"win7-dll", "_ctypes.pyd": b"win7-pyd"})
+    _patch_manifest(monkeypatch, _VER, zip_bytes)
+    monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout, **kw: FakeResp(zip_bytes))
+    _patch_check_ok(monkeypatch)
+    dll = ensure_win7_dll(_VER, tmp_path / "cache", dest)
+    assert dll.read_bytes() == b"win7-dll"
+    # 官方残留 pyd 被 win7 版覆盖，同源标记补写
+    assert (dest / "_ctypes.pyd").read_bytes() == b"win7-pyd"
+    assert (dest / ".win7_runtime").read_text() == _VER
 
 
 def test_ensure_records_stage_download_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -5,7 +5,7 @@
 - :func:`_prepare_runtime`：主入口，按目标平台分支
 - :func:`_prepare_standalone_runtime`：Linux/macOS python-build-standalone 下载解压
 - :func:`_prepare_windows_runtime`：Windows embed python 下载解压
-- :func:`_replace_win7_dll`：Windows 3.12+ 官方 python3XX.dll 替换为 win7 重编译版
+- :func:`_replace_win7_dll`：Windows 3.12+ 官方 runtime 组件整套替换为 win7 重编译版
 - :func:`_slim_runtime`：编译后 strip 调试符号 + 删无用文件
 """
 
@@ -102,9 +102,10 @@ def _prepare_runtime(ctx: BuildContext) -> Path:
     # 使 embed python 3.9+ 在 Win7 SP1 / Server 2008 R2 SP1 上也能运行。
     # 仅 Windows 目标需要（Linux/macOS standalone 不存在此问题）。
     # 3.12+ 官方 python3XX.dll 另含 kernel32 的 Win8+ 静态导入，shim 无法解决，
-    # 须先替换为重编译版 dll（清单驱动下载 + 双重校验，见 win7_dll 模块）。
+    # 须整套替换为重编译版组件（dll+pyd+exe 同源，仅换 dll 会与官方 pyd ABI
+    # 混搭不兼容；清单驱动下载 + 双重校验，见 win7_dll 模块）。
     if target is Platform.WINDOWS and needs_win7_dll(ctx.info.py_version):
-        with ctx.tracker.stage("Win7 dll 替换") as st:
+        with ctx.tracker.stage("Win7 组件替换") as st:
             _replace_win7_dll(ctx, st)
     if target is Platform.WINDOWS and _needs_win7_compat_dll(ctx.info.py_version):
         _inject_win7_compat_dll(ctx.runtime_dir)
@@ -229,12 +230,14 @@ def _prepare_windows_runtime(ctx: BuildContext) -> Path:
 
 
 def _replace_win7_dll(ctx: BuildContext, st: StageRecorder) -> None:
-    """将 runtime 内官方 python3XX.dll 替换为 win7 重编译版（3.12+ 目标）.
+    """将 runtime 官方组件整套替换为 win7 重编译版（3.12+ 目标）.
 
     官方 dll 含 kernel32 的 Win8+ 静态导入，loader 在 Win7 上直接拒绝加载，
-    shim 无法解决；此处在官方 embed 解压后按清单下载重编译版覆盖。zip
-    缓存命中时仅本地提取 + 导入表校验。``replace_invalid=True``：官方 dll
-    校验必然失败，静默替换而非报错。
+    shim 无法解决；且重编译版与官方 embed 工具链不同，仅换 dll 会与官方
+    ``_ctypes.pyd`` 等组件 ABI 混搭不兼容（``import ctypes`` 即访问冲突）。
+    此处在官方 embed 解压后按清单下载 win7 embed zip **全量提取覆盖** runtime，
+    保证 dll/pyd/exe/运行时 DLL 同源。zip 缓存命中时仅本地提取 + 导入表校验。
+    ``replace_invalid=True``：官方 dll 校验必然失败，静默替换而非报错。
     """
     ensure_win7_dll(
         ctx.info.py_version,
