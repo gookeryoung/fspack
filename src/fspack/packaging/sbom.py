@@ -94,7 +94,7 @@ def collect_sbom(dist_dir: Path, info: ProjectInfo) -> dict[str, Any]:
 
     扫描 ``dist/site-packages`` 下的所有 ``*.dist-info`` 目录，提取依赖元信息。
     每个包计算整体 SHA256（基于 RECORD 列出文件的内容拼接哈希），license 从
-    METADATA 解析。
+    METADATA 解析。多包时逐包 ``ThreadPoolExecutor`` 并行哈希（结果保序）。
 
     Args:
         dist_dir: dist 根目录（``dist/``）
@@ -106,12 +106,22 @@ def collect_sbom(dist_dir: Path, info: ProjectInfo) -> dict[str, Any]:
     site_packages = find_site_packages(dist_dir)
     packages: list[SbomPackage] = []
     if site_packages is not None:
-        for dist_info in sorted(site_packages.glob("*.dist-info")):
-            if not dist_info.is_dir():
-                continue
-            pkg = _parse_dist_info(dist_info)
-            if pkg is not None:
-                packages.append(pkg)
+        dist_infos = sorted(d for d in site_packages.glob("*.dist-info") if d.is_dir())
+        if dist_infos:
+            # 逐包并行：_sha256_file 分块哈希释放 GIL（hashlib 对 >2KB 块），
+            # 文件读取为 I/O 等待，线程是真并行。单包退化为直接调用避免
+            # 线程池开销。executor.map 保序，packages 顺序与串行一致。
+            from concurrent.futures import ThreadPoolExecutor
+
+            if len(dist_infos) == 1:
+                pkg = _parse_dist_info(dist_infos[0])
+                if pkg is not None:
+                    packages.append(pkg)
+            else:
+                with ThreadPoolExecutor(max_workers=min(len(dist_infos), 8)) as pool:
+                    for pkg in pool.map(_parse_dist_info, dist_infos):
+                        if pkg is not None:
+                            packages.append(pkg)
 
     # 文档命名空间：含 UUID 避免同项目多次构建命名空间冲突
     namespace = f"https://fspack.dev/spdx/{info.name}-{info.version}-{uuid.uuid4()}"

@@ -298,12 +298,22 @@ def collect_size_report(dist_dir: Path, *, top_n: int = _TOP_N_PACKAGES) -> Size
         # 预构建 normalized_name → [paths] 索引：O(M) 一次性扫描，避免
         # 每个无 RECORD 的 dist-info 都扫描整个 site-packages（O(N*M)）
         name_index = _build_name_index(site_packages)
-        for d in site_packages.glob("*.dist-info"):
-            if not d.is_dir():
-                continue
-            pkg_name, pkg_ver = _parse_dist_info_name(d)
-            pkg_size, pkg_files = _package_dir_size(site_packages, d, name_index=name_index)
+        dist_infos = [d for d in site_packages.glob("*.dist-info") if d.is_dir()]
+        if len(dist_infos) > 1:
+            # 逐包并行：_package_dir_size 以 stat I/O 为主（RECORD 逐行 stat /
+            # 目录递归），线程等待释放 GIL 真并行；name_index 只读共享线程安全。
+            # executor.map 保序，随后按体积排序与串行结果一致。
+            from concurrent.futures import ThreadPoolExecutor
+
+            with ThreadPoolExecutor(max_workers=min(len(dist_infos), 8)) as pool:
+                sizes = list(
+                    pool.map(lambda d: (d, *_package_dir_size(site_packages, d, name_index=name_index)), dist_infos)
+                )
+        else:
+            sizes = [(d, *_package_dir_size(site_packages, d, name_index=name_index)) for d in dist_infos]
+        for d, pkg_size, pkg_files in sizes:
             if pkg_size > 0:
+                pkg_name, pkg_ver = _parse_dist_info_name(d)
                 packages.append(PackageSize(name=pkg_name, version=pkg_ver, size=pkg_size, file_count=pkg_files))
         packages.sort(key=lambda p: p.size, reverse=True)
 
