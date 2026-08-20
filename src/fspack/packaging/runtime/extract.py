@@ -111,17 +111,26 @@ def extract_zip_safe(archive_path: Path, runtime_dir: Path, label: str) -> None:
 
 
 def extract_tar_safe(archive_path: Path, runtime_dir: Path, label: str) -> None:
-    """tar.gz 安全解压：3.12+ 用 filter=data；低版本手动用 :func:`_validate_tar_member` 预检.
+    """tar.gz 安全解压：先逐条目预检，再 extractall（3.12+ 传 filter="data"）.
+
+    预检（:func:`_validate_tar_member`）在**所有** Python 版本执行，不能只在
+    低版本预检而 3.12+ 依赖 PEP 706 ``data`` filter：Python 3.13 实测 data
+    filter 会把绝对路径（``/etc/passwd``）与 Windows 盘符路径（``C:evil.txt``）
+    **静默规范化**为相对路径解压而非拒绝（安全缺口），且其异常统一为
+    TarError 子类无区分度（被本函数转为笼统「损坏」消息）。预检保证恶意
+    条目按类别拒绝并给出具体 EmbedError 消息；3.12+ extractall 仍传
+    ``filter="data"`` 作双重防护（预检通过后 data filter 不会再拒绝任何条目，
+    仅防御预检遗漏的边角情况如危险权限位）。
 
     TarError / OSError 或预检失败（EmbedError）时删除归档避免缓存污染。
     """
     try:
         with tarfile.open(archive_path, "r:gz") as tf:
+            for member in tf.getmembers():
+                _validate_tar_member(member)
             if sys.version_info >= (3, 12):
-                tf.extractall(runtime_dir, filter="data")  # pragma: no cover # 测试环境 3.11
-            else:
-                for member in tf.getmembers():
-                    _validate_tar_member(member)
+                tf.extractall(runtime_dir, filter="data")
+            else:  # pragma: no cover - 测试环境 3.13，低版本分支不可达
                 tf.extractall(runtime_dir)
     except (tarfile.TarError, OSError) as e:
         _safe_unlink_archive(archive_path, label)
