@@ -204,7 +204,7 @@ def _trim_standalone_runtime(  # noqa: PLR0912, PLR0913
 ) -> None:
     """精简 standalone runtime 到运行时最小集（在 ``_precompile_pyc`` 之后调用）.
 
-    剥离四类运行时无用文件（仅 Linux/macOS 目标，Windows embed 已精简且无调试符号）：
+    剥离四类运行时无用文件（Linux/macOS 目标）：
 
     - **A. strip libpython 调试符号**：``libpython3.X.so.1.0`` 含完整 DWARF 调试
       符号（53MB），``strip --strip-all`` 后 ~19MB，运行时零影响
@@ -220,10 +220,16 @@ def _trim_standalone_runtime(  # noqa: PLR0912, PLR0913
     同时删除 ``python/bin/`` 下开发工具脚本（2to3/idle3/pip3/pydoc3 与 ``*-config``
     脚本，运行时不用；``pip`` 已在 ``site-packages`` 中可用）。
 
+    Windows 目标仅自由线程版走 standalone 路径（标准版 embed zip 已精简，
+    函数内转 :func:`_trim_windows_standalone_runtime` 处理）。
+
     幂等：重复调用时已删除的文件不存在则跳过，``bytes_saved`` 仅累计首次删除大小。
     """
     if target is Platform.WINDOWS:
-        stage.set_detail("embed python 无调试符号，跳过")
+        if not py_version.endswith("t"):
+            stage.set_detail("embed python 无调试符号，跳过")
+            return
+        _trim_windows_standalone_runtime(runtime_dir, py_version, stage, has_tkinter=has_tkinter)
         return
 
     python_dir = runtime_dir / "python"
@@ -305,6 +311,83 @@ def _trim_standalone_runtime(  # noqa: PLR0912, PLR0913
     if removed_files or removed_dirs:
         details.append(f"删 {removed_files + removed_dirs} 个文件/目录")
     stage.set_detail("，".join(details) or "无操作")
+
+
+def _trim_windows_standalone_runtime(
+    runtime_dir: Path,
+    py_version: str,
+    stage: StageRecorder,
+    *,
+    has_tkinter: bool,
+) -> None:
+    """精简 Windows standalone runtime（自由线程版，扁平化布局）.
+
+    python-build-standalone Windows tarball 自带开发期文件（约 75MB），运行时无用：
+
+    - ``*.pdb`` 调试符号：runtime 根（``python314t.pdb`` 等）与 ``DLLs/`` 下
+      各扩展模块的 pdb（DLLs 目录 80MB 中约七成是 pdb）
+    - ``include/`` C 头文件（~2MB）、``libs/`` 静态链接库（~0.6MB）、``Scripts/``
+      开发工具脚本
+    - 版本别名二进制 ``python3.Xt.exe``/``pythonw3.Xt.exe``：与 ``python.exe``/
+      ``pythonw.exe`` 等价，保留后者即可（``fsp r --debug`` 直接调 ``python.exe``）
+    - 非 tkinter 项目剥离 ``tcl/`` 目录（~5MB；tkinter 项目 ``_tkinter.pyd``
+      运行时需要 Tcl/Tk 脚本库）
+
+    幂等：已删除的文件/目录不存在则跳过。
+    """
+    is_t = py_version.endswith("t")
+    base = py_version[:-1] if is_t else py_version
+    major, minor = base.split(".")[:2]
+    suffix = "t" if is_t else ""
+    saved_bytes = 0
+    removed_files = 0
+    removed_dirs = 0
+
+    # pdb 调试符号：runtime 根 + DLLs/（避免 rglob 全树遍历 Lib/ 拖慢构建）
+    pdb_dirs = [runtime_dir, runtime_dir / "DLLs"]
+    for pdb_dir in pdb_dirs:
+        if not pdb_dir.is_dir():
+            continue
+        for pdb in pdb_dir.glob("*.pdb"):
+            try:
+                saved_bytes += pdb.stat().st_size
+                pdb.unlink()
+                removed_files += 1
+            except OSError as e:  # pragma: no cover - 杀软占用等文件系统异常容错
+                _logger.warning("删除 %s 失败: %s", pdb, e)
+
+    # 开发期目录：C 头文件 / 静态库 / 工具脚本
+    for dirname in ("include", "libs", "Scripts"):
+        d = runtime_dir / dirname
+        if d.is_dir():
+            saved_bytes += _dir_size(d)
+            shutil.rmtree(d, ignore_errors=True)
+            removed_dirs += 1
+            _logger.info("精简 runtime: 删除 %s/", dirname)
+
+    # 版本别名 exe（python.exe/pythonw.exe 保留）
+    for name in (f"python{major}.{minor}{suffix}.exe", f"pythonw{major}.{minor}{suffix}.exe"):
+        f = runtime_dir / name
+        if f.is_file():
+            try:
+                saved_bytes += f.stat().st_size
+                f.unlink()
+                removed_files += 1
+            except OSError as e:  # pragma: no cover - 文件占用容错
+                _logger.warning("删除 %s 失败: %s", f, e)
+
+    # 非 tkinter 项目剥离 Tcl/Tk 脚本运行时
+    if not has_tkinter:
+        tcl_dir = runtime_dir / "tcl"
+        if tcl_dir.is_dir():
+            saved_bytes += _dir_size(tcl_dir)
+            shutil.rmtree(tcl_dir, ignore_errors=True)
+            removed_dirs += 1
+            _logger.info("精简 runtime: 删除 tcl/")
+
+    stage.skip(removed_files + removed_dirs)
+    stage.add_saved_bytes(saved_bytes)
+    stage.set_detail(f"删 {removed_files + removed_dirs} 个文件/目录" if (removed_files or removed_dirs) else "无操作")
 
 
 def _strip_elf_symbols(lib_path: Path, platform: str) -> tuple[int, int]:

@@ -26,6 +26,14 @@ def write_pth(
     python311.zip 标准库、..\\site-packages 第三方依赖（与 runtime 平级的
     dist/site-packages）、..\\src 用户源码。
 
+    标准库布局自适应（按 runtime 实际结构检测）：
+
+    - embed 布局（python.org embed zip）：stdlib 在 ``python3XX.zip`` 内、
+      ``.pyd`` 在 runtime 根（``.`` 行覆盖）
+    - standalone 布局（python-build-standalone，Windows 自由线程版）：stdlib
+      为解压的 ``Lib/`` 目录、``.pyd`` 在 ``DLLs/`` 目录，二者均需列入
+      sys.path（``._pth`` isolated 模式下 CPython 不自动追加）
+
     ``enable_site=False`` 时省略 ``import site`` 行，启动时跳过 ``site.py``
     执行（约节省 20-30ms）。wrapper 已显式 ``sys.path.insert`` site-packages，
     故禁用 site.py 不影响第三方依赖发现，但会丢失 ``user site`` 与
@@ -38,14 +46,22 @@ def write_pth(
     runtime_dir = dist_dir / "runtime"
     runtime_dir.mkdir(parents=True, exist_ok=True)
     pth = runtime_dir / f"{pyxy}._pth"
+    if (runtime_dir / "Lib").is_dir():
+        stdlib_lines = ["Lib", "DLLs"]
+    else:
+        stdlib_lines = [f"{pyxy}.zip", "."]
     lines = [
-        f"{pyxy}.zip",
-        ".",
+        *stdlib_lines,
         "..\\site-packages",
         "..\\src",
         *extra_paths,
     ]
+    # 去重保持首次出现顺序：tkinter 场景 extra_paths 含 Lib 时避免重复行
+    deduped: list[str] = []
+    for line in lines:
+        if line not in deduped:
+            deduped.append(line)
     if enable_site:
-        lines.append("import site")
-    pth.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        deduped.append("import site")
+    pth.write_text("\n".join(deduped) + "\n", encoding="utf-8")
     return pth

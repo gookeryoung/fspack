@@ -242,6 +242,35 @@ def test_write_pth_extra_paths(tmp_path: Path) -> None:
     assert "assets" in pth.read_text()
 
 
+def test_write_pth_standalone_lib_layout(tmp_path: Path) -> None:
+    """runtime/Lib 目录存在（standalone 布局）时 sys.path 写 Lib/DLLs 而非 zip.
+
+    Windows 自由线程版走 python-build-standalone 路径，stdlib 为解压的 Lib/
+    目录、pyd 在 DLLs/，python3XXt.zip 不存在——写 zip 行会导致 encodings
+    找不到（isolated 模式下 sys.path 完全由 ._pth 决定）。
+    """
+    runtime = tmp_path / "runtime"
+    (runtime / "Lib").mkdir(parents=True)
+    pth = write_pth(tmp_path, "3.14.6t")
+    content = pth.read_text(encoding="utf-8")
+    lines = content.splitlines()
+    assert lines[0] == "Lib"
+    assert lines[1] == "DLLs"
+    assert "python314t.zip" not in content
+    assert "..\\site-packages" in content
+    assert "..\\src" in content
+    assert "import site" in content
+
+
+def test_write_pth_standalone_dedup_extra_lib(tmp_path: Path) -> None:
+    """standalone 布局 + extra_paths 含 Lib 时去重（tkinter 场景）."""
+    runtime = tmp_path / "runtime"
+    (runtime / "Lib").mkdir(parents=True)
+    pth = write_pth(tmp_path, "3.14.6t", extra_paths=("Lib",))
+    content = pth.read_text(encoding="utf-8")
+    assert content.count("Lib") == 1
+
+
 def test_write_pth_disable_site(tmp_path: Path) -> None:
     """enable_site=False 省略 `import site` 行，启动跳过 site.py 加速."""
     pth = write_pth(tmp_path, "3.11.9", enable_site=False)

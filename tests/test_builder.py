@@ -3024,6 +3024,85 @@ def test_trim_standalone_runtime_windows_skips(tmp_path: Path) -> None:
     assert record.bytes_saved == 0
 
 
+def _make_windows_t_runtime(tmp_path: Path) -> Path:
+    """构造扁平化布局的 Windows 自由线程 runtime 目录树.
+
+    模拟 python-build-standalone freethreaded tarball 解压扁平化后的结构：
+    runtime 根含 python.exe/python3.14t.exe/pdb、Lib/DLLs/include/libs/Scripts/tcl。
+    """
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(parents=True)
+    (runtime / "Lib").mkdir()
+    (runtime / "Lib" / "encodings").mkdir()
+    (runtime / "DLLs").mkdir()
+    (runtime / "include").mkdir()
+    (runtime / "libs").mkdir()
+    (runtime / "Scripts").mkdir()
+    (runtime / "tcl").mkdir()
+    (runtime / "python.exe").write_bytes(b"exe")
+    (runtime / "pythonw.exe").write_bytes(b"exe")
+    (runtime / "python3.14t.exe").write_bytes(b"exe")
+    (runtime / "pythonw3.14t.exe").write_bytes(b"exe")
+    (runtime / "python314t.pdb").write_bytes(b"pdb" * 100)
+    (runtime / "python3t.pdb").write_bytes(b"pdb" * 50)
+    (runtime / "DLLs" / "_ssl.cp314t-win_amd64.pdb").write_bytes(b"pdb" * 10)
+    (runtime / "DLLs" / "_ssl.cp314t-win_amd64.pyd").write_bytes(b"pyd")
+    (runtime / "DLLs" / "_socket.cp314t-win_amd64.pdb").write_bytes(b"pdb" * 10)
+    (runtime / "include" / "Python.h").write_text("#include")
+    (runtime / "libs" / "python314t.lib").write_bytes(b"lib")
+    (runtime / "tcl" / "init.tcl").write_text("# tcl")
+    return runtime
+
+
+def test_trim_standalone_runtime_windows_t_strips_dev_files(tmp_path: Path) -> None:
+    """Windows 自由线程版（standalone 布局）剥离 pdb/include/libs/别名 exe/tcl."""
+    runtime = _make_windows_t_runtime(tmp_path)
+    st = StageRecorder("精简 runtime")
+    _trim_standalone_runtime(runtime, "3.14.6t", Platform.WINDOWS, st, has_tkinter=False)
+
+    # pdb 全部剥离（runtime 根与 DLLs/）
+    assert not list(runtime.glob("*.pdb"))
+    assert not list((runtime / "DLLs").glob("*.pdb"))
+    # 开发期目录剥离
+    assert not (runtime / "include").exists()
+    assert not (runtime / "libs").exists()
+    assert not (runtime / "Scripts").exists()
+    # 非 tkinter 项目剥离 tcl/
+    assert not (runtime / "tcl").exists()
+    # 版本别名 exe 剥离，python.exe/pythonw.exe 保留（fsp r --debug 用）
+    assert (runtime / "python.exe").is_file()
+    assert (runtime / "pythonw.exe").is_file()
+    assert not (runtime / "python3.14t.exe").exists()
+    assert not (runtime / "pythonw3.14t.exe").exists()
+    # pyd 与 stdlib 保留
+    assert (runtime / "DLLs" / "_ssl.cp314t-win_amd64.pyd").is_file()
+    assert (runtime / "Lib" / "encodings").is_dir()
+    record = st._finalize()
+    assert record.bytes_saved > 0
+
+
+def test_trim_standalone_runtime_windows_t_keeps_tcl_for_tkinter(tmp_path: Path) -> None:
+    """tkinter 项目保留 tcl/（_tkinter.pyd 运行时需要 Tcl/Tk 脚本库）."""
+    runtime = _make_windows_t_runtime(tmp_path)
+    st = StageRecorder("精简 runtime")
+    _trim_standalone_runtime(runtime, "3.14.6t", Platform.WINDOWS, st, has_tkinter=True)
+
+    assert (runtime / "tcl").is_dir()
+    assert not list(runtime.glob("*.pdb"))
+
+
+def test_trim_standalone_runtime_windows_t_idempotent(tmp_path: Path) -> None:
+    """重复精简幂等：二次调用无报错、不再累计节省字节."""
+    runtime = _make_windows_t_runtime(tmp_path)
+    st1 = StageRecorder("精简 runtime")
+    _trim_standalone_runtime(runtime, "3.14.6t", Platform.WINDOWS, st1, has_tkinter=False)
+    saved1 = st1._finalize().bytes_saved
+    st2 = StageRecorder("精简 runtime")
+    _trim_standalone_runtime(runtime, "3.14.6t", Platform.WINDOWS, st2, has_tkinter=False)
+    assert st2._finalize().bytes_saved == 0
+    assert saved1 > 0
+
+
 def test_trim_standalone_runtime_missing_python_dir_skips(tmp_path: Path) -> None:
     """standalone runtime 目录不存在时不报错."""
     runtime = tmp_path / "runtime"
