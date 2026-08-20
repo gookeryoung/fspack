@@ -113,8 +113,8 @@ def test_build_dry_run_skips_linux_runtime_download(tmp_path: Path, monkeypatch:
 
 def test_build_dry_run_returns_project_info(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """dry_run=True 返回 ProjectInfo，字段与项目配置一致."""
-    proj = tmp_path / "cli_helloworld"
-    shutil.copytree(_EXAMPLES / "cli" / "cli_helloworld", proj)
+    proj = tmp_path / "tk_app"
+    shutil.copytree(_EXAMPLES / "gui" / "tk_app", proj)
 
     # 拦截所有写操作
     for fn in ("download_embed", "download_standalone", "download_wheels"):
@@ -130,15 +130,15 @@ def test_build_dry_run_returns_project_info(tmp_path: Path, monkeypatch: pytest.
     with console.rich.capture():
         info = build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, dry_run=True)
 
-    assert info.name == "cli_helloworld"
+    assert info.name == "tk_app"
     assert info.version == "0.1.0"
     assert info.py_version == "3.11.9"
 
 
 def test_build_dry_run_prints_plan_summary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """dry_run=True 输出 '打包计划就绪' 汇总与 dry-run 提示."""
-    proj = tmp_path / "cli_helloworld"
-    shutil.copytree(_EXAMPLES / "cli" / "cli_helloworld", proj)
+    proj = tmp_path / "tk_app"
+    shutil.copytree(_EXAMPLES / "gui" / "tk_app", proj)
 
     for fn in ("download_embed", "download_standalone", "download_wheels"):
         monkeypatch.setattr(f"fspack.packaging.pipeline.stages.{fn}", lambda *a, **k: tmp_path / "fake")
@@ -160,7 +160,7 @@ def test_build_dry_run_prints_plan_summary(tmp_path: Path, monkeypatch: pytest.M
     assert "构建选项" in out
     assert "打包计划就绪" in out
     assert "dry-run" in out.lower()
-    assert "cli_helloworld" in out
+    assert "tk_app" in out
     assert "3.11.9" in out
     assert "windows" in out.lower()
 
@@ -196,8 +196,8 @@ def test_build_dry_run_includes_missing_dependencies(tmp_path: Path, monkeypatch
 
 def test_build_dry_run_no_write_operations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """dry_run=True 不创建 dist/runtime、dist/src、dist/.entry 等任何产物."""
-    proj = tmp_path / "cli_helloworld"
-    shutil.copytree(_EXAMPLES / "cli" / "cli_helloworld", proj)
+    proj = tmp_path / "tk_app"
+    shutil.copytree(_EXAMPLES / "gui" / "tk_app", proj)
 
     for fn in ("download_embed", "download_wheels"):
         monkeypatch.setattr(f"fspack.packaging.pipeline.stages.{fn}", lambda *a, **k: tmp_path / "fake")

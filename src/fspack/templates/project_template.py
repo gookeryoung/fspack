@@ -66,7 +66,7 @@ class ProjectTemplate(Template):
     def from_id(cls, template_id: str) -> Template | None:
         """按目录名获取单个 doctor 模板，不存在返回 ``None``.
 
-        :param template_id: 模板 id（目录名，如 ``cli_helloworld``）
+        :param template_id: 模板 id（目录名，如 ``tk_app``）
         :return: 模板对象或 ``None``
         """
         from fspack.templates.registry import _CATEGORIES

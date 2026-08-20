@@ -186,9 +186,9 @@ fspack b . --target windows
 for ep in cli gui web; do
   if [ "$ep" = "gui" ]; then
     export QT_QPA_PLATFORM=offscreen
-    fspack r . --entry $ep --debug 2>&1 | grep -q "hello from multi_entry_py310 $ep" || exit 1
+    fspack r . --entry $ep --debug 2>&1 | grep -q "hello from multi_entry $ep" || exit 1
   else
-    wine ./dist/${ep}.exe 2>&1 | tr -d '\r' | grep -q "hello from multi_entry_py310 $ep" || exit 1
+    wine ./dist/${ep}.exe 2>&1 | tr -d '\r' | grep -q "hello from multi_entry $ep" || exit 1
   fi
 done
 ```
@@ -205,11 +205,11 @@ done
 
 ## 完整示例
 
-`examples/multi_entry_py310` 是多入口项目示例，以下 workflow 片段展示如何在 CI 中验证其三个入口：
+`src/fspack/assets/templates/config/multi_entry` 是多入口项目示例，以下 workflow 片段展示如何在 CI 中验证其三个入口：
 
 ```yaml
 - name: Build multi-entry project
-  run: fspack b examples/multi_entry_py310 --target windows
+  run: fspack b src/fspack/assets/templates/config/multi_entry --target windows
 
 - name: Verify all entries
   env:
@@ -218,16 +218,16 @@ done
     QT_QPA_PLATFORM: offscreen
   run: |
     wineboot --init
-    cd examples/multi_entry_py310
+    cd src/fspack/assets/templates/config/multi_entry
     # CLI 与 Web 入口用 wine 运行
     for ep in cli web; do
       output=$(wine ./dist/${ep}.exe 2>&1 | tr -d '\r')
-      echo "$output" | grep -q "hello from multi_entry_py310 $ep" || {
+      echo "$output" | grep -q "hello from multi_entry $ep" || {
         echo "::error::入口 $ep 运行失败: $output"; exit 1
       }
     done
     # GUI 入口用 --debug 绕过 GUI loader
-    fspack r . --entry gui --debug 2>&1 | grep -q "hello from multi_entry_py310 gui" || {
+    fspack r . --entry gui --debug 2>&1 | grep -q "hello from multi_entry gui" || {
       echo "::error::GUI 入口运行失败"; exit 1
     }
 ```

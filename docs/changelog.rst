@@ -4,6 +4,7 @@
 v0.4.16（未发布）
 ------------------
 
+- chore: 移除覆盖度低的简单示例模板（``cli_helloworld``/``cli_office``/``pygame_cli``），测试改用 ``tk_app``（无依赖）与 ``web_app``（flask 依赖）等现存模板，同步更新 README 示例清单与集成文档中的模板路径
 - fix: 前端构建命令（``pnpm install``/``run build``）改为流式透传输出并增加 600s 超时保护。原实现静默捕获输出且无超时，vite/vue-tsc 构建数分钟无任何显示被误认为卡死，真卡死时无限阻塞；超时后 Windows 用 ``taskkill /T /F`` 递归终止 ``pnpm.CMD → node → vite`` 整棵进程树（仅杀直接子进程时孙进程持有管道写端，drain 线程等不到 EOF 永久阻塞），失败与超时均抛含输出尾部的明确错误
 
 v0.4.15

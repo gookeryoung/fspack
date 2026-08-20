@@ -73,14 +73,14 @@ def test_mirror_config_embed_url() -> None:
     assert m.embed_url("3.11.9") == "https://x/py/3.11.9/python-3.11.9-embed-amd64.zip"
 
 
-def test_project_info_from_dir_helloworld() -> None:
-    """from_dir 类方法解析 cli_helloworld 示例."""
-    info = ProjectInfo.from_dir(_EXAMPLES / "cli" / "cli_helloworld")
-    assert info.name == "cli_helloworld"
-    assert info.entry_module == "helloworld"
-    assert info.entry_file.name == "helloworld.py"
-    assert info.app_type is AppType.CLI
-    assert info.exe_name == "cli_helloworld.exe"
+def test_project_info_from_dir_tk_app() -> None:
+    """from_dir 类方法解析 tk_app 示例（无第三方依赖的 GUI 模板）."""
+    info = ProjectInfo.from_dir(_EXAMPLES / "gui" / "tk_app")
+    assert info.name == "tk_app"
+    assert info.entry_module == "tk_app"
+    assert info.entry_file.name == "tk_app.py"
+    assert info.app_type is AppType.GUI
+    assert info.exe_name == "tk_app.exe"
     assert info.py_xy == "python311"
 
 
@@ -351,13 +351,14 @@ def test_project_info_from_dir_multi_entry() -> None:
 # --- 项目解析（parse_project）测试 ---
 
 
-def test_parse_project_helloworld() -> None:
-    info = parse_project(_EXAMPLES / "cli" / "cli_helloworld")
-    assert info.name == "cli_helloworld"
-    assert info.entry_module == "helloworld"
-    assert info.entry_file.name == "helloworld.py"
-    assert info.app_type is AppType.CLI
-    assert info.exe_name == "cli_helloworld.exe"
+def test_parse_project_tk_app() -> None:
+    """解析 tk_app 示例：无 requires-python 时用默认版本."""
+    info = parse_project(_EXAMPLES / "gui" / "tk_app")
+    assert info.name == "tk_app"
+    assert info.entry_module == "tk_app"
+    assert info.entry_file.name == "tk_app.py"
+    assert info.app_type is AppType.GUI
+    assert info.exe_name == "tk_app.exe"
     assert info.py_xy == "python311"
     assert info.py_version == DEFAULT_PY_VERSION
     assert info.requires_python is None
@@ -1438,12 +1439,6 @@ def test_infer_app_type_non_utf8_falls_back_to_declared(tmp_path: Path) -> None:
     assert infer_app_type(script, ("PyQt5>=5",)) is AppType.GUI
     # 无声明依赖时回退 CLI（保留控制台最安全）
     assert infer_app_type(script, ()) is AppType.CLI
-
-
-def test_parse_project_pygame_example_is_gui() -> None:
-    """pygame_cli 示例被识别为 GUI."""
-    info = parse_project(_EXAMPLES / "game" / "pygame_cli")
-    assert info.app_type is AppType.GUI
 
 
 def test_parse_project_pygame_snake_is_gui() -> None:

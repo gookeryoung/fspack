@@ -451,9 +451,10 @@ def test_build_forwards_keep_modules(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert "requests" in captured["submodule_usage"]
 
 
-def test_build_orchestration_helloworld(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    proj = tmp_path / "cli_helloworld"
-    shutil.copytree(_EXAMPLES / "cli" / "cli_helloworld", proj, ignore=shutil.ignore_patterns("dist", "__pycache__"))
+def test_build_orchestration_tk_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """无第三方依赖的真实模板（tk_app）走完整 Windows 编排."""
+    proj = tmp_path / "tk_app"
+    shutil.copytree(_EXAMPLES / "gui" / "tk_app", proj, ignore=shutil.ignore_patterns("dist", "__pycache__"))
     calls: dict[str, Any] = {}
 
     def fake_extract_embed(zip_path: object, runtime_dir: Path) -> None:
@@ -479,17 +480,22 @@ def test_build_orchestration_helloworld(tmp_path: Path, monkeypatch: pytest.Monk
         return out_exe
 
     monkeypatch.setattr("fspack.packaging.pipeline.stages.compile_loader", fake_compile)
+    # tk_app 使用 tkinter：Windows embed 需补充内置库，mock 避免真实下载 standalone tarball
+    monkeypatch.setattr(
+        "fspack.packaging.pipeline.stages.TkinterBundler.ensure",
+        lambda runtime_dir, version, cache_dir, stage: None,
+    )
 
     with console.rich.capture() as capture:
         info = build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
-    assert info.name == "cli_helloworld"
-    assert (proj / "dist" / "cli_helloworld.exe").is_file()
+    assert info.name == "tk_app"
+    assert (proj / "dist" / "tk_app.exe").is_file()
     assert (proj / "dist" / "runtime" / "python311._pth").is_file()
-    assert (proj / "dist" / "src" / "helloworld.py").is_file()
+    assert (proj / "dist" / "src" / "tk_app.py").is_file()
     assert (proj / "dist" / "runtime" / "python311.dll").is_file()
     assert (proj / "dist" / ".entry").is_file()
-    assert (proj / "dist" / ".entry").read_text(encoding="utf-8") == "_entry_cli_helloworld.py"
-    wrapper = proj / "dist" / "_entry_cli_helloworld.py"
+    assert (proj / "dist" / ".entry").read_text(encoding="utf-8") == "_entry_tk_app.py"
+    wrapper = proj / "dist" / "_entry_tk_app.py"
     assert wrapper.is_file()
     assert "fspack 生成的入口包装器" in wrapper.read_text(encoding="utf-8")
     pth = (proj / "dist" / "runtime" / "python311._pth").read_text()
@@ -735,8 +741,9 @@ def test_build_skips_download_when_site_packages_has_deps(tmp_path: Path, monkey
 
 
 def test_build_orchestration_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    proj = tmp_path / "cli_helloworld"
-    shutil.copytree(_EXAMPLES / "cli" / "cli_helloworld", proj, ignore=shutil.ignore_patterns("dist", "__pycache__"))
+    """无第三方依赖的真实模板（tk_app）走完整 Linux 编排（standalone runtime）."""
+    proj = tmp_path / "tk_app"
+    shutil.copytree(_EXAMPLES / "gui" / "tk_app", proj, ignore=shutil.ignore_patterns("dist", "__pycache__"))
     calls: dict[str, Any] = {}
 
     def fake_extract_standalone(tar_path: object, runtime_dir: Path) -> None:
@@ -767,13 +774,13 @@ def test_build_orchestration_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr("subprocess.run", lambda cmd, **kw: _CompileCompleted())
 
     info = build(proj, get_mirror("huawei"), "3.11.9", target=Platform.LINUX)
-    assert info.name == "cli_helloworld"
-    assert (proj / "dist" / "cli_helloworld").is_file()
-    assert not (proj / "dist" / "cli_helloworld.exe").exists()
+    assert info.name == "tk_app"
+    assert (proj / "dist" / "tk_app").is_file()
+    assert not (proj / "dist" / "tk_app.exe").exists()
     assert not (proj / "dist" / "runtime" / "python311._pth").exists()
-    assert (proj / "dist" / "src" / "helloworld.py").is_file()
+    assert (proj / "dist" / "src" / "tk_app.py").is_file()
     assert (proj / "dist" / ".entry").is_file()
-    assert (proj / "dist" / "_entry_cli_helloworld.py").is_file()
+    assert (proj / "dist" / "_entry_tk_app.py").is_file()
     assert "standalone" in calls
     assert "dlopen" in calls["compile_source"]
     assert "libpython3.11.so" in calls["compile_source"]
@@ -1582,7 +1589,7 @@ def test_strip_py_sources_optimize_level_matches_pyc(tmp_path: Path) -> None:
 def test_strip_py_sources_skips_data_dirs(tmp_path: Path) -> None:
     """``data_dirs`` 内的 .py 不剥离（数据资源目录原样保留）.
 
-    模拟 fspack 自身打包：``src/fspack/assets/templates/<each>/helloworld.py``
+    模拟 fspack 自身打包：``src/fspack/assets/templates/<each>/tk_app.py``
     是项目模板源码，``fsp doctor --test`` 复制后需 .py 存在才能 build。
     """
     from fspack.builder import _strip_py_sources
@@ -1591,22 +1598,22 @@ def test_strip_py_sources_skips_data_dirs(tmp_path: Path) -> None:
     src.mkdir()
     (src / "__init__.py").write_text("")
     (src / "app.py").write_text("print('app')")
-    # 模拟 assets/templates/cli/cli_helloworld/helloworld.py
-    tpl_dir = src / "fspack" / "assets" / "templates" / "cli" / "cli_helloworld"
+    # 模拟 assets/templates/gui/tk_app/tk_app.py
+    tpl_dir = src / "fspack" / "assets" / "templates" / "gui" / "tk_app"
     tpl_dir.mkdir(parents=True)
-    (tpl_dir / "helloworld.py").write_text("def main():\n    print('hi')\n")
+    (tpl_dir / "tk_app.py").write_text("def main():\n    print('hi')\n")
     # 为两个 .py 都生成 .pyc（确保 PEP 3147 迁移条件满足，区别仅在 data_dirs 跳过）
     _make_pyc_file(src / "app.py", "3.11", optimize=0)
-    _make_pyc_file(tpl_dir / "helloworld.py", "3.11", optimize=0)
+    _make_pyc_file(tpl_dir / "tk_app.py", "3.11", optimize=0)
 
     data_dirs = (tpl_dir.resolve(),)
     stripped = _strip_py_sources([src], py_version="3.11.9", optimize=0, data_dirs=data_dirs)
 
-    # 仅 app.py 被剥离，helloworld.py 保留
+    # 仅 app.py 被剥离，tk_app.py 保留
     assert stripped == 1
     assert not (src / "app.py").exists()
     assert (src / "app.pyc").is_file()  # app.pyc 迁移到 legacy 布局
-    assert (tpl_dir / "helloworld.py").is_file()  # data_dirs 内保留 .py
+    assert (tpl_dir / "tk_app.py").is_file()  # data_dirs 内保留 .py
     # data_dirs 内的 __pycache__/.pyc 不迁移（.py 未删除）
     pycache_files: list[Path] = list((tpl_dir / "__pycache__").glob("*.pyc"))
     assert pycache_files  # __pycache__ 下 .pyc 仍在
@@ -2171,12 +2178,12 @@ def test_copy_source_data_dirs_keeps_metadata_in_data_dirs(tmp_path: Path) -> No
     src = tmp_path / "proj"
     src.mkdir()
     (src / "app.py").write_text("print('hi')")
-    # 模拟 assets/templates/cli/cli_helloworld/ 完整项目模板
-    tpl = src / "src" / "fspack" / "assets" / "templates" / "cli" / "cli_helloworld"
+    # 模拟 assets/templates/gui/tk_app/ 完整项目模板
+    tpl = src / "src" / "fspack" / "assets" / "templates" / "gui" / "tk_app"
     tpl.mkdir(parents=True)
-    (tpl / "pyproject.toml").write_text('[project]\nname = "cli-helloworld"\n')
-    (tpl / "helloworld.py").write_text("def main():\n    print('hi')\n")
-    (tpl / "README.md").write_text("# cli-helloworld\n")
+    (tpl / "pyproject.toml").write_text('[project]\nname = "tk_app"\n')
+    (tpl / "tk_app.py").write_text("def main():\n    print('hi')\n")
+    (tpl / "README.md").write_text("# tk_app\n")
     (tpl / "uv.lock").write_text("version = 1\n")
     (tpl / ".python-version").write_text("3.11\n")
     # 项目根目录的元数据文件仍应被剥离
@@ -2186,13 +2193,13 @@ def test_copy_source_data_dirs_keeps_metadata_in_data_dirs(tmp_path: Path) -> No
 
     copy_source(src, dst, data_dirs=("src/fspack/assets/templates",))
     # data_dirs 内的元数据/文档文件保留
-    assert (dst / "src" / "fspack" / "assets" / "templates" / "cli" / "cli_helloworld" / "pyproject.toml").is_file()
-    assert (dst / "src" / "fspack" / "assets" / "templates" / "cli" / "cli_helloworld" / "README.md").is_file()
-    assert (dst / "src" / "fspack" / "assets" / "templates" / "cli" / "cli_helloworld" / "uv.lock").is_file()
-    assert (dst / "src" / "fspack" / "assets" / "templates" / "cli" / "cli_helloworld" / ".python-version").is_file()
+    assert (dst / "src" / "fspack" / "assets" / "templates" / "gui" / "tk_app" / "pyproject.toml").is_file()
+    assert (dst / "src" / "fspack" / "assets" / "templates" / "gui" / "tk_app" / "README.md").is_file()
+    assert (dst / "src" / "fspack" / "assets" / "templates" / "gui" / "tk_app" / "uv.lock").is_file()
+    assert (dst / "src" / "fspack" / "assets" / "templates" / "gui" / "tk_app" / ".python-version").is_file()
     # 应用源码保留
     assert (dst / "app.py").is_file()
-    assert (dst / "src" / "fspack" / "assets" / "templates" / "cli" / "cli_helloworld" / "helloworld.py").is_file()
+    assert (dst / "src" / "fspack" / "assets" / "templates" / "gui" / "tk_app" / "tk_app.py").is_file()
     # 项目根目录的元数据文件仍被剥离（data_dirs 只保护子树内的元数据）
     assert not (dst / "pyproject.toml").exists()
     assert not (dst / "README.md").exists()

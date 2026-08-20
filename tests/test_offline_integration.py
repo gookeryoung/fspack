@@ -8,9 +8,9 @@
 3. ``FSPACK_CACHE_DIR`` 环境变量 → build() 用此路径作为 embed 缓存
 4. 非离线模式缓存未命中 → 不抛离线异常，回退到网络下载路径
 
-集成测试用 ``assets/templates/cli/cli_helloworld``（无第三方依赖）与
-``assets/templates/cli/cli_office``（有 pypdf 依赖）作为真实项目输入，避免构造
-虚假项目结构。runtime/网络层用 monkeypatch 替身，不实际下载或解压。
+集成测试用本模块内构造的最小项目（无第三方依赖）与
+``assets/templates/web/web_app``（有 flask 依赖）作为真实项目输入。runtime/网络层
+用 monkeypatch 替身，不实际下载或解压。
 
 **平台覆盖**：Windows（embed python）与 Linux（python-build-standalone）各有
 5 个对等测试，验证两个平台的离线模式行为一致。
@@ -42,7 +42,7 @@ _LINUX_PY_VERSION = "3.11.15"
 def _copy_example(rel_path: str, tmp_path: Path) -> Path:
     """复制 assets/templates/<rel_path> 到 tmp_path/<name>，返回项目路径.
 
-    :param rel_path: 相对于 ``assets/templates/`` 的路径（如 ``cli/cli_helloworld``）
+    :param rel_path: 相对于 ``assets/templates/`` 的路径（如 ``web/web_app``）
     """
     src = _EXAMPLES / rel_path
     name = Path(rel_path).name
@@ -51,13 +51,26 @@ def _copy_example(rel_path: str, tmp_path: Path) -> Path:
     return dst
 
 
+def _make_min_project(tmp_path: Path, name: str = "app") -> Path:
+    """构造无第三方依赖的最小项目，返回项目路径.
+
+    原无依赖模板 cli_helloworld 已移除，剩余无依赖模板仅 tk_app（tkinter 会
+    触发 Windows 内置库补充，偏离离线行为测试焦点），故此处内联构造最小项目。
+    """
+    proj = tmp_path / name
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text(f'[project]\nname = "{name}"\nversion = "0.1.0"\n', encoding="utf-8")
+    (proj / f"{name}.py").write_text("def main():\n    print('hi')\n", encoding="utf-8")
+    return proj
+
+
 # ---- 离线模式 + runtime 缓存未命中 → build() 抛 EmbedError ----
 
 
 def test_build_offline_embed_cache_miss_raises_embed_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """离线模式下 embed python 缓存未命中 → build() 抛 EmbedError，错误信息含"离线模式".
 
-    用 cli_helloworld（无第三方依赖），跳过 wheel 下载阶段，
+    用无第三方依赖的最小项目，跳过 wheel 下载阶段，
     聚焦验证 build() 入口能正确传递 runtime 层的离线异常。
     """
     monkeypatch.setenv("FSPACK_OFFLINE", "1")
@@ -65,7 +78,7 @@ def test_build_offline_embed_cache_miss_raises_embed_error(tmp_path: Path, monke
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.setattr("urllib.request.urlopen", fail_urlopen)
 
-    proj = _copy_example("cli/cli_helloworld", tmp_path)
+    proj = _make_min_project(tmp_path)
     from fspack.builder import build
 
     with pytest.raises(EmbedError, match=r"离线模式下.*缓存未命中"):
@@ -77,20 +90,20 @@ def test_build_offline_wheel_cache_miss_raises_dependency_error(
 ) -> None:
     """离线模式下 wheel 缓存未命中 → build() 抛 DependencyError，错误信息含"离线模式".
 
-    用 cli_office（声明 pypdf 依赖），mock runtime 已就绪（跳过 embed 下载），
+    用 web_app 模板（声明 flask 依赖），mock runtime 已就绪（跳过 embed 下载），
     mock pip download --no-index 失败（缓存未命中），验证 build() 抛离线异常。
     """
     monkeypatch.setenv("FSPACK_OFFLINE", "1")
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.setattr("urllib.request.urlopen", fail_urlopen)
 
-    proj = _copy_example("cli/cli_office", tmp_path)
+    proj = _copy_example("web/web_app", tmp_path)
     # 让 runtime 已就绪：在 dist/runtime/ 下创建 python311.dll marker
     runtime_dir = proj / "dist" / "runtime"
     runtime_dir.mkdir(parents=True)
     (runtime_dir / "python311.dll").write_bytes(b"")
     (runtime_dir / "python311._pth").write_text("..\\site-packages\n", encoding="utf-8")
-    # 让 site-packages 存在但不包含 pypdf，触发 wheel 下载
+    # 让 site-packages 存在但不包含 flask，触发 wheel 下载
     site_packages = proj / "dist" / "site-packages"
     site_packages.mkdir(parents=True)
 
@@ -128,7 +141,7 @@ def test_build_offline_uses_cache_dir_env_var(tmp_path: Path, monkeypatch: pytes
     # mock extract_embed 跳过实际解压（假 zip 无法解压）
     monkeypatch.setattr("fspack.packaging.pipeline.stages.extract_embed", lambda zip_path, runtime_dir: None)
 
-    proj = _copy_example("cli/cli_helloworld", tmp_path)
+    proj = _make_min_project(tmp_path)
     from fspack.builder import build
 
     # 缓存命中后进入解压 → 复制源码 → 编译 loader 等阶段
@@ -183,7 +196,7 @@ def test_build_non_offline_falls_back_to_network(tmp_path: Path, monkeypatch: py
     # mock extract_embed 跳过实际解压（假数据无法解压）
     monkeypatch.setattr("fspack.packaging.pipeline.stages.extract_embed", lambda zip_path, runtime_dir: None)
 
-    proj = _copy_example("cli/cli_helloworld", tmp_path)
+    proj = _make_min_project(tmp_path)
     from fspack.builder import build
 
     # 缓存未命中 + 非离线模式 → 走网络下载，不应抛"离线模式"异常
@@ -207,7 +220,7 @@ def test_build_offline_error_lists_searched_paths(tmp_path: Path, monkeypatch: p
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(custom_cache))
     monkeypatch.setattr("urllib.request.urlopen", fail_urlopen)
 
-    proj = _copy_example("cli/cli_helloworld", tmp_path)
+    proj = _make_min_project(tmp_path)
     from fspack.builder import build
 
     with pytest.raises(EmbedError) as exc_info:
@@ -241,7 +254,7 @@ def test_build_offline_standalone_cache_miss_raises_embed_error(
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.setattr("urllib.request.urlopen", fail_urlopen)
 
-    proj = _copy_example("cli/cli_helloworld", tmp_path)
+    proj = _make_min_project(tmp_path)
     from fspack.builder import build
 
     with pytest.raises(EmbedError, match=r"离线模式下.*缓存未命中"):
@@ -261,13 +274,13 @@ def test_build_offline_wheel_cache_miss_raises_dependency_error_linux(
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.setattr("urllib.request.urlopen", fail_urlopen)
 
-    proj = _copy_example("cli/cli_office", tmp_path)
+    proj = _copy_example("web/web_app", tmp_path)
     # Linux runtime marker：runtime/python/bin/python3.11（对应 py_version 3.11.15）
     runtime_dir = proj / "dist" / "runtime"
     python_bin = runtime_dir / "python" / "bin"
     python_bin.mkdir(parents=True)
     (python_bin / "python3.11").write_bytes(b"")
-    # site-packages 存在但不包含 pypdf，触发 wheel 下载
+    # site-packages 存在但不包含 flask，触发 wheel 下载
     site_packages = proj / "dist" / "site-packages"
     site_packages.mkdir(parents=True)
 
@@ -300,7 +313,7 @@ def test_build_offline_uses_cache_dir_env_var_linux(tmp_path: Path, monkeypatch:
     # mock extract_standalone 跳过实际解压
     monkeypatch.setattr("fspack.packaging.pipeline.stages.extract_standalone", lambda tar, runtime_dir: None)
 
-    proj = _copy_example("cli/cli_helloworld", tmp_path)
+    proj = _make_min_project(tmp_path)
     from fspack.builder import build
 
     try:
@@ -346,7 +359,7 @@ def test_build_non_offline_falls_back_to_network_linux(tmp_path: Path, monkeypat
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     monkeypatch.setattr("fspack.packaging.pipeline.stages.extract_standalone", lambda tar, runtime_dir: None)
 
-    proj = _copy_example("cli/cli_helloworld", tmp_path)
+    proj = _make_min_project(tmp_path)
     from fspack.builder import build
 
     try:
@@ -369,7 +382,7 @@ def test_build_offline_error_lists_searched_paths_linux(tmp_path: Path, monkeypa
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(custom_cache))
     monkeypatch.setattr("urllib.request.urlopen", fail_urlopen)
 
-    proj = _copy_example("cli/cli_helloworld", tmp_path)
+    proj = _make_min_project(tmp_path)
     from fspack.builder import build
 
     with pytest.raises(EmbedError) as exc_info:

@@ -44,7 +44,7 @@ def test_list_all_returns_sorted() -> None:
 def test_list_all_has_known_entries() -> None:
     """列表中包含已知的模板项目（迁移自 examples/）."""
     ids = {t.id for t in ProjectTemplate.list_all()}
-    assert "cli_helloworld" in ids
+    assert "cli_complex" in ids
     assert "pyside2_qml_dashboard" in ids
     assert "sci_numpy" in ids
 
@@ -116,11 +116,11 @@ def test_list_all_skips_dir_with_invalid_toml(monkeypatch: pytest.MonkeyPatch, t
 
 
 def test_from_id_existing() -> None:
-    """from_id 返回已知模板，元数据正确."""
-    tpl = ProjectTemplate.from_id("cli_helloworld")
+    """from_id 返回已知模板，元数据正确（tk_app 无依赖且用默认 requires-python）."""
+    tpl = ProjectTemplate.from_id("tk_app")
     assert tpl is not None
-    assert tpl.id == "cli_helloworld"
-    assert tpl.name == "cli_helloworld"
+    assert tpl.id == "tk_app"
+    assert tpl.name == "tk_app"
     assert tpl.requires_python == ">=3.8"
     assert tpl.dependencies == ()
 
@@ -230,7 +230,7 @@ def test_from_dir_app_type_defaults_to_cli(tmp_path: Path) -> None:
 
 def test_project_template_is_frozen() -> None:
     """ProjectTemplate 是 frozen dataclass，不可变."""
-    tpl = ProjectTemplate.from_id("cli_helloworld")
+    tpl = ProjectTemplate.from_id("tk_app")
     assert tpl is not None
     with pytest.raises(AttributeError):
         tpl.id = "modified"  # type: ignore[misc]

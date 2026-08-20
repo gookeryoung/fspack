@@ -210,7 +210,7 @@ fsp b /path/to/project --mirror aliyun --py-version 3.11.9 --target windows
 ### 递归打包多项目
 
 ```bash
-fsp b -R ./examples        # 递归构建 examples/ 下所有示例
+fsp b -R ./workspace       # 递归构建 workspace/ 下所有子项目
 fsp p -R ./monorepo        # 递归打包 monorepo/ 下所有子项目
 ```
 
@@ -367,25 +367,25 @@ fsp cache clean  [--dry-run] [--stale] [--target <name>]  # 清理损坏与过�
 
 ## 示例
 
-`examples/` 下提供 18 个典型项目，覆盖各类打包场景：
+`src/fspack/assets/templates/` 下内置 13 个典型项目模板，覆盖各类打包场景（`fsp doctor --test` 用其验证环境可打包性）：
 
-| 示例 | 类型 | 亮点 |
+| 模板 | 类型 | 亮点 |
 |------|------|------|
-| `cli_helloworld_pyall` | 无库 CLI | 最小示例，验证基础流水线 |
-| `cli_complex_py314` | 无库 CLI | 多文件结构，Python 3.14 |
-| `cli_office_py38` | 有库 CLI | pypdf 依赖，uv workspace |
-| `pyside2_app_py310` | GUI 应用 | PySide2 依赖 |
-| `pyside2_qml_dashboard_py38` | QML 应用 | PySide2+QML 仪表盘 |
-| `pyqt5_cli_pyall` | GUI 应用 | PyQt5，Python 3.12 兼容 |
-| `tk_app_pyall` | tkinter | 内置库打包验证 |
-| `pygame_conway_py38` | 游戏 | pygame 生命游戏 |
-| `pygame_gktetris_py38` | 游戏 | pygame 俄罗斯方块 |
-| `sci_numpy_py38` | 科学计算 | numpy 数值计算 |
-| `sci_matplotlib_py38` | 科学计算 | matplotlib 绘图 |
-| `web_app_pyall` | Web 服务 | flask web 框架 |
-| `multi_entry_py310` | 多入口 | cli+gui+web 三入口 |
+| `cli_complex` | CLI | 多文件结构，Python 3.14 |
+| `tk_app` | tkinter | 内置库打包验证 |
+| `pyside2_app` | GUI 应用 | PySide2 依赖 |
+| `pyside2_qml_dashboard` | QML 应用 | PySide2+QML 仪表盘 |
+| `pygame_conway` | 游戏 | pygame 生命游戏 |
+| `pygame_snake` | 游戏 | pygame 贪吃蛇 |
+| `pygame_tetris` | 游戏 | pygame 俄罗斯方块 |
+| `sci_numpy` | 科学计算 | numpy 数值计算 |
+| `sci_scipy` | 科学计算 | scipy 科学计算 |
+| `sci_matplotlib` | 科学计算 | matplotlib 绘图 |
+| `web_app` | Web 服务 | flask web 框架 |
+| `webview_app` | 前后端分离 | Vue + Vite + pywebview |
+| `multi_entry` | 多入口 | cli+gui+web 三入口 |
 
-完整示例列表见 [examples/](examples/) 目录。
+完整模板列表见 [src/fspack/assets/templates/](src/fspack/assets/templates/) 目录。
 
 ## 配置参考
 
