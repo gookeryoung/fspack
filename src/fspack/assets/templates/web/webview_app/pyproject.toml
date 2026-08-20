@@ -3,7 +3,7 @@ dependencies = [
     "cffi>=1.17.1",
     "cryptography>=46.0.3",
     "pythonnet>=3.0.5",
-    "pywebview>=6.1",
+    "pywebview[ssl]>=6.1",
 ]
 description = "一个基于pywebview的本地桌面应用示例"
 name = "webview_app"
@@ -19,6 +19,10 @@ build = ["pyinstaller>=6.0"]
 
 [project.scripts]
 webview_app = "webview_app.cli:main"
+
+[[tool.uv.index]]
+url = "https://mirrors.aliyun.com/pypi/simple/"
+default = true
 
 [build-system]
 build-backend = "hatchling.build"

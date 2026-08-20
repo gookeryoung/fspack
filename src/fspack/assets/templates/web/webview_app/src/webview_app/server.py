@@ -13,7 +13,15 @@ import webview
 from webview_app.api import BaseApi
 
 try:
-    import cryptography  # noqa: F401
+    # 探测须与 pywebview __generate_ssl_cert 的导入集完全一致（深层导入才会
+    # 加载 _rust 扩展）：裸 import cryptography 顶层恒成功（纯 Python __init__），
+    # 而 cryptography 43+ 的 _rust 由 Rust 1.78+ 编译、最低要求 Win10，
+    # Win7 上深层导入 ImportError。此处探测失败降级 http，应用仍可启动。
+    from cryptography import x509  # noqa: F401
+    from cryptography.hazmat.backends import default_backend  # noqa: F401
+    from cryptography.hazmat.primitives import hashes, serialization  # noqa: F401
+    from cryptography.hazmat.primitives.asymmetric import rsa  # noqa: F401
+    from cryptography.x509.oid import NameOID  # noqa: F401
 except ImportError:
     USE_SSL = False
 else:
