@@ -74,6 +74,27 @@ def test_needs_win7_dll_version_boundary() -> None:
     assert needs_win7_dll("3.14.6")
 
 
+def test_needs_win7_dll_freethreaded_returns_false() -> None:
+    """free-threaded 版本（t 后缀）needs_win7_dll 返回 False，不走 win7 重编译分支.
+
+    上游 adang1345/PythonVista 未发布 t 变体，free-threaded 仅支持 Win10+；
+    由 :func:`download_win7_embed` 显式拒绝 t 版本下载。
+    """
+    assert not needs_win7_dll("3.13.14t")
+    assert not needs_win7_dll("3.14.6t")
+
+
+def test_download_win7_embed_freethreaded_rejected(tmp_path: Path) -> None:
+    """free-threaded 版本请求 win7 embed 时直接抛 Win7DllError，不发网络请求.
+
+    等价于"检测到 win7 目标 + t 版本即报错"的守卫：上游未发布 t 变体重编译版，
+    free-threaded build 仅支持 Win10+。错误信息提示用户切换标准版。
+    """
+    with pytest.raises(Win7DllError, match=r"free-threaded build .* 不支持 win7 目标"):
+        download_win7_embed("3.13.14t", tmp_path / "cache")
+    assert not (tmp_path / "cache").exists() or not list((tmp_path / "cache").iterdir())
+
+
 def test_win7_dll_name() -> None:
     assert win7_dll_name("3.12.10") == "python312.dll"
     assert win7_dll_name("3.14.6") == "python314.dll"
@@ -355,8 +376,12 @@ def test_manifest_covers_all_embed_versions_ge_312() -> None:
     """
     from fspack.config import KNOWN_EMBED_VERSIONS
 
+    # free-threaded 版本（t 后缀）不支持 Win7，不进 win7 清单（download_win7_embed
+    # 主动拒绝 t 变体，无需对齐清单）；过滤掉 t 后缀再做 int 比较，避免 int("13t") 失败
     expected = {
-        full for minor, full in KNOWN_EMBED_VERSIONS.items() if tuple(int(x) for x in minor.split(".")) >= (3, 12)
+        full
+        for minor, full in KNOWN_EMBED_VERSIONS.items()
+        if not minor.endswith("t") and tuple(int(x) for x in minor.split(".")) >= (3, 12)
     }
     missing = expected - set(win7_dll.WIN7_EMBED_SHA256)
     assert not missing, f"win7 清单缺失版本（升级 KNOWN_EMBED_VERSIONS 后须同步 WIN7_EMBED_SHA256）: {sorted(missing)}"

@@ -222,9 +222,13 @@ class EmbedRuntime(RuntimeDownloader):
 
 
 class StandaloneRuntime(RuntimeDownloader):
-    """python-build-standalone 下载器（Linux 与 macOS）。
+    """python-build-standalone 下载器（Linux/macOS/Windows+t）。
 
-    macOS 通过 ``macos_arch`` kwarg 区分 x86_64 与 arm64。
+    macOS 通过 ``macos_arch`` kwarg 区分 x86_64 与 arm64；Windows 自由线程版本
+    （``py_version`` 末尾 ``t`` 后缀）通过 ``windows=True`` kwarg 触发 Windows
+    msvc 平台 tarball 下载（python.org 不提供 freethreaded embed zip，
+    Windows+t 目标必须走 python-build-standalone 的 ``-freethreaded-install_only``
+    变体）。
     """
 
     download_timeout = 300
@@ -237,7 +241,9 @@ class StandaloneRuntime(RuntimeDownloader):
         assert isinstance(release_tag, str)
         macos_arch = kwargs.get("macos_arch")
         assert isinstance(macos_arch, str) or macos_arch is None
-        return standalone_tarball_name(version, release_tag, macos_arch=macos_arch)
+        windows = kwargs.get("windows", False)
+        assert isinstance(windows, bool)
+        return standalone_tarball_name(version, release_tag, macos_arch=macos_arch, windows=windows)
 
     @classmethod
     @override
@@ -246,13 +252,19 @@ class StandaloneRuntime(RuntimeDownloader):
         assert isinstance(release_tag, str)
         macos_arch = kwargs.get("macos_arch")
         assert isinstance(macos_arch, str) or macos_arch is None
-        return standalone_url(version, release_tag, macos_arch=macos_arch)
+        windows = kwargs.get("windows", False)
+        assert isinstance(windows, bool)
+        return standalone_url(version, release_tag, macos_arch=macos_arch, windows=windows)
 
     @classmethod
     @override
     def marker_path(cls, runtime_dir: Path, version: str) -> Path:
-        major, minor = version.split(".")[:2]
-        return runtime_dir / "python" / "bin" / f"python{major}.{minor}"
+        # free-threaded build 二进制名带 t 后缀（python3.13t）
+        is_t = version.endswith("t")
+        base = version[:-1] if is_t else version
+        major, minor = base.split(".")[:2]
+        suffix = "t" if is_t else ""
+        return runtime_dir / "python" / "bin" / f"python{major}.{minor}{suffix}"
 
     @classmethod
     @override
@@ -317,9 +329,14 @@ def download_standalone(  # noqa: PLR0913
     *,
     stage: StageRecorder | None = None,
     macos_arch: str | None = None,
+    windows: bool = False,
     expected_hash: str | None = None,
 ) -> Path:
-    """下载 python-build-standalone tar.gz 到缓存目录，已存在则复用。"""
+    """下载 python-build-standalone tar.gz 到缓存目录，已存在则复用.
+
+    ``windows=True`` 时下载 Windows msvc 平台 tarball（用于自由线程版本
+    Windows 目标——python.org 不提供 freethreaded embed zip）。
+    """
     return StandaloneRuntime.download(
         version,
         cache_dir,
@@ -327,6 +344,7 @@ def download_standalone(  # noqa: PLR0913
         expected_hash=expected_hash,
         release_tag=release_tag,
         macos_arch=macos_arch,
+        windows=windows,
     )
 
 
@@ -343,6 +361,7 @@ def ensure_standalone(  # noqa: PLR0913
     *,
     stage: StageRecorder | None = None,
     macos_arch: str | None = None,
+    windows: bool = False,
     expected_hash: str | None = None,
 ) -> Path:
     """确保 runtime_dir 内有可用 python-build-standalone，返回 runtime_dir.
@@ -358,7 +377,13 @@ def ensure_standalone(  # noqa: PLR0913
         download_standalone_dispatch = _R("download_standalone", download_standalone)
         extract_standalone_dispatch = _R("extract_standalone", extract_standalone)
         tar_path = download_standalone_dispatch(
-            version, release_tag, cache_dir, stage=stage, macos_arch=macos_arch, expected_hash=expected_hash
+            version,
+            release_tag,
+            cache_dir,
+            stage=stage,
+            macos_arch=macos_arch,
+            windows=windows,
+            expected_hash=expected_hash,
         )
         extract_standalone_dispatch(tar_path, runtime_dir)
     return runtime_dir

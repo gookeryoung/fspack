@@ -194,8 +194,12 @@ def _precompile_pyc(  # noqa: PLR0912, PLR0913
     if target is Platform.WINDOWS:
         py_exe = runtime_dir / "python.exe"
     else:
-        major, minor = py_version.split(".")[:2]
-        py_exe = runtime_dir / "python" / "bin" / f"python{major}.{minor}"
+        # free-threaded build 二进制名带 t 后缀（python3.13t）
+        is_t = py_version.endswith("t")
+        base = py_version[:-1] if is_t else py_version
+        major, minor = base.split(".")[:2]
+        suffix = "t" if is_t else ""
+        py_exe = runtime_dir / "python" / "bin" / f"python{major}.{minor}{suffix}"
     site_packages = dist_dir / "site-packages"
     src_dir = dist_dir / "src"
     if not py_exe.is_file():

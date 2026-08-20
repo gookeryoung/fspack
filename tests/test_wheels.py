@@ -13,6 +13,7 @@ import pytest
 from fspack.exceptions import DependencyError
 from fspack.packaging.wheels import (
     _PIP_PYTHON_NAMES,
+    _build_pip_download_args,
     _build_sdist_wheels,
     _cleanup_partial_wheels,
     _convert_uv_output_to_pip_format,
@@ -130,6 +131,38 @@ def test_download_wheels_fallback_cmd_has_index(tmp_path: Path, monkeypatch: pyt
     assert "--no-index" in calls[0]
     assert "https://idx/simple" in calls[1]
     assert "--no-index" not in calls[1]
+
+
+def test_build_pip_download_args_standard() -> None:
+    """标准版 py_version 解析为 cp311 abi + 3.11 python-version."""
+    args = _build_pip_download_args("/py/python", "3.11.9", ("win_amd64",), Path("./.cache"))
+    assert "--python-version" in args
+    py_ver_idx = args.index("--python-version") + 1
+    abi_idx = args.index("--abi") + 1
+    assert args[py_ver_idx] == "3.11"
+    assert args[abi_idx] == "cp311"
+
+
+def test_build_pip_download_args_freethreaded_313t() -> None:
+    """free-threaded 版本 3.13.14t 解析为 cp313t abi + 3.13t python-version.
+
+    pip 24.0+ 识别 ``--python-version 3.13t`` 与 ``--abi cp313t`` 用于下载
+    free-threaded wheel（abi tag 与标准版 cp313 不互通）。
+    """
+    args = _build_pip_download_args("/py/python", "3.13.14t", ("win_amd64",), Path("./.cache"))
+    py_ver_idx = args.index("--python-version") + 1
+    abi_idx = args.index("--abi") + 1
+    assert args[py_ver_idx] == "3.13t"
+    assert args[abi_idx] == "cp313t"
+
+
+def test_build_pip_download_args_freethreaded_314t() -> None:
+    """free-threaded 版本 3.14.6t 解析为 cp314t abi + 3.14t python-version."""
+    args = _build_pip_download_args("/py/python", "3.14.6t", ("win_amd64",), Path("./.cache"))
+    py_ver_idx = args.index("--python-version") + 1
+    abi_idx = args.index("--abi") + 1
+    assert args[py_ver_idx] == "3.14t"
+    assert args[abi_idx] == "cp314t"
 
 
 def test_download_wheels_no_index_skips_network(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1287,6 +1320,27 @@ def test_resolve_with_uv_macos_platform(monkeypatch: pytest.MonkeyPatch) -> None
     cmd = captured["cmd"]
     assert "macos" in cmd
     assert "linux" not in cmd
+
+
+def test_resolve_with_uv_freethreaded_pyversion(monkeypatch: pytest.MonkeyPatch) -> None:
+    """free-threaded py_version（3.13.14t）传 --python-version 3.13t 给 uv pip compile.
+
+    uv 0.5+ 识别 ``3.13t`` 形式为 free-threaded build，按 cp313t abi tag 解析 wheel；
+    与标准版 ``3.13`` 不互通，确保 t 版本依赖图与 abi 一致。
+    """
+    captured: dict[str, list[str]] = {}
+
+    def fake_run(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, stdout="pkg==1.0\n", stderr="")
+
+    monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
+    ctx = _make_ctx([], py_version="3.13.14t", uv_path="/usr/bin/uv")
+    _resolve_with_uv(ctx, ("pkg",))
+    cmd = captured["cmd"]
+    assert "--python-version" in cmd
+    pv_idx = cmd.index("--python-version") + 1
+    assert cmd[pv_idx] == "3.13t"
 
 
 def test_resolve_with_uv_no_uv_raises(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2681,6 +2735,31 @@ def test_download_one_with_uv_macos_platform(tmp_path: Path, monkeypatch: pytest
     assert "--python-platform" in cmd
     assert "macos" in cmd
     assert "linux" not in cmd
+
+
+def test_download_one_with_uv_freethreaded_pyversion(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """free-threaded py_version（3.14.6t）传 --python-version 3.14t 给 uv pip download.
+
+    uv 按 free-threaded build 解析 wheel（cp314t abi tag），与标准版 cp314 不互通。
+    """
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    captured: dict[str, list[str]] = {}
+
+    def fake_run(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="Downloaded a.whl\n", stderr="")
+
+    monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
+    _download_one_with_uv(
+        "numpy==1.24.0",
+        _make_ctx([], cache, py_version="3.14.6t", uv_path="/usr/bin/uv"),
+        with_index=False,
+    )
+    cmd = captured["cmd"]
+    assert "--python-version" in cmd
+    pv_idx = cmd.index("--python-version") + 1
+    assert cmd[pv_idx] == "3.14t"
 
 
 def test_download_online_shares_uv_path_detection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

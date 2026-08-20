@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fspack._compat import override
+from fspack.config.versions import _split_t_suffix
 from fspack.exceptions import EmbedError, FspackError
 from fspack.packaging.runtime.download import RuntimeDownloader
 from fspack.packaging.runtime.extract import extract_zip_safe
@@ -86,8 +87,17 @@ def needs_win7_dll(py_version: str) -> bool:
     """该版本官方 python3XX.dll 是否含 Win8+ 静态导入、需替换为重编译版.
 
     3.9–3.11 官方 dll 仅缺 api-ms-win-core-path（shim 注入即可）；3.12 起
-    另含 kernel32 的 Win8+/Win8.1+ API，必须替换 dll。
+    另含 kernel32 的 Win8+/Win8.1+ API，必须替换 dll.
+
+    自由线程版本（PEP 703/779，``py_version`` 末尾 ``t`` 后缀）返回 ``False``：
+    上游 adang1345/PythonVista 未发布 free-threaded 重编译版 t 变体，
+    且 free-threaded 依赖 mimalloc 与新调度器，Win7 上游官方未测试。
+    显式调用 :func:`download_win7_embed` 请求 t 版本会抛 :class:`Win7DllError`，
+    等价于"检测到 win7 + t 版本即报错"的守卫。
     """
+    _, is_t = _split_t_suffix(py_version)
+    if is_t:
+        return False
     parts = py_version.split(".")
     return (int(parts[0]), int(parts[1])) >= (3, 12)
 
@@ -147,10 +157,19 @@ def download_win7_embed(version: str, cache_dir: Path, *, stage: StageRecorder |
     """按清单 sha256 下载 win7 embed zip 到缓存目录，已缓存且哈希匹配则复用.
 
     版本未收录清单时抛 :class:`Win7DllError`（防止下载不可信的未知版本）。
+    自由线程版本（``t`` 后缀）显式拒绝：上游未发布 t 变体重编译版，
+    free-threaded build 仅支持 Win10+ 目标。
     """
     expected = WIN7_EMBED_SHA256.get(version)
     if expected is None:
         known = "、".join(sorted(WIN7_EMBED_SHA256))
+        _, is_t = _split_t_suffix(version)
+        if is_t:
+            raise Win7DllError(
+                f"free-threaded build ({version}) 不支持 win7 目标："
+                f"上游重编译版（adang1345/PythonVista）未发布 t 变体，"
+                f"free-threaded 仅支持 Win10+。请切换标准版（如 3.13.14）"
+            )
         raise Win7DllError(
             f"Python {version} 不在 win7 重编译版清单（收录: {known}），"
             f"版本须与 KNOWN_EMBED_VERSIONS 对齐且 patch 完全一致，请更新 WIN7_EMBED_SHA256"

@@ -21,12 +21,15 @@ from fspack.config import (
     MirrorConfig,
     ProjectInfo,
     _satisfies,
+    _split_t_suffix,
+    _ver_key,
     build_options_from_defaults,
     clear_project_cache,
     detect_entry,
     expand_extras,
     get_mirror,
     infer_app_type,
+    nuitka_version_for,
     parse_project,
     resolve_py_version,
 )
@@ -636,6 +639,47 @@ def test_resolve_py_version_python_version_314_mapping(tmp_path: Path) -> None:
     assert resolve_py_version(tmp_path, None, None) == "3.14.6"
 
 
+def test_resolve_py_version_python_version_freethreaded_313t(tmp_path: Path) -> None:
+    """.python-version=3.13t 映射到 3.13.14t（free-threaded build，PEP 703/779）."""
+    (tmp_path / ".python-version").write_text("3.13t")
+    assert resolve_py_version(tmp_path, None, None) == "3.13.14t"
+
+
+def test_resolve_py_version_python_version_freethreaded_314t(tmp_path: Path) -> None:
+    """.python-version=3.14t 映射到 3.14.6t（free-threaded build，PEP 779 正式支持）."""
+    (tmp_path / ".python-version").write_text("3.14t")
+    assert resolve_py_version(tmp_path, None, None) == "3.14.6t"
+
+
+def test_resolve_py_version_python_version_freethreaded_full_passes_through(tmp_path: Path) -> None:
+    """.python-version=3.13.14t 完整版本号直接透传（无映射）."""
+    (tmp_path / ".python-version").write_text("3.13.14t")
+    assert resolve_py_version(tmp_path, None, None) == "3.13.14t"
+
+
+def test_split_t_suffix() -> None:
+    """_split_t_suffix 剥离 free-threaded build 的 t 后缀."""
+    assert _split_t_suffix("3.13.14") == ("3.13.14", False)
+    assert _split_t_suffix("3.13.14t") == ("3.13.14", True)
+    assert _split_t_suffix("3.13t") == ("3.13", True)
+    assert _split_t_suffix("3.14") == ("3.14", False)
+
+
+def test_ver_key_freethreaded_t_suffix() -> None:
+    """_ver_key 处理 free-threaded 版本号末尾 t 后缀（int('14t') 会抛 ValueError）."""
+    assert _ver_key("3.13.14") == (3, 13, 14)
+    assert _ver_key("3.13.14t") == (3, 13, 14)
+    assert _ver_key("3.13t") == (3, 13)
+
+
+def test_nuitka_version_for_freethreaded() -> None:
+    """nuitka_version_for 识别 t 后缀查表 3.13t/3.14t 键."""
+    assert nuitka_version_for("3.13.14t") == "4.1.3"
+    assert nuitka_version_for("3.14.6t") == "4.1.3"
+    assert nuitka_version_for("3.13.14") == "4.1.3"  # 标准版仍命中
+    assert nuitka_version_for("3.14.6") == "4.1.3"
+
+
 def test_resolve_py_version_python_version_unknown_short_falls_back(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -815,6 +859,19 @@ def test_satisfies_unparseable_specifiers_warns_and_passes(tmp_path: Path, caplo
     with caplog.at_level("WARNING", logger="fspack.config.versions"):
         assert _satisfies("3.11.9", "abc") is True
     assert "无法解析" in caplog.text
+
+
+def test_satisfies_freethreaded_t_suffix() -> None:
+    """free-threaded 版本号末尾 't' 后缀：剥离后按纯数字版本判定.
+
+    requires-python 规范符不区分 t 变体（标准版与 free-threaded 版本号主体相同）。
+    """
+    assert _satisfies("3.13.14t", ">=3.13") is True
+    assert _satisfies("3.13.14t", ">=3.14") is False
+    assert _satisfies("3.13.14t", "==3.13.*") is True
+    assert _satisfies("3.14.6t", ">=3.13,<3.15") is True
+    assert _satisfies("3.14.6t", "~=3.14") is True
+    assert _satisfies("3.12.10", "~=3.13") is False  # 标准版回归测试
 
 
 def test_resolve_py_version_wildcard_requires_python(tmp_path: Path) -> None:

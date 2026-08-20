@@ -378,9 +378,18 @@ class ProjectInfo:
 
     @property
     def py_xy(self) -> str:
-        """形如 python311 的版本前缀."""
-        major, minor = self.py_version.split(".")[:2]
-        return f"python{major}{minor}"
+        """形如 ``python311`` / ``python313t`` 的版本前缀.
+
+        free-threaded build（``py_version`` 末尾 ``t`` 后缀）返回
+        ``python313t``，与 ``python313t.dll`` 文件名一致；loader 用本字段
+        拼接 ``runtime\\\\{py_xy}.dll`` 路径，必须与 runtime 实际 DLL 名一致。
+        """
+        # 内联 t 后缀剥离：避免 models → versions 引入新依赖（versions 已被
+        # parsing 间接依赖 models，反向依赖会形成循环）
+        is_t = self.py_version.endswith("t")
+        base = self.py_version[:-1] if is_t else self.py_version
+        major, minor = base.split(".")[:2]
+        return f"python{major}{minor}{'t' if is_t else ''}"
 
     @property
     def all_entries(self) -> tuple[EntryPoint, ...]:

@@ -38,6 +38,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Sequence
 
+from fspack.config.versions import _split_t_suffix
 from fspack.exceptions import DependencyError
 from fspack.packaging.wheels.cache import _deps_cache_key, _load_deps_cache, _save_deps_cache
 from fspack.packaging.wheels.markers import _filter_by_python_version
@@ -236,8 +237,16 @@ def _build_pip_download_args(
     platform_tags: Sequence[str],
     cache_dir: Path,
 ) -> list[str]:
-    """构造 ``pip download`` 基础参数（不含 ``-i index`` 与包名）."""
-    major, minor = py_version.split(".")[:2]
+    """构造 ``pip download`` 基础参数（不含 ``-i index`` 与包名）.
+
+    自由线程版本（PEP 703/779，``py_version`` 末尾 ``t`` 后缀）：
+    - ``--python-version`` 传 ``3.13t``（pip 24.0+ 识别 t 后缀）
+    - ``--abi`` 传 ``cp313t``（free-threaded wheel abi tag，与标准版 cp313 不互通）
+    """
+    base, is_t = _split_t_suffix(py_version)
+    major, minor = base.split(".")[:2]
+    py_ver_arg = f"{major}.{minor}{'t' if is_t else ''}"
+    abi_arg = f"cp{major}{minor}{'t' if is_t else ''}"
     platform_args: list[str] = []
     for tag in platform_tags:
         platform_args.extend(["--platform", tag])
@@ -252,9 +261,9 @@ def _build_pip_download_args(
         str(cache_dir),
         *platform_args,
         "--python-version",
-        f"{major}.{minor}",
+        py_ver_arg,
         "--abi",
-        f"cp{major}{minor}",
+        abi_arg,
         "--implementation",
         "cp",
         "--only-binary=:all:",

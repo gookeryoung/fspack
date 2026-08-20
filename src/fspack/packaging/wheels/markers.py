@@ -14,6 +14,8 @@ import logging
 import re
 from typing import Sequence
 
+from fspack.config.versions import _split_t_suffix
+
 __all__ = [
     "_MARKER_PY_VER_RE",
     "_eval_python_version_marker",
@@ -37,8 +39,13 @@ def _filter_by_python_version(packages: Sequence[str], py_version: str) -> list[
 
     仅处理 ``python_version`` 标记；其他标记（如 ``platform_system``）视为 True
     （保守保留，让 pip 自行处理）。
+
+    自由线程版本（``py_version`` 末尾 ``t`` 后缀）：剥离后缀按纯数字版本比较，
+    环境标记 ``python_version`` 不区分 t 变体（``requires-python>=3.13`` 同时
+    匹配标准版 3.13 与 free-threaded 3.13t）。
     """
-    py_parts = tuple(int(x) for x in py_version.split(".")[:2])
+    base, _ = _split_t_suffix(py_version)
+    py_parts = tuple(int(x) for x in base.split(".")[:2])
     result: list[str] = []
     for pkg in packages:
         if ";" not in pkg:

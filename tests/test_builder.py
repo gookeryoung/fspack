@@ -1057,8 +1057,8 @@ def test_trim_stdlib_linux_records_saved_bytes(tmp_path: Path) -> None:
     assert record.skipped == 2  # test + ensurepip
 
 
-def test_trim_stdlib_windows_skips(tmp_path: Path) -> None:
-    """Windows embed 标准库在 zip 内已精简，跳过不剥离."""
+def test_trim_stdlib_windows_standard_skips(tmp_path: Path) -> None:
+    """Windows 标准版 embed zip 标准库在 zip 内已精简，跳过不剥离."""
     runtime = tmp_path / "runtime"
     stdlib = runtime / "python" / "lib" / "python3.11"
     (stdlib / "test").mkdir(parents=True)  # 构造验证跳过
@@ -1066,8 +1066,39 @@ def test_trim_stdlib_windows_skips(tmp_path: Path) -> None:
     st = StageRecorder("精简标准库")
     _trim_stdlib(runtime, "3.11.9", Platform.WINDOWS, st)
 
-    # Windows 模式不剥离
+    # Windows 标准版（embed zip）不剥离
     assert (stdlib / "test").exists()
+    record = st._finalize()
+    assert record.bytes_saved == 0
+
+
+def test_trim_stdlib_windows_t_strips_lib_at_root(tmp_path: Path) -> None:
+    """Windows 自由线程版（t 后缀）走 standalone 路径，剥离 runtime/Lib/ 无用目录."""
+    runtime = tmp_path / "runtime"
+    # python-build-standalone Windows freethreaded tarball 解压扁平化后标准库在 runtime/Lib/
+    stdlib = runtime / "Lib"
+    for d in ("test", "ensurepip", "idlelib", "pydoc_data", "turtledemo", "json"):
+        (stdlib / d).mkdir(parents=True)
+    (stdlib / "json" / "__init__.py").write_text("")  # 有用模块应保留
+
+    st = StageRecorder("精简标准库")
+    _trim_stdlib(runtime, "3.13.14t", Platform.WINDOWS, st)
+
+    assert not (stdlib / "test").exists()
+    assert not (stdlib / "ensurepip").exists()
+    assert not (stdlib / "idlelib").exists()
+    assert not (stdlib / "pydoc_data").exists()
+    assert not (stdlib / "turtledemo").exists()
+    assert (stdlib / "json").exists()  # 保留有用模块
+
+
+def test_trim_stdlib_windows_t_missing_lib_skips(tmp_path: Path) -> None:
+    """Windows 自由线程版 runtime/Lib/ 不存在时不报错."""
+    runtime = tmp_path / "runtime"
+    # 不创建 Lib 目录（缓存命中场景或扁平化前已删除）
+
+    st = StageRecorder("精简标准库")
+    _trim_stdlib(runtime, "3.14.6t", Platform.WINDOWS, st)
     record = st._finalize()
     assert record.bytes_saved == 0
 
@@ -3409,6 +3440,188 @@ def test_prepare_runtime_skips_dll_replace_on_linux(tmp_path: Path, monkeypatch:
     runtime_stage._prepare_runtime(ctx)
     assert not called["ensure"]
     assert not called["inject"]
+
+
+# --- _flatten_python_dir & _prepare_windows_t_runtime 测试 ---
+
+
+def test_flatten_python_dir_moves_entries_to_root(tmp_path: Path) -> None:
+    """_flatten_python_dir 把 python/ 子目录内容上移到 runtime_dir 根并删 python/."""
+    from fspack.packaging.pipeline.runtime_stage import _flatten_python_dir
+
+    runtime = tmp_path / "runtime"
+    python_sub = runtime / "python"
+    python_sub.mkdir(parents=True)
+    (python_sub / "python.exe").write_bytes(b"exe")
+    (python_sub / "python313t.dll").write_bytes(b"dll")
+    (python_sub / "Lib").mkdir()
+    (python_sub / "Lib" / "os.py").write_text("")
+    (python_sub / "DLLs").mkdir()
+    (python_sub / "DLLs" / "_tkinter.pyd").write_bytes(b"pyd")
+
+    _flatten_python_dir(runtime)
+
+    assert not python_sub.exists()  # python/ 子目录已删
+    assert (runtime / "python.exe").is_file()
+    assert (runtime / "python313t.dll").is_file()
+    assert (runtime / "Lib" / "os.py").is_file()
+    assert (runtime / "DLLs" / "_tkinter.pyd").is_file()
+
+
+def test_flatten_python_dir_idempotent_no_python_subdir(tmp_path: Path) -> None:
+    """_flatten_python_dir 幂等：python/ 不存在时直接返回不报错（缓存命中场景）."""
+    from fspack.packaging.pipeline.runtime_stage import _flatten_python_dir
+
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "python313t.dll").write_bytes(b"dll")  # runtime 已扁平化
+
+    _flatten_python_dir(runtime)
+    assert (runtime / "python313t.dll").is_file()
+    assert not (runtime / "python").exists()
+
+
+def test_flatten_python_dir_overrides_existing_dest(tmp_path: Path) -> None:
+    """_flatten_python_dir 遇到 dest 已存在时先清理再移动（重复构建残留场景）."""
+    from fspack.packaging.pipeline.runtime_stage import _flatten_python_dir
+
+    runtime = tmp_path / "runtime"
+    python_sub = runtime / "python"
+    python_sub.mkdir(parents=True)
+    (python_sub / "python.exe").write_bytes(b"new")
+    # runtime 根已有残留的 python.exe（旧构建未清）
+    (runtime / "python.exe").write_bytes(b"old")
+    (python_sub / "Lib").mkdir()
+    (python_sub / "Lib" / "x.py").write_text("")
+    (runtime / "Lib").mkdir()
+    (runtime / "Lib" / "stale.py").write_text("")  # 残留目录
+
+    _flatten_python_dir(runtime)
+
+    assert (runtime / "python.exe").read_bytes() == b"new"  # 覆盖为最新
+    assert not (runtime / "python").exists()
+    assert (runtime / "Lib" / "x.py").is_file()
+    assert not (runtime / "Lib" / "stale.py").exists()  # 残留被清理
+
+
+def _make_windows_t_context(
+    tmp_path: Path,
+    py_version: str = "3.13.14t",
+    *,
+    no_stdlib_trim: bool = False,
+) -> tuple[BuildContext, Path]:
+    """构造 Windows 自由线程版本 BuildContext 用于 _prepare_windows_t_runtime 测试."""
+    from fspack.config import BuildConfig
+    from fspack.progress import BuildTracker
+
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    info = ProjectInfo.from_dir(tmp_path, py_version)
+    cfg = BuildConfig(
+        project_dir=tmp_path,
+        dist_dir=tmp_path / "dist",
+        embed_cache_dir=tmp_path / "cache",
+        mirror=get_mirror("huawei"),
+        target=Platform.WINDOWS,
+    )
+    runtime_dir = tmp_path / "dist" / "runtime"
+    runtime_dir.mkdir(parents=True)
+    ctx = BuildContext(
+        tracker=BuildTracker(),
+        info=info,
+        cfg=cfg,
+        opts=BuildOptions(no_stdlib_trim=no_stdlib_trim),
+        runtime_dir=runtime_dir,
+    )
+    return ctx, runtime_dir
+
+
+def test_prepare_windows_t_runtime_cache_hit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """runtime 已就绪（python3XXt.dll 存在）时两 stage 均 hit_cache，不下载不解压."""
+    from fspack.packaging.pipeline import runtime_stage
+    from fspack.packaging.runtime import embed_dirname
+
+    ctx, runtime_dir = _make_windows_t_context(tmp_path, "3.13.14t")
+    # 标记 runtime 已就绪：写入 python313t.dll
+    (runtime_dir / f"{embed_dirname('3.13.14t')}.dll").write_bytes(b"ready")
+
+    download_calls: list[str] = []
+    extract_calls: list[Path] = []
+
+    def fake_download(*args: object, **kwargs: object) -> Path:
+        download_calls.append("download")
+        return tmp_path / "fake.tar.gz"
+
+    def fake_extract(_tar: Path, _dest: Path) -> None:
+        extract_calls.append(_tar)
+
+    monkeypatch.setattr(runtime_stage, "_default_download_standalone", fake_download)
+    monkeypatch.setattr(runtime_stage, "_default_extract_standalone", fake_extract)
+    monkeypatch.setattr(runtime_stage, "needs_win7_dll", lambda v: False)
+    monkeypatch.setattr(runtime_stage, "_needs_win7_compat_dll", lambda v: False)
+
+    site_packages = runtime_stage._prepare_windows_t_runtime(ctx)
+    assert download_calls == []  # runtime 已就绪，不下载
+    assert extract_calls == []  # 不解压
+    assert site_packages == ctx.cfg.dist_dir / "site-packages"
+
+
+def test_prepare_windows_t_runtime_download_extract_flatten(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """runtime 未就绪时下载 standalone freethreaded tarball 并扁平化 python/ 子目录."""
+    from fspack.packaging.pipeline import runtime_stage
+    from fspack.packaging.runtime import embed_dirname
+
+    ctx, runtime_dir = _make_windows_t_context(tmp_path, "3.13.14t")
+    tar_path = tmp_path / "fake-standalone.tar.gz"
+    tar_path.write_bytes(b"tarball")
+
+    def fake_download(*args: object, **kwargs: object) -> Path:
+        # 验证 windows=True 被传递
+        assert kwargs.get("windows") is True
+        return tar_path
+
+    def fake_extract(_tar: Path, dest: Path) -> None:
+        # 模拟 python-build-standalone tarball 解压：顶层是 python/ 子目录
+        python_sub = dest / "python"
+        python_sub.mkdir(parents=True)
+        (python_sub / "python.exe").write_bytes(b"exe")
+        (python_sub / f"{embed_dirname('3.13.14t')}.dll").write_bytes(b"dll")
+        (python_sub / "Lib").mkdir()
+        (python_sub / "Lib" / "os.py").write_text("")
+        (python_sub / "DLLs").mkdir()
+
+    monkeypatch.setattr(runtime_stage, "_default_download_standalone", fake_download)
+    monkeypatch.setattr(runtime_stage, "_default_extract_standalone", fake_extract)
+    monkeypatch.setattr(runtime_stage, "needs_win7_dll", lambda v: False)
+    monkeypatch.setattr(runtime_stage, "_needs_win7_compat_dll", lambda v: False)
+
+    site_packages = runtime_stage._prepare_windows_t_runtime(ctx)
+    assert site_packages == ctx.cfg.dist_dir / "site-packages"
+    # 扁平化后 python/ 子目录被删，DLL/exe/Lib 移到 runtime_dir 根
+    assert not (runtime_dir / "python").exists()
+    assert (runtime_dir / "python.exe").is_file()
+    assert (runtime_dir / f"{embed_dirname('3.13.14t')}.dll").is_file()
+    assert (runtime_dir / "Lib" / "os.py").is_file()
+    assert (runtime_dir / "DLLs").is_dir()
+
+
+def test_prepare_runtime_dispatches_to_windows_t_branch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_prepare_runtime 对 Windows+t 版本调用 _prepare_windows_t_runtime（独立分支）."""
+    from fspack.packaging.pipeline import runtime_stage
+
+    ctx, _ = _make_windows_t_context(tmp_path, "3.13.14t", no_stdlib_trim=True)
+    called: dict[str, object] = {}
+
+    def fake_prepare_t(ctx: BuildContext) -> Path:
+        called["t_branch"] = True
+        return ctx.cfg.dist_dir / "site-packages"
+
+    monkeypatch.setattr(runtime_stage, "_prepare_windows_t_runtime", fake_prepare_t)
+    monkeypatch.setattr(runtime_stage, "needs_win7_dll", lambda v: False)
+    monkeypatch.setattr(runtime_stage, "_needs_win7_compat_dll", lambda v: False)
+
+    runtime_stage._prepare_runtime(ctx)
+    assert called.get("t_branch") is True
 
 
 # --- _build_entry_loaders 并行编译测试（iter-133）---

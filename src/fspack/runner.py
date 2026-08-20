@@ -15,6 +15,7 @@ import subprocess
 from pathlib import Path
 
 from fspack.config import AppType, EntryPoint, ProjectInfo
+from fspack.config.versions import _split_t_suffix
 from fspack.exceptions import FspackError
 
 __all__ = ["run"]
@@ -148,8 +149,12 @@ def _find_bin_python(dist: Path, py_version: str | None) -> Path | None:
     bin_dir = dist / "runtime" / "python" / "bin"
     entries = sorted(bin_dir.glob("python*"))
     if py_version:
-        major, minor = [*py_version.split("."), "", ""][:2]
-        candidates = {f"python{major}.{minor}", f"python{major}", "python3", "python"}
+        # 剥离 free-threaded build 的 t 后缀：astral-sh standalone 二进制名
+        # 在 free-threaded 变体下为 python3.13t（与 python.org 一致）
+        base, is_t = _split_t_suffix(py_version)
+        major, minor = [*base.split("."), "", ""][:2]
+        suffix = "t" if is_t else ""
+        candidates = {f"python{major}.{minor}{suffix}", f"python{major}", "python3", "python"}
         exact = next((p for p in entries if p.name in candidates), None)
         if exact is not None:
             return exact

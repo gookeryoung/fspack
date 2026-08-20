@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 # net.py 顶部已轻量化（rich.progress/console/StageRecorder 延迟导入），加载 builtin
 # 触发 net 模块定义不再连带加载 rich.progress。
 from fspack.config import is_offline
+from fspack.config.versions import _split_t_suffix
 from fspack.exceptions import BuiltinError
 from fspack.packaging.net import Downloader
 from fspack.packaging.runtime import STANDALONE_BASE_URL, STANDALONE_RELEASE_TAG
@@ -105,8 +106,11 @@ class TkinterBundler:
             return
 
         # embed 版本 → 同 minor 的 standalone 版本（ABI 兼容，避免拼出不存在的 URL）
-        minor = ".".join(version.split(".")[:2])
-        standalone_ver = KNOWN_STANDALONE_VERSIONS.get(minor, version)
+        # free-threaded build（t 后缀）查 '3.13t' 键，命中 '3.13.14t' 后用于
+        # standalone tarball 下载与解压目录名（-freethreaded-install_only 段，版本号无 t）
+        base, is_t = _split_t_suffix(version)
+        minor_key = ".".join(base.split(".")[:2]) + ("t" if is_t else "")
+        standalone_ver = KNOWN_STANDALONE_VERSIONS.get(minor_key, version)
 
         tkinter_cache_dir = cache_dir / "tkinter"
         tkinter_cache_dir.mkdir(parents=True, exist_ok=True)

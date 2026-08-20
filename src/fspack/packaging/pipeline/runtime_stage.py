@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -48,9 +49,11 @@ if TYPE_CHECKING:
     from fspack.progress import StageRecorder
 
 __all__ = [
+    "_flatten_python_dir",
     "_prepare_runtime",
     "_prepare_standalone_runtime",
     "_prepare_windows_runtime",
+    "_prepare_windows_t_runtime",
     "_slim_runtime",
 ]
 
@@ -85,7 +88,10 @@ def _prepare_runtime(ctx: BuildContext) -> Path:
 
     - Linux：下载 python-build-standalone tar.gz，解压到 ``runtime/python``
     - macOS：下载 python-build-standalone tar.gz（x86_64 或 arm64），解压到 ``runtime/python``
-    - Windows：下载 embed python zip，解压到 ``runtime``
+    - Windows 标准版：下载 embed python zip，解压到 ``runtime``
+    - Windows 自由线程版（``py_version`` 末尾 ``t``）：下载 python-build-standalone
+      Windows freethreaded tarball，解压后扁平化 ``python/`` 子目录到 ``runtime`` 根
+      （python.org 不提供 freethreaded embed zip）
 
     runtime 已就绪（dll/python bin 存在）时跳过下载解压，两 stage 均 ``hit_cache``。
     """
@@ -94,6 +100,8 @@ def _prepare_runtime(ctx: BuildContext) -> Path:
         site_packages = _prepare_standalone_runtime(ctx)
     elif target is Platform.MACOS:
         site_packages = _prepare_standalone_runtime(ctx, macos_arch=_detect_macos_arch())
+    elif target is Platform.WINDOWS and ctx.info.py_version.endswith("t"):
+        site_packages = _prepare_windows_t_runtime(ctx)
     else:
         site_packages = _prepare_windows_runtime(ctx)
     site_packages.mkdir(parents=True, exist_ok=True)
@@ -111,7 +119,8 @@ def _prepare_runtime(ctx: BuildContext) -> Path:
         _inject_win7_compat_dll(ctx.runtime_dir)
 
     # 标准库精简：剥离 standalone 中的 test/ensurepip/idlelib 等运行时无用模块。
-    # Windows embed 标准库在 python3XX.zip 内（官方已精简），阶段内自动跳过。
+    # Windows embed 标准库在 python3XX.zip 内（官方已精简），阶段内自动跳过；
+    # Windows 自由线程版（走 standalone 路径，Lib/ 解压）与 Linux/macOS 一样精简。
     if not ctx.opts.no_stdlib_trim:
         with ctx.tracker.stage("精简标准库") as st:
             _trim_stdlib(ctx.runtime_dir, ctx.info.py_version, target, st)
@@ -167,8 +176,12 @@ def _prepare_standalone_runtime(ctx: BuildContext, *, macos_arch: str | None = N
     """
     download_standalone = _S("download_standalone", _default_download_standalone)
     extract_standalone = _S("extract_standalone", _default_extract_standalone)
-    major, minor = ctx.info.py_version.split(".")[:2]
-    python_bin = ctx.runtime_dir / "python" / "bin" / f"python{major}.{minor}"
+    # free-threaded build 二进制名带 t 后缀（python3.13t）
+    is_t = ctx.info.py_version.endswith("t")
+    base = ctx.info.py_version[:-1] if is_t else ctx.info.py_version
+    major, minor = base.split(".")[:2]
+    suffix = "t" if is_t else ""
+    python_bin = ctx.runtime_dir / "python" / "bin" / f"python{major}.{minor}{suffix}"
     runtime_ready = python_bin.is_file()
     standalone_cache = standalone_cache_dir()
     tar_path = None
@@ -226,6 +239,78 @@ def _prepare_windows_runtime(ctx: BuildContext) -> Path:
             extract_embed(zip_path, ctx.runtime_dir)
             st.processed(1)
             st.set_detail("embed python")
+    return ctx.cfg.dist_dir / "site-packages"
+
+
+def _flatten_python_dir(runtime_dir: Path) -> None:
+    """将 ``runtime_dir/python/`` 子目录所有内容上移到 ``runtime_dir`` 根.
+
+    python-build-standalone tarball 解压后顶层是 ``python/`` 子目录，含
+    ``python.exe``/``python3XX.dll``/``Lib/``/``DLLs/`` 等。Windows loader
+    与 pth 文件预期 DLL 在 ``runtime_dir`` 根（与 embed zip 结构一致），
+    故需扁平化：把 ``python/*`` 全部移到 ``runtime_dir/``，再删空的 ``python/``。
+
+    幂等：``python/`` 不存在时直接返回（缓存命中场景）。
+    """
+    python_subdir = runtime_dir / "python"
+    if not python_subdir.is_dir():
+        return
+    for entry in python_subdir.iterdir():
+        dest = runtime_dir / entry.name
+        if dest.exists():
+            # 同名条目已存在于 runtime_dir 根（如重复构建残留），先清理
+            if dest.is_dir():
+                shutil.rmtree(dest, ignore_errors=True)
+            else:
+                dest.unlink(missing_ok=True)
+        shutil.move(str(entry), str(dest))
+    # 删除空的 python/ 子目录（ignore_errors 容忍 Windows 上偶发的句柄占用）
+    shutil.rmtree(python_subdir, ignore_errors=True)
+
+
+def _prepare_windows_t_runtime(ctx: BuildContext) -> Path:
+    """下载 python-build-standalone freethreaded Windows tarball 并扁平化到 runtime_dir.
+
+    python.org 不提供 freethreaded embed zip（``python-3.X.Yt-embed-amd64.zip``
+    不存在），Windows 自由线程版本必须改用 astral-sh python-build-standalone 的
+    ``-freethreaded-install_only`` tarball。该 tarball 解压后顶层为 ``python/``
+    子目录，扁平化后 DLL/exe/Lib 移到 ``runtime_dir`` 根，与 embed 结构一致，
+    使下游 loader（``runtime\\python3XXt.dll``）与 pth 文件能直接定位。
+
+    runtime 已就绪（``python3XXt.dll`` 存在）时跳过下载解压，两 stage 均
+    ``hit_cache``。
+    """
+    download_standalone = _S("download_standalone", _default_download_standalone)
+    extract_standalone = _S("extract_standalone", _default_extract_standalone)
+    dll_marker = ctx.runtime_dir / f"{embed_dirname(ctx.info.py_version)}.dll"
+    runtime_ready = dll_marker.is_file()
+    tar_path = None
+    with ctx.tracker.stage("下载运行时") as st:
+        if runtime_ready:
+            st.hit_cache()
+            st.set_detail("runtime 已就绪")
+        else:
+            tar_path = download_standalone(
+                ctx.info.py_version,
+                STANDALONE_RELEASE_TAG,
+                standalone_cache_dir(),
+                stage=st,
+                windows=True,
+            )
+            st.set_detail("python-build-standalone freethreaded")
+    with ctx.tracker.stage("解压运行时") as st:
+        if runtime_ready:
+            st.hit_cache()
+            st.set_detail("runtime 已就绪")
+        else:
+            if tar_path is None:
+                # runtime 未就绪时 download_standalone 应返回路径或抛异常，
+                # 此分支仅防御（assert 在 python -O 下会被剥离）
+                raise EmbedError("下载运行时未返回 python-build-standalone tar.gz 路径")
+            extract_standalone(tar_path, ctx.runtime_dir)
+            _flatten_python_dir(ctx.runtime_dir)
+            st.processed(1)
+            st.set_detail("python-build-standalone freethreaded")
     return ctx.cfg.dist_dir / "site-packages"
 
 

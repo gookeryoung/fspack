@@ -86,7 +86,8 @@ def _is_windows_7() -> bool:
 def _format_requires_python(python_version: str) -> str:
     """根据用户指定的 Python 版本构造 ``requires-python`` 约束字符串.
 
-    :param python_version: Python 版本号（``X.Y`` 格式，如 ``3.8``/``3.10``）
+    :param python_version: Python 版本号（``X.Y`` 格式，如 ``3.8``/``3.10``/
+        ``3.13t`` 自由线程版本）
     :return: ``requires-python`` 约束（如 ``>=3.10``），只设下限不设上界，
         保留用户主动选择版本时的灵活性
     :raises ValueError: 版本号格式无效（非 ``X.Y`` 格式或非数字）
@@ -96,10 +97,16 @@ def _format_requires_python(python_version: str) -> str:
     - ``3.8`` → ``>=3.8``
     - ``3.10`` → ``>=3.10``
     - ``3.11`` → ``>=3.11``
+    - ``3.13t`` → ``>=3.13``（free-threaded build 的 t 后缀仅影响运行时
+        选择，``requires-python`` 不区分 t 变体，标准版与 free-threaded
+        版本号主体相同，``>=3.13`` 同时匹配两者）
     """
-    parts = python_version.split(".")
+    # 剥离 free-threaded build 的 t 后缀（PEP 703/779），requires-python
+    # 不区分 t 变体——下游 _satisfies 比较时也剥离后缀按纯数字版本判定
+    base = python_version[:-1] if python_version.endswith("t") else python_version
+    parts = base.split(".")
     if len(parts) < 2 or not parts[0].isdigit() or not parts[1].isdigit():
-        raise ValueError(f"无效的 Python 版本号: {python_version!r}，应为 X.Y 格式（如 3.8、3.10）")
+        raise ValueError(f"无效的 Python 版本号: {python_version!r}，应为 X.Y 格式（如 3.8、3.10、3.13t）")
     major, minor = parts[0], parts[1]
     return f">={major}.{minor}"
 

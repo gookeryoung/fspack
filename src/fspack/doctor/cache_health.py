@@ -424,10 +424,14 @@ def _scan_nuitka_health(cache_dir: Path, *, delete_corrupt: bool = False) -> Cac
             continue  # 非版本目录（可能是 README/.DS_Store）
 
         version = name
-        # 检查 python 可执行存在性（Windows: python/python.exe，Linux: python/bin/pythonX.Y）
-        major, minor = version.split(".")[:2]
+        # 检查 python 可执行存在性（Windows: python/python.exe，Linux: python/bin/pythonX.Y[或 pythonX.Yt]）
+        # free-threaded build 二进制名带 t 后缀（python3.13t）
+        is_t = version.endswith("t")
+        base = version[:-1] if is_t else version
+        major, minor = base.split(".")[:2]
+        suffix = "t" if is_t else ""
         win_py = entry / "python" / "python.exe"
-        linux_py = entry / "python" / "bin" / f"python{major}.{minor}"
+        linux_py = entry / "python" / "bin" / f"python{major}.{minor}{suffix}"
         if not win_py.is_file() and not linux_py.is_file():
             # 并发竞态防护：目录名匹配版本正则但暂无 python 可执行，可能是
             # 另一进程正在解压 standalone（解压耗时可达分钟级）。目录 mtime

@@ -29,6 +29,7 @@ import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, Sequence
 
+from fspack.config.versions import _split_t_suffix
 from fspack.exceptions import DependencyError
 
 if TYPE_CHECKING:
@@ -188,7 +189,11 @@ def _resolve_with_uv(ctx: DownloadContext, packages: Sequence[str], *, generate_
     """
     if ctx.uv_path is None:
         raise DependencyError("未找到 uv，无法执行在线依赖解析")
-    major, minor = ctx.py_version.split(".")[:2]
+    # 自由线程版本（py_version 末尾 't' 后缀）：uv pip compile 接受 --python-version 3.13t，
+    # uv 内部识别为 free-threaded build 并按 cp313t abi 解析 wheel（uv 0.5+ 支持）。
+    base, is_t = _split_t_suffix(ctx.py_version)
+    major, minor = base.split(".")[:2]
+    py_ver_arg = f"{major}.{minor}{'t' if is_t else ''}"
     # uv 的 --python-platform 只有 windows/linux/macos 粗粒度，按标签映射
     py_platform = _uv_python_platform(ctx.platform_tags)
     cmd: list[str] = [
@@ -196,7 +201,7 @@ def _resolve_with_uv(ctx: DownloadContext, packages: Sequence[str], *, generate_
         "pip",
         "compile",
         "--python-version",
-        f"{major}.{minor}",
+        py_ver_arg,
         "--python-platform",
         py_platform,
         "--no-header",

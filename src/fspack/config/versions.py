@@ -27,6 +27,7 @@ __all__ = [
     "KNOWN_EMBED_VERSIONS",
     "KNOWN_STANDALONE_VERSIONS",
     "NUITKA_VERSIONS",
+    "_split_t_suffix",
     "known_versions",
     "nuitka_version_for",
     "resolve_py_version",
@@ -47,6 +48,15 @@ KNOWN_EMBED_VERSIONS: dict[str, str] = {
     "3.12": "3.12.10",
     "3.13": "3.13.14",
     "3.14": "3.14.6",
+    # free-threaded build（PEP 703/779）：版本号末尾 't' 后缀标记，仅 Win10+ 目标。
+    # python.org 官方**不**提供 freethreaded embed zip（``python-3.13.Xt-embed-amd64.zip``
+    # 不存在），仅随完整 installer 提供 ``python-3.13.Xt-amd64.exe``（含 t 变体运行时）。
+    # Windows+t 目标改用 astral-sh python-build-standalone 的 ``-freethreaded-install_only``
+    # tarball（见 KNOWN_STANDALONE_VERSIONS），DLL 名 python313t.dll（非 python313.dll）。
+    # 此处保留 3.13t/3.14t 键供版本解析/展示，但 KNOWN_EMBED_VERSIONS 不参与 t 版本下载。
+    # 不支持 Win7：上游重编译版（adang1345/PythonVista）无 t 变体，检测到 Win7 目标直接报错。
+    "3.13t": "3.13.14t",
+    "3.14t": "3.14.6t",
 }
 
 # Linux python-build-standalone 版本映射：major.minor → 完整版本号
@@ -59,6 +69,10 @@ KNOWN_STANDALONE_VERSIONS: dict[str, str] = {
     "3.12": "3.12.13",
     "3.13": "3.13.14",
     "3.14": "3.14.6",
+    # free-threaded build：astral-sh python-build-standalone 自 20241011 起提供
+    # -freethreaded-install_only 变体 tarball（版本号无 t 后缀），覆盖 Linux/macOS/Windows 三平台。
+    "3.13t": "3.13.14t",
+    "3.14t": "3.14.6t",
 }
 
 # 默认 Python 版本：从对应平台的版本表派生，确保 EMBED 与 STANDALONE 各自使用最新版。
@@ -80,24 +94,52 @@ NUITKA_VERSIONS: dict[str, str] = {
     "3.12": "4.1.3",
     "3.13": "4.1.3",
     "3.14": "4.1.3",
+    # free-threaded build（PEP 703/779）：Nuitka 4.1.3 起实验性支持 free-threaded，
+    # 编译产物 .pyd 链接 python3XXt.dll（与标准版 ABI 不兼容，必须同源）。
+    "3.13t": "4.1.3",
+    "3.14t": "4.1.3",
 }
 
 # 默认 Nuitka 版本：py_version 不在 NUITKA_VERSIONS 时回退（如未来 3.15）。
 DEFAULT_NUITKA_VERSION = "4.1.3"
 
 
+def _split_t_suffix(version: str) -> tuple[str, bool]:
+    """剥离版本号末尾 ``t`` 后缀（free-threaded build 标记），返回 (纯数字版本, 是否自由线程).
+
+    PEP 703/779 free-threaded build 在版本号末尾加 ``t`` 后缀（如 ``3.13.14t``、
+    ``3.13t``），非合法 PEP 440 版本号。比较/解析时需先剥离后缀（``int("14t")``
+    会抛 ``ValueError``），仅在命名/abi tag 等场景使用 ``t`` 标记本身。
+
+    Args:
+        version: 可能含 ``t`` 后缀的版本号字符串。
+
+    Returns:
+        ``(纯数字版本, 是否自由线程)`` 二元组。无 ``t`` 后缀时第二项为 ``False``。
+    """
+    if version.endswith("t"):
+        return version[:-1], True
+    return version, False
+
+
 def nuitka_version_for(py_version: str) -> str:
     """按目标 Python 版本返回锁定的 Nuitka 版本.
 
+    支持自由线程版本（``py_version`` 末尾 ``t`` 后缀，如 ``3.13.14t``）：
+    查表时用剥离 ``t`` 后的 ``major.minor`` 拼回含 ``t`` 的键，命中 ``3.13t``/
+    ``3.14t`` 后返回锁定版本；未收录时回退 :data:`DEFAULT_NUITKA_VERSION`。
+
     Args:
-        py_version: 完整 Python 版本号（如 ``3.11.9``）。
+        py_version: 完整 Python 版本号（如 ``3.11.9`` 或 ``3.13.14t``）。
 
     Returns:
         对应的 Nuitka 版本号（如 ``4.1.3``）；未知 Python 版本回退
         :data:`DEFAULT_NUITKA_VERSION`。
     """
-    major, minor = py_version.split(".")[:2]
-    return NUITKA_VERSIONS.get(f"{major}.{minor}", DEFAULT_NUITKA_VERSION)
+    base, is_t = _split_t_suffix(py_version)
+    major, minor = base.split(".")[:2]
+    key = f"{major}.{minor}" + ("t" if is_t else "")
+    return NUITKA_VERSIONS.get(key, DEFAULT_NUITKA_VERSION)
 
 
 def known_versions(target: Platform) -> dict[str, str]:
@@ -114,7 +156,9 @@ def known_versions(target: Platform) -> dict[str, str]:
 
 
 def _ver_key(v: str) -> tuple[int, ...]:
-    return tuple(int(x) for x in v.split("."))
+    # 先剥离 t 后缀：free-threaded 版本号末尾 't' 非数字，直接 int 会抛 ValueError。
+    base, _ = _split_t_suffix(v)
+    return tuple(int(x) for x in base.split("."))
 
 
 # PEP 440 版本规范符正则：第三组捕获可选 ``.*`` 后缀（``==3.12.*`` 前缀匹配）
@@ -278,10 +322,15 @@ def _satisfies(version: str, specifiers: str) -> bool:
     支持兼容发行符 ``~=``：限定 minor 系列，如 ``~=3.11`` 匹配
     ``3.11 <= ver < 3.12``，``~=3.11.5`` 匹配 ``3.11.5 <= ver < 3.12.0``。
 
+    支持自由线程版本（``version`` 末尾 ``t`` 后缀）：比较时剥离后缀按纯数字
+    版本判定，``requires-python`` 规范符不区分 ``t`` 变体（标准版与 free-threaded
+    版本号主体相同，``requires-python>=3.13`` 同时匹配 ``3.13.14`` 与 ``3.13.14t``）。
+
     整串无可识别规范符（如 ``"abc"``）时保持宽松放行（返回 ``True``），
     但记 warning 日志便于发现 ``requires-python`` 配置错误。
     """
-    ver_parts = tuple(int(x) for x in version.split("."))
+    base, _ = _split_t_suffix(version)
+    ver_parts = tuple(int(x) for x in base.split("."))
     matches = _SPEC_RE.findall(specifiers)
     if not matches:
         _logger.warning("requires-python 规范符无法解析，宽松放行: %r", specifiers)

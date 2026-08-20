@@ -31,6 +31,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from fspack.config.versions import _split_t_suffix
 from fspack.exceptions import DependencyError
 from fspack.packaging.wheels.sdist import _handle_sdist_fallback
 from fspack.packaging.wheels.uv_bridge import (
@@ -129,7 +130,15 @@ def _download_one_with_uv(
     """
     if ctx.uv_path is None:
         raise DependencyError("ctx.uv_path 未设置，无法用 uv 下载")
-    major, minor = ctx.py_version.split(".")[:2] if ctx.py_version else ("", "")
+    # 自由线程版本（py_version 末尾 't' 后缀）：uv --python-version 接受 '3.13t'
+    # 形式，uv 内部按 free-threaded build 解析 wheel（cp313t abi tag）
+    if ctx.py_version:
+        base, is_t = _split_t_suffix(ctx.py_version)
+        major, minor = base.split(".")[:2]
+        py_ver_arg = f"{major}.{minor}{'t' if is_t else ''}"
+    else:
+        major = minor = ""
+        py_ver_arg = ""
     py_platform = _uv_python_platform(ctx.platform_tags)
     cmd: list[str] = [
         ctx.uv_path,
@@ -142,7 +151,7 @@ def _download_one_with_uv(
         str(ctx.cache_dir),
     ]
     if major and minor:
-        cmd.extend(["--python-version", f"{major}.{minor}"])
+        cmd.extend(["--python-version", py_ver_arg])
     cmd.extend(["--python-platform", py_platform])
     if with_index:
         cmd.extend(["--index-url", ctx.pypi_index])

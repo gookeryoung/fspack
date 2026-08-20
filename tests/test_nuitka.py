@@ -147,6 +147,20 @@ def test_build_python_exe_linux(tmp_path: Path) -> None:
     assert result == build_dir / "python" / "bin" / "python3.11"
 
 
+def test_build_python_exe_linux_freethreaded(tmp_path: Path) -> None:
+    """free-threaded 版本 Linux 路径为 python/bin/python3.13t（与 python.org 一致）.
+
+    标准版二进制名 ``python3.13``，free-threaded build 为 ``python3.13t``，
+    两者不互通（ABI 不一致），需用 t 后缀定位正确可执行文件。
+    """
+    build_dir = tmp_path / "3.13.14t"
+    result = NuitkaCompiler._build_python_exe(build_dir, "3.13.14t", Platform.LINUX)
+    assert result == build_dir / "python" / "bin" / "python3.13t"
+    build_dir_314 = tmp_path / "3.14.6t"
+    result_314 = NuitkaCompiler._build_python_exe(build_dir_314, "3.14.6t", Platform.LINUX)
+    assert result_314 == build_dir_314 / "python" / "bin" / "python3.14t"
+
+
 # ---- _ensure_build_python standalone python 就绪测试 ----
 
 
@@ -163,10 +177,18 @@ def no_host_python(monkeypatch: pytest.MonkeyPatch) -> None:
 def _make_standalone_tarball(dest: Path, version: str, tag: str, *, with_python: bool = True) -> None:
     """构造 standalone python tarball，模拟 python-build-standalone 解压结构.
 
-    真实 tarball 结构：``cpython-<ver>+<tag>-x86_64-pc-windows-msvc-install_only/python/python.exe``。
+    真实 tarball 结构：``cpython-<base>+<tag>-x86_64-pc-windows-msvc[-freethreaded]-install_only/python/python.exe``。
     ``with_python=False`` 时内层无 ``python/`` 目录，用于模拟结构异常场景。
+
+    free-threaded build（``version`` 末尾 ``t`` 后缀）在平台三元组与 ``install_only``
+    之间插入 ``-freethreaded``（**版本号无 t 后缀**），与
+    :func:`fspack.packaging.runtime.standalone_tarball_name` 命名一致。
     """
-    inner_root = f"cpython-{version}+{tag}-x86_64-pc-windows-msvc-install_only"
+    from fspack.config.versions import _split_t_suffix
+
+    base, is_t = _split_t_suffix(version)
+    freethreaded_segment = "-freethreaded" if is_t else ""
+    inner_root = f"cpython-{base}+{tag}-x86_64-pc-windows-msvc{freethreaded_segment}-install_only"
     with tarfile.open(dest, "w:gz") as tf:
         if with_python:
             data = b"fake-python-exe"
@@ -428,6 +450,55 @@ def test_host_python_exe_missing_executable_returns_none(monkeypatch: pytest.Mon
     assert NuitkaCompiler._host_python_exe("3.11.9") is None
 
 
+def test_host_python_exe_freethreaded_match(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """目标 t 版本 + 构建机是 free-threaded build（GIL disabled）+ Windows + 同 minor → 复用.
+
+    ``sys._is_gil_enabled()`` 在 free-threaded build 返回 False，与目标 t 变体
+    一致即可复用 sys.executable 编译（避免下载 ~40MB tarball）。
+    """
+    fake_exe = tmp_path / "python.exe"
+    fake_exe.write_bytes(b"fake")
+    monkeypatch.setattr("fspack.packaging.nuitka.standalone.sys.platform", "win32")
+    monkeypatch.setattr("fspack.packaging.nuitka.standalone.sys.version_info", SimpleNamespace(major=3, minor=13))
+    monkeypatch.setattr("fspack.packaging.nuitka.standalone.sys.executable", str(fake_exe))
+    # free-threaded build：_is_gil_enabled 返回 False
+    monkeypatch.setattr("fspack.packaging.nuitka.standalone.sys._is_gil_enabled", lambda: False, raising=False)
+    assert NuitkaCompiler._host_python_exe("3.13.14t") == fake_exe
+
+
+def test_host_python_exe_freethreaded_target_standard_host_mismatch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """目标 t 版本 + 构建机是标准版（GIL enabled）→ 返回 None，避免 ABI 不兼容.
+
+    标准 CPython 的 ``_is_gil_enabled()`` 返回 True，与 t 变体 ABI 不互通
+    （python313t.dll vs python313.dll），Nuitka 编译产物需与 runtime 同源 t 变体。
+    """
+    fake_exe = tmp_path / "python.exe"
+    fake_exe.write_bytes(b"fake")
+    monkeypatch.setattr("fspack.packaging.nuitka.standalone.sys.platform", "win32")
+    monkeypatch.setattr("fspack.packaging.nuitka.standalone.sys.version_info", SimpleNamespace(major=3, minor=13))
+    monkeypatch.setattr("fspack.packaging.nuitka.standalone.sys.executable", str(fake_exe))
+    monkeypatch.setattr("fspack.packaging.nuitka.standalone.sys._is_gil_enabled", lambda: True, raising=False)
+    assert NuitkaCompiler._host_python_exe("3.13.14t") is None
+
+
+def test_host_python_exe_standard_target_freethreaded_host_mismatch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """目标标准版 + 构建机是 free-threaded build（GIL disabled）→ 返回 None.
+
+    反向场景：构建机是 t 变体但目标标准版，ABI 同样不互通。
+    """
+    fake_exe = tmp_path / "python.exe"
+    fake_exe.write_bytes(b"fake")
+    monkeypatch.setattr("fspack.packaging.nuitka.standalone.sys.platform", "win32")
+    monkeypatch.setattr("fspack.packaging.nuitka.standalone.sys.version_info", SimpleNamespace(major=3, minor=13))
+    monkeypatch.setattr("fspack.packaging.nuitka.standalone.sys.executable", str(fake_exe))
+    monkeypatch.setattr("fspack.packaging.nuitka.standalone.sys._is_gil_enabled", lambda: False, raising=False)
+    assert NuitkaCompiler._host_python_exe("3.13.14") is None
+
+
 def test_ensure_build_python_reuses_host_python(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -483,6 +554,43 @@ def test_ensure_build_python_shared_tarball_cache_hit(
     assert result == cache_root / ver / "python" / "python.exe"
     assert st._hits == 1
     # tarball 保留（共享缓存不被解压流程删除）
+    assert tarball.is_file()
+
+
+def test_ensure_build_python_freethreaded_shared_tarball_cache_hit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    no_host_python: None,
+) -> None:
+    """free-threaded 版本（3.13t）共享缓存命中 + 解压根含 -freethreaded 段.
+
+    python-build-standalone 的 free-threaded tarball 名与解压根目录名均含
+    ``-freethreaded`` 段（版本号无 t 后缀），与 ``standalone_tarball_name`` 命名一致。
+    """
+    ver = KNOWN_STANDALONE_VERSIONS["3.13t"]
+    assert ver == "3.13.14t"
+    cache_root = tmp_path / "cache"
+    shared_dir = tmp_path / "standalone-windows"
+    shared_dir.mkdir()
+    tarball = shared_dir / standalone_tarball_name(ver, STANDALONE_RELEASE_TAG, windows=True)
+    # tarball 文件名含 -freethreaded-install_only.tar.gz 后缀
+    assert tarball.name.endswith("-freethreaded-install_only.tar.gz")
+    _make_standalone_tarball(tarball, ver, STANDALONE_RELEASE_TAG)
+
+    class _NoNetDownloader:
+        def __init__(self, timeout: int = 0) -> None:
+            pass
+
+        def download(self, url: str, dest: Path, *, stage: object = None, label: str = "") -> int:
+            raise AssertionError("共享缓存命中时不应触发下载")
+
+    monkeypatch.setattr("fspack.packaging.net.Downloader", _NoNetDownloader)
+
+    st = StageRecorder("standalone python")
+    result = NuitkaCompiler._ensure_build_python(cache_root, "3.13.14t", Platform.WINDOWS, stage=st)
+
+    assert result == cache_root / ver / "python" / "python.exe"
+    assert st._hits == 1
     assert tarball.is_file()
 
 

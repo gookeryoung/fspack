@@ -96,6 +96,7 @@ from fspack.config.versions import (
     _read_python_version,  # noqa: F401
     _satisfies,  # noqa: F401
     _satisfies_wildcard,  # noqa: F401
+    _split_t_suffix,  # noqa: F401
     _ver_key,  # noqa: F401
     known_versions,
     nuitka_version_for,

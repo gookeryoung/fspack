@@ -327,6 +327,42 @@ def test_standalone_tarball_name_macos_ignores_windows_flag() -> None:
     assert name_with_windows == name_without_windows
 
 
+def test_standalone_tarball_name_freethreaded_windows() -> None:
+    """自由线程版本（t 后缀）在 windows 平台追加 -freethreaded 标识（版本号无 t 后缀）."""
+    assert (
+        standalone_tarball_name("3.13.14t", "20260718", windows=True)
+        == "cpython-3.13.14+20260718-x86_64-pc-windows-msvc-freethreaded-install_only.tar.gz"
+    )
+
+
+def test_standalone_tarball_name_freethreaded_linux() -> None:
+    """自由线程版本在 linux 平台追加 -freethreaded 标识（版本号无 t 后缀）."""
+    assert (
+        standalone_tarball_name("3.14.6t", "20260718")
+        == "cpython-3.14.6+20260718-x86_64-unknown-linux-gnu-freethreaded-install_only.tar.gz"
+    )
+
+
+def test_standalone_tarball_name_freethreaded_macos_arm64() -> None:
+    """自由线程版本在 macOS arm64 平台追加 -freethreaded 标识（版本号无 t 后缀）."""
+    assert (
+        standalone_tarball_name("3.13.14t", "20260718", macos_arch="arm64")
+        == "cpython-3.13.14+20260718-arm64-apple-darwin-freethreaded-install_only.tar.gz"
+    )
+
+
+def test_embed_dirname_freethreaded() -> None:
+    """自由线程版本目录名带 t 后缀（python313t 而非 python313）."""
+    assert embed_dirname("3.13.14t") == "python313t"
+    assert embed_dirname("3.14.6t") == "python314t"
+
+
+def test_embed_zip_name_freethreaded() -> None:
+    """自由线程版本 embed zip 文件名保留 t 后缀."""
+    assert embed_zip_name("3.13.14t") == "python-3.13.14t-embed-amd64.zip"
+    assert embed_zip_name("3.14.6t") == "python-3.14.6t-embed-amd64.zip"
+
+
 def test_standalone_url() -> None:
     url = standalone_url("3.13.14", "20260718")
     assert url.startswith(STANDALONE_BASE_URL)

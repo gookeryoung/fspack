@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fspack.config import MirrorConfig, is_offline, nuitka_version_for
+from fspack.config.versions import _split_t_suffix
 from fspack.exceptions import NuitkaError
 from fspack.platform import Platform
 from fspack.progress import StageRecorder
@@ -78,12 +79,15 @@ class NuitkaEnv:
         """解析 runtime python 可执行文件路径.
 
         Windows: ``runtime/python.exe``
-        Linux: ``runtime/python/bin/python<major>.<minor>``
+        Linux: ``runtime/python/bin/python<major>.<minor>`` 或 ``python<major>.<minor>t``
         """
         if target is Platform.WINDOWS:
             return runtime_dir / "python.exe"
-        major, minor = py_version.split(".")[:2]
-        return runtime_dir / "python" / "bin" / f"python{major}.{minor}"
+        # free-threaded build 二进制名带 t 后缀（python3.13t）
+        base, is_t = _split_t_suffix(py_version)
+        major, minor = base.split(".")[:2]
+        suffix = "t" if is_t else ""
+        return runtime_dir / "python" / "bin" / f"python{major}.{minor}{suffix}"
 
     @staticmethod
     def _check_c_compiler(target: Platform) -> None:

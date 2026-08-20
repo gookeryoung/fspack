@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fspack.config import KNOWN_STANDALONE_VERSIONS
+from fspack.config.versions import _split_t_suffix
 from fspack.exceptions import NuitkaError
 from fspack.platform import Platform
 from fspack.progress import StageRecorder
@@ -76,8 +77,11 @@ class NuitkaStandalone:
         if target is Platform.WINDOWS:
             return build_python_dir / "python" / "python.exe"
 
-        major, minor = py_version.split(".")[:2]
-        return build_python_dir / "python" / "bin" / f"python{major}.{minor}"
+        # free-threaded build 二进制名带 t 后缀（python3.13t），与 python.org 一致
+        base, is_t = _split_t_suffix(py_version)
+        major, minor = base.split(".")[:2]
+        suffix = "t" if is_t else ""
+        return build_python_dir / "python" / "bin" / f"python{major}.{minor}{suffix}"
 
     @staticmethod
     def _host_python_exe(py_version: str) -> Path | None:
@@ -90,16 +94,28 @@ class NuitkaStandalone:
         - 构建机 python 的 major.minor 与目标 ``py_version`` 一致（Nuitka 必须在
           目标版本解释器下运行，这是硬约束；CPython 按 major.minor ABI 兼容，
           补丁版本差异不影响编译产物链接的 ``pythonXY.dll``）
+        - **GIL 状态一致**：目标 t 版本时构建机必须是 free-threaded build，
+          目标标准版时构建机必须是标准 build。free-threaded 与标准版 ABI 不
+          互通（``python313t.dll`` vs ``python313.dll``），Nuitka 编译的 .pyd
+          链接的 DLL 必须与目标 runtime 同源 t 变体，否则运行时访问违例。
 
+        ``sys._is_gil_enabled()``（CPython 3.13+ 提供）在 free-threaded build
+        返回 ``False``，标准版返回 ``True``；3.12 及以下无此方法（且无 t 变体）。
         满足时直接复用 ``sys.executable``（:meth:`ensure_env` 安装 nuitka 用的
         就是它，标准 CPython/venv 均可被 nuitka/scons 安全衍生子进程），免下载
-        ~40MB standalone tarball。
+        ~40MB standalone tarball.
         """
         if sys.platform != "win32":
             return None
-        major_minor = ".".join(py_version.split(".")[:2])
+        base, is_t = _split_t_suffix(py_version)
+        major_minor = ".".join(base.split(".")[:2])
         host = f"{sys.version_info.major}.{sys.version_info.minor}"
         if host != major_minor:
+            return None
+        # 构建机 GIL 状态须与目标 t 变体一致；3.12 及以下无 _is_gil_enabled
+        # 但 t 版本只支持 3.13+，is_t 为 False 时构建机也必为标准版（hasattr False）
+        host_is_t = not sys._is_gil_enabled() if hasattr(sys, "_is_gil_enabled") else False
+        if host_is_t != is_t:
             return None
         exe = Path(sys.executable)
         return exe if exe.is_file() else None
@@ -160,13 +176,18 @@ class NuitkaStandalone:
                 py_version,
                 host_py,
             )
-            major_minor = ".".join(py_version.split(".")[:2])
-            stage.set_detail(f"复用构建机 python {major_minor}")
+            # 展示键含 t 后缀（如 3.13t），与 KNOWN_STANDALONE_VERSIONS 风格一致
+            base, is_t = _split_t_suffix(py_version)
+            major_minor_display = ".".join(base.split(".")[:2]) + ("t" if is_t else "")
+            stage.set_detail(f"复用构建机 python {major_minor_display}")
             return host_py
 
         # Windows: 下载 python-build-standalone Windows 版
-        major_minor = ".".join(py_version.split(".")[:2])
-        standalone_version = KNOWN_STANDALONE_VERSIONS.get(major_minor)
+        # KNOWN_STANDALONE_VERSIONS 键含 '3.13t'/'3.14t'（free-threaded build）：
+        # 用剥离 micro 后的 major.minor[+t] 查表，命中 '3.13t' → '3.13.14t'
+        base, is_t = _split_t_suffix(py_version)
+        major_minor_key = ".".join(base.split(".")[:2]) + ("t" if is_t else "")
+        standalone_version = KNOWN_STANDALONE_VERSIONS.get(major_minor_key)
         if standalone_version is None:
             raise NuitkaError(
                 f"Python {py_version} 无对应 python-build-standalone Windows 版本，"
@@ -269,7 +290,8 @@ class NuitkaStandalone:
     ) -> None:
         """解压 standalone python tarball 并提升内层目录到 build_python_dir 根.
 
-        解压后结构：``build_python_dir/cpython-<ver>+<tag>-x86_64-pc-windows-msvc-install_only/python/python.exe``
+        解压后结构：
+        ``build_python_dir/cpython-<base>+<tag>-x86_64-pc-windows-msvc[-freethreaded]-install_only/python/python.exe``
         需将内层 ``python/`` 目录提升到 ``build_python_dir/python``，清理其他文件。
 
         tarball 本身保留（位于共享缓存 ``standalone-windows/``，供
@@ -298,11 +320,15 @@ class NuitkaStandalone:
         except (tarfile.TarError, OSError) as e:
             raise NuitkaError(f"standalone python tarball 损坏: {archive_path}") from e
 
-        # 解压后结构：build_python_dir/cpython-<ver>+<tag>-x86_64-pc-windows-msvc-install_only/python/python.exe
-        # 需将内层目录提升到 build_python_dir 根
+        # 解压后结构：build_python_dir/cpython-<base>+<tag>-x86_64-pc-windows-msvc[-freethreaded]-install_only/python/python.exe
+        # free-threaded build 的 tarball 解压目录名在平台三元组与 install_only 之间插入
+        # '-freethreaded' 段（**版本号无 t 后缀**），与 standalone_tarball_name 命名一致
+        # （参见 runtime/urls.py）。需将内层目录提升到 build_python_dir 根
+        base, is_t = _split_t_suffix(standalone_version)
+        freethreaded_segment = "-freethreaded" if is_t else ""
         extracted_root = (
             build_python_dir
-            / f"cpython-{standalone_version}+{STANDALONE_RELEASE_TAG}-x86_64-pc-windows-msvc-install_only"
+            / f"cpython-{base}+{STANDALONE_RELEASE_TAG}-x86_64-pc-windows-msvc{freethreaded_segment}-install_only"
         )
         if extracted_root.is_dir():
             python_dir = extracted_root / "python"

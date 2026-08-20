@@ -20,6 +20,7 @@ import subprocess as _default_subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from fspack.config.versions import _split_t_suffix
 from fspack.packaging.sync import _dir_size
 from fspack.platform import Platform
 
@@ -114,7 +115,14 @@ def _needs_win7_compat_dll(py_version: str) -> bool:
 
     Python 3.8 是最后官方支持 Win7 的版本；3.9+ 调用 ``PathCchSkipRoot`` 等
     API，需 ``api-ms-win-core-path-l1-1-0.dll`` 提供（Win8+ 自带，Win7 缺失）。
+
+    自由线程版本（PEP 703/779，``py_version`` 末尾 ``t`` 后缀）仅支持 Win10+：
+    free-threaded build 依赖 mimalloc 与新调度器，上游官方未在 Win7 测试，
+    且无 win7 重编译版 t 变体；注入 shim 无意义，直接返回 ``False``。
     """
+    _, is_t = _split_t_suffix(py_version)
+    if is_t:
+        return False
     parts = py_version.split(".")
     return (int(parts[0]), int(parts[1])) >= (3, 9)
 
@@ -146,14 +154,28 @@ def _trim_stdlib(runtime_dir: Path, py_version: str, target: Platform, stage: St
 
     Windows embed 标准库在 python3XX.zip 内（只读、官方已精简），跳过。
     Linux 与 macOS 用 python-build-standalone，标准库在
-    ``runtime/python/lib/pythonX.Y/`` 下，需剥离 test/ensurepip/idlelib 等。
+    ``runtime/python/lib/pythonX.Y[t]/`` 下，需剥离 test/ensurepip/idlelib 等。
+    Windows 自由线程版（``py_version`` 末尾 ``t``）走 standalone 路径，扁平化后
+    标准库位于 ``runtime/Lib/``（首字母大写、无版本后缀，与 Linux 不同），按相同规则精简。
     重复构建时已剥离的目录不存在则跳过，幂等。
     """
-    if target is Platform.WINDOWS:
+    is_t = py_version.endswith("t")
+    # Windows 标准版 embed zip 标准库在 python3XX.zip 内（只读、官方已精简），跳过；
+    # Windows 自由线程版走 standalone 路径，Lib/ 在 runtime_dir 根，需精简
+    if target is Platform.WINDOWS and not is_t:
         stage.set_detail("embed zip 已精简，跳过")
         return
-    major, minor = py_version.split(".")[:2]
-    stdlib = runtime_dir / "python" / "lib" / f"python{major}.{minor}"
+    if target is Platform.WINDOWS and is_t:
+        # python-build-standalone Windows freethreaded tarball 解压扁平化后
+        # 标准库位于 runtime/Lib/（首字母大写、无版本后缀），与 Linux 嵌套结构不同
+        stdlib = runtime_dir / "Lib"
+    else:
+        # Linux/macOS python-build-standalone：runtime/python/lib/pythonX.Y[t]/
+        # free-threaded build 标准库目录名带 t 后缀（python3.13t）
+        base = py_version[:-1] if is_t else py_version
+        major, minor = base.split(".")[:2]
+        suffix = "t" if is_t else ""
+        stdlib = runtime_dir / "python" / "lib" / f"python{major}.{minor}{suffix}"
     if not stdlib.is_dir():
         stage.set_detail("标准库目录不存在，跳过")
         return
@@ -209,7 +231,11 @@ def _trim_standalone_runtime(  # noqa: PLR0912, PLR0913
         stage.set_detail("standalone runtime 不存在，跳过")
         return
 
-    major, minor = py_version.split(".")[:2]
+    # free-threaded build 二进制与库文件名带 t 后缀（python3.13t / libpython3.13t.so）
+    is_t = py_version.endswith("t")
+    base = py_version[:-1] if is_t else py_version
+    major, minor = base.split(".")[:2]
+    suffix = "t" if is_t else ""
     saved_bytes = 0
     removed_files = 0
     removed_dirs = 0
@@ -217,13 +243,13 @@ def _trim_standalone_runtime(  # noqa: PLR0912, PLR0913
 
     if strip_symbols:
         lib_dir = python_dir / "lib"
-        for lib in lib_dir.glob(f"libpython{major}.{minor}.so*"):
+        for lib in lib_dir.glob(f"libpython{major}.{minor}{suffix}.so*"):
             if lib.is_symlink() or not lib.is_file():
                 continue
             ok, saved = _strip_elf_symbols(lib, "linux")
             stripped_libs += ok
             saved_bytes += saved
-        for lib in lib_dir.glob(f"libpython{major}.{minor}.dylib"):
+        for lib in lib_dir.glob(f"libpython{major}.{minor}{suffix}.dylib"):
             if lib.is_symlink() or not lib.is_file():
                 continue
             ok, saved = _strip_elf_symbols(lib, "macos")
@@ -232,7 +258,7 @@ def _trim_standalone_runtime(  # noqa: PLR0912, PLR0913
 
     bin_dir = python_dir / "bin"
     if bin_dir.is_dir():
-        py_bin = bin_dir / f"python{major}.{minor}"
+        py_bin = bin_dir / f"python{major}.{minor}{suffix}"
         if py_bin.is_file():
             saved_bytes += py_bin.stat().st_size
             py_bin.unlink()

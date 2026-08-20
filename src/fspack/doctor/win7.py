@@ -66,8 +66,12 @@ def _check_win7_compat() -> CheckResult:
     cached = 0
 
     # 1. 清单对齐：KNOWN_EMBED_VERSIONS 的 3.12+ 必须收录 win7 清单
+    # free-threaded 版本（t 后缀）不支持 Win7 目标（download_win7_embed 主动拒绝），
+    # 不纳入清单对齐守卫——上游未发布 t 变体重编译版，无需校对清单。
     expected = {
-        full for minor, full in KNOWN_EMBED_VERSIONS.items() if tuple(int(x) for x in minor.split(".")) >= (3, 12)
+        full
+        for minor, full in KNOWN_EMBED_VERSIONS.items()
+        if not minor.endswith("t") and tuple(int(x) for x in minor.split(".")) >= (3, 12)
     }
     missing = expected - set(WIN7_EMBED_SHA256)
     if missing:

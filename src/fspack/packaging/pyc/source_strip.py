@@ -82,8 +82,13 @@ def _strip_py_sources(  # noqa: PLR0913
     site-packages 无此类目录。
     """
     if py_version:
-        major, minor = py_version.split(".")[:2]
-        ver_tag = f"cpython-{major}{minor}"
+        # free-threaded build 的 pyc tag 末尾带 't'（cpython-313t），与标准版
+        # cpython-313 不互通；CPython 3.13+ free-threaded build 使用 t 后缀 tag
+        is_t = py_version.endswith("t")
+        base = py_version[:-1] if is_t else py_version
+        major, minor = base.split(".")[:2]
+        suffix = "t" if is_t else ""
+        ver_tag = f"cpython-{major}{minor}{suffix}"
     else:  # pragma: no cover - py_version 始终由 _precompile_pyc 传入
         ver_tag = "cpython-*"
     opt_suffix = "" if optimize == 0 else f".opt-{optimize}"
