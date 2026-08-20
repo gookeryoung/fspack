@@ -3,7 +3,7 @@ dependencies    = ["pygame>=2.5.0"]
 description     = "A modern Tetris game with gradient colors, particle effects and dynamic line-clear animations"
 name            = "pygame_tetris"
 readme          = "README.md"
-requires-python = ">=3.8,<3.11"
+requires-python = ">=3.8,<3.13"
 version         = "0.1.12"
 
 [build-system]
