@@ -240,12 +240,14 @@ def _build_pip_download_args(
     """构造 ``pip download`` 基础参数（不含 ``-i index`` 与包名）.
 
     自由线程版本（PEP 703/779，``py_version`` 末尾 ``t`` 后缀）：
-    - ``--python-version`` 传 ``3.13t``（pip 24.0+ 识别 t 后缀）
-    - ``--abi`` 传 ``cp313t``（free-threaded wheel abi tag，与标准版 cp313 不互通）
+    - ``--python-version`` 传纯数字 ``3.13``（pip 不识别 ``t`` 后缀，
+      ``--python-version 3.13t`` 报 "each version part must be an integer"）
+    - ``--abi`` 传 ``cp313t``（free-threaded wheel abi tag，与标准版 cp313 不互通；
+      pip 按 ``cp313-cp313t-<platform>`` 组合兼容 tag，正确命中 freethreaded wheel）
     """
     base, is_t = _split_t_suffix(py_version)
     major, minor = base.split(".")[:2]
-    py_ver_arg = f"{major}.{minor}{'t' if is_t else ''}"
+    py_ver_arg = f"{major}.{minor}"
     abi_arg = f"cp{major}{minor}{'t' if is_t else ''}"
     platform_args: list[str] = []
     for tag in platform_tags:

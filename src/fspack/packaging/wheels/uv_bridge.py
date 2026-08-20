@@ -189,11 +189,13 @@ def _resolve_with_uv(ctx: DownloadContext, packages: Sequence[str], *, generate_
     """
     if ctx.uv_path is None:
         raise DependencyError("未找到 uv，无法执行在线依赖解析")
-    # 自由线程版本（py_version 末尾 't' 后缀）：uv pip compile 接受 --python-version 3.13t，
-    # uv 内部识别为 free-threaded build 并按 cp313t abi 解析 wheel（uv 0.5+ 支持）。
-    base, is_t = _split_t_suffix(ctx.py_version)
+    # 自由线程版本（py_version 末尾 't' 后缀）：uv --python-version 不识别 t 后缀
+    # （报 "found t, which is not part of a valid version"），剥离后传纯数字 3.13。
+    # compile 阶段仅解析版本号：同一版本同时发布 cp313 与 cp313t wheel（版本号相同），
+    # 实际 freethreaded wheel 的选择由后续 pip download 的 --abi cp313t 完成。
+    base, _ = _split_t_suffix(ctx.py_version)
     major, minor = base.split(".")[:2]
-    py_ver_arg = f"{major}.{minor}{'t' if is_t else ''}"
+    py_ver_arg = f"{major}.{minor}"
     # uv 的 --python-platform 只有 windows/linux/macos 粗粒度，按标签映射
     py_platform = _uv_python_platform(ctx.platform_tags)
     cmd: list[str] = [

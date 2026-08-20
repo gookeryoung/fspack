@@ -144,24 +144,25 @@ def test_build_pip_download_args_standard() -> None:
 
 
 def test_build_pip_download_args_freethreaded_313t() -> None:
-    """free-threaded 版本 3.13.14t 解析为 cp313t abi + 3.13t python-version.
+    """free-threaded 版本 3.13.14t 解析为 cp313t abi + 纯数字 3.13 python-version.
 
-    pip 24.0+ 识别 ``--python-version 3.13t`` 与 ``--abi cp313t`` 用于下载
-    free-threaded wheel（abi tag 与标准版 cp313 不互通）。
+    pip 不识别 ``--python-version 3.13t``（报 "each version part must be an
+    integer"），须剥离 t 后缀传 ``3.13``；``--abi cp313t`` 指定 free-threaded
+    wheel（abi tag 与标准版 cp313 不互通），pip 按 abi 组合命中 freethreaded wheel。
     """
     args = _build_pip_download_args("/py/python", "3.13.14t", ("win_amd64",), Path("./.cache"))
     py_ver_idx = args.index("--python-version") + 1
     abi_idx = args.index("--abi") + 1
-    assert args[py_ver_idx] == "3.13t"
+    assert args[py_ver_idx] == "3.13"
     assert args[abi_idx] == "cp313t"
 
 
 def test_build_pip_download_args_freethreaded_314t() -> None:
-    """free-threaded 版本 3.14.6t 解析为 cp314t abi + 3.14t python-version."""
+    """free-threaded 版本 3.14.6t 解析为 cp314t abi + 纯数字 3.14 python-version."""
     args = _build_pip_download_args("/py/python", "3.14.6t", ("win_amd64",), Path("./.cache"))
     py_ver_idx = args.index("--python-version") + 1
     abi_idx = args.index("--abi") + 1
-    assert args[py_ver_idx] == "3.14t"
+    assert args[py_ver_idx] == "3.14"
     assert args[abi_idx] == "cp314t"
 
 
@@ -1323,10 +1324,11 @@ def test_resolve_with_uv_macos_platform(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_resolve_with_uv_freethreaded_pyversion(monkeypatch: pytest.MonkeyPatch) -> None:
-    """free-threaded py_version（3.13.14t）传 --python-version 3.13t 给 uv pip compile.
+    """free-threaded py_version（3.13.14t）传纯数字 3.13 给 uv pip compile.
 
-    uv 0.5+ 识别 ``3.13t`` 形式为 free-threaded build，按 cp313t abi tag 解析 wheel；
-    与标准版 ``3.13`` 不互通，确保 t 版本依赖图与 abi 一致。
+    uv 不识别 ``--python-version 3.13t``（报 "found t, which is not part of a
+    valid version"），须剥离 t 后缀；compile 阶段仅解析版本号，freethreaded
+    wheel（cp313t abi）的实际选择由后续 pip download 的 ``--abi cp313t`` 完成。
     """
     captured: dict[str, list[str]] = {}
 
@@ -1340,7 +1342,7 @@ def test_resolve_with_uv_freethreaded_pyversion(monkeypatch: pytest.MonkeyPatch)
     cmd = captured["cmd"]
     assert "--python-version" in cmd
     pv_idx = cmd.index("--python-version") + 1
-    assert cmd[pv_idx] == "3.13t"
+    assert cmd[pv_idx] == "3.13"
 
 
 def test_resolve_with_uv_no_uv_raises(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2738,9 +2740,10 @@ def test_download_one_with_uv_macos_platform(tmp_path: Path, monkeypatch: pytest
 
 
 def test_download_one_with_uv_freethreaded_pyversion(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """free-threaded py_version（3.14.6t）传 --python-version 3.14t 给 uv pip download.
+    """free-threaded py_version（3.14.6t）传纯数字 3.14 给 uv pip download.
 
-    uv 按 free-threaded build 解析 wheel（cp314t abi tag），与标准版 cp314 不互通。
+    uv 不识别 ``--python-version 3.14t``，须剥离 t 后缀；freethreaded wheel
+    （cp314t abi）的实际选择由回退的 pip download ``--abi cp314t`` 完成。
     """
     cache = tmp_path / "cache"
     cache.mkdir()
@@ -2759,7 +2762,7 @@ def test_download_one_with_uv_freethreaded_pyversion(tmp_path: Path, monkeypatch
     cmd = captured["cmd"]
     assert "--python-version" in cmd
     pv_idx = cmd.index("--python-version") + 1
-    assert cmd[pv_idx] == "3.14t"
+    assert cmd[pv_idx] == "3.14"
 
 
 def test_download_online_shares_uv_path_detection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

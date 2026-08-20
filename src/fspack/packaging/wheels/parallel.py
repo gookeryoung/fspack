@@ -130,12 +130,13 @@ def _download_one_with_uv(
     """
     if ctx.uv_path is None:
         raise DependencyError("ctx.uv_path 未设置，无法用 uv 下载")
-    # 自由线程版本（py_version 末尾 't' 后缀）：uv --python-version 接受 '3.13t'
-    # 形式，uv 内部按 free-threaded build 解析 wheel（cp313t abi tag）
+    # 自由线程版本（py_version 末尾 't' 后缀）：uv --python-version 不识别 t 后缀
+    # （报 "found t, which is not part of a valid version"），剥离后传纯数字 3.13。
+    # freethreaded wheel（cp313t abi）的实际选择由回退的 pip download --abi cp313t 完成。
     if ctx.py_version:
-        base, is_t = _split_t_suffix(ctx.py_version)
+        base, _ = _split_t_suffix(ctx.py_version)
         major, minor = base.split(".")[:2]
-        py_ver_arg = f"{major}.{minor}{'t' if is_t else ''}"
+        py_ver_arg = f"{major}.{minor}"
     else:
         major = minor = ""
         py_ver_arg = ""
