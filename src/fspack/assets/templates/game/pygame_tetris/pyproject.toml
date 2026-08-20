@@ -9,3 +9,7 @@ version         = "0.1.12"
 [build-system]
 build-backend = "hatchling.build"
 requires      = ["hatchling"]
+
+[tool.fspack]
+pyc_strip = true
+no_site = true
