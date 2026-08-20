@@ -291,7 +291,12 @@ def _download_resolved_parallel(resolved: list[str], ctx: DownloadContext) -> su
                 extra_index_urls=ctx.extra_index_urls,
                 find_links=ctx.find_links,
             )
-            return _download_one_resolved(resolved[0], ctx, with_index=True, stream=True)
+            try:
+                return _download_one_resolved(resolved[0], ctx, with_index=True, stream=True)
+            except subprocess.CalledProcessError as retry_err:
+                # sdist 回退后重试仍失败：转 DependencyError（含 stderr），与
+                # _run_pip 的异常约定一致，避免裸 CalledProcessError 逃逸到 CLI
+                raise DependencyError(f"依赖下载失败:\n{retry_err.stderr}") from retry_err
 
     workers = min(_PARALLEL_DOWNLOAD_WORKERS, len(resolved))
     succeeded: list[tuple[str, subprocess.CompletedProcess[str]]] = []
@@ -331,9 +336,13 @@ def _download_resolved_parallel(resolved: list[str], ctx: DownloadContext) -> su
         find_links=ctx.find_links,
     )
     # sdist 构建后重试失败的包（带 -i index，因 sdist 构建的 wheel 在本地缓存）
+    # 重试仍失败时转 DependencyError（含 stderr），避免裸 CalledProcessError 逃逸
     retry_results: list[tuple[str, subprocess.CompletedProcess[str]]] = []
     for req, _ in failed:
-        result = _download_one_resolved(req, ctx, with_index=True)
+        try:
+            result = _download_one_resolved(req, ctx, with_index=True)
+        except subprocess.CalledProcessError as retry_err:
+            raise DependencyError(f"依赖下载失败:\n{retry_err.stderr}") from retry_err
         retry_results.append((req, result))
     return _merge_parallel_results([*succeeded, *retry_results])
 

@@ -21,6 +21,7 @@ from fspack.packaging.wheels import (
     _download_one_resolved,
     _download_one_with_uv,
     _download_online,
+    _download_resolved_parallel,
     _eval_python_version_marker,
     _eval_single_marker,
     _filter_by_python_version,
@@ -1645,6 +1646,92 @@ def test_download_resolved_parallel_multiple_packages(tmp_path: Path, monkeypatc
     for cmd in captured_cmds:
         assert "--no-deps" in cmd
         assert cmd[-1] in resolved_pkgs
+
+
+def test_download_online_freethreaded_skips_uv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """free-threaded 版本跳过 uv 解析，直接 pip 完整解析按 --abi 选版本.
+
+    uv 无 abi 参数且不识别 t 后缀，按标准 cp3XX 解析出的精确版本可能无
+    cp3XXt wheel（如 numpy 2.5.x 仅发布 cp314t），须由 pip 完整解析按
+    ``--abi cp3XXt`` 约束重新选版本（如回退到 2.4.6）。
+    """
+
+    def _uv_must_not_be_probed() -> str | None:
+        raise AssertionError("free-threaded 版本不应探测/使用 uv")
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setattr("fspack.packaging.wheels.resolver._find_uv", _uv_must_not_be_probed)
+    captured: dict[str, list[str]] = {}
+
+    def fake_stream(cmd: list[str]) -> CompletedStub:
+        captured["cmd"] = cmd
+        return CompletedStub()
+
+    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
+    _download_online(["numpy"], _make_ctx(base_args, cache, py_version="3.13.14t"))
+    cmd = captured["cmd"]
+    # pip 完整解析：不带 --no-deps（精确版本由 pip 按 abi 约束自行解析）
+    assert "--no-deps" not in cmd
+    assert "-i" in cmd
+    assert "https://idx/simple" in cmd
+
+
+def test_download_wheels_sanitizes_pypi_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """pypi_index 防御性清理：strip markdown 反引号/引号/空白包裹.
+
+    从文档复制 URL 常带入 `` `https://...` `` 形式，pip/uv 不识别反引号导致
+    "Invalid URL" 或 DNS 解析失败；入口处清理后所有下游命令（-i/--index-url）
+    均为干净 URL。
+    """
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
+        calls.append(cmd)
+        # --no-index 缓存解析失败，触发在线回退
+        raise subprocess.CalledProcessError(1, "pip", stderr="not in cache")
+
+    def fake_stream(cmd: list[str]) -> CompletedStub:
+        calls.append(cmd)
+        return CompletedStub()
+
+    monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    monkeypatch.setattr("fspack.packaging.wheels.downloader._find_pip_python", lambda: "/py/python")
+    monkeypatch.setattr("fspack.packaging.wheels.resolver._find_uv", lambda: None)
+    download_wheels(("numpy",), "3.11.9", "  `https://idx/simple`  ", tmp_path / "cache")
+    assert len(calls) >= 2
+    # 在线回退命令中的 -i 值为清理后的干净 URL
+    online_cmd = calls[1]
+    i_idx = online_cmd.index("-i") + 1
+    assert online_cmd[i_idx] == "https://idx/simple"
+
+
+def test_download_resolved_parallel_single_retry_error_converted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """单包 sdist 回退后重试仍失败：转 DependencyError 而非裸 CalledProcessError.
+
+    与 ``_run_pip`` 的异常约定一致（CalledProcessError 转 DependencyError 含
+    stderr），避免裸 CalledProcessError 逃逸到 CLI 显示原始 traceback。
+    """
+    cache = tmp_path / "cache"
+    cache.mkdir()
+
+    def fake_stream(cmd: list[str]) -> CompletedStub:
+        raise subprocess.CalledProcessError(1, cmd, stderr="ERROR: No matching distribution found")
+
+    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    monkeypatch.setattr(
+        "fspack.packaging.wheels.parallel._handle_sdist_fallback",
+        lambda *a, **kw: None,
+    )
+    base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
+    ctx = _make_ctx(base_args, cache)
+    ctx.uv_path = None
+    with pytest.raises(DependencyError, match="No matching distribution"):
+        _download_resolved_parallel(["numpy==2.5.2"], ctx)
 
 
 def test_download_resolved_parallel_uses_configured_pypi_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

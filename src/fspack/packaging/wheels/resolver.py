@@ -178,12 +178,25 @@ def _download_online(
     require_hashes 检查、uv 解析与 ``_download_resolved_parallel`` 的 uv 下载
     路径，避免重复 ``shutil.which`` 调用。``_uv_supports_download`` 也调一次，
     uv 不支持时将 ``ctx.uv_path`` 置回 ``None`` 让并行下载全走 pip。
+
+    free-threaded 版本（``py_version`` 末尾 ``t``）跳过 uv 解析：uv 不识别
+    t 后缀且无 abi 参数，按标准 abi 解析出的精确版本可能无 cp3XXt wheel，
+    pip 完整解析按 ``--abi cp3XXt`` 约束重新选版本才能命中 freethreaded wheel。
     """
     # 惰性导入打破循环依赖：downloader 顶层导入本模块，本模块不能顶层导入 downloader
     from fspack.packaging.wheels.downloader import _run_pip
 
-    # 共享 uv 路径检测：require_hashes 检查、uv 解析、uv 下载共用一次 _find_uv()
-    ctx.uv_path = _find_uv()
+    # free-threaded 版本（py_version 末尾 't'）跳过 uv 解析，直接 pip 完整解析：
+    # uv 无 abi 参数且不识别 t 后缀版本，按标准 cp3XX 解析出的精确版本可能无
+    # cp3XXt wheel（如 numpy 2.5.x 仅发布 cp314t，cp313t 最新为 2.4.6），
+    # pip download --no-deps <精确版本> 下载必然失败；pip 完整解析按
+    # --abi cp3XXt 约束重新选版本，正确命中有 freethreaded wheel 的版本
+    if ctx.py_version.endswith("t"):
+        ctx.uv_path = None
+        _logger.info("free-threaded 版本跳过 uv 解析，pip 按 abi 约束完整解析")
+    else:
+        # 共享 uv 路径检测：require_hashes 检查、uv 解析、uv 下载共用一次 _find_uv()
+        ctx.uv_path = _find_uv()
     # 检测 uv 是否支持 pip download 子命令（0.1.9+ 移除），结果决定并行下载走 uv 还是 pip
     uv_can_download = _uv_supports_download(ctx.uv_path)
 

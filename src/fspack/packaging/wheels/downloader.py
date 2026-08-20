@@ -145,8 +145,13 @@ def download_wheels(  # noqa: PLR0913
     再 ``pip download --require-hashes -r requirements.txt`` 校验下载。
     缓存命中（deps_cache 或 --no-index 解析成功）时跳过校验（缓存目录 wheel 已首次
     校验）；uv 不可用时降级为 warning 不校验（避免阻塞构建）。
+
+    ``pypi_index`` 防御性清理：strip 首尾空白与 markdown 反引号/引号包裹
+    （从文档复制 URL 常带入 `` `url` `` 形式，pip/uv 不识别反引号导致
+    "Invalid URL" 或 DNS 解析失败）。
     """
     cache_dir.mkdir(parents=True, exist_ok=True)
+    pypi_index = pypi_index.strip(" \t\r\n`'\"")
 
     filtered = _prefilter_by_python_version(packages, py_version)
     if not filtered:
