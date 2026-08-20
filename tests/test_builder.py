@@ -460,6 +460,8 @@ def test_build_orchestration_tk_app(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     def fake_extract_embed(zip_path: object, runtime_dir: Path) -> None:
         runtime_dir.mkdir(parents=True, exist_ok=True)
         (runtime_dir / "python311.dll").write_bytes(b"")
+        # embed 布局判据：python3XX.zip 存在（stdlib 载体），write_pth 据此写 zip 行
+        (runtime_dir / "python311.zip").write_bytes(b"")
         (runtime_dir.parent / "site-packages").mkdir(parents=True, exist_ok=True)
         calls["extract"] = True
 

@@ -227,7 +227,17 @@ def test_extract_embed_rejects_symlink(tmp_path: Path) -> None:
     assert not zip_path.exists()
 
 
+def _make_embed_runtime(tmp_path: Path, version: str = "3.11.9") -> Path:
+    """构造 embed 布局 runtime（含 python3XX.zip，布局判据所需）."""
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(parents=True)
+    parts = version.split(".")[:2]
+    (runtime / f"python{parts[0]}{parts[1]}.zip").write_bytes(b"zip")
+    return runtime
+
+
 def test_write_pth_content(tmp_path: Path) -> None:
+    _make_embed_runtime(tmp_path)
     pth = write_pth(tmp_path, "3.11.9")
     assert pth == tmp_path / "runtime" / "python311._pth"
     content = pth.read_text(encoding="utf-8")
@@ -238,12 +248,13 @@ def test_write_pth_content(tmp_path: Path) -> None:
 
 
 def test_write_pth_extra_paths(tmp_path: Path) -> None:
+    _make_embed_runtime(tmp_path)
     pth = write_pth(tmp_path, "3.11.9", extra_paths=("assets",))
     assert "assets" in pth.read_text()
 
 
 def test_write_pth_standalone_lib_layout(tmp_path: Path) -> None:
-    """runtime/Lib 目录存在（standalone 布局）时 sys.path 写 Lib/DLLs 而非 zip.
+    """runtime 无 python3XX.zip（standalone 布局）时 sys.path 写 Lib/DLLs.
 
     Windows 自由线程版走 python-build-standalone 路径，stdlib 为解压的 Lib/
     目录、pyd 在 DLLs/，python3XXt.zip 不存在——写 zip 行会导致 encodings
@@ -262,6 +273,29 @@ def test_write_pth_standalone_lib_layout(tmp_path: Path) -> None:
     assert "import site" in content
 
 
+def test_write_pth_embed_with_tkinter_lib(tmp_path: Path) -> None:
+    """embed 布局 + tkinter 组件（Lib 目录存在）时仍写 zip 行.
+
+    回归：旧判据「Lib 目录存在 → standalone 布局」被 tkinter 组件误触发
+    （tkinter 解压进 runtime/Lib/tkinter/），embed 布局被写成 Lib/DLLs 行
+    而 stdlib 实际在 python311.zip 内，导致 encodings 找不到。新判据以
+    python3XX.zip 文件存在性区分布局，embed+tkinter 组合正确走 zip 行 +
+    extra_paths 的 Lib 行（tkinter 可 import）。
+    """
+    runtime = tmp_path / "runtime"
+    (runtime / "Lib" / "tkinter").mkdir(parents=True)
+    (runtime / "python311.zip").write_bytes(b"zip")
+    pth = write_pth(tmp_path, "3.11.9", extra_paths=("Lib",))
+    content = pth.read_text(encoding="utf-8")
+    lines = content.splitlines()
+    assert lines[0] == "python311.zip"
+    assert lines[1] == "."
+    # extra_paths 的 Lib 去重后仅一行，tkinter 组件可 import
+    assert content.count("Lib") == 1
+    assert "..\\site-packages" in content
+    assert "..\\src" in content
+
+
 def test_write_pth_standalone_dedup_extra_lib(tmp_path: Path) -> None:
     """standalone 布局 + extra_paths 含 Lib 时去重（tkinter 场景）."""
     runtime = tmp_path / "runtime"
@@ -273,6 +307,7 @@ def test_write_pth_standalone_dedup_extra_lib(tmp_path: Path) -> None:
 
 def test_write_pth_disable_site(tmp_path: Path) -> None:
     """enable_site=False 省略 `import site` 行，启动跳过 site.py 加速."""
+    _make_embed_runtime(tmp_path)
     pth = write_pth(tmp_path, "3.11.9", enable_site=False)
     content = pth.read_text(encoding="utf-8")
     assert "import site" not in content
@@ -283,6 +318,7 @@ def test_write_pth_disable_site(tmp_path: Path) -> None:
 
 def test_write_pth_enable_site_default(tmp_path: Path) -> None:
     """默认 enable_site=True 保留 `import site` 行（向后兼容）."""
+    _make_embed_runtime(tmp_path)
     pth = write_pth(tmp_path, "3.11.9")
     assert "import site" in pth.read_text(encoding="utf-8")
 
