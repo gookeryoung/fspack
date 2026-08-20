@@ -10,6 +10,7 @@ from __future__ import annotations
 def main() -> None:
     """运行 numpy 数组运算并打印结果摘要."""
     import numpy as np
+    import numexpr as ne  # 用于表达式计算
 
     # 创建数组与广播运算
     a = np.arange(12).reshape(3, 4)
@@ -26,6 +27,14 @@ def main() -> None:
 
     print(f"numpy {np.__version__}")
     print(f"numpy demo ok: mean={mean:.2f} sum={total} det={det:.2f}")
+
+    # 表达式计算
+    a = np.random.rand(1000000)
+    b = np.random.rand(1000000)
+    expr = "2*a + 3*b + sin(a)**2*b + cos(b)*a"
+    result = ne.evaluate(expr)
+    print(f"numexpr {ne.__version__}")
+    print(f"numexpr demo ok: {expr!r} = {result}")
 
 
 if __name__ == "__main__":
