@@ -109,8 +109,8 @@ class MacInstaller(Installer):
     @classmethod
     @override
     def exe_filename(cls, info: ProjectInfo) -> str:
-        """返回 ``<name>``（无后缀，与 Linux 一致）。"""
-        return info.name
+        """返回 ``<entry>``（无后缀，多入口项目取默认入口名，与 Linux 一致）。"""
+        return info.default_entry.name
 
     @classmethod
     @override

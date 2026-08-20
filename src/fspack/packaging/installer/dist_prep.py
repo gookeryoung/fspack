@@ -91,8 +91,12 @@ def _prepare_dist(req: ReleaseRequest, target: Platform) -> tuple[Path, ProjectI
 
 
 def _exe_path(info: ProjectInfo, target: Platform) -> str:
-    """返回目标平台期望的可执行文件名（Windows 为 ``<name>.exe``，Linux 为 ``<name>``）。"""
-    return info.exe_name if target is Platform.WINDOWS else info.name
+    """返回目标平台期望的可执行文件名（Windows 为 ``<entry>.exe``，Linux 为 ``<entry>``）。
+
+    多入口项目构建侧按入口名命名 exe（如 ``[project.scripts] webview_app`` 产出
+    ``webview_app.exe``），故取默认入口名而非项目名；单入口模式二者一致。
+    """
+    return info.exe_name if target is Platform.WINDOWS else info.default_entry.name
 
 
 def _exe_exists(dist: Path, info: ProjectInfo, target: Platform) -> bool:

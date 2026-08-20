@@ -367,8 +367,14 @@ class ProjectInfo:
 
     @property
     def exe_name(self) -> str:
-        """生成的可执行文件名（单入口模式）."""
-        return f"{self.name}.exe"
+        """生成的可执行文件名（多入口模式取默认入口名，与构建侧命名一致）.
+
+        构建侧（compile_stage._loader_exe_path）按入口名命名 exe，多入口项目
+        项目名与 exe 名不同；此处取默认入口名保证安装器校验/快捷方式引用与
+        构建产物一致。单入口模式 ``all_entries`` 回退构造入口名为项目名，
+        行为不变（``<name>.exe``）。
+        """
+        return f"{self.default_entry.name}.exe"
 
     @property
     def py_xy(self) -> str:

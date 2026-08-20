@@ -74,8 +74,8 @@ class LinuxInstaller(Installer):
     @classmethod
     @override
     def exe_filename(cls, info: ProjectInfo) -> str:
-        """返回 ``<name>``（无后缀）。"""
-        return info.name
+        """返回 ``<entry>``（无后缀，多入口项目取默认入口名）。"""
+        return info.default_entry.name
 
     @classmethod
     @override
@@ -140,7 +140,8 @@ def build_deb(dist_dir: Path, info: ProjectInfo, release_dir: Path) -> Path:
     bin_dir = staging / "usr" / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
     wrapper = bin_dir / info.name
-    wrapper.write_text(f'#!/bin/sh\nexec /usr/lib/{info.name}/{info.name} "$@"\n', encoding="utf-8")
+    # wrapper 命令名用项目名；可执行文件名用默认入口名（多入口项目与构建产物命名一致）
+    wrapper.write_text(f'#!/bin/sh\nexec /usr/lib/{info.name}/{info.default_entry.name} "$@"\n', encoding="utf-8")
     wrapper.chmod(0o755)
 
     debian_dir = staging / "DEBIAN"

@@ -109,6 +109,19 @@ def test_generate_nsis_script_gui(tmp_path: Path) -> None:
     assert '"DisplayIcon" "$INSTDIR\\guiapp.exe"' in content
 
 
+def test_generate_nsis_script_multi_entry_shortcut_uses_default_entry(tmp_path: Path) -> None:
+    """多入口项目快捷方式/注册表引用默认入口 exe（gui.exe 而非项目名 app.exe）."""
+    info = _make_multi_entry_info(tmp_path)
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    nsi = generate_nsis_script(info, dist, dist / "release")
+    content = nsi.read_text(encoding="utf-8")
+    # 快捷方式名沿用项目名（安装展示），目标指向默认入口 exe
+    assert 'CreateShortCut "$SMPROGRAMS\\app\\app.lnk" "$INSTDIR\\gui.exe"' in content
+    assert 'CreateShortCut "$DESKTOP\\app.lnk" "$INSTDIR\\gui.exe"' in content
+    assert '"DisplayIcon" "$INSTDIR\\gui.exe"' in content
+
+
 def test_generate_nsis_script_registry_block(tmp_path: Path) -> None:
     """所有应用都生成完整的添加/删除程序注册表条目."""
     info = _make_info(tmp_path, name="myapp")
@@ -1048,6 +1061,34 @@ def test_exe_exists_and_exe_path_helpers(tmp_path: Path) -> None:
     (tmp_path / "myapp.exe").write_bytes(b"")
     assert _exe_exists(tmp_path, info, Platform.WINDOWS) is True
     assert _exe_exists(tmp_path, info, Platform.LINUX) is False
+
+
+def test_exe_path_multi_entry_uses_default_entry(tmp_path: Path) -> None:
+    """多入口项目 _exe_path/exe_filename 取默认入口名（与构建侧 exe 命名一致）.
+
+    构建侧（compile_stage._loader_exe_path）按入口名命名 exe：项目名 app、
+    入口 cli/gui 时产物为 cli.exe/gui.exe 而非 app.exe；校验侧须同样取
+    默认入口名（GUI 优先），否则 fsp p 报"未找到已构建的可执行文件"。
+    """
+    from fspack.packaging.installer import _check_exe, _exe_path
+    from fspack.packaging.installer.linux import LinuxInstaller
+    from fspack.packaging.installer.macos import MacInstaller
+    from fspack.packaging.installer.nsis import NsisInstaller
+
+    info = _make_multi_entry_info(tmp_path)
+    # default_entry GUI 优先：gui
+    assert info.default_entry.name == "gui"
+    assert _exe_path(info, Platform.WINDOWS) == "gui.exe"
+    assert _exe_path(info, Platform.LINUX) == "gui"
+    assert NsisInstaller.exe_filename(info) == "gui.exe"
+    assert LinuxInstaller.exe_filename(info) == "gui"
+    assert MacInstaller.exe_filename(info) == "gui"
+
+    # dist 内只有入口 exe（cli.exe/gui.exe）时校验通过
+    (tmp_path / "gui.exe").write_bytes(b"")
+    _check_exe(tmp_path, info, Platform.WINDOWS)
+    # 项目名 exe（app.exe）不存在，不能因它误判就绪
+    assert not (tmp_path / "app.exe").exists()
 
 
 # ---- sign_exe_file 测试 ----

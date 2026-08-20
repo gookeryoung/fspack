@@ -348,6 +348,38 @@ def test_project_info_from_dir_multi_entry() -> None:
     assert info.all_entries[0].name == "cli"
 
 
+def test_project_info_exe_name_multi_entry_uses_default_entry() -> None:
+    """多入口模式 exe_name 取默认入口名（GUI 优先），与构建侧 exe 命名一致."""
+    ep_cli = EntryPoint(name="cli", module="cli", file=Path("cli.py"), app_type=AppType.CLI)
+    ep_gui = EntryPoint(name="gui", module="gui", file=Path("gui.py"), app_type=AppType.GUI)
+    info = ProjectInfo(
+        name="multi",
+        version="0.1",
+        src_dir=Path(),
+        entry_module="cli",
+        entry_file=Path("cli.py"),
+        app_type=AppType.CLI,
+        dependencies=(),
+        py_version="3.10.11",
+        entries=(ep_cli, ep_gui),
+    )
+    # default_entry GUI 优先于 CLI，exe 名跟随默认入口而非项目名
+    assert info.default_entry is ep_gui
+    assert info.exe_name == "gui.exe"
+
+
+def test_scripts_exe_name_matches_build_output(tmp_path: Path) -> None:
+    """[project.scripts] 声明入口后 exe_name 与构建产物名一致（入口名而非项目名）."""
+    _write_script(tmp_path / "cli.py", content="def main():\n    pass\n")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[project.scripts]\nwebview_app = "cli:main"\n'
+    )
+    clear_project_cache()
+    info = parse_project(tmp_path)
+    assert len(info.entries) == 1
+    assert info.exe_name == "webview_app.exe"
+
+
 # --- 项目解析（parse_project）测试 ---
 
 
