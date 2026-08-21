@@ -232,6 +232,10 @@ class BuildDefaults:
     # 关闭构建结束后的 Win7 兼容扫描：默认输出文本报告
     # 到 dist/release/win7-compat-report.txt（仅 Windows 目标）
     no_win7_scan: bool | None = None
+    # 关闭 Win7 兼容 DLL 注入：跳过 shim 注入（3.9-3.11）与组件整体替换（3.12+，
+    # 需从 GitHub 下载重编译版 embed zip）。产物仅面向 Win8+/Win10+ 时启用，
+    # 避免网络受限环境下因 GitHub 下载失败阻断构建
+    no_win7_dll: bool | None = None
     # Windows 代码签名证书路径：未指定时跳过 signtool 签名。
     # 配置层仅作为 CLI --sign-exe-certificate 的回退默认值
     sign_exe_certificate: str | None = None
@@ -558,6 +562,9 @@ class BuildOptions:
     # 关闭构建结束后的 Win7 兼容扫描与报告（仅 Windows 目标，loader exe
     # 硬门禁不受此开关影响）
     no_win7_scan: bool = False
+    # 关闭 Win7 兼容 DLL 注入（shim 注入 3.9-3.11 + 组件整体替换 3.12+）：
+    # 产物仅面向 Win8+/Win10+ 时启用，避免 GitHub 下载失败阻断构建
+    no_win7_dll: bool = False
     # Windows 代码签名证书路径：非 None 时调用 signtool 签名 exe 与安装包
     sign_exe_certificate: Path | None = None
     # Windows 代码签名证书密码：与 sign_exe_certificate 配套
@@ -600,6 +607,7 @@ def build_options_from_defaults(defaults: BuildDefaults) -> BuildOptions:
         no_sbom=defaults.no_sbom if defaults.no_sbom is not None else base.no_sbom,
         no_manifest=defaults.no_manifest if defaults.no_manifest is not None else base.no_manifest,
         no_win7_scan=defaults.no_win7_scan if defaults.no_win7_scan is not None else base.no_win7_scan,
+        no_win7_dll=defaults.no_win7_dll if defaults.no_win7_dll is not None else base.no_win7_dll,
         sign_exe_certificate=(
             Path(defaults.sign_exe_certificate) if defaults.sign_exe_certificate else base.sign_exe_certificate
         ),

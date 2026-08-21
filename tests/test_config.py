@@ -2379,6 +2379,42 @@ def test_parse_project_require_hashes_invalid_type_raises(tmp_path: Path) -> Non
         parse_project(tmp_path)
 
 
+def test_parse_project_no_win7_dll_config(tmp_path: Path) -> None:
+    """[tool.fspack] no_win7_dll = true 解析并透传到 BuildOptions.
+
+    网络受限环境跳过 Win7 组件替换（3.12+ 需从 GitHub 下载重编译版 embed zip），
+    产物仅面向 Win8+/Win10+。
+    """
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nno_win7_dll = true\n', encoding="utf-8"
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
+    info = parse_project(tmp_path)
+    assert info.build_defaults.no_win7_dll is True
+    opts = build_options_from_defaults(info.build_defaults)
+    assert opts.no_win7_dll is True
+
+
+def test_parse_project_no_win7_dll_default_false(tmp_path: Path) -> None:
+    """未配置 no_win7_dll 时默认 False（保持 Win7 兼容注入）."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n', encoding="utf-8")
+    (tmp_path / "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
+    info = parse_project(tmp_path)
+    assert info.build_defaults.no_win7_dll is None
+    opts = build_options_from_defaults(info.build_defaults)
+    assert opts.no_win7_dll is False
+
+
+def test_parse_project_no_win7_dll_invalid_type_raises(tmp_path: Path) -> None:
+    """no_win7_dll 非布尔值时报错."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nno_win7_dll = "yes"\n', encoding="utf-8"
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
+    with pytest.raises(ProjectError, match="no_win7_dll 必须是布尔值"):
+        parse_project(tmp_path)
+
+
 def test_parse_project_no_sbom_config(tmp_path: Path) -> None:
     """[tool.fspack] no_sbom = true 解析为布尔值并透传到 BuildOptions."""
     (tmp_path / "pyproject.toml").write_text(

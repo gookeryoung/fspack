@@ -97,6 +97,7 @@ _BUILD_DEFAULT_KEYS: dict[str, str] = {
     "no_sbom": "no_sbom",
     "no_manifest": "no_manifest",
     "no_win7_scan": "no_win7_scan",
+    "no_win7_dll": "no_win7_dll",
     "open_browser": "open_browser",
 }
 

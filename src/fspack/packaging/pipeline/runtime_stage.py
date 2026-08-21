@@ -112,11 +112,14 @@ def _prepare_runtime(ctx: BuildContext) -> Path:
     # 3.12+ 官方 python3XX.dll 另含 kernel32 的 Win8+ 静态导入，shim 无法解决，
     # 须整套替换为重编译版组件（dll+pyd+exe 同源，仅换 dll 会与官方 pyd ABI
     # 混搭不兼容；清单驱动下载 + 双重校验，见 win7_dll 模块）。
-    if target is Platform.WINDOWS and needs_win7_dll(ctx.info.py_version):
-        with ctx.tracker.stage("Win7 组件替换") as st:
-            _replace_win7_dll(ctx, st)
-    if target is Platform.WINDOWS and _needs_win7_compat_dll(ctx.info.py_version):
-        _inject_win7_compat_dll(ctx.runtime_dir)
+    # ``--no-win7-dll``：产物仅面向 Win8+/Win10+ 时跳过全部 Win7 兼容注入，
+    # 避免网络受限环境因 GitHub 下载失败阻断构建（产物不支持 Win7）。
+    if not ctx.opts.no_win7_dll:
+        if target is Platform.WINDOWS and needs_win7_dll(ctx.info.py_version):
+            with ctx.tracker.stage("Win7 组件替换") as st:
+                _replace_win7_dll(ctx, st)
+        if target is Platform.WINDOWS and _needs_win7_compat_dll(ctx.info.py_version):
+            _inject_win7_compat_dll(ctx.runtime_dir)
 
     # 标准库精简：剥离 standalone 中的 test/ensurepip/idlelib 等运行时无用模块。
     # Windows embed 标准库在 python3XX.zip 内（官方已精简），阶段内自动跳过；

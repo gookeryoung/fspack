@@ -286,6 +286,14 @@ _BUILD_OPTS: tuple[_Opt, ...] = (
         dest="no_win7_scan",
     ),
     _Opt(
+        ("--no-win7-dll",),
+        "关闭 Win7 兼容 DLL 注入（默认 3.9-3.11 注入 api-ms-win-core-path shim、"
+        "3.12+ 整套替换为 GitHub 重编译版组件）。产物仅面向 Win8+/Win10+ 时启用，"
+        "避免网络受限环境下载 GitHub 失败阻断构建；启用后产物不支持 Win7",
+        action="store_true",
+        dest="no_win7_dll",
+    ),
+    _Opt(
         ("--auto-clean",),
         "构建前自动清理 dist 残留（含上次失败标记 .build_failed），"
         "无需手动 fsp c。检测到半成品时：无此标志则告警并继续（可能因残留文件失败），"

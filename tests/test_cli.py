@@ -1056,3 +1056,37 @@ def test_build_open_browser_flag_sets_build_options(tmp_path: Path, monkeypatch:
     monkeypatch.setattr("fspack.builder.build", fake_build)
     cli.main(["b", str(tmp_path), "--open-browser"])
     assert called["options"].open_browser is True
+
+
+def test_build_no_win7_dll_flag_sets_build_options(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`fsp b <project> --no-win7-dll` 解析为 BuildOptions.no_win7_dll=True.
+
+    网络受限环境跳过 Win7 组件替换（3.12+ 需从 GitHub 下载重编译版 embed zip），
+    避免下载失败阻断构建；产物仅面向 Win8+/Win10+。
+    """
+    _make_minimal_project(tmp_path)
+    called, fake_build = _capture_build()
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    cli.main(["b", str(tmp_path), "--no-win7-dll"])
+    assert called["options"].no_win7_dll is True
+
+
+def test_build_no_win7_dll_default_false(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """无 --no-win7-dll 标志且未配置时默认 False（保持 Win7 兼容注入）."""
+    _make_minimal_project(tmp_path)
+    called, fake_build = _capture_build()
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    cli.main(["b", str(tmp_path)])
+    assert called["options"].no_win7_dll is False
+
+
+def test_build_no_win7_dll_config_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """[tool.fspack] no_win7_dll = true 配置（无 CLI 标志）同样生效."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nno_win7_dll = true\n', encoding="utf-8"
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
+    called, fake_build = _capture_build()
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    cli.main(["b", str(tmp_path)])
+    assert called["options"].no_win7_dll is True
