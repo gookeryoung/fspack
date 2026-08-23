@@ -98,7 +98,7 @@ def test_project_info_from_dir_with_explicit_py_version(tmp_path: Path) -> None:
 def test_project_info_from_dir_pyside2_app() -> None:
     """from_dir 解析 GUI 示例并读取 requires-python 约束."""
     info = ProjectInfo.from_dir(_EXAMPLES / "gui" / "pyside2_app")
-    assert info.requires_python == ">=3.8,<3.10"
+    assert info.requires_python == ">=3.8,<3.11"
     assert info.app_type is AppType.GUI
 
 
@@ -402,7 +402,7 @@ def test_parse_project_tk_app() -> None:
 def test_parse_project_pyside2app_requires_python() -> None:
     """pyside2app 示例的 requires-python 约束正确解析."""
     info = parse_project(_EXAMPLES / "gui" / "pyside2_app")
-    assert info.requires_python == ">=3.8,<3.10"
+    assert info.requires_python == ">=3.8,<3.11"
     assert info.app_type is AppType.GUI
 
 

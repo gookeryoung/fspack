@@ -3,7 +3,7 @@ name = "pyside2_qml_dashboard"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.8,<3.10"
+requires-python = ">=3.8,<3.11"
 dependencies = [
     "pyside2>=5.15.2.1",
 ]
