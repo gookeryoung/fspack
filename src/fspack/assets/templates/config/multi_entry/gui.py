@@ -10,7 +10,8 @@ def main() -> None:
     import PySide2
 
     pyside_dir = str(Path(PySide2.__file__).parent)
-    with contextlib.suppress(OSError):
+    # add_dll_directory 仅 Windows 存在（Linux/macOS 抛 AttributeError）
+    with contextlib.suppress(OSError, AttributeError):
         os.add_dll_directory(pyside_dir)
     import PySide2.QtGui  # QtWidgets 在 C 层依赖 QtGui,显式导入以保留 .pyd
     from PySide2.QtCore import QTimer

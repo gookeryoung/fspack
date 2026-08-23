@@ -468,7 +468,10 @@ int main(int argc, char **argv) {{
 
 
 _LOADER_C_LINUX = r"""/* fspack 生成的 C loader —— 加载 python-build-standalone 并运行用户入口脚本
-   入口脚本路径从 <exe_basename>.entry 文件读取，回退 .entry（单入口兼容） */
+   入口脚本路径从 <exe_basename>.entry 文件读取，回退 .entry（单入口兼容）
+   注：exe 链接参数含 -Wl,--disable-new-dtags,-rpath,$ORIGIN/runtime/python/lib
+   （老式 DT_RPATH），使进程内所有 C 扩展的 NEEDED 解析搜索 runtime/python/lib
+   （如 _tkinter.so 依赖的 libtcl9.0.so），详见 LinuxLoader._build_command */
 #include <dlfcn.h>
 #include <stdio.h>
 #include <stdlib.h>

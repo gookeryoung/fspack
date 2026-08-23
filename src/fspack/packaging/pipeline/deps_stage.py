@@ -128,13 +128,15 @@ def _download_dependencies(ctx: BuildContext, site_packages: Path, report: Depen
     # 补充内置库：embed python 缺失 tkinter（纯 Python 包 + _tkinter.pyd + Tcl/Tk 脚本），
     # 若 AST 检测到 tkinter 使用则从 python-build-standalone Windows 构建提取并补充到 runtime。
     # Linux standalone 已含全部 stdlib，无需补充。
-    has_tkinter = False
+    # tkinter 使用检测须跨平台：Linux/macOS 的 trim 阶段（_slim_runtime）依赖
+    # has_tkinter 保留 Tcl/Tk 动态库（libtcl9.0.so/libtk9.0.so，_tkinter 模块
+    # 运行时 dlopen 依赖），仅按 Windows 判定会让 Linux tkinter 项目误删库而崩溃。
+    has_tkinter = "tkinter" in report.ast_stdlib
     TkinterBundler_dispatch = _S("TkinterBundler", _DefaultTkinterBundler)
     if TkinterBundler_dispatch.is_needed(report.ast_stdlib, target):  # type: ignore[attr-defined]
         builtin_cache = cache_root()
         with ctx.tracker.stage("补充内置库") as st:
             TkinterBundler_dispatch.ensure(ctx.runtime_dir, ctx.info.py_version, builtin_cache, stage=st)  # type: ignore[attr-defined]
-            has_tkinter = True
             st.set_detail("tkinter")
 
     # 下载用包名：优先 declared（pyproject.toml 声明的 PyPI 包名，权威），

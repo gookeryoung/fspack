@@ -330,8 +330,24 @@ class LinuxLoader(LoaderCompiler):
         app_type: AppType,  # noqa: ARG003 # 抽象方法签名要求，Linux 不区分 app_type
         resource_obj: Path | None,  # noqa: ARG003 # 抽象方法签名要求，Linux 无 PE 资源段
     ) -> list[str]:
-        """构造 gcc 编译命令，链接 libdl。"""
-        return [LINUX_GCC, "-O2", "-o", str(out_exe), str(c_file), "-ldl"]
+        """构造 gcc 编译命令，链接 libdl + 设置 runtime 库搜索 RPATH.
+
+        ``--disable-new-dtags`` 生成老式 ``DT_RPATH``（而非 ``DT_RUNPATH``）：
+        RPATH 对进程内**所有**动态加载生效（RUNPATH 仅作用于 exe 直接 NEEDED），
+        之后 Python import 机制 dlopen 的 C 扩展（如 ``_tkinter.so``）解析
+        NEEDED（``libtcl9.0.so`` 等）时同样搜索该目录。``$ORIGIN`` 由 ld.so
+        展开为 exe 所在目录（dist 根），与 libpython 相对路径布局一致。
+        """
+        return [
+            LINUX_GCC,
+            "-O2",
+            "-o",
+            str(out_exe),
+            str(c_file),
+            "-ldl",
+            "-Wl,--disable-new-dtags",
+            "-Wl,-rpath,$ORIGIN/runtime/python/lib",
+        ]
 
 
 class MacLoader(LoaderCompiler):

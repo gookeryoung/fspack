@@ -270,7 +270,16 @@ def _trim_standalone_runtime(  # noqa: PLR0912, PLR0913
             py_bin.unlink()
             removed_files += 1
             _logger.info("精简 runtime: 删除 python 二进制 %s", py_bin.name)
-        for link_name in (f"python{major}.{minor}-config", "python3-config", "python3", "python"):
+        # 清理别名链接与 *-config 脚本。freethreaded 版真实二进制为
+        # python3.13t，bin/ 下另有别名链接 python3.13 → python3.13t 与
+        # python3.13t-config 脚本：删真实二进制后必须一并删除别名，否则
+        # 留下悬空符号链接（_find_bin_python 的 glob 回退会命中断链，
+        # doctor 运行验证报 127）。
+        link_names = [f"python{major}.{minor}{suffix}-config", "python3-config", "python3", "python"]
+        if is_t:
+            # 无 t 别名：python3.13（→ python3.13t）与 python3.13-config（→ python3.13t-config）
+            link_names.extend((f"python{major}.{minor}", f"python{major}.{minor}-config"))
+        for link_name in link_names:
             link = bin_dir / link_name
             if link.is_symlink() or link.exists():
                 try:

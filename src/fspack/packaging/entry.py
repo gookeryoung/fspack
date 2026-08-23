@@ -171,7 +171,10 @@ def _close_splash():
     except OSError:
         pass  # ctypes 异常等场景：画面由 loader C 侧 30s 超时兜底关闭
 
-# tkinter 环境变量（embed python 缺失 Tcl/Tk 脚本路径，需手动指定）
+# tkinter 环境变量（embed python 缺失 Tcl/Tk 脚本路径，需手动指定）。
+# Linux/macOS standalone 无需此块：Tcl/Tk 脚本库由 python-build-standalone
+# 可重定位构建从 so 位置自动推导；共享库（libtcl9.0.so 等）由 loader exe
+# 的 DT_RPATH 兜底解析（见 LinuxLoader._build_command）。
 if {has_tkinter}:
     _tcl_lib = glob.glob(os.path.join(_RUNTIME_DIR, "tcl", "tcl*"))
     if _tcl_lib:
