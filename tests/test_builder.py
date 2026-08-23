@@ -50,7 +50,13 @@ from fspack.packaging.pipeline import (
     _save_build_failure,
     _save_build_ok,
 )
-from fspack.packaging.pipeline.frontend_stage import _build_frontend, _detect_frontends, _frontend_prune_map, _run_cmd
+from fspack.packaging.pipeline.frontend_stage import (
+    _build_frontend,
+    _detect_frontends,
+    _frontend_prune_map,
+    _is_wsl_windows_mount,
+    _run_cmd,
+)
 from fspack.packaging.pipeline.stages import _MAX_LOADER_WORKERS, BuildContext, _build_entry_loaders
 from fspack.platform import Platform
 from fspack.progress import StageRecorder
@@ -4151,6 +4157,39 @@ def test_build_frontend_empty_output_after_build_raises(tmp_path: Path, monkeypa
     monkeypatch.setattr("fspack.packaging.pipeline.frontend_stage._resolve_pm", lambda: ("npm", "npm"))
     with pytest.raises(FspackError, match="产物目录仍为空"):
         _build_frontend(_detect_frontends(tmp_path, ()))
+
+
+def test_is_wsl_windows_mount() -> None:
+    """``/mnt/<盘符>/...`` 命中 WSL Windows 挂载，其余路径不命中."""
+    assert _is_wsl_windows_mount("/mnt/c/Users/foo/nodejs/pnpm")
+    assert _is_wsl_windows_mount("/mnt/d/env/node/pnpm.cmd")
+    # 非 Windows 盘符挂载：多字母卷名、普通 Linux 路径、相对路径均不命中
+    assert not _is_wsl_windows_mount("/mnt/usb/bin/pnpm")
+    assert not _is_wsl_windows_mount("/usr/bin/pnpm")
+    assert not _is_wsl_windows_mount("C:/fake/pnpm.cmd")
+    assert not _is_wsl_windows_mount("pnpm")
+
+
+def test_resolve_pm_skips_wsl_windows_mount(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``which`` 命中 WSL Windows 盘符路径时跳过，改用后续 Linux 候选."""
+    from fspack.packaging.pipeline import frontend_stage
+
+    def fake_which(name: str) -> str | None:
+        return {
+            "pnpm": "/mnt/c/Users/foo/AppData/pnpm",
+            "npm": "/usr/bin/npm",
+        }.get(name)
+
+    monkeypatch.setattr(frontend_stage.shutil, "which", fake_which)
+    assert frontend_stage._resolve_pm() == ("npm", "/usr/bin/npm")
+
+
+def test_resolve_pm_all_wsl_mounts_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """所有候选均只存在于 Windows 盘符挂载时返回 None（明确的未找到报错）."""
+    from fspack.packaging.pipeline import frontend_stage
+
+    monkeypatch.setattr(frontend_stage.shutil, "which", lambda name: f"/mnt/c/tools/{name}")
+    assert frontend_stage._resolve_pm() is None
 
 
 class _FakePipeStream:

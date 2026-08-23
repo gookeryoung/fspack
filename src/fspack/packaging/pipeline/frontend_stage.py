@@ -180,13 +180,7 @@ def _is_wsl_windows_mount(exe: str) -> bool:
     必须跳过，让后续候选（或明确的「未找到包管理器」报错）接管。
     """
     parts = Path(exe).parts
-    return (
-        len(parts) >= 3
-        and parts[0] == "/"
-        and parts[1] == "mnt"
-        and len(parts[2]) == 1
-        and parts[2].isalpha()
-    )
+    return len(parts) >= 3 and parts[0] == "/" and parts[1] == "mnt" and len(parts[2]) == 1 and parts[2].isalpha()
 
 
 def _resolve_pm() -> tuple[str, str] | None:

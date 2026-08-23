@@ -244,7 +244,8 @@ class Downloader:
                             # 响应体被代理/弱网截断但连接正常关闭：读循环无异常
                             # 结束，仅能靠字节数对账发现。IncompleteRead 属可重试
                             # 分类，重试耗尽后进入 except 清理 .part。
-                            raise http.client.IncompleteRead(written, total)
+                            # partial 须为 bytes（http.client 用 len() 取其长度）。
+                            raise http.client.IncompleteRead(b"", total - written)
             part.replace(dest)
         except Exception:
             # 下载失败（重试耗尽或不可重试异常 reraise）：best-effort 清理半成品

@@ -42,6 +42,7 @@ from fspack.doctor import (
     _collect_machine_info,
     _deserialize_bench_results,
     _dir_size,
+    _filter_platform_supported,
     _find_debug_python,
     _find_dist_exe,
     _find_wrapper,
@@ -51,6 +52,7 @@ from fspack.doctor import (
     _format_status,
     _load_previous_bench_history,
     _machine_id,
+    _platform_skip_reason,
     _print_bench_comparison,
     _print_performance_analysis,
     _print_template_build_summary,
@@ -62,6 +64,7 @@ from fspack.doctor import (
     run_doctor,
 )
 from fspack.platform import Platform
+from fspack.templates.registry import Template
 
 
 @pytest.fixture(autouse=True)
@@ -2617,6 +2620,54 @@ def test_cli_doctor_in_help() -> None:
     help_text = parser.format_help()
     assert "doctor" in help_text
     assert "环境诊断" in help_text
+
+
+# ---- 平台兼容性过滤（doctor --test/--bench 跳过无兼容 Python 的模板）----
+
+
+def _tpl(tpl_id: str, requires_python: str) -> Template:
+    """构造最小 Template（仅 id 与 requires_python 参与平台过滤）."""
+    return Template(id=tpl_id, name=tpl_id, description="", category="cli", files=(), requires_python=requires_python)
+
+
+def test_platform_skip_reason_incompatible_on_linux(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Linux 无 3.8/3.9 standalone，``>=3.8,<3.10`` 约束应给出跳过原因."""
+    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    reason = _platform_skip_reason(_tpl("pyside2", ">=3.8,<3.10"))
+    assert reason is not None
+    assert "requires-python" in reason
+    assert ">=3.8,<3.10" in reason
+
+
+def test_platform_skip_reason_compatible_on_linux(monkeypatch: pytest.MonkeyPatch) -> None:
+    """宽松约束（``>=3.8``）在 Linux 有 3.10+ 可用，可构建返回 None."""
+    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    assert _platform_skip_reason(_tpl("helloworld", ">=3.8")) is None
+
+
+def test_platform_skip_reason_pyside2_ok_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """同一 ``>=3.8,<3.10`` 约束在 Windows 有 3.8/3.9 embed 可用，不跳过."""
+    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.WINDOWS)
+    assert _platform_skip_reason(_tpl("pyside2", ">=3.8,<3.10")) is None
+
+
+def test_platform_skip_reason_unsatisfiable_constraint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """任何平台版本表都无法满足的约束（``>=3.15``）给出跳过原因."""
+    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.WINDOWS)
+    reason = _platform_skip_reason(_tpl("future", ">=3.15"))
+    assert reason is not None
+    assert "requires-python" in reason
+
+
+def test_filter_platform_supported_splits(monkeypatch: pytest.MonkeyPatch) -> None:
+    """混合列表按平台兼容性拆分为 (可构建, 跳过及原因)."""
+    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    ok1, ok2 = _tpl("a", ">=3.8"), _tpl("b", ">=3.10,<3.14")
+    skip1 = _tpl("pyside2", ">=3.8,<3.10")
+    buildable, skipped = _filter_platform_supported([ok1, skip1, ok2])
+    assert buildable == [ok1, ok2]
+    assert [tpl for tpl, _ in skipped] == [skip1]
+    assert all("requires-python" in reason for _, reason in skipped)
 
 
 # ---- TemplateBuildResult / 模板构建汇总 ----
