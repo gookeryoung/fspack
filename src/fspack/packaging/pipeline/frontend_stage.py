@@ -37,7 +37,7 @@ import sys
 import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import IO, Any
 
 from fspack._util.jsoncache import load_json_dict
@@ -179,7 +179,8 @@ def _is_wsl_windows_mount(exe: str) -> bool:
     无法落在 Linux 文件系统（/tmp 等），即使经 interop 跑起来也写不进产物目录，
     必须跳过，让后续候选（或明确的「未找到包管理器」报错）接管。
     """
-    parts = Path(exe).parts
+    # 必须用 PurePosixPath：宿主机为 Windows 时 Path 会把根解析成 "\\"，导致挂载检测恒为 False
+    parts = PurePosixPath(exe).parts
     return len(parts) >= 3 and parts[0] == "/" and parts[1] == "mnt" and len(parts[2]) == 1 and parts[2].isalpha()
 
 
