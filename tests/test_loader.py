@@ -55,6 +55,146 @@ def test_generate_loader_source_no_entry_hardcoded() -> None:
     assert "app.py" not in src1
 
 
+def test_generate_loader_source_error_reporting() -> None:
+    """Windows loader 错误三通道报告：stderr + GUI 弹窗 + 日志文件."""
+    src = generate_loader_source("python311")
+    # GUI 子系统无控制台时 MessageBox 弹窗（GetConsoleWindow 判定）
+    assert "MessageBoxW" in src
+    assert "GetConsoleWindow" in src
+    # 日志文件持久兜底：<exe_dir>\logs\loader.log
+    assert "write_log" in src
+    assert "loader.log" in src
+    # 错误码翻译：GetLastError 高频错误码给人话与修复建议
+    assert "describe_load_error" in src
+    # 退出码规范：100=entry 101=dll 102=sym 103=mem
+    assert "#define ERR_ENTRY 100" in src
+    assert "#define ERR_DLL 101" in src
+    assert "#define ERR_SYM 102" in src
+    assert "#define ERR_MEM 103" in src
+    # 文案统一前缀与建议格式
+    assert "[fspack loader]" in src
+    assert "建议:" in src
+
+
+def test_generate_loader_source_startup_perf() -> None:
+    """Windows loader 启动提速措施：耗时打点 + 禁用 pyc 回写."""
+    src = generate_loader_source("python311")
+    # FSPACK_LOADER_VERBOSE=1 输出各阶段耗时（默认关闭零开销）
+    assert "FSPACK_LOADER_VERBOSE" in src
+    assert "verbose_enabled" in src
+    assert "GetTickCount64" in src
+    # 禁用运行时 pyc 回写（发行目录只读/杀软监控场景），用户已设置时不覆盖
+    assert "PYTHONDONTWRITEBYTECODE" in src
+    assert "set_dont_write_bytecode" in src
+    # stderr 重定向时中文转 UTF-8 字节输出（宽字符流默认 locale 下中文丢失）
+    assert "_isatty" in src
+    assert "stderr_write" in src
+
+
+def test_generate_loader_source_linux_error_reporting() -> None:
+    """Linux loader 错误双通道报告：stderr + 日志文件."""
+    src = generate_loader_source("python311", Platform.LINUX)
+    assert "report_error" in src
+    assert "write_log" in src
+    assert "loader.log" in src
+    # 退出码规范与 Windows 版一致
+    assert "#define ERR_ENTRY 100" in src
+    assert "#define ERR_DLL 101" in src
+    assert "#define ERR_SYM 102" in src
+    assert "#define ERR_MEM 103" in src
+    # 日志写入用时间戳（time.h + strftime）
+    assert "strftime" in src
+    assert "[fspack loader]" in src
+
+
+def test_generate_loader_source_linux_startup_perf() -> None:
+    """Linux loader 启动提速：RTLD_LAZY 惰性绑定 + 打点 + 禁用 pyc 回写."""
+    src = generate_loader_source("python311", Platform.LINUX)
+    # dlopen 惰性绑定：跳过 libpython 全量符号重定位（CPython 官方同款）
+    assert "RTLD_LAZY | RTLD_GLOBAL" in src
+    assert "RTLD_NOW" not in src
+    assert "FSPACK_LOADER_VERBOSE" in src
+    assert "CLOCK_MONOTONIC" in src
+    assert "PYTHONDONTWRITEBYTECODE" in src
+
+
+def test_generate_loader_source_macos_error_reporting() -> None:
+    """macOS loader 错误双通道报告：stderr + 日志文件."""
+    src = generate_loader_source("python311", Platform.MACOS)
+    assert "report_error" in src
+    assert "write_log" in src
+    assert "loader.log" in src
+    assert "#define ERR_ENTRY 100" in src
+    assert "#define ERR_DLL 101" in src
+    assert "#define ERR_SYM 102" in src
+    assert "#define ERR_MEM 103" in src
+    assert "[fspack loader]" in src
+
+
+def test_generate_loader_source_macos_startup_perf() -> None:
+    """macOS loader 启动提速：RTLD_LAZY 惰性绑定 + 打点 + 禁用 pyc 回写."""
+    src = generate_loader_source("python311", Platform.MACOS)
+    assert "RTLD_LAZY | RTLD_GLOBAL" in src
+    assert "RTLD_NOW" not in src
+    assert "FSPACK_LOADER_VERBOSE" in src
+    assert "CLOCK_MONOTONIC" in src
+    assert "PYTHONDONTWRITEBYTECODE" in src
+
+
+def test_generate_loader_source_splash_inject() -> None:
+    """--splash 注入启动画面：独立线程 + 首窗口轮询 + 事件关闭 + 超时兜底."""
+    src = generate_loader_source("python311", splash=True, splash_title="我的应用")
+    # 标记全部被替换（无残留注释标记）
+    assert "FSPACK:SPLASH" not in src
+    # 独立线程 + 消息循环（主线程不被阻塞）
+    assert "splash_thread" in src
+    assert "CreateThread" in src
+    # 三关闭条件：首窗口轮询（GUI 通用）/ 命名事件（WEB server）/ 超时兜底
+    assert "EnumWindows" in src
+    assert "splash_enum_cb" in src
+    assert 'L"Local\\\\fspack_splash_%lu"' in src
+    assert "MsgWaitForMultipleObjects" in src
+    assert "SPLASH_TIMEOUT_MS" in src
+    # 调用点：wmain 显示、report_error 先关画面再弹错误框
+    assert "    splash_show();" in src
+    assert "    splash_close();" in src
+    # 画面样式：无边框居中窗口 + 标题绘制
+    assert "WS_POPUP | WS_VISIBLE" in src
+    assert "DrawTextW" in src
+    assert 'L"我的应用"' in src
+
+
+def test_generate_loader_source_splash_title_escaped() -> None:
+    """splash 标题含双引号/反斜杠时转义为合法 C 字符串字面量."""
+    src = generate_loader_source("python311", splash=True, splash_title='My "App"\\1')
+    assert 'L"My \\"App\\"\\\\1"' in src
+
+
+def test_generate_loader_source_splash_disabled_default() -> None:
+    """默认构建不含 splash：标记剥离、无 splash 代码，源码与旧行为一致."""
+    src = generate_loader_source("python311")
+    assert "FSPACK:SPLASH" not in src
+    assert "splash_show" not in src
+    assert "splash_close" not in src
+    assert "Splash" not in src
+    # Linux/macOS 传 splash=True 也忽略（无 Windows 窗口系统概念）
+    linux = generate_loader_source("python311", Platform.LINUX, splash=True, splash_title="x")
+    assert "splash_show" not in linux
+
+
+def test_generate_loader_source_splash_changes_cache_key() -> None:
+    """splash 开关改变源码 → loader 缓存键自然分离（同配置命中、改配置失效）."""
+    plain = generate_loader_source("python311")
+    splashed = generate_loader_source("python311", splash=True, splash_title="app")
+    other_title = generate_loader_source("python311", splash=True, splash_title="other")
+    keys = {
+        _loader_cache_key(plain, AppType.CLI, Platform.WINDOWS),
+        _loader_cache_key(splashed, AppType.CLI, Platform.WINDOWS),
+        _loader_cache_key(other_title, AppType.CLI, Platform.WINDOWS),
+    }
+    assert len(keys) == 3
+
+
 def _touch_out(cmd: list[str]) -> None:
     """从命令提取输出路径并 touch（gcc 用 -o，windres 用 --output）。"""
     for flag in ("-o", "--output"):
@@ -91,6 +231,11 @@ def test_compile_loader_cli_invokes_mingw(tmp_path: Path, monkeypatch: pytest.Mo
     assert out.is_file()
     assert "-municode" in captured["cmd"]
     assert "-mwindows" not in captured["cmd"]
+    # 错误报告用 MessageBoxW/GetConsoleWindow，需显式链接 user32；
+    # splash 启动画面绘制用 GDI 函数，需显式链接 gdi32（--splash 注入，
+    # 未注入时多余链接无副作用，保持命令稳定）
+    assert "-luser32" in captured["cmd"]
+    assert "-lgdi32" in captured["cmd"]
     assert captured["cmd"][0] == _find_mingw_gcc()
 
 

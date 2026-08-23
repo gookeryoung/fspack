@@ -167,7 +167,14 @@ def _build_entry_loaders(ctx: BuildContext, resolved_icon: Path | None, has_tkin
     target = ctx.cfg.target
     exes: list[Path] = []
     with ctx.tracker.stage("生成 C loader") as st:
-        source = generate_loader_source(ctx.info.py_xy, target)
+        # splash 启动画面：--splash 构建选项（默认关闭），仅 Windows 生效，
+        # 画布标题用应用名（嵌入源码参与 loader 缓存键）
+        source = generate_loader_source(
+            ctx.info.py_xy,
+            target,
+            splash=ctx.opts.splash,
+            splash_title=ctx.info.name,
+        )
         entries = ctx.info.all_entries
         # 单入口无需并行（线程池开销无收益）
         if len(entries) <= 1:

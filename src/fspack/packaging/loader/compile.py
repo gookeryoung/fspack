@@ -31,7 +31,12 @@ from fspack.packaging.loader.cache_keys import (
     loader_cache_dir,
 )
 from fspack.packaging.loader.resource import LoaderVersionInfo
-from fspack.packaging.loader.source import _LOADER_C_LINUX, _LOADER_C_MACOS, _LOADER_C_WINDOWS
+from fspack.packaging.loader.source import (
+    _LOADER_C_LINUX,
+    _LOADER_C_MACOS,
+    _LOADER_C_WINDOWS,
+    apply_splash,
+)
 from fspack.packaging.loader.toolchain import LINUX_GCC, MACOS_CLANG, MINGW_GCC, _compile_resource_obj, _find_mingw_gcc
 from fspack.platform import Platform
 
@@ -271,7 +276,11 @@ class WindowsLoader(LoaderCompiler):
         gcc = _find_mingw_gcc()
         if gcc is None:
             raise LoaderError(f"未找到编译器 {cls.compiler_name}，请安装 {cls.install_hint}")
-        cmd: list[str] = [gcc, "-O2", "-municode", "-o", str(out_exe), str(c_file)]
+        # -luser32：loader 错误报告用 MessageBoxW/GetConsoleWindow（GUI 子系统
+        # 无控制台时弹窗提示），mingw 默认不链接 user32，需显式指定
+        # -lgdi32：splash 启动画面绘制用 CreateSolidBrush/DrawTextW 等 GDI 函数
+        # （--splash 注入；未注入时多余链接无副作用，保持命令稳定）
+        cmd: list[str] = [gcc, "-O2", "-municode", "-o", str(out_exe), str(c_file), "-luser32", "-lgdi32"]
         if app_type in (AppType.GUI, AppType.WEB):
             cmd.insert(1, "-mwindows")
         if resource_obj is not None:
@@ -370,18 +379,31 @@ class MacLoader(LoaderCompiler):
 def generate_loader_source(
     py_xy: str,
     platform: Platform = Platform.WINDOWS,
+    *,
+    splash: bool = False,
+    splash_title: str = "",
 ) -> str:
     """生成 C loader 源码。
 
     py_xy: 形如 python311 的版本前缀。
     platform: 目标平台，决定加载 DLL（Windows）/ .so（Linux）/ .dylib（macOS）。
+    splash: 注入 splash 启动画面（仅 Windows；Linux/macOS 忽略，保持源码不变）。
+        画面显示应用名，进程内出现首个可见窗口（GUI 通用）、wrapper 事件通知
+        （WEB server 启动）或 30s 超时后自动关闭。
+    splash_title: splash 显示的应用名（splash=True 时生效，经 C 转义嵌入源码）。
 
     入口脚本路径在运行时从 ``<exe_dir>/<exe_basename>.entry`` 读取（多入口），
     回退 ``<exe_dir>/.entry``（单入口）；构建时由 build 写入对应入口文件。
-    loader 源码仅依赖 ``py_xy`` 与平台，可按 ``(py_xy, app_type, platform)`` 缓存复用。
+    loader 源码依赖 ``(py_xy, app_type, platform)`` 与 splash 配置缓存复用——
+    splash 标题嵌入源码，不同应用名自然产生不同缓存键。
     """
     cls = _loader_class_for(platform)
-    return cls.generate_source(py_xy)
+    source = cls.generate_source(py_xy)
+    if splash and platform is Platform.WINDOWS:
+        source = apply_splash(source, splash_title)
+    else:
+        source = apply_splash(source, None)
+    return source
 
 
 def compile_loader(  # noqa: PLR0913

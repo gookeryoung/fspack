@@ -153,6 +153,24 @@ for _qt_pkg in ("PySide2", "PySide6", "PyQt5", "PyQt6"):
                 os.environ["PATH"] = _qt_root + _path_sep + _old_path
         break
 
+# splash 启动画面关闭通知（--splash 构建的 Windows exe 才有对应命名事件，
+# 其余平台/构建为无操作）。GUI 应用由 loader C 侧 EnumWindows 检测首个可见
+# 窗口自动关闭；WEB 应用无自有窗口，server 启动前经 ctypes SetEvent 通知。
+def _close_splash():
+    """通知 loader 关闭 splash 启动画面（事件不存在时无操作）."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        _kernel32 = ctypes.windll.kernel32
+        _ev = _kernel32.OpenEventW(0x0002, False, f"Local\\\\fspack_splash_{{os.getpid()}}")
+        if _ev:
+            _kernel32.SetEvent(_ev)
+            _kernel32.CloseHandle(_ev)
+    except OSError:
+        pass  # ctypes 异常等场景：画面由 loader C 侧 30s 超时兜底关闭
+
 # tkinter 环境变量（embed python 缺失 Tcl/Tk 脚本路径，需手动指定）
 if {has_tkinter}:
     _tcl_lib = glob.glob(os.path.join(_RUNTIME_DIR, "tcl", "tcl*"))
@@ -215,6 +233,7 @@ if _WEB_STATIC_DIRS and _OPEN_BROWSER:
             _host = host or "127.0.0.1"
             _port = port or 5000
             _open_browser_after_delay(f"http://{{_host}}:{{_port}}/")
+            _close_splash()  # WEB 无自有窗口，server 启动即关 splash
             return _original_run(self, host=host, port=port, **kwargs)
 
         Flask.run = _patched_run
@@ -246,6 +265,7 @@ if _WEB_STATIC_DIRS and _OPEN_BROWSER:
                 except ImportError:
                     pass
             _open_browser_after_delay(f"http://{{host}}:{{port}}/")
+            _close_splash()  # WEB 无自有窗口，server 启动即关 splash
             return _original_uvicorn_run(app, host=host, port=port, **kwargs)
 
         uvicorn.run = _patched_uvicorn_run
