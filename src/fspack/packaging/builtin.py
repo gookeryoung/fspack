@@ -14,6 +14,7 @@ import logging
 import re
 import tarfile
 import zipfile
+import zlib
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -154,8 +155,8 @@ class TkinterBundler:
         _logger.info("tkinter 打包: 从 tarball 提取 tkinter 组件")
         try:
             zip_data = cls._build_tkinter_zip(tarball_path)
-        except (EOFError, tarfile.ReadError) as e:
-            # tarball 损坏（gzip 流提前结束等），删除缓存并重新下载重试一次
+        except (EOFError, zlib.error, tarfile.ReadError) as e:
+            # tarball 损坏（gzip 流提前结束/解压数据错误等），删除缓存并重新下载重试一次
             _logger.warning("standalone tarball 损坏，删除并重新下载: %s", e)
             tarball_path.unlink(missing_ok=True)
             if is_offline():

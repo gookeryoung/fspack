@@ -232,8 +232,9 @@ def _parse_file_worker(py: str) -> tuple[list[str], list[str], dict[str, frozens
     """
     try:
         tree = ast.parse(Path(py).read_bytes())
-    except (SyntaxError, OSError, ValueError, RecursionError) as e:
-        # ValueError：源码含 NUL 字节；RecursionError：深度嵌套源码爆解析栈
+    except (SyntaxError, OSError, ValueError, RecursionError, MemoryError) as e:
+        # ValueError：源码含 NUL 字节；RecursionError/MemoryError：深度嵌套源码
+        # 爆解析栈（3.9+ 抛 RecursionError，3.8 的 C 栈溢出表现为 MemoryError）
         return [], [], {}, [(py, str(e))]
     tops, subs = collect_imports_and_submodules(tree)
     stdlib_ref = _WORKER_STATE["stdlib"] or _STDLIB
@@ -278,7 +279,8 @@ def _parse_serial(
     for py in py_files:
         try:
             tree = ast.parse(py.read_bytes())
-        except (SyntaxError, OSError, ValueError, RecursionError) as e:
+        except (SyntaxError, OSError, ValueError, RecursionError, MemoryError) as e:
+            # MemoryError：3.8 上深度嵌套源码的 C 栈溢出表现（3.9+ 为 RecursionError）
             all_errors.append((str(py), str(e)))
             continue
         tops, subs = collect_imports_and_submodules(tree)

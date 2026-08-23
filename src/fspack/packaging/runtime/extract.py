@@ -12,6 +12,7 @@ import stat
 import sys
 import tarfile
 import zipfile
+import zlib
 from pathlib import Path
 
 from fspack.exceptions import EmbedError
@@ -124,10 +125,12 @@ def extract_tar_safe(archive_path: Path, runtime_dir: Path, label: str) -> None:
 
     TarError / OSError / EOFError 或预检失败（EmbedError）时删除归档避免缓存污染。
 
-    ``EOFError`` 单独列出：截断的 tar.gz 在 ``getmembers``/``extractall`` 读到
-    gzip 流尾时抛 ``EOFError``（"Compressed file ended before the end-of-stream
-    marker was reached"），它既非 ``TarError`` 也非 ``OSError``，漏捕会让损坏
-    归档留在缓存且以原始 traceback 崩溃 CLI（下载中断产生半成品文件的典型症状）。
+    ``EOFError`` / ``zlib.error`` 单独列出：截断或损坏的 tar.gz 在
+    ``getmembers``/``extractall`` 读 gzip 流时抛 ``EOFError``（"Compressed file
+    ended before the end-of-stream marker was reached"，3.9+ 典型）或
+    ``zlib.error``（"Error -3 while decompressing data" 等，3.8 及 CRC 损坏典型），
+    两者均非 ``TarError`` 亦非 ``OSError``，漏捕会让损坏归档留在缓存且以原始
+    traceback 崩溃 CLI（下载中断产生半成品文件的典型症状）。
     """
     try:
         with tarfile.open(archive_path, "r:gz") as tf:
@@ -137,7 +140,7 @@ def extract_tar_safe(archive_path: Path, runtime_dir: Path, label: str) -> None:
                 tf.extractall(runtime_dir, filter="data")
             else:  # pragma: no cover - 测试环境 3.13，低版本分支不可达
                 tf.extractall(runtime_dir)
-    except (tarfile.TarError, OSError, EOFError) as e:
+    except (tarfile.TarError, OSError, EOFError, zlib.error) as e:
         _safe_unlink_archive(archive_path, label)
         raise EmbedError(f"{label} 损坏: {archive_path}") from e
     except EmbedError:
