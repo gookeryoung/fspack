@@ -52,6 +52,7 @@ from fspack.packaging.pipeline.stages import (
     _prepare_runtime,
     _resolve_project_icon,
     _slim_runtime,
+    _zip_stdlib,
 )
 from fspack.packaging.runtime import write_pth
 from fspack.packaging.sync import copy_source
@@ -327,6 +328,12 @@ def _execute_build(  # noqa: PLR0912, PLR0913
             )
 
     _compile_user_sources(ctx, src_dst)
+
+    # 标准库 zip 化：在 _compile_user_sources 之后（与 _precompile_pyc 不冲突，
+    # stdlib 不在 src/site-packages 编译范围）、_slim_runtime 删 python 二进制之前
+    # （compileall 需 python/bin/pythonX.Y[t]）。仅 Linux/macOS 目标生效，
+    # 函数内自动跳过其他平台。--no-stdlib-zip 关闭（BuildOptions.no_stdlib_zip）。
+    _zip_stdlib(ctx)
 
     # 精简 standalone runtime：在 _precompile_pyc 之后（构建期 compileall 已用完 python3.X 二进制），
     # strip libpython 调试符号 + 删 python3.X 二进制 + 删 include/share + 非 tkinter 项目剥离 Tcl/Tk。

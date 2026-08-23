@@ -58,6 +58,7 @@ from fspack.packaging.pipeline.runtime_stage import (
     _prepare_standalone_runtime,
     _prepare_windows_runtime,
     _slim_runtime,
+    _zip_stdlib,
 )
 from fspack.packaging.runtime import (
     download_embed,
@@ -65,6 +66,7 @@ from fspack.packaging.runtime import (
     extract_embed,
     extract_standalone,
     write_pth,
+    zip_stdlib,
 )
 from fspack.packaging.site_packages import normalize_pkg_name as _normalize_pkg_name
 from fspack.packaging.wheels import download_wheels
@@ -96,6 +98,7 @@ __all__ = [
     "_site_packages_has_deps",
     "_slim_runtime",
     "_strip_version_specifier",
+    "_zip_stdlib",
     "compile_loader",
     "default_icon_path",
     "detect_platform",
@@ -107,4 +110,5 @@ __all__ = [
     "fspack_wheel_cache_dir",
     "unpack_wheels",
     "write_pth",
+    "zip_stdlib",
 ]

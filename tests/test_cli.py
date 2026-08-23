@@ -253,6 +253,26 @@ def test_build_pyc_options_default_false(tmp_path: Path, monkeypatch: pytest.Mon
     assert opts.nuitka is False
 
 
+def test_build_splash_and_stdlib_zip_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`--splash`/`--no-stdlib-zip` 解析并封装到 BuildOptions."""
+    _make_minimal_project(tmp_path)
+    called, fake_build = _capture_build()
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    cli.main(["b", str(tmp_path), "--splash", "--no-stdlib-zip"])
+    assert called["options"].splash is True
+    assert called["options"].no_stdlib_zip is True
+
+
+def test_build_splash_and_stdlib_zip_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """未指定时 splash 关闭（默认不启用启动画面）、stdlib zip 化开启."""
+    _make_minimal_project(tmp_path)
+    called, fake_build = _capture_build()
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    cli.main(["b", str(tmp_path)])
+    assert called["options"].splash is False
+    assert called["options"].no_stdlib_zip is False
+
+
 def test_build_new_options_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`--pyc-optimize`/`--no-site`/`--nuitka` 解析并封装到 BuildOptions."""
     _make_minimal_project(tmp_path)

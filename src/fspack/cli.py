@@ -178,6 +178,8 @@ def _run_build(project: Path, ns: argparse.Namespace) -> None:
         icon=Path(ns.icon).resolve() if ns.icon else base.icon,
         no_stdlib_trim=ns.no_stdlib_trim or base.no_stdlib_trim,
         no_slim_runtime=ns.no_slim_runtime or base.no_slim_runtime,
+        no_stdlib_zip=ns.no_stdlib_zip or base.no_stdlib_zip,
+        splash=ns.splash or base.splash,
         no_pyc=ns.no_pyc or base.no_pyc,
         pyc_strip=ns.pyc_strip or base.pyc_strip,
         pyc_optimize=ns.pyc_optimize if ns.pyc_optimize is not None else base.pyc_optimize,

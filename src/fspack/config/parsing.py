@@ -90,6 +90,8 @@ _BUILD_DEFAULT_KEYS: dict[str, str] = {
     "no_pyc": "no_pyc",
     "no_stdlib_trim": "no_stdlib_trim",
     "no_slim_runtime": "no_slim_runtime",
+    "no_stdlib_zip": "no_stdlib_zip",
+    "splash": "splash",
     "ccache": "ccache",
     "no_size_report": "no_size_report",
     "analyze_deps": "analyze_deps",

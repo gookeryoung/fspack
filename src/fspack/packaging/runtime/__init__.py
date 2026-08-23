@@ -8,6 +8,7 @@
   EmbedRuntime、StandaloneRuntime）+ ensure/download/extract 函数式 API
 - :mod:`fspack.packaging.runtime.trim`：Win7 DLL 注入 + stdlib/standalone/Tcl/Tk 精简
 - :mod:`fspack.packaging.runtime.pth`：python3X._pth 生成（sys.path 控制）
+- :mod:`fspack.packaging.runtime.stdlib_zip`：Linux/macOS 标准库 zip 化（启动提速）
 
 测试 patch 点（``monkeypatch.setattr("fspack.packaging.runtime.<name>", ...)``）：
 
@@ -38,6 +39,7 @@ from fspack.packaging.runtime.extract import (
     extract_zip_safe,
 )
 from fspack.packaging.runtime.pth import write_pth
+from fspack.packaging.runtime.stdlib_zip import zip_stdlib
 from fspack.packaging.runtime.trim import (
     _STANDALONE_DEV_BIN_FILES,
     _STDLIB_TRIM_DIRS,
@@ -91,4 +93,5 @@ __all__ = [
     "standalone_tarball_name",
     "standalone_url",
     "write_pth",
+    "zip_stdlib",
 ]

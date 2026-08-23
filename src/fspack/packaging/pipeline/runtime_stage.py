@@ -6,6 +6,7 @@
 - :func:`_prepare_standalone_runtime`：Linux/macOS python-build-standalone 下载解压
 - :func:`_prepare_windows_runtime`：Windows embed python 下载解压
 - :func:`_replace_win7_dll`：Windows 3.12+ 官方 runtime 组件整套替换为 win7 重编译版
+- :func:`_zip_stdlib`：Linux/macOS 标准库 zip 化（编译后、精简前）
 - :func:`_slim_runtime`：编译后 strip 调试符号 + 删无用文件
 """
 
@@ -40,6 +41,9 @@ from fspack.packaging.runtime import (
 from fspack.packaging.runtime import (
     extract_standalone as _default_extract_standalone,
 )
+from fspack.packaging.runtime import (
+    zip_stdlib as _default_zip_stdlib,
+)
 from fspack.packaging.win7.dll import ensure_win7_dll, needs_win7_dll
 from fspack.platform import Platform
 
@@ -55,6 +59,7 @@ __all__ = [
     "_prepare_windows_runtime",
     "_prepare_windows_t_runtime",
     "_slim_runtime",
+    "_zip_stdlib",
 ]
 
 _logger = logging.getLogger(__name__)
@@ -129,6 +134,25 @@ def _prepare_runtime(ctx: BuildContext) -> Path:
             _trim_stdlib(ctx.runtime_dir, ctx.info.py_version, target, st)
 
     return site_packages
+
+
+def _zip_stdlib(ctx: BuildContext) -> None:
+    """Linux/macOS 标准库 zip 化（在 ``_compile_user_sources`` 之后、``_slim_runtime`` 之前调用）.
+
+    把 standalone 标准库 ``.py`` 编译为 ``.pyc`` 打包为 ``lib/pythonX.Y[t].zip``，
+    CPython ``getpath`` 自动检测 zip 加入 ``sys.path``，省去数百个 stdlib 目录的
+    ``stat`` 遍历，冷启动提速 30-80ms。详见 :func:`fspack.packaging.runtime.stdlib_zip.zip_stdlib`。
+
+    时序约束：必须在 ``_precompile_pyc`` 之后（不冲突，stdlib 不在 src/site-packages
+    编译范围）且 ``_trim_standalone_runtime`` 删除 python 二进制之前（compileall
+    需要 ``python/bin/pythonX.Y[t]``）。``--no-stdlib-zip`` 关闭（``BuildOptions.no_stdlib_zip``）。
+    """
+    if ctx.opts.no_stdlib_zip:
+        _logger.info("no_stdlib_zip=True，跳过标准库 zip 化")
+        return
+    zip_stdlib_dispatch = _S("zip_stdlib", _default_zip_stdlib)
+    with ctx.tracker.stage("标准库 zip 化") as st:
+        zip_stdlib_dispatch(ctx.runtime_dir, ctx.info.py_version, ctx.cfg.target, st)
 
 
 def _slim_runtime(ctx: BuildContext, has_tkinter: bool) -> None:

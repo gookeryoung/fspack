@@ -126,6 +126,18 @@ _BUILD_OPTS: tuple[_Opt, ...] = (
         action="store_true",
     ),
     _Opt(
+        ("--no-stdlib-zip",),
+        "关闭 Linux/macOS 标准库 zip 化（默认打包为 lib/pythonX.Y[t].zip，"
+        "省去 stdlib 目录 stat 遍历，冷启动提速 30-80ms）",
+        action="store_true",
+    ),
+    _Opt(
+        ("--splash",),
+        "启用 Windows splash 启动画面（默认关闭）：loader 启动期显示应用名无边框画面，"
+        "GUI 首窗口出现/WEB server 启动/30s 超时自动关闭。仅 Windows 目标生效",
+        action="store_true",
+    ),
+    _Opt(
         ("--no-pyc",),
         "关闭字节码预编译（默认预编译 src+site-packages 为 .pyc 加速首次启动）",
         action="store_true",
