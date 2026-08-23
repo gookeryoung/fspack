@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +12,21 @@ import pytest
 from fspack import __version__, cli
 from fspack.config import BuildOptions, get_mirror
 from fspack.platform import Platform
+
+
+def test_import_does_not_pull_logging() -> None:
+    """导入 fspack.cli 不拉 logging（启动性能契约）.
+
+    logging 导入链约 5-6ms，仅异常分支与 package/init 的 info 日志使用，
+    console 顶层自会导入。若有人把 import logging 加回模块顶层，
+    ``fsp --help`` 类轻路径将白白多付这段导入耗时（启动剖析实测）。
+    用干净子进程验证（pytest 进程自身已加载 logging，进程内断言无效）。
+    """
+    src_root = str(Path(cli.__file__).resolve().parent.parent)
+    code = f"import sys; sys.path.insert(0, r'{src_root}'); import fspack.cli; print('logging' in sys.modules)"
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "False"
 
 
 def test_build_parser_prog() -> None:

@@ -1,8 +1,10 @@
 """fspack CLI 入口 —— cargo 风格短命令（fsp b/c/r）.
 
-顶部仅导入轻量标准库（argparse/logging/pathlib/os/sys）与 ``__version__``。
+顶部仅导入轻量标准库（argparse/pathlib/os/sys）与 ``__version__``。
 重模块（``fspack.config``/``fspack.console``/``fspack.platform``）延迟到
-实际使用时导入，使 ``fsp --help`` 无需加载 config/console 即可输出帮助。
+实际使用时导入，使 ``fsp --help`` 无需加载 config/console 即可输出帮助；
+``logging`` 同样延迟到使用点（console 顶层自会导入，``--help`` 类轻路径
+可整段省去 logging 导入链，实测约 5-6ms）。
 ``--mirror`` 刻意不做 argparse choices 校验（choices 会在 parser 构建期
 触发 config 导入），改由 :func:`_resolve_mirror` 在执行期校验。
 
@@ -16,7 +18,6 @@ parser 构建代码拆分到 :mod:`fspack.cli_parser`（argparse 声明集中维
 from __future__ import annotations
 
 import argparse
-import logging
 import os
 import sys
 from pathlib import Path
@@ -30,8 +31,6 @@ if TYPE_CHECKING:
     from fspack.platform import Platform
 
 __all__ = ["build_parser", "discover_subprojects", "main"]
-
-_logger = logging.getLogger(__name__)
 
 
 # 递归扫描子项目时跳过的目录名。
@@ -89,7 +88,9 @@ def main(argv: list[str] | None = None) -> None:
         # 依赖下载失败等）已携带清晰中文消息：打印后以退出码 2 退出，不暴露原始栈。
         # 完整堆栈仅在 --verbose（DEBUG）时记录，便于排查而不干扰普通用户。
         console.error(str(exc))
-        _logger.debug("命令 %s 执行失败", command, exc_info=exc)
+        import logging
+
+        logging.getLogger(__name__).debug("命令 %s 执行失败", command, exc_info=exc)
         raise SystemExit(2) from None
 
 
@@ -269,8 +270,10 @@ def _run_package(project: Path, ns: argparse.Namespace) -> None:
         sign_deb_key=sign_deb_key,
     )
     outputs = build_release(req, target=_parse_target(ns.target), fmt=ns.format, sign=sign)
+    import logging
+
     for out in outputs:
-        _logger.info("发行包已生成: %s", out)
+        logging.getLogger(__name__).info("发行包已生成: %s", out)
 
 
 def _run_init(ns: argparse.Namespace) -> None:
@@ -291,8 +294,10 @@ def _run_init(ns: argparse.Namespace) -> None:
 
     if not ns.project_name:
         # 未指定项目名且未 --list：用当前目录名作为项目名
+        import logging
+
         ns.project_name = Path.cwd().name
-        _logger.info("未指定项目名，使用当前目录名: %s", ns.project_name)
+        logging.getLogger(__name__).info("未指定项目名，使用当前目录名: %s", ns.project_name)
 
     template_id = ns.template
     if template_id is None:
@@ -568,7 +573,9 @@ def _run_recursive(root: Path, action: str, ns: argparse.Namespace) -> int:
             err_msg = _format_error(exc)
             failed.append((project, f"{rel}: {err_msg}"))
             console.error(f"{rel} {action_verb}失败: {err_msg}")
-            _logger.debug("%s 完整错误堆栈", rel, exc_info=exc)
+            import logging
+
+            logging.getLogger(__name__).debug("%s 完整错误堆栈", rel, exc_info=exc)
 
     _print_recursive_summary(action_verb, succeeded, failed)
     return 1 if failed else 0

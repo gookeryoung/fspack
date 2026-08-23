@@ -96,15 +96,16 @@ def run_with_profile(cmd: list[str], env: dict[str, str] | None = None) -> int:
 def _parse_import_lines(lines: list[str]) -> tuple[float, list[tuple[str, float]], list[tuple[str, float]]]:
     """解析 importtime 行，返回 (解释器初始化耗时, 顶层导入列表, 模块自身耗时列表).
 
-    - 解释器初始化耗时（约）：wrapper 首次 import ``glob`` 之前的全部
+    - 解释器初始化耗时（约）：wrapper 首次 import ``runpy`` 之前的全部
       depth-0 根导入 cumulative 之和（encodings/site 等解释器启动导入）。
-    - 顶层导入列表：``glob`` 及其后的 depth-0 根导入（wrapper 自身与用户
+    - 顶层导入列表：``runpy`` 及其后的 depth-0 根导入（wrapper 自身与用户
       代码的顶层导入），值为 cumulative 毫秒。
     - 模块自身耗时列表：全部模块按 self 毫秒降序的前 :data:`_TOP_SELF` 条。
 
     行格式 ``import time: <self_us> | <cum_us> | <缩进><name>``，无法解析的
-    行（表头/畸形行）跳过。未找到 ``glob``（理论上仅旧版 wrapper）时全部
-    根导入计入解释器初始化段。
+    行（表头/畸形行）跳过。锚点用 ``runpy``：wrapper 顶层必导入 runpy 且
+    早于一切用户代码，而 os/sys/time 在解释器启动期已缓存不产生 importtime
+    行；找不到时（理论上仅极旧版 wrapper）全部根导入计入解释器初始化段。
     """
     roots: list[tuple[str, float]] = []
     self_items: list[tuple[str, float]] = []
@@ -125,11 +126,11 @@ def _parse_import_lines(lines: list[str]) -> tuple[float, list[tuple[str, float]
         depth = (len(name_field) - len(name_field.lstrip(" "))) // _NAME_INDENT
         if depth == 0:
             roots.append((name, cum_ms))
-    glob_idx = next((i for i, (n, _) in enumerate(roots) if n == "glob"), None)
-    if glob_idx is None:
+    anchor_idx = next((i for i, (n, _) in enumerate(roots) if n == "runpy"), None)
+    if anchor_idx is None:
         return sum(c for _, c in roots), [], sorted(self_items, key=lambda x: -x[1])[:_TOP_SELF]
-    interp_ms = sum(c for _, c in roots[:glob_idx])
-    return interp_ms, roots[glob_idx:], sorted(self_items, key=lambda x: -x[1])[:_TOP_SELF]
+    interp_ms = sum(c for _, c in roots[:anchor_idx])
+    return interp_ms, roots[anchor_idx:], sorted(self_items, key=lambda x: -x[1])[:_TOP_SELF]
 
 
 def _disp_width(text: str) -> int:

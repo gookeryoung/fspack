@@ -234,6 +234,9 @@ def test_generate_wrapper_source_tkinter_disabled_by_default() -> None:
     assert "if False:" in source
     assert "TCL_LIBRARY" in source  # 模板含代码但分支不执行
     assert "TK_LIBRARY" in source
+    # glob 延迟到 tkinter 分支内：顶层无缩进的 import glob 意味着所有程序
+    # （含无 tkinter 的绝大多数）都要付 glob 导入链（~7-9ms）的启动成本
+    assert "\nimport glob\n" not in source
 
 
 def test_generate_wrapper_source_tkinter_enabled() -> None:

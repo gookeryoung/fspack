@@ -48,7 +48,6 @@ _WRAPPER_TEMPLATE = '''\
 设置 site-packages 与 Qt 插件路径后以包上下文运行用户入口，使相对导入可用。
 此文件由 fspack 构建时生成，不要手动编辑。
 """
-import glob
 import os
 import runpy
 import sys
@@ -193,6 +192,11 @@ def _close_splash():
 # 可重定位构建从 so 位置自动推导；共享库（libtcl9.0.so 等）由 loader exe
 # 的 DT_RPATH 兜底解析（见 LinuxLoader._build_command）。
 if {has_tkinter}:
+    # glob 延迟导入：仅 tkinter 程序需要扫描 tcl/tk 脚本目录，无 tkinter 的
+    # 程序（绝大多数）省去 wrapper 期的 glob 导入链（glob→fnmatch→re 等，
+    # 实测约 7-9ms；后续用户代码经 pathlib._abc 导入 glob 时 re 多已被缓存）。
+    import glob
+
     _tcl_lib = glob.glob(os.path.join(_RUNTIME_DIR, "tcl", "tcl*"))
     if _tcl_lib:
         os.environ.setdefault("TCL_LIBRARY", _tcl_lib[0])

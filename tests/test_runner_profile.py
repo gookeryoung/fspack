@@ -45,12 +45,12 @@ _IMPORTTIME_SAMPLE = [
 
 
 def test_parse_import_lines_segments() -> None:
-    """glob 前的根导入计入解释器初始化段，glob 及其后为顶层导入段."""
+    """runpy 前的根导入计入解释器初始化段，runpy 及其后为顶层导入段."""
     interp_ms, roots, self_top = _parse_import_lines(_IMPORTTIME_SAMPLE)
-    # glob 之前仅 encodings(650us) + site(1050us) = 1.7ms
-    assert interp_ms == pytest.approx(1.7)
-    assert [name for name, _ in roots] == ["glob", "runpy", "game"]
-    assert roots[2] == ("game", pytest.approx(2.0))
+    # runpy 之前：encodings(650us) + site(1050us) + glob(60us) = 1.76ms
+    assert interp_ms == pytest.approx(1.76)
+    assert [name for name, _ in roots] == ["runpy", "game"]
+    assert roots[1] == ("game", pytest.approx(2.0))
     # self 降序 top：runpy 0.7 / game 0.5 / site 0.4 / numpy 0.15 ...
     assert self_top[0] == ("runpy", pytest.approx(0.7))
     assert self_top[1] == ("game", pytest.approx(0.5))
@@ -61,8 +61,8 @@ def test_parse_import_lines_segments() -> None:
     assert all(name not in names_top for name in ("broken", "not an importtime line"))
 
 
-def test_parse_import_lines_no_glob_fallback() -> None:
-    """无 glob 根导入时（旧版 wrapper）全部根导入计入解释器初始化段."""
+def test_parse_import_lines_no_runpy_fallback() -> None:
+    """无 runpy 根导入时（极旧版 wrapper）全部根导入计入解释器初始化段."""
     lines = [
         "import time:       100 |       100 | encodings",
         "import time:       200 |       300 | site",
@@ -84,11 +84,11 @@ def test_parse_import_lines_empty() -> None:
 def test_parse_import_lines_nested_not_root() -> None:
     """缩进的子模块（深度 > 0）不计入根导入列表，只参与 self 排序."""
     lines = [
-        "import time:       100 |       100 | glob",
+        "import time:       100 |       100 | runpy",
         "import time:       999 |      1500 |   submodule",
     ]
     _, roots, self_top = _parse_import_lines(lines)
-    assert [name for name, _ in roots] == ["glob"]
+    assert [name for name, _ in roots] == ["runpy"]
     assert self_top[0] == ("submodule", pytest.approx(0.999))
 
 
@@ -311,6 +311,7 @@ def test_print_summary_table_layout(capsys: pytest.CaptureFixture[str]) -> None:
         "import time:      2100 |      2100 | encodings",
         "import time:      3300 |      5400 | site",
         "import time:        60 |        60 | glob",
+        "import time:       100 |       100 | runpy",
         "import time:   1437300 |  1437300 | app.controllers.app_controller",
         "import time:     66000 |     66000 | natsort.natsort",
     ]
@@ -327,8 +328,8 @@ def test_print_summary_table_layout(capsys: pytest.CaptureFixture[str]) -> None:
     assert "app.controllers.app_controller" in out
     assert "1437.3ms" in out
     assert "71.9%" in out
-    # 模块自身耗段子项（glob 0.06ms 低于阈值被过滤，剩 4 条）
-    assert "模块自身耗时 top4" in out
+    # 模块自身耗段子项（glob 0.06ms 低于阈值被过滤，剩 5 条含 runpy 0.1ms）
+    assert "模块自身耗时 top5" in out
     assert "natsort.natsort" in out
     assert "66.0ms" in out
     # wrapper 段
