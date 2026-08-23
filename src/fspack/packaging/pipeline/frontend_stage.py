@@ -169,15 +169,36 @@ def _detect_frontends(project_dir: Path, web_static_dirs: tuple[str, ...]) -> li
     return [*configured, *auto]
 
 
+def _is_wsl_windows_mount(exe: str) -> bool:
+    """可执行文件是否位于 WSL 的 Windows 盘符挂载路径（``/mnt/<drive>/...``）.
+
+    WSL 默认把 Windows PATH 追加进 Linux PATH，``shutil.which("pnpm")`` 会命中
+    ``/mnt/c/.../nodejs/pnpm``（Windows 发行版的 sh 包装脚本）。该脚本 ``exec node``
+    依赖 Linux PATH 中的 node——而 Windows node 不在 Linux PATH（``node.exe`` 非
+    ``node``），执行必然失败（``exec: node: not found``）。且 Windows 进程的 cwd
+    无法落在 Linux 文件系统（/tmp 等），即使经 interop 跑起来也写不进产物目录，
+    必须跳过，让后续候选（或明确的「未找到包管理器」报错）接管。
+    """
+    parts = Path(exe).parts
+    return (
+        len(parts) >= 3
+        and parts[0] == "/"
+        and parts[1] == "mnt"
+        and len(parts[2]) == 1
+        and parts[2].isalpha()
+    )
+
+
 def _resolve_pm() -> tuple[str, str] | None:
     """按 pnpm → yarn → npm 顺序解析包管理器，返回 ``(名称, 可执行文件路径)``.
 
     :func:`shutil.which` 在 Windows 上按 PATHEXT 命中 ``pnpm.cmd`` 等，
-    无需手动拼接后缀。
+    无需手动拼接后缀。Linux/WSL 下跳过 Windows 盘符挂载路径（见
+    :func:`_is_wsl_windows_mount`），未找到时返回 ``None``。
     """
     for name in _PM_CANDIDATES:
         exe = shutil.which(name)
-        if exe:
+        if exe and not _is_wsl_windows_mount(exe):
             return name, exe
     return None
 

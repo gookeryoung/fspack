@@ -1,13 +1,20 @@
 """Standalone 标准库 zip 化：Linux/macOS 启动提速.
 
 把 ``runtime/python/lib/pythonX.Y[t]/`` 下的纯 ``.py`` 编译为 ``.pyc`` 并打包为
-``lib/pythonX.Y[t].zip``（legacy 布局条目，如 ``os.pyc``、``json/__init__.pyc``），
+``lib/pythonXY[t].zip``（legacy 布局条目，如 ``os.pyc``、``json/__init__.pyc``），
 随后删除源 ``.py`` 与 ``__pycache__``。运行时 CPython ``getpath`` 检测到
-``lib/pythonX.Y[t].zip`` 自动加入 ``sys.path``（与 Windows embed 的
+``lib/pythonXY[t].zip`` 自动加入 ``sys.path``（与 Windows embed 的
 ``python3XX.zip`` 同机制，free-threaded build 的 ABI 标志 ``t`` 计入 zip 名），
 import 命中 zip 条目：省去每次启动对数百个 stdlib 目录的 ``stat`` 遍历与
 源码重编译（配合 loader 的 ``PYTHONDONTWRITEBYTECODE=1``，散装 ``.py`` 每次
 启动都要重新编译），冷启动收益 30-80ms（磁盘/杀软敏感环境更多）。
+
+注意 zip 名为 ``python314.zip``（major+minor 无点拼接，t 后缀紧随），不是
+``python3.14.zip``：POSIX ``getpath`` 按
+``<prefix>/lib/python{major}{minor}[t].zip`` 计算 zip 路径（实测
+python-build-standalone 3.14.6 的 ``sys.path[0]`` 为 ``lib/python314.zip``），
+带点的文件名永远不会进入 ``sys.path``，标准库 ``.py`` 又已被删除，
+启动时 ``encodings`` 找不到直接 fatal error。
 
 排除目录（保留目录形态、不打包不删源）：
 
@@ -58,9 +65,9 @@ def _stdlib_layout(runtime_dir: Path, py_version: str) -> tuple[Path, Path, Path
     suffix = "t" if is_t else ""
     lib_dir = runtime_dir / "python" / "lib"
     stdlib = lib_dir / f"python{major}.{minor}{suffix}"
-    # zip 与 stdlib 目录平级：CPython getpath 在 lib/ 下按
-    # pythonX.Y[ABI].zip 名检测并自动加入 sys.path
-    zip_path = lib_dir / f"python{major}.{minor}{suffix}.zip"
+    # zip 与 stdlib 目录平级：CPython getpath 在 lib/ 下按 pythonXY[ABI].zip
+    # （major+minor 无点拼接）名检测并自动加入 sys.path
+    zip_path = lib_dir / f"python{major}{minor}{suffix}.zip"
     py_exe = runtime_dir / "python" / "bin" / f"python{major}.{minor}{suffix}"
     if not stdlib.is_dir():
         return None

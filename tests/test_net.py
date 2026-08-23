@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import ssl
 from pathlib import Path
 from urllib.request import Request
@@ -125,3 +126,39 @@ class TestDownloaderDownload:
         with pytest.raises(OSError, match="boom"):
             downloader.download("https://x/d", dest)
         assert not dest.exists()
+
+    def test_truncated_body_raises_incomplete_read(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """响应体截断（written < Content-Length 且连接正常关闭）重试耗尽后失败.
+
+        弱网/代理截断场景 urllib 读循环可能无异常结束，仅靠字节数对账发现；
+        最终失败后不产生 dest（.part 半成品被清理），缓存不被截断文件污染。
+        """
+
+        class TruncResp(FakeResp):
+            """Content-Length 声明完整长度但只提供一半数据（模拟代理截断）."""
+
+            def __init__(self) -> None:
+                super().__init__(b"x" * 100)
+                self.headers = {"Content-Length": "200"}
+
+        monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout, **kw: TruncResp())
+        dest = tmp_path / "f.tar.gz"
+        downloader = Downloader(ssl_ctx=ssl.create_default_context())
+        with pytest.raises(http.client.IncompleteRead):
+            downloader.download("https://x/d", dest)
+        assert not dest.exists(), "截断文件不应写入 dest"
+        assert not (tmp_path / "f.tar.gz.part").exists(), ".part 半成品应被清理"
+
+    def test_atomic_part_rename(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """下载经 .part 临时文件写入，成功后原子 replace 到 dest（不留 .part）."""
+
+        monkeypatch.setattr(
+            "urllib.request.urlopen",
+            lambda req, timeout, **kw: FakeResp(b"full body"),
+        )
+        dest = tmp_path / "f.zip"
+        downloader = Downloader(ssl_ctx=ssl.create_default_context())
+        written = downloader.download("https://x/d", dest)
+        assert written == len(b"full body")
+        assert dest.read_bytes() == b"full body"
+        assert not (tmp_path / "f.zip.part").exists(), "成功后 .part 应被 rename 消费"

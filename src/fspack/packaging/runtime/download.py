@@ -306,7 +306,9 @@ def ensure_embed(  # noqa: PLR0913
     """确保 runtime_dir 内有可用 embed python，返回 runtime_dir.
 
     通过 :func:`_R` 延迟解析 ``download_embed`` / ``extract_embed``：测试 patch
-    ``runtime.download_embed`` 时，此处会感知 patch 后的实现。
+    ``runtime.download_embed`` 时，此处会感知 patch 后的实现。解压抛
+    :class:`EmbedError`（zip 损坏，缓存文件已被 extract 侧删除）时重新下载
+    一次自愈，两次失败才向上抛错。
     """
     dll_marker = EmbedRuntime.marker_path(runtime_dir, version)
     if dll_marker.is_file():
@@ -317,7 +319,13 @@ def ensure_embed(  # noqa: PLR0913
         download_embed_dispatch = _R("download_embed", download_embed)
         extract_embed_dispatch = _R("extract_embed", extract_embed)
         zip_path = download_embed_dispatch(version, mirror, cache_dir, stage=stage, expected_hash=expected_hash)
-        extract_embed_dispatch(zip_path, runtime_dir)
+        try:
+            extract_embed_dispatch(zip_path, runtime_dir)
+        except EmbedError:
+            # 损坏归档已被 extract_zip_safe 删除缓存文件，重新下载一次自愈
+            _logger.warning("embed zip 损坏（%s），重新下载", zip_path.name)
+            zip_path = download_embed_dispatch(version, mirror, cache_dir, stage=stage, expected_hash=expected_hash)
+            extract_embed_dispatch(zip_path, runtime_dir)
     EmbedRuntime.post_extract(runtime_dir, version)
     return runtime_dir
 
@@ -367,6 +375,8 @@ def ensure_standalone(  # noqa: PLR0913
     """确保 runtime_dir 内有可用 python-build-standalone，返回 runtime_dir.
 
     通过 :func:`_R` 延迟解析 ``download_standalone`` / ``extract_standalone``。
+    解压抛 :class:`EmbedError`（归档损坏，缓存文件已被 extract 侧删除）时
+    重新下载一次自愈，两次失败才向上抛错。
     """
     python_bin = StandaloneRuntime.marker_path(runtime_dir, version)
     if python_bin.is_file():
@@ -376,14 +386,25 @@ def ensure_standalone(  # noqa: PLR0913
     else:
         download_standalone_dispatch = _R("download_standalone", download_standalone)
         extract_standalone_dispatch = _R("extract_standalone", extract_standalone)
-        tar_path = download_standalone_dispatch(
-            version,
-            release_tag,
-            cache_dir,
-            stage=stage,
-            macos_arch=macos_arch,
-            windows=windows,
-            expected_hash=expected_hash,
-        )
-        extract_standalone_dispatch(tar_path, runtime_dir)
+
+        def _download() -> Path:
+            return download_standalone_dispatch(
+                version,
+                release_tag,
+                cache_dir,
+                stage=stage,
+                macos_arch=macos_arch,
+                windows=windows,
+                expected_hash=expected_hash,
+            )
+
+        tar_path = _download()
+        try:
+            extract_standalone_dispatch(tar_path, runtime_dir)
+        except EmbedError:
+            # 损坏归档已被 extract_tar_safe 删除缓存文件，重新下载一次自愈
+            # （下载中断留下的半成品 tar.gz 缓存命中后首次解压才暴露）
+            _logger.warning("python-build-standalone tarball 损坏（%s），重新下载", tar_path.name)
+            tar_path = _download()
+            extract_standalone_dispatch(tar_path, runtime_dir)
     return runtime_dir

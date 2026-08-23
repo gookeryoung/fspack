@@ -517,6 +517,24 @@ def test_extract_standalone_bad_tar(tmp_path: Path) -> None:
     assert not bad.exists(), "损坏的 tarball 应被删除"
 
 
+def test_extract_standalone_truncated_tar(tmp_path: Path) -> None:
+    """截断的 tar.gz（下载中断半成品）抛 EmbedError 且归档被删除.
+
+    截断 gzip 在 ``getmembers`` 读到流尾时抛 ``EOFError``——既非 ``TarError``
+    也非 ``OSError``，曾漏过 except 元组以原始 traceback 崩溃 CLI 且损坏
+    归档留在缓存（用户实测 ``fsp b`` 崩溃场景）。
+    """
+    truncated = tmp_path / "truncated.tar.gz"
+    full = tmp_path / "full.tar.gz"
+    _make_tar(full, [("python/bin/python3.11", b"#!/bin/sh"), ("python/lib/x.so", b"so" * 1024)])
+    # 前半字节：gzip 头有效但流不完整，tarfile.open 成功、getmembers 抛 EOFError
+    data = full.read_bytes()
+    truncated.write_bytes(data[: len(data) // 2])
+    with pytest.raises(EmbedError, match="tarball 损坏"):
+        extract_standalone(truncated, tmp_path / "runtime")
+    assert not truncated.exists(), "截断的 tarball 应被删除（自愈：下次构建重新下载）"
+
+
 def test_extract_standalone_bad_tar_unlink_failure_warns(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -704,6 +722,62 @@ def test_ensure_standalone_downloads_when_missing(tmp_path: Path, monkeypatch: p
     monkeypatch.setattr("fspack.packaging.runtime.download_standalone", lambda *a, **k: tar_path)
     ensure_standalone("3.11.9", STANDALONE_RELEASE_TAG, tmp_path / "cache", runtime)
     assert (runtime / "python" / "bin" / "python3.11").is_file()
+
+
+def test_ensure_standalone_retries_after_corrupt_archive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """缓存命中损坏 tarball：解压失败（归档被删）后重新下载一次自愈."""
+    runtime = tmp_path / "runtime"
+    full = tmp_path / "full.tar.gz"
+    _make_tar(full, [("python/bin/python3.11", b"")])
+    data = full.read_bytes()
+    truncated = tmp_path / "truncated.tar.gz"
+    truncated.write_bytes(data[: len(data) // 2])
+
+    downloads = iter([truncated, full])
+    monkeypatch.setattr(
+        "fspack.packaging.runtime.download_standalone",
+        lambda *a, **k: next(downloads),
+    )
+    ensure_standalone("3.11.9", STANDALONE_RELEASE_TAG, tmp_path / "cache", runtime)
+    assert (runtime / "python" / "bin" / "python3.11").is_file(), "重下载后解压成功"
+
+
+def test_ensure_standalone_two_corrupt_archives_raise(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """两次下载均损坏时向上抛 EmbedError（重试只做一次）."""
+    runtime = tmp_path / "runtime"
+    bad = tmp_path / "bad.tar.gz"
+    bad.write_bytes(b"not a tar")
+    calls = {"n": 0}
+
+    def fake_download(*a: object, **k: object) -> Path:
+        calls["n"] += 1
+        return bad
+
+    monkeypatch.setattr("fspack.packaging.runtime.download_standalone", fake_download)
+    with pytest.raises(EmbedError, match="tarball 损坏"):
+        ensure_standalone("3.11.9", STANDALONE_RELEASE_TAG, tmp_path / "cache", runtime)
+    assert calls["n"] == 2, "损坏重试一次后失败"
+
+
+def test_ensure_embed_retries_after_corrupt_zip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mirror: MirrorConfig
+) -> None:
+    """缓存命中损坏 embed zip：解压失败（归档被删）后重新下载一次自愈."""
+    runtime = tmp_path / "runtime"
+    good_zip = tmp_path / "good.zip"
+    with zipfile.ZipFile(good_zip, "w") as zf:
+        zf.writestr("python311.dll", b"dll")
+    downloads = iter([tmp_path / "corrupt.zip", good_zip])
+
+    def fake_download(*a: object, **k: object) -> Path:
+        path = next(downloads)
+        if not path.exists():
+            path.write_bytes(b"not a zip")
+        return path
+
+    monkeypatch.setattr("fspack.packaging.runtime.download_embed", fake_download)
+    ensure_embed("3.11.9", mirror, tmp_path / "cache", runtime)
+    assert (runtime / "python311.dll").is_file(), "重下载后解压成功"
 
 
 # --- ensure_* with stage 参数测试 ---

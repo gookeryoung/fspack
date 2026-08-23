@@ -104,8 +104,10 @@ class Downloader:
     注入（测试场景）。
 
     下载失败时按 :func:`_is_retryable_network_error` 分类重试：连接超时/DNS 失败/
-    读阶段连接中断/HTTP 502/503/504 重试（首次 + 2 次重试，退避约 1s/2s + 抖动），
-    HTTP 4xx 等客户端错误立即失败。失败后清理 ``dest`` 半成品文件避免污染缓存。
+    读阶段连接中断/HTTP 502/503/504/响应体截断（Content-Length 不匹配）重试
+    （首次 + 2 次重试，退避约 1s/2s + 抖动），HTTP 4xx 等客户端错误立即失败。
+    下载先写 ``<dest>.part`` 校验通过后原子 ``replace``，失败后清理 ``.part``
+    半成品文件避免污染缓存。
     """
 
     def __init__(
@@ -156,10 +158,18 @@ class Downloader:
 
         网络错误按 :func:`_is_retryable_network_error` 分类重试：可重试错误（连接超时、
         DNS 失败、读阶段连接中断、HTTP 502/503/504）重试（首次 + 2 次重试，退避约
-        1s/2s + 抖动），不可重试错误（HTTP 4xx、磁盘满）立即失败。重试时 ``dest``
-        以 ``wb`` 模式重新打开覆盖上次部分写入，progress 任务重建（transient=True
-        不留痕）。最终失败（重试耗尽或不可重试异常 reraise）后 best-effort 清理
-        ``dest`` 半成品文件，避免残缺归档污染缓存。
+        1s/2s + 抖动），不可重试错误（HTTP 4xx、磁盘满）立即失败。重试时 ``.part``
+        临时文件以 ``wb`` 模式重新打开覆盖上次部分写入，progress 任务重建
+        （transient=True 不留痕）。最终失败（重试耗尽或不可重试异常 reraise）后
+        best-effort 清理 ``.part`` 半成品文件，避免残缺归档污染缓存。
+
+        完整性两道防线（弱网/代理截断响应体时 urllib 可能不抛异常）：
+
+        1. **Content-Length 校验**：读循环正常结束但 ``written != total`` 时抛
+           ``http.client.IncompleteRead``（可重试分类），截断文件不落盘为最终产物
+        2. **原子写入**：先写 ``<dest>.part``，校验通过后 ``replace`` 到 ``dest``，
+           进程被杀/断电等中途退出只留下 ``.part``（缓存按精确文件名命中，
+           不会误用半成品），不会污染缓存
 
         ``urllib.request`` / ``rich.progress`` / ``fspack.console`` 在方法内延迟导入：
         ``import fspack.builder`` 热路径不触发 urllib.request（省 ~15ms）与
@@ -173,6 +183,7 @@ class Downloader:
         """
         # 延迟导入：urllib.request + rich.progress 多 column 类 + console 单例。
         # 仅在真正下载时加载，避免 import fspack.builder 热路径触发 ~23ms 重模块加载。
+        import http.client
         import urllib.request
 
         from rich.progress import (
@@ -188,6 +199,9 @@ class Downloader:
         from fspack.console import console
 
         dest.parent.mkdir(parents=True, exist_ok=True)
+        # 原子写入：先写 .part 临时文件，成功后 replace 到 dest。中途退出
+        # （进程被杀/断电）只留下 .part，缓存按精确文件名命中不会误用半成品。
+        part = dest.with_name(dest.name + ".part")
         req = urllib.request.Request(url, headers={"User-Agent": "fspack"})
 
         retryer = _build_download_retryer()
@@ -218,7 +232,7 @@ class Downloader:
                             total = 0
                         task_id = progress.add_task(label or url.rsplit("/", 1)[-1], total=total or None)
                         written = 0
-                        with dest.open("wb") as f:
+                        with part.open("wb") as f:
                             while True:
                                 chunk = resp.read(_BLOCK_SIZE)
                                 if not chunk:
@@ -226,14 +240,20 @@ class Downloader:
                                 f.write(chunk)
                                 written += len(chunk)
                                 progress.update(task_id, advance=len(chunk))
+                        if total and written != total:
+                            # 响应体被代理/弱网截断但连接正常关闭：读循环无异常
+                            # 结束，仅能靠字节数对账发现。IncompleteRead 属可重试
+                            # 分类，重试耗尽后进入 except 清理 .part。
+                            raise http.client.IncompleteRead(written, total)
+            part.replace(dest)
         except Exception:
             # 下载失败（重试耗尽或不可重试异常 reraise）：best-effort 清理半成品
             # 文件，避免残缺归档留在缓存目录被下次构建误用。清理自身失败仅记
             # warning，不掩盖原异常。
             try:
-                dest.unlink(missing_ok=True)
+                part.unlink(missing_ok=True)
             except OSError as unlink_err:  # pragma: no cover - 清理失败极罕见
-                _logger.warning("清理下载失败的半成品文件失败 %s: %s", dest, unlink_err)
+                _logger.warning("清理下载失败的半成品文件失败 %s: %s", part, unlink_err)
             raise
         if stage:
             stage.add_bytes(written)

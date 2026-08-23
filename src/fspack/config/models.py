@@ -210,7 +210,7 @@ class BuildDefaults:
     no_pyc: bool | None = None
     no_stdlib_trim: bool | None = None
     no_slim_runtime: bool | None = None
-    # 关闭 Linux/macOS 标准库 zip 化（默认打包为 lib/pythonX.Y[t].zip 启动提速）
+    # 关闭 Linux/macOS 标准库 zip 化（默认打包为 lib/pythonXY[t].zip 启动提速）
     no_stdlib_zip: bool | None = None
     # 启用 Windows splash 启动画面（默认关闭；GUI 首窗口/WEB server 启动/30s 超时自动关闭）
     splash: bool | None = None
@@ -526,7 +526,7 @@ class BuildOptions:
     - ``no_slim_runtime``：关闭 standalone runtime 精简（默认 strip libpython 调试符号 +
       删 python3.X 二进制 + 删 include/share + 非 tkinter 项目剥离 Tcl/Tk，省 ~100MB）
     - ``no_stdlib_zip``：关闭 Linux/macOS 标准库 zip 化（默认打包为
-      ``lib/pythonX.Y[t].zip`` 省去 stdlib 目录遍历，冷启动提速 30-80ms）
+      ``lib/pythonXY[t].zip`` 省去 stdlib 目录遍历，冷启动提速 30-80ms）
     - ``splash``：启用 Windows splash 启动画面（默认关闭；loader 启动期显示
       无边框画面，GUI 首窗口出现/WEB server 启动/30s 超时自动关闭）
     - ``no_pyc``：关闭字节码预编译

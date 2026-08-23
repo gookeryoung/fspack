@@ -139,7 +139,7 @@ def _prepare_runtime(ctx: BuildContext) -> Path:
 def _zip_stdlib(ctx: BuildContext) -> None:
     """Linux/macOS 标准库 zip 化（在 ``_compile_user_sources`` 之后、``_slim_runtime`` 之前调用）.
 
-    把 standalone 标准库 ``.py`` 编译为 ``.pyc`` 打包为 ``lib/pythonX.Y[t].zip``，
+    把 standalone 标准库 ``.py`` 编译为 ``.pyc`` 打包为 ``lib/pythonXY[t].zip``，
     CPython ``getpath`` 自动检测 zip 加入 ``sys.path``，省去数百个 stdlib 目录的
     ``stat`` 遍历，冷启动提速 30-80ms。详见 :func:`fspack.packaging.runtime.stdlib_zip.zip_stdlib`。
 

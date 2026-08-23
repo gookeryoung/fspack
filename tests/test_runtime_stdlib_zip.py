@@ -31,7 +31,9 @@ def _make_runtime(tmp: Path, py_version: str = "3.11.9") -> tuple[Path, Path, Pa
     runtime = tmp / "runtime"
     stdlib = runtime / "python" / "lib" / f"python{major}.{minor}{suffix}"
     stdlib.mkdir(parents=True)
-    zip_path = runtime / "python" / "lib" / f"python{major}.{minor}{suffix}.zip"
+    # zip 名与 CPython POSIX getpath 约定一致：python311.zip / python313t.zip
+    # （major+minor 无点拼接，t 后缀紧随），带点的 python3.11.zip 不会进 sys.path
+    zip_path = runtime / "python" / "lib" / f"python{major}{minor}{suffix}.zip"
     py_exe = runtime / "python" / "bin" / f"python{major}.{minor}{suffix}"
     py_exe.parent.mkdir(parents=True)
     py_exe.write_bytes(b"#!/bin/sh\n")
@@ -181,10 +183,10 @@ def test_zip_stdlib_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_zip_stdlib_freethreaded_layout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """t 后缀版本：stdlib/python 二进制/zip 名均带 t（python3.13t）."""
+    """t 后缀版本：stdlib/python 二进制目录名带点，zip 名无点（python313t.zip）."""
     runtime, stdlib, zip_path, py_exe = _make_runtime(tmp_path, py_version="3.13.14t")
     assert stdlib.name == "python3.13t"
-    assert zip_path.name == "python3.13t.zip"
+    assert zip_path.name == "python313t.zip"
     assert py_exe.name == "python3.13t"
     (stdlib / "os.py").write_text("x = 1\n")
 

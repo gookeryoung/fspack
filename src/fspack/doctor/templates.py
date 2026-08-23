@@ -44,9 +44,11 @@ __all__ = [
     "_build_debug_cmd",
     "_build_run_cmd",
     "_build_single_template",
+    "_filter_platform_supported",
     "_find_debug_python",
     "_find_dist_exe",
     "_find_wrapper",
+    "_platform_skip_reason",
     "_run_template",
     "run_doctor_bench",
     "run_doctor_test",
@@ -269,6 +271,37 @@ def _run_template(
     )
 
 
+def _platform_skip_reason(tpl: Template) -> str | None:
+    """当前平台无法满足模板 ``requires-python`` 时返回跳过原因，可构建返回 ``None``.
+
+    与 :func:`fspack.builder.build` 内 :func:`resolve_py_version` 同判据：按目标
+    平台取已知版本表（Linux/macOS 为 standalone，Windows 为 embed），无任何已知
+    版本满足约束即跳过。典型场景：PySide2 模板 ``requires-python >=3.8,<3.10``，
+    Linux 无 3.8/3.9 standalone 运行时（EOL，astral-sh 不再发布），Windows embed
+    仍可正常构建——跳过而非失败，避免 doctor 在 Linux 上永久误报。
+    """
+    from fspack.config.versions import _satisfies, known_versions
+    from fspack.platform import detect_platform
+
+    versions = known_versions(detect_platform())
+    if any(_satisfies(v, tpl.requires_python) for v in versions.values()):
+        return None
+    return f"requires-python: {tpl.requires_python}，当前平台无已知兼容 python 版本"
+
+
+def _filter_platform_supported(templates: list[Template]) -> tuple[list[Template], list[tuple[Template, str]]]:
+    """拆分模板列表为 (可构建, 平台不支持跳过及原因)."""
+    buildable: list[Template] = []
+    skipped: list[tuple[Template, str]] = []
+    for tpl in templates:
+        reason = _platform_skip_reason(tpl)
+        if reason is None:
+            buildable.append(tpl)
+        else:
+            skipped.append((tpl, reason))
+    return buildable, skipped
+
+
 def _build_single_template(  # pragma: no cover
     template: Template,
     work_dir: Path,
@@ -376,13 +409,17 @@ def run_doctor_test() -> None:  # pragma: no cover
         console.warn("未找到项目模板")
         return
 
-    console.step(f"模板构建测试（{len(templates)} 个模板）")
+    buildable, skipped = _filter_platform_supported(templates)
+    console.step(f"模板构建测试（{len(buildable)} 个模板）")
+    for tpl, reason in skipped:
+        console.rich.print(f"  [yellow]-[/yellow] 跳过 {tpl.id}: {reason}")
+
     results: list[TemplateBuildResult] = []
 
     with tempfile.TemporaryDirectory(prefix="fsp-doctor-test-") as tmp:
         work_dir = Path(tmp)
-        for i, tpl in enumerate(templates, 1):
-            console.rich.print(f"[cyan][{i}/{len(templates)}][/cyan] 构建 {tpl.id} ...")
+        for i, tpl in enumerate(buildable, 1):
+            console.rich.print(f"[cyan][{i}/{len(buildable)}][/cyan] 构建 {tpl.id} ...")
             result = _build_single_template(tpl, work_dir, bench=False)
             results.append(result)
             if result.success:
@@ -411,13 +448,17 @@ def run_doctor_bench() -> None:  # pragma: no cover
         console.warn("未找到项目模板")
         return
 
-    console.step(f"性能基准测试（{len(templates)} 个模板）")
+    buildable, skipped = _filter_platform_supported(templates)
+    console.step(f"性能基准测试（{len(buildable)} 个模板）")
+    for tpl, reason in skipped:
+        console.rich.print(f"  [yellow]-[/yellow] 跳过 {tpl.id}: {reason}")
+
     results: list[TemplateBuildResult] = []
 
     with tempfile.TemporaryDirectory(prefix="fsp-doctor-bench-") as tmp:
         work_dir = Path(tmp)
-        for i, tpl in enumerate(templates, 1):
-            console.rich.print(f"[cyan][{i}/{len(templates)}][/cyan] 基准构建 {tpl.id} ...")
+        for i, tpl in enumerate(buildable, 1):
+            console.rich.print(f"[cyan][{i}/{len(buildable)}][/cyan] 基准构建 {tpl.id} ...")
             result = _build_single_template(tpl, work_dir, bench=True)
             results.append(result)
             if result.success:

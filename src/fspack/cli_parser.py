@@ -127,7 +127,7 @@ _BUILD_OPTS: tuple[_Opt, ...] = (
     ),
     _Opt(
         ("--no-stdlib-zip",),
-        "关闭 Linux/macOS 标准库 zip 化（默认打包为 lib/pythonX.Y[t].zip，"
+        "关闭 Linux/macOS 标准库 zip 化（默认打包为 lib/pythonXY[t].zip，"
         "省去 stdlib 目录 stat 遍历，冷启动提速 30-80ms）",
         action="store_true",
     ),

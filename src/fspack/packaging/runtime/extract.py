@@ -122,7 +122,12 @@ def extract_tar_safe(archive_path: Path, runtime_dir: Path, label: str) -> None:
     ``filter="data"`` 作双重防护（预检通过后 data filter 不会再拒绝任何条目，
     仅防御预检遗漏的边角情况如危险权限位）。
 
-    TarError / OSError 或预检失败（EmbedError）时删除归档避免缓存污染。
+    TarError / OSError / EOFError 或预检失败（EmbedError）时删除归档避免缓存污染。
+
+    ``EOFError`` 单独列出：截断的 tar.gz 在 ``getmembers``/``extractall`` 读到
+    gzip 流尾时抛 ``EOFError``（"Compressed file ended before the end-of-stream
+    marker was reached"），它既非 ``TarError`` 也非 ``OSError``，漏捕会让损坏
+    归档留在缓存且以原始 traceback 崩溃 CLI（下载中断产生半成品文件的典型症状）。
     """
     try:
         with tarfile.open(archive_path, "r:gz") as tf:
@@ -132,7 +137,7 @@ def extract_tar_safe(archive_path: Path, runtime_dir: Path, label: str) -> None:
                 tf.extractall(runtime_dir, filter="data")
             else:  # pragma: no cover - 测试环境 3.13，低版本分支不可达
                 tf.extractall(runtime_dir)
-    except (tarfile.TarError, OSError) as e:
+    except (tarfile.TarError, OSError, EOFError) as e:
         _safe_unlink_archive(archive_path, label)
         raise EmbedError(f"{label} 损坏: {archive_path}") from e
     except EmbedError:
