@@ -15,7 +15,14 @@ from typing import Any
 import pytest
 
 from fspack.runner import run as run_run
-from fspack.runner_profile import PROFILE_ENV, _parse_import_lines, run_with_profile
+from fspack.runner_profile import (
+    PROFILE_ENV,
+    _pad,
+    _parse_import_lines,
+    _print_summary,
+    _rpad,
+    run_with_profile,
+)
 
 # ---- _parse_import_lines 单元测试 ----
 
@@ -109,18 +116,29 @@ def test_run_with_profile_collect_and_summarize(capsys: pytest.CaptureFixture[st
     rc = run_with_profile([sys.executable, "-c", _CHILD_CODE], env=env)
     assert rc == 0
     captured = capsys.readouterr()
-    # 汇总头与总耗时
+    # 汇总头、分隔线与总耗时
     assert "[fspack] 启动耗时剖析（总 wall time" in captured.out
     assert "退出码 0" in captured.out
-    # loader 段：去前缀原文展示（"loader 总耗时"阶段名与"耗时"不可拆分重组）
-    assert "read_entry 耗时 1.5ms" in captured.out
-    assert "加载 python313.dll 耗时 16.4ms" in captured.out
-    assert "loader 总耗时 18.9ms（进入 Python）" in captured.out
+    assert "─" * 30 in captured.out
+    # loader 段：结构化展示（阶段名 + "耗时"词并入列展示，"loader 总"重组为
+    # "loader 总（进入 Python）"）
+    assert "read_entry" in captured.out
+    assert "1.5ms" in captured.out
+    assert "加载 python313.dll" in captured.out
+    assert "16.4ms" in captured.out
+    assert "loader 总（进入 Python）" in captured.out
+    assert "18.9ms" in captured.out
     # wrapper 段：环境准备 = env_ready 累计值；用户入口执行 = done - start
-    assert "环境准备  2.0ms" in captured.out
-    assert "用户入口执行  2.5ms" in captured.out
+    assert "环境准备" in captured.out
+    assert "2.0ms" in captured.out
+    assert "用户入口执行" in captured.out
+    assert "2.5ms" in captured.out
     # import 段：真实解释器受 PYTHONPROFILEIMPORTTIME 激活输出 importtime
     assert "解释器初始化(约)" in captured.out
+    # 占比列存在（"%"结尾的字段）
+    assert "%" in captured.out
+    # 短运行 gap 低于阈值，不显示未细分行
+    assert "未细分" not in captured.out
     # 非标记行透传（stderr），标记行被汇总替代不透传
     assert "user-stderr-line" in captured.err
     assert "[fspack timing]" not in captured.err
@@ -161,8 +179,10 @@ def test_run_with_profile_missing_entry_done(capsys: pytest.CaptureFixture[str])
     rc = run_with_profile([sys.executable, "-c", code])
     assert rc == 0
     captured = capsys.readouterr()
-    assert "环境准备  1.0ms" in captured.out
-    assert "用户入口执行  未返回" in captured.out
+    assert "环境准备" in captured.out
+    assert "1.0ms" in captured.out
+    assert "用户入口执行" in captured.out
+    assert "未返回" in captured.out
 
 
 def test_run_with_profile_no_markers(capsys: pytest.CaptureFixture[str]) -> None:
@@ -266,3 +286,95 @@ def test_run_without_profile_unchanged(tmp_path: Path, monkeypatch: pytest.Monke
     run_run(project)
     assert captured["cmd"] == [str(project / "dist" / "app.exe")]
     assert captured["env"] is None
+
+
+# ---- 汇总表排版与"未细分"归因测试 ----
+
+
+def test_pad_cjk_display_width() -> None:
+    """_pad/_rpad 按终端显示宽度对齐：CJK 全宽字符占 2 列，超宽不截断."""
+    assert _pad("环境准备", 10) == "环境准备  "
+    assert _pad("read_entry", 12) == "read_entry  "
+    assert _rpad("1437.3ms", 10) == "  1437.3ms"
+    assert _rpad("99.9%", 7) == "  99.9%"
+    assert _pad("超长名称超过列宽时不截断", 6) == "超长名称超过列宽时不截断"
+
+
+def test_print_summary_table_layout(capsys: pytest.CaptureFixture[str]) -> None:
+    """汇总表逐行展示顶层导入/模块自身耗时子项，含耗时与占比两列.
+
+    直接调用私有 _print_summary 注入构造数据（故障注入例外，避免为构造
+    秒级 wall time 真实起子进程）。
+    """
+    timing = {"env_ready": 50.0, "entry_start": 51.0, "entry_done": 100.0}
+    imports = [
+        "import time:      2100 |      2100 | encodings",
+        "import time:      3300 |      5400 | site",
+        "import time:        60 |        60 | glob",
+        "import time:   1437300 |  1437300 | app.controllers.app_controller",
+        "import time:     66000 |     66000 | natsort.natsort",
+    ]
+    _print_summary(2000.0, 0, [("loader 总", 10.0, "（进入 Python）")], timing, imports)
+    out = capsys.readouterr().out
+    # 表头与分隔线
+    assert "[fspack] 启动耗时剖析（总 wall time 2000ms，退出码 0）" in out
+    assert "─" * 60 in out
+    # loader 行结构化：阶段名 + 耗时 + 占比
+    assert "loader 总（进入 Python）" in out
+    assert "10.0ms" in out
+    assert "0.5%" in out
+    # 顶层导入子项行：名称 + cumulative + 占比（1437.3ms / 2000ms = 71.9%）
+    assert "app.controllers.app_controller" in out
+    assert "1437.3ms" in out
+    assert "71.9%" in out
+    # 模块自身耗段子项（glob 0.06ms 低于阈值被过滤，剩 4 条）
+    assert "模块自身耗时 top4" in out
+    assert "natsort.natsort" in out
+    assert "66.0ms" in out
+    # wrapper 段
+    assert "环境准备" in out
+    assert "50.0ms" in out
+    assert "用户入口执行" in out
+    assert "49.0ms" in out
+
+
+def test_print_summary_gap_old_dist_hint(capsys: pytest.CaptureFixture[str]) -> None:
+    """旧 dist（无 wrapper 打点）大 gap 显示未细分行与重新构建提示."""
+    _print_summary(7000.0, 0, [("read_entry", 0.0, ""), ("loader 总", 0.0, "（进入 Python）")], {}, [])
+    out = capsys.readouterr().out
+    assert "未细分" in out
+    assert "旧 dist 无 wrapper 打点" in out
+    assert "重新 fsp b" in out
+    assert "~" in out
+
+
+def test_print_summary_gap_teardown_new_dist(capsys: pytest.CaptureFixture[str]) -> None:
+    """新 dist 末端大 gap 归因为进程收尾，不提示重新构建."""
+    timing = {"env_ready": 5.0, "entry_start": 6.0, "entry_done": 5000.0}
+    _print_summary(7000.0, 0, [("loader 总", 10.0, "")], timing, [])
+    out = capsys.readouterr().out
+    assert "未细分" in out
+    assert "进程收尾" in out
+    assert "重新 fsp b" not in out
+    # wrapper 各段正常展示：入口执行 = 5000 - 6 = 4994ms
+    assert "环境准备" in out
+    assert "用户入口执行" in out
+    assert "4994.0ms" in out
+
+
+def test_print_summary_gap_entry_missing(capsys: pytest.CaptureFixture[str]) -> None:
+    """有 env_ready 但缺 entry_done 的大 gap 归因为入口未完成打点."""
+    timing = {"env_ready": 5.0, "entry_start": 6.0}
+    _print_summary(5000.0, 0, [], timing, [])
+    out = capsys.readouterr().out
+    assert "未细分" in out
+    assert "入口执行未完成打点" in out
+    assert "未返回" in out
+
+
+def test_print_summary_small_gap_hidden(capsys: pytest.CaptureFixture[str]) -> None:
+    """低于阈值的小 gap 不显示未细分行，避免噪音."""
+    timing = {"env_ready": 5.0, "entry_start": 6.0, "entry_done": 5950.0}
+    _print_summary(6000.0, 0, [("loader 总", 10.0, "")], timing, [])
+    out = capsys.readouterr().out
+    assert "未细分" not in out

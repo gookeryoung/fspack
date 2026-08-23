@@ -300,10 +300,7 @@ fsp r [project] [--entry <name>] [--debug] [--profile] [-- <args>...]
 | `--profile` | 输出启动耗时剖析汇总（loader/环境准备/import 各阶段耗时） |
 | `-- <args>` | 透传给目标程序的参数 |
 
-`--profile` 启动耗时剖析：注入三级打点（C loader 阶段 / 入口包装器各阶段 /
-CPython 原生 `importtime` 逐模块导入），运行结束后输出汇总，定位启动性能
-优化点。可与 `--debug` 组合（无 loader 段）。旧 dist 构建的 wrapper 无
-打点时汇总缺 wrapper 段，重新 `fsp b` 后完整。
+`--profile` 启动耗时剖析：注入三级打点（C loader 阶段 / 入口包装器各阶段 / CPython 原生 `importtime` 逐模块导入），运行结束后输出对齐的耗时汇总表（各阶段与逐模块耗时、占总时长占比、未归因时间的"未细分"提示），定位启动性能优化点。可与 `--debug` 组合（无 loader 段）。旧 dist 构建的 wrapper 无打点时汇总缺 wrapper 段并提示重新构建，重新 `fsp b` 后完整。
 
 ### fsp package
 

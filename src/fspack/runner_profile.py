@@ -1,18 +1,19 @@
 """``fsp r --profile`` 启动耗时剖析：采集与汇总.
 
-流式读取子进程 stderr，采集三类打点标记并解析为启动耗时汇总：
+流式读取子进程 stderr，采集三类打点标记并解析为启动耗时汇总表：
 
 - ``[fspack loader] <阶段> 耗时 <ms>ms``：C loader 各阶段耗时，
   由 ``FSPACK_LOADER_VERBOSE=1`` 激活（三平台 loader 已内置打点）。
 - ``[fspack timing] <label> @<累计ms>ms``：入口包装器各阶段累计时刻，
   由 ``FSPACK_TIMING=1`` 激活（新构建的 dist wrapper 已内置打点；
-  旧 dist 无此类行，汇总缺 wrapper 段）。
+  旧 dist 无此类行，汇总缺 wrapper 段并提示重新构建）。
 - ``import time: <self> | <cumulative> | <缩进><模块名>``：CPython 原生
   ``-X importtime`` 逐模块导入耗时，由 ``PYTHONPROFILEIMPORTTIME=1`` 激活。
 
 非标记行（程序自身的 stderr 输出）原样透传；标记行与 importtime 原始行
-不透传，由退出后打印的汇总替代，避免刷屏。stdout/stdin 继承父进程，
-交互与正常输出不受影响。
+不透传，由退出后打印的对齐汇总表替代（阶段/耗时/占比三列，CJK 全宽字符
+按 2 列对齐；末端"未细分"行解释未被各阶段覆盖的 wall time 去向）。
+stdout/stdin 继承父进程，交互与正常输出不受影响。
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ import re
 import subprocess
 import sys
 import time
+import unicodedata
 
 __all__ = ["PROFILE_ENV", "run_with_profile"]
 
@@ -30,8 +32,7 @@ PROFILE_ENV = {"FSPACK_LOADER_VERBOSE": "1", "FSPACK_TIMING": "1", "PYTHONPROFIL
 _LOADER_PREFIX = "[fspack loader]"
 _TIMING_PREFIX = "[fspack timing]"
 _IMPORTTIME_PREFIX = "import time:"
-# loader 打点行：[fspack loader] <阶段> 耗时 <ms>ms[（补充说明）]；
-# 展示时保留去前缀原文（阶段名与"耗时"连写场景如"loader 总耗时"不可拆分重组）
+# loader 打点行：[fspack loader] <阶段> 耗时 <ms>ms[（补充说明）]
 _LOADER_RE = re.compile(r"\[fspack loader\]\s*(.+?)\s*耗时\s*([0-9.]+)ms(.*)")
 # wrapper 打点行：[fspack timing] <label> @<累计ms>ms
 _TIMING_RE = re.compile(r"\[fspack timing\]\s*(\S+)\s*@\s*([0-9.]+)ms")
@@ -42,6 +43,16 @@ _TOP_ROOTS = 8
 _TOP_SELF = 10
 # 低于该阈值（ms）的条目在汇总中不展示，避免噪音
 _MIN_DISPLAY_MS = 0.1
+# 汇总表列宽（按终端显示宽度计，CJK 全宽字符占 2 列）
+_TAG_W = 10
+_LABEL_W = 36
+_MS_W = 10
+_PCT_W = 7
+_SEP_LEN = 60
+# "未细分"行的显示阈值：gap 超过该绝对值且占总时长 5% 以上才显示，
+# 避免短运行的控制噪声触发
+_GAP_MIN_MS = 100.0
+_GAP_MIN_RATIO = 0.05
 
 
 def run_with_profile(cmd: list[str], env: dict[str, str] | None = None) -> int:
@@ -53,7 +64,7 @@ def run_with_profile(cmd: list[str], env: dict[str, str] | None = None) -> int:
     """
     t_start = time.perf_counter()
     proc = subprocess.Popen(cmd, env=env, stderr=subprocess.PIPE)
-    loader_stages: list[str] = []
+    loader_stages: list[tuple[str, float, str]] = []
     timing_stages: dict[str, float] = {}
     import_lines: list[str] = []
     assert proc.stderr is not None
@@ -62,9 +73,11 @@ def run_with_profile(cmd: list[str], env: dict[str, str] | None = None) -> int:
         if line.startswith(_IMPORTTIME_PREFIX):
             import_lines.append(line)
             continue
-        if line.startswith(_LOADER_PREFIX) and _LOADER_RE.match(line) is not None:
-            loader_stages.append(line[len(_LOADER_PREFIX) :].strip())
-            continue
+        if line.startswith(_LOADER_PREFIX):
+            m = _LOADER_RE.match(line)
+            if m is not None:
+                loader_stages.append((m.group(1), float(m.group(2)), m.group(3)))
+                continue
         if line.startswith(_TIMING_PREFIX):
             m = _TIMING_RE.match(line)
             if m is not None:
@@ -119,34 +132,127 @@ def _parse_import_lines(lines: list[str]) -> tuple[float, list[tuple[str, float]
     return interp_ms, roots[glob_idx:], sorted(self_items, key=lambda x: -x[1])[:_TOP_SELF]
 
 
+def _disp_width(text: str) -> int:
+    """返回终端显示宽度（CJK 全宽/宽字符按 2 列计，其余按 1 列）."""
+    return sum(2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1 for ch in text)
+
+
+def _pad(text: str, width: int) -> str:
+    """按显示宽度右侧补空格到指定列宽（超宽原样返回，不截断）."""
+    return text + " " * max(0, width - _disp_width(text))
+
+
+def _rpad(text: str, width: int) -> str:
+    """按显示宽度左侧补空格右对齐到指定列宽（超宽原样返回）."""
+    return " " * max(0, width - _disp_width(text)) + text
+
+
+def _fmt_ms(ms: float) -> str:
+    """格式化毫秒值（一位小数）."""
+    return f"{ms:.1f}ms"
+
+
+def _fmt_pct(ms: float, wall_ms: float) -> str:
+    """格式化占总时长的百分比（wall time 非正时为空串）."""
+    if wall_ms <= 0:
+        return ""
+    return f"{ms / wall_ms * 100:.1f}%"
+
+
+def _row(tag: str, label: str, ms_text: str = "", pct_text: str = "") -> None:
+    """打印一行汇总：标签列 + 名称列 + 耗时列 + 占比列."""
+    print("  " + _pad(tag, _TAG_W) + _pad(label, _LABEL_W) + _rpad(ms_text, _MS_W) + "  " + _rpad(pct_text, _PCT_W))
+
+
+def _sub_row(name: str, ms: float, wall_ms: float) -> None:
+    """打印子项行：名称列位置缩进对齐，用于顶层导入/模块自身耗时逐条展示."""
+    print(
+        "  "
+        + _pad("", _TAG_W)
+        + _pad(name, _LABEL_W)
+        + _rpad(_fmt_ms(ms), _MS_W)
+        + "  "
+        + _rpad(_fmt_pct(ms, wall_ms), _PCT_W)
+    )
+
+
+def _print_import_sections(
+    interp_ms: float,
+    user_roots: list[tuple[str, float]],
+    self_top: list[tuple[str, float]],
+    wall_ms: float,
+) -> None:
+    """打印 import 段：解释器初始化、顶层导入子项、模块自身耗时子项."""
+    if interp_ms > 0:
+        _row("[import]", "解释器初始化(约)", _fmt_ms(interp_ms), _fmt_pct(interp_ms, wall_ms))
+    if user_roots:
+        shown_roots = [r for r in sorted(user_roots, key=lambda x: -x[1])[:_TOP_ROOTS] if r[1] >= _MIN_DISPLAY_MS]
+        if shown_roots:
+            _row("[import]", f"顶层导入 top{len(shown_roots)}")
+            for name, ms in shown_roots:
+                _sub_row(name, ms, wall_ms)
+    if self_top:
+        shown_self = [r for r in self_top if r[1] >= _MIN_DISPLAY_MS]
+        if shown_self:
+            _row("[import]", f"模块自身耗时 top{len(shown_self)}")
+            for name, ms in shown_self:
+                _sub_row(name, ms, wall_ms)
+
+
+def _print_unaccounted(
+    wall_ms: float,
+    loader_total: float,
+    interp_ms: float,
+    timing_stages: dict[str, float],
+) -> None:
+    """打印"未细分"行：wall 减去已归因阶段（loader 总耗时 + 解释器初始化 +
+    wrapper 末次打点累计值）。gap 显著（超过 100ms 且占总时长 5% 以上）时
+    展示并按可用打点解释去向：旧 dist 无 wrapper 打点 → 提示重新构建细分；
+    有打点 → 进程收尾；缺末次打点 → 入口未完成。
+    """
+    env_ready = timing_stages.get("env_ready")
+    entry_done = timing_stages.get("entry_done")
+    gap = wall_ms - (loader_total + interp_ms + max(entry_done or 0.0, env_ready or 0.0))
+    if gap < _GAP_MIN_MS or gap < wall_ms * _GAP_MIN_RATIO:
+        return
+    if env_ready is None:
+        label, reason = "旧 dist 无 wrapper 打点", "重新 fsp b 后可细分环境准备与入口执行"
+    elif entry_done is None:
+        label, reason = "入口执行未完成打点", "os._exit 或异常退出，入口内耗时未归因"
+    else:
+        label, reason = "进程收尾", "解释器退出与资源清理"
+    _row("[未细分]", label, f"~{gap:.0f}ms", _fmt_pct(gap, wall_ms))
+    print("  " + _pad("", _TAG_W) + reason)
+
+
 def _print_summary(
     wall_ms: float,
     returncode: int,
-    loader_stages: list[str],
+    loader_stages: list[tuple[str, float, str]],
     timing_stages: dict[str, float],
     import_lines: list[str],
 ) -> None:
-    """打印启动耗时汇总：loader → wrapper 环境准备 → 解释器初始化 → import 细分 → 用户入口执行."""
+    """打印启动耗时汇总表：loader → 环境准备 → 解释器初始化 → import 细分 → 入口执行 → 未细分."""
     print(f"[fspack] 启动耗时剖析（总 wall time {wall_ms:.0f}ms，退出码 {returncode}）")
-    for text in loader_stages:
-        print(f"  [loader]   {text}")
+    print("─" * _SEP_LEN)
+    interp_ms = 0.0
+    user_roots: list[tuple[str, float]] = []
+    self_top: list[tuple[str, float]] = []
+    if import_lines:
+        interp_ms, user_roots, self_top = _parse_import_lines(import_lines)
+    loader_total = 0.0
+    for stage, ms, suffix in loader_stages:
+        loader_total = max(loader_total, ms)
+        _row("[loader]", f"{stage}{suffix}", _fmt_ms(ms), _fmt_pct(ms, wall_ms))
     env_ready = timing_stages.get("env_ready")
     entry_start = timing_stages.get("entry_start")
     entry_done = timing_stages.get("entry_done")
     if env_ready is not None:
-        print(f"  [wrapper]  环境准备  {env_ready:.1f}ms  （site-packages/Qt/lazy hooks/web 补丁）")
-    if import_lines:
-        interp_ms, user_roots, self_top = _parse_import_lines(import_lines)
-        print(f"  [import]   解释器初始化(约)  {interp_ms:.1f}ms  （encodings/site 根导入累计）")
-        roots_str = " | ".join(
-            f"{n} {c:.1f}ms" for n, c in sorted(user_roots, key=lambda x: -x[1])[:_TOP_ROOTS] if c >= _MIN_DISPLAY_MS
-        )
-        if roots_str:
-            print(f"  [import]   顶层导入:  {roots_str}")
-        top_str = " | ".join(f"{n} {s:.1f}ms" for n, s in self_top if s >= _MIN_DISPLAY_MS)
-        if top_str:
-            print(f"  [import]   模块自身耗时 top{_TOP_SELF}:  {top_str}")
+        _row("[wrapper]", "环境准备", _fmt_ms(env_ready), _fmt_pct(env_ready, wall_ms))
+    _print_import_sections(interp_ms, user_roots, self_top, wall_ms)
     if entry_start is not None and entry_done is not None:
-        print(f"  [wrapper]  用户入口执行  {entry_done - entry_start:.1f}ms  （runpy 开始 → 入口返回）")
+        exec_ms = entry_done - entry_start
+        _row("[wrapper]", "用户入口执行", _fmt_ms(exec_ms), _fmt_pct(exec_ms, wall_ms))
     elif entry_start is not None:
-        print("  [wrapper]  用户入口执行  未返回（入口未完成或 os._exit 退出）")
+        _row("[wrapper]", "用户入口执行", "未返回")
+    _print_unaccounted(wall_ms, loader_total, interp_ms, timing_stages)
