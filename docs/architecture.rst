@@ -71,13 +71,20 @@ dist 布局
 多入口机制
 ----------
 
-单个项目可通过 ``[tool.fspack.entries]`` 声明多个入口，每个入口生成独立 exe，
-共享 runtime/依赖/源码。每个入口按自身脚本 import 推断 CLI/GUI 类型，支持
-cli/gui/web 混合。
+单个项目可声明多个入口，每个入口生成独立 exe，共享 runtime/依赖/源码。每个入口
+按自身脚本 import 推断 CLI/GUI 类型，支持 cli/gui/web 混合。
+
+入口声明来源与优先级：
+
+1. ``[project.scripts]``（PEP 621 标准，默认推荐）：``name = "module:function"``，
+   fspack 自动识别 flat/src layout 将 dotted module 解析为脚本文件路径；
+   已声明该表时无需再定义 ``[tool.fspack.entries]``。
+2. ``[tool.fspack.entries]``（可选）：``name = "script_rel"``，相对项目目录的
+   脚本路径；同名入口覆盖 ``[project.scripts]``，也可补充打包专属入口。
+3. 无任何入口声明时按文件名兜底扫描（``detect_entry``）。
 
 多入口模式下每个入口写入 ``<name>.entry`` 文件，C loader 运行时按
-``<exe_basename>.entry`` 查找入口脚本。单入口项目（无 ``[tool.fspack.entries]``）
-仍写 ``.entry`` 文件，向后兼容。
+``<exe_basename>.entry`` 查找入口脚本。单入口项目仍写 ``.entry`` 文件，向后兼容。
 
 递归打包
 --------

@@ -1395,25 +1395,23 @@ def test_scripts_mixed_cli_gui_entries(tmp_path: Path) -> None:
 def test_scripts_real_fspack_self_scenario(tmp_path: Path) -> None:
     """典型：真实 fspack 自身场景.
 
-    fspack 的 pyproject.toml 同时声明：
-    - [project.scripts] fspack = "fspack.cli:main" / fsp = "fspack.cli:main"
-    - [tool.fspack.entries] fsp = "src/fspack/cli.py" / fspack = "src/fspack/cli.py"
+    fspack 的 pyproject.toml 仅声明 [project.scripts]（PEP 621 标准入口点）：
+    - fspack = "fspack.cli:main" / fsp = "fspack.cli:main"
 
-    fsp 与 fspack 同名，fspack entries 覆盖 scripts；
-    合并后 2 个入口，文件路径指向 src/fspack/cli.py（src layout 解析）。
+    无 [tool.fspack.entries] 时 entries 全部来自 [project.scripts]，
+    dotted module fspack.cli 经 src layout 解析指向 src/fspack/cli.py。
     """
     _write_script(tmp_path / "src" / "fspack" / "__init__.py", content="")
     _write_script(tmp_path / "src" / "fspack" / "cli.py")
     (tmp_path / "pyproject.toml").write_text(
         '[project]\nname = "fspack"\nversion = "0.3.10"\n\n'
-        '[project.scripts]\nfspack = "fspack.cli:main"\nfsp = "fspack.cli:main"\n\n'
-        '[tool.fspack.entries]\nfsp = "src/fspack/cli.py"\nfspack = "src/fspack/cli.py"\n'
+        '[project.scripts]\nfspack = "fspack.cli:main"\nfsp = "fspack.cli:main"\n'
     )
     clear_project_cache()
     info = parse_project(tmp_path)
     assert len(info.entries) == 2
     assert [ep.name for ep in info.entries] == ["fspack", "fsp"]
-    # 两者都被 fspack entries 覆盖，指向 src/fspack/cli.py
+    # 两者均经 src layout 解析指向 src/fspack/cli.py
     assert info.entries[0].file == (tmp_path / "src" / "fspack" / "cli.py").resolve()
     assert info.entries[1].file == (tmp_path / "src" / "fspack" / "cli.py").resolve()
 

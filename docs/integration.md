@@ -176,7 +176,7 @@ git push origin v0.1.0
 
 ## 多入口项目的 CI 验证
 
-多入口项目（`[tool.fspack.entries]`）在 CI 中应循环验证每个入口：
+多入口项目（`[project.scripts]` 或 `[tool.fspack.entries]`）在 CI 中应循环验证每个入口：
 
 ```bash
 # 构建一次生成所有入口 exe

@@ -58,7 +58,7 @@ def test_init_multi_entry_then_parse(tmp_path: Path) -> None:
     target = init_project("e2e-me", template_id="multi-entry", directory=tmp_path)
     info = ProjectInfo.from_dir(target)
     assert info.name == "e2e-me"
-    # 多入口声明 [tool.fspack.entries]
+    # 多入口声明 [project.scripts]（PEP 621 标准，dotted module 经 src layout 解析）
     assert len(info.entries) == 2
     entry_names = {e.name for e in info.entries}
     assert entry_names == {"cli", "gui"}

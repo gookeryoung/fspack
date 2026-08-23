@@ -27,7 +27,11 @@ exclude = ["tests", "docs", ".github"]
 # Nuitka 编译的第三方包（可选，需配合 nuitka = true）
 # nuitka_packages = ["numpy"]
 
-# 多入口声明（可选，键为 exe 名，值为入口脚本路径）
+# 多入口声明（推荐 [project.scripts]，PEP 621 标准，dotted module 自动解析 flat/src layout）
+# [project.scripts]
+# cli = "cli:main"
+# gui = "gui:main"
+
+# 可选：[tool.fspack.entries] 覆盖同名入口或补充打包专属入口（值为脚本相对路径）
 # [tool.fspack.entries]
-# cli = "src/cli.py"
-# gui = "src/gui.py"
+# debug = "debug.py"

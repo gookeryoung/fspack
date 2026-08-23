@@ -77,13 +77,23 @@ fspack 扫描源码 `import` 推断依赖，并按使用情况精简 wheel。例
 ### 多入口项目
 
 一个项目里有 CLI 工具 + GUI 界面 + Web 服务，可声明多个入口，一次打包生成多个
-exe，共享运行时与依赖：
+exe，共享运行时与依赖。默认推荐使用 PEP 621 标准的 `[project.scripts]`（fspack
+自动识别 flat/src layout，将 dotted module 解析为脚本路径）：
+
+```toml
+[project.scripts]
+cli = "myapp.cli:main"   # 生成 cli.exe
+gui = "myapp.gui:main"   # 生成 gui.exe（GUI 类型，无控制台窗口）
+web = "myapp.web:main"   # 生成 web.exe
+```
+
+已声明 `[project.scripts]` 时无需再定义 `[tool.fspack.entries]`。后者仅在需要
+覆盖同名入口或补充打包专属入口（如调试脚本）时使用：
 
 ```toml
 [tool.fspack.entries]
-cli = "cli.py"        # 生成 cli.exe
-gui = "gui.py"        # 生成 gui.exe（GUI 类型，无控制台窗口）
-web = "web.py"        # 生成 web.exe
+cli = "scripts/cli.py"   # 覆盖同名入口，指定脚本相对路径
+debug = "debug.py"       # 补充额外入口
 ```
 
 ### 离线打包
@@ -403,9 +413,12 @@ slim-exclude = [                           # wheel 精简：强制剥离
 extra-index-urls = ["https://pypi.company.com/simple/"]  # 私有 PyPI 源
 find-links = ["./wheels"]                  # 本地 wheel 目录
 
-[tool.fspack.entries]                      # 多入口声明
-cli = "cli.py"
-gui = "gui.py"
+[project.scripts]                          # 多入口声明（推荐，PEP 621 标准）
+cli = "myapp.cli:main"
+gui = "myapp.gui:main"
+
+[tool.fspack.entries]                      # 可选：覆盖同名入口/补充打包专属入口
+debug = "debug.py"
 ```
 
 ### wheel 精简用户规则

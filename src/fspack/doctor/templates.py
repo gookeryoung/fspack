@@ -316,8 +316,9 @@ def _build_single_template(  # pragma: no cover
     dist_dir = proj_dir / "dist"
     dist_size = _dir_size(dist_dir) if dist_dir.is_dir() else 0
 
-    # 构建成功后解析项目入口：多入口项目产出的 exe 名是 [tool.fspack.entries]
-    # 的键（如 cli/gui/web），不等于 template.name。用 ProjectInfo.default_entry
+    # 构建成功后解析项目入口：多入口项目产出的 exe 名是 [project.scripts]/
+    # [tool.fspack.entries] 的键（如 cli/gui/web），不等于 template.name。用
+    # ProjectInfo.default_entry
     # 取默认入口名（GUI 优先、同类型按字母排序，与 `fsp r` 默认行为一致），
     # 避免多入口项目跳过运行验证。
     info = ProjectInfo.from_dir(proj_dir)

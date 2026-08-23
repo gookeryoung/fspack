@@ -34,8 +34,8 @@ def run(
     ``debug=True`` 时绕过 loader exe，用 embed python 直接跑入口脚本，
     使 GUI 应用（Windows subsystem）的 stdout/stderr 可见。
 
-    ``entry`` 指定多入口项目中要运行的入口名（与 ``[tool.fspack.entries]``
-    键匹配）；单入口项目或 ``entry=None`` 时使用默认入口。
+    ``entry`` 指定多入口项目中要运行的入口名（与 ``[project.scripts]``/
+    ``[tool.fspack.entries]`` 键匹配）；单入口项目或 ``entry=None`` 时使用默认入口。
     """
     info = ProjectInfo.from_dir(project)
     rest = rest_args or []

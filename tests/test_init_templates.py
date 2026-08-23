@@ -268,8 +268,9 @@ def test_pyinstaller_template_contains_tool_fspack_config() -> None:
     assert "pyc_strip" in pyproject
     assert "pyc_optimize" in pyproject
     assert "exclude" in pyproject
-    # 多入口声明示例（注释形式）
-    assert "[tool.fspack.entries]" in pyproject
+    # 多入口声明示例（注释形式）：[project.scripts] 推荐 + [tool.fspack.entries] 可选覆盖
+    assert "# [project.scripts]" in pyproject
+    assert "# [tool.fspack.entries]" in pyproject
 
 
 def test_init_project_pygame(tmp_path: Path) -> None:
@@ -355,7 +356,7 @@ def test_iter85_templates_registered(tpl_id: str) -> None:
 
 
 def test_multi_entry_template_contains_entries_config() -> None:
-    """multi-entry 模板的 pyproject.toml 含 [tool.fspack.entries] 声明."""
+    """multi-entry 模板的 pyproject.toml 含 [project.scripts] 声明（推荐默认）."""
     tpl = get_template("multi-entry")
     assert tpl is not None
     rel_paths = [f.rel_path for f in tpl.files]
@@ -363,9 +364,9 @@ def test_multi_entry_template_contains_entries_config() -> None:
     assert "src/gui.py" in rel_paths
     rendered = _render_template_files("multi-entry")
     pyproject = rendered[Path("pyproject.toml")]
-    assert "[tool.fspack.entries]" in pyproject
-    assert 'cli = "src/cli.py"' in pyproject
-    assert 'gui = "src/gui.py"' in pyproject
+    assert "[project.scripts]" in pyproject
+    assert 'cli = "cli:main"' in pyproject
+    assert 'gui = "gui:main"' in pyproject
 
 
 def test_multi_entry_template_scripts_syntax_valid() -> None:
@@ -417,7 +418,7 @@ def test_init_project_multi_entry(tmp_path: Path) -> None:
     assert (target / "src" / "cli.py").is_file()
     assert (target / "src" / "gui.py").is_file()
     pyproject = (target / "pyproject.toml").read_text(encoding="utf-8")
-    assert "[tool.fspack.entries]" in pyproject
+    assert "[project.scripts]" in pyproject
 
 
 def test_init_project_full_config(tmp_path: Path) -> None:

@@ -88,9 +88,5 @@ data-dirs = ["src/fspack/assets/templates", "src/fspack/assets/init_templates"]
 pyc_strip = true
 no_site = true
 
-[tool.fspack.entries]
-fsp = "src/fspack/cli.py"
-fspack = "src/fspack/cli.py"
-
 [dependency-groups]
 dev = ["fspack[dev,docs,image]"]
