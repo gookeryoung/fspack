@@ -363,6 +363,7 @@ def test_run_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         rest_args: list[str] | None = None,
         debug: bool = False,
         entry: str | None = None,
+        profile: bool = False,
     ) -> None:
         called["project"] = project
         called["rest"] = rest_args
@@ -387,11 +388,13 @@ def test_run_debug_flag_after_project(tmp_path: Path, monkeypatch: pytest.Monkey
         rest_args: list[str] | None = None,
         debug: bool = False,
         entry: str | None = None,
+        profile: bool = False,
     ) -> None:
         called["project"] = project
         called["rest"] = rest_args
         called["debug"] = debug
         called["entry"] = entry
+        called["profile"] = profile
 
     monkeypatch.setattr("fspack.runner.run", fake_run)
     cli.main(["r", str(tmp_path), "--debug"])
@@ -408,12 +411,31 @@ def test_run_entry_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
         rest_args: list[str] | None = None,
         debug: bool = False,
         entry: str | None = None,
+        profile: bool = False,
     ) -> None:
         called["entry"] = entry
 
     monkeypatch.setattr("fspack.runner.run", fake_run)
     cli.main(["r", str(tmp_path), "--entry", "cli"])
     assert called["entry"] == "cli"
+
+
+def test_run_profile_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`fspack r <project> --profile` 解析 profile 开关."""
+    called: dict[str, Any] = {}
+
+    def fake_run(
+        project: Path,
+        rest_args: list[str] | None = None,
+        debug: bool = False,
+        entry: str | None = None,
+        profile: bool = False,
+    ) -> None:
+        called["profile"] = profile
+
+    monkeypatch.setattr("fspack.runner.run", fake_run)
+    cli.main(["r", str(tmp_path), "--profile"])
+    assert called["profile"] is True
 
 
 def test_clean_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

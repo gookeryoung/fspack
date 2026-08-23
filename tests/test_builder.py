@@ -875,6 +875,8 @@ def test_build_skips_tkinter_when_not_used(tmp_path: Path, monkeypatch: pytest.M
 
 def test_fspack_wheel_cache_dir_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """fspack wheel 缓存目录路径结构 ``~/.fspack/cache/wheels/``."""
+    # 本机设置 FSPACK_CACHE_DIR 时会覆盖 home 推导，须隔离保证断言语义
+    monkeypatch.delenv("FSPACK_CACHE_DIR", raising=False)
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     result = fspack_wheel_cache_dir()
     assert result == tmp_path / ".fspack" / "cache" / "wheels"

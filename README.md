@@ -290,14 +290,20 @@ fsp b [project] [--mirror <name>] [--py-version <ver>] [--target <platform>]
 ### fsp run
 
 ```text
-fsp r [project] [--entry <name>] [--debug] [-- <args>...]
+fsp r [project] [--entry <name>] [--debug] [--profile] [-- <args>...]
 ```
 
 | 选项 | 说明 |
 |------|------|
 | `--entry <name>` | 多入口项目指定入口名 |
 | `--debug` | 用 embed python 直跑（绕过 loader，输出可见） |
+| `--profile` | 输出启动耗时剖析汇总（loader/环境准备/import 各阶段耗时） |
 | `-- <args>` | 透传给目标程序的参数 |
+
+`--profile` 启动耗时剖析：注入三级打点（C loader 阶段 / 入口包装器各阶段 /
+CPython 原生 `importtime` 逐模块导入），运行结束后输出汇总，定位启动性能
+优化点。可与 `--debug` 组合（无 loader 段）。旧 dist 构建的 wrapper 无
+打点时汇总缺 wrapper 段，重新 `fsp b` 后完整。
 
 ### fsp package
 

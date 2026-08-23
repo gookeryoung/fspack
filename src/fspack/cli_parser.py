@@ -329,6 +329,7 @@ _RUN_OPTS: tuple[_Opt, ...] = (
     _Opt(("rest",), "透传给目标程序的参数（以 -- 分隔）", default=[], nargs="*"),
     _Opt(("--debug",), "用 embed python 直跑入口脚本（绕过 GUI loader，输出可见）", action="store_true"),
     _Opt(("--entry",), "多入口项目指定要运行的入口名（与 [project.scripts] 键匹配）", default=None),
+    _Opt(("--profile",), "输出启动耗时剖析汇总（loader/环境准备/import 各阶段耗时）", action="store_true"),
 )
 
 

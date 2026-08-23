@@ -121,7 +121,7 @@ def _dispatch(command: str, ns: argparse.Namespace) -> None:
     elif command in ("run", "r"):
         from fspack.runner import run as run_cmd
 
-        run_cmd(project, rest_args=_drop_separator(ns.rest), debug=ns.debug, entry=ns.entry)
+        run_cmd(project, rest_args=_drop_separator(ns.rest), debug=ns.debug, entry=ns.entry, profile=ns.profile)
     elif command in ("clean", "c"):
         from fspack.builder import clean_dist
 

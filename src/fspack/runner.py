@@ -3,6 +3,8 @@
 Linux 下 ``.exe`` 用 wine 运行，原生无后缀可执行文件直跑；Windows 直跑 ``.exe``。
 ``--debug`` 模式绕过 loader exe，用 embed python 直接执行入口包装器，使 GUI
 应用（Windows subsystem）的 stdout/stderr 可见，便于排查启动失败。
+``--profile`` 模式注入打点环境变量（loader/wrapper/importtime），流式采集
+stderr 并在退出后打印启动耗时汇总（见 :mod:`fspack.runner_profile`）。
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from pathlib import Path
 from fspack.config import AppType, EntryPoint, ProjectInfo
 from fspack.config.versions import _split_t_suffix
 from fspack.exceptions import FspackError
+from fspack.runner_profile import PROFILE_ENV, run_with_profile
 
 __all__ = ["run"]
 
@@ -28,6 +31,7 @@ def run(
     rest_args: list[str] | None = None,
     debug: bool = False,
     entry: str | None = None,
+    profile: bool = False,
 ) -> None:
     """运行 dist 下的可执行文件。
 
@@ -36,6 +40,12 @@ def run(
 
     ``entry`` 指定多入口项目中要运行的入口名（与 ``[project.scripts]``/
     ``[tool.fspack.entries]`` 键匹配）；单入口项目或 ``entry=None`` 时使用默认入口。
+
+    ``profile=True`` 时注入 ``FSPACK_LOADER_VERBOSE``/``FSPACK_TIMING``/
+    ``PYTHONPROFILEIMPORTTIME`` 环境变量激活三级打点，子进程退出后打印
+    启动耗时汇总（loader 阶段/环境准备/import 细分/用户入口执行），
+    定位启动性能优化点。旧 dist 的 wrapper 无 timing 打点时汇总缺
+    wrapper 段，重新构建后完整。
     """
     info = ProjectInfo.from_dir(project)
     rest = rest_args or []
@@ -43,6 +53,8 @@ def run(
     if debug:
         cmd = _build_debug_cmd(project, ep, info.py_version) + rest
         debug_env: dict[str, str] = {**os.environ, "PYTHONUNBUFFERED": "1"}
+        if profile:
+            debug_env.update(PROFILE_ENV)
         if platform.system() != "Windows":
             debug_env["PYTHONHOME"] = str(Path(project) / "dist" / "runtime" / "python")
         env: dict[str, str] | None = debug_env
@@ -51,16 +63,20 @@ def run(
         if exe is None:
             raise FspackError(f"未找到已构建的可执行文件: {project}/dist/{ep.name}[.exe]（请先执行 fsp b）")
         cmd = _build_cmd(exe) + rest
-        env = None
+        env = {**os.environ, **PROFILE_ENV} if profile else None
     _logger.info("运行入口 %s: %s", ep.name, " ".join(cmd))
-    completed = subprocess.run(cmd, check=False, env=env)
-    if completed.returncode != 0:
+    if profile:
+        returncode = run_with_profile(cmd, env)
+    else:
+        completed = subprocess.run(cmd, check=False, env=env)
+        returncode = completed.returncode
+    if returncode != 0:
         if ep.app_type in (AppType.GUI, AppType.WEB) and not debug:
             _logger.warning(
                 "%s 应用输出被 Windows subsystem 吞掉，如需查看输出请用 `fspack r --debug`",
                 ep.app_type.value.upper(),
             )
-        raise FspackError(f"程序退出码非零: {completed.returncode}")
+        raise FspackError(f"程序退出码非零: {returncode}")
 
 
 def _select_entry(info: ProjectInfo, entry: str | None) -> EntryPoint:

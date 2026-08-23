@@ -608,8 +608,10 @@ def test_compile_loader_cache_linux_no_suffix(tmp_path: Path, monkeypatch: pytes
     assert not work_dir.exists()
 
 
-def test_loader_cache_dir_default() -> None:
+def test_loader_cache_dir_default(monkeypatch: pytest.MonkeyPatch) -> None:
     """loader_cache_dir 返回 ~/.fspack/cache/loaders/."""
+    # 本机设置 FSPACK_CACHE_DIR 时会覆盖 home 推导，须隔离保证断言语义
+    monkeypatch.delenv("FSPACK_CACHE_DIR", raising=False)
     assert loader_cache_dir() == Path.home() / ".fspack" / "cache" / "loaders"
 
 

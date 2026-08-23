@@ -21,6 +21,8 @@ fspack 在 dist 根目录为每个入口生成 ``_entry_<name>.py`` 包装器，
 6. **延迟导入钩子**：``--lazy-import numpy,pandas`` 指定的模块由
    :class:`_LazyImportFinder` 拦截，用 :class:`importlib.util.LazyLoader` 包装，
    首次属性访问时才执行 ``__init__.py``，降低启动时间。
+7. **启动耗时打点**：``FSPACK_TIMING=1``（由 ``fsp r --profile`` 注入）时输出
+   各阶段累计时刻到 stderr，供 runner 侧汇总剖析；未启用时零开销。
 
 包模式下 wrapper 将 ``pkg_root`` 加入 ``sys.path`` 使首层包可 import。对于
 src-layout 项目（包在 ``src/<pkg>/`` 下，``src/`` 是容器而非包），wrapper
@@ -50,6 +52,21 @@ import glob
 import os
 import runpy
 import sys
+import time
+
+# fsp r --profile 启动耗时打点：FSPACK_TIMING=1 时输出各阶段累计时刻（ms）到
+# stderr，由 fsp r 解析为启动耗时汇总；未启用时仅一次 environ.get，零开销。
+# _T0 在 wrapper 首个可执行语句附近采样，近似解释器初始化完成时刻（进入
+# Python 前的 loader 阶段耗时由 C loader 的 FSPACK_LOADER_VERBOSE 打点覆盖）。
+_FSPACK_TIMING = os.environ.get("FSPACK_TIMING") == "1"
+_T0 = time.perf_counter() if _FSPACK_TIMING else 0.0
+
+
+def _fspack_tick(label):
+    """输出累计时刻打点行 ``[fspack timing] <label> @<ms>ms``（未启用时无操作）."""
+    if _FSPACK_TIMING:
+        sys.stderr.write("[fspack timing] %s @%.1fms\\n" % (label, (time.perf_counter() - _T0) * 1000.0))
+        sys.stderr.flush()
 
 # GUI 子系统（pythonw.exe / -mwindows loader）下 sys.stdout/stderr/stdin 为 None，
 # 第三方库（如 loguru logger.add(sys.stderr)）写 None 会触发 __fastfail 崩溃
@@ -281,12 +298,19 @@ if _WEB_STATIC_DIRS and _OPEN_BROWSER:
     _patch_flask()
     _patch_fastapi()
 
+# 环境准备完成打点：site-packages 注入/缓存预填充/lazy hooks/Qt/tkinter/web
+# 补丁全部就绪，接下来是 sys.path 调整与 runpy 进入用户入口。
+_fspack_tick("env_ready")
+
 _SRC_DIR = os.path.join(_DIST_DIR, "src")
 _ENTRY_MODULE = {module_dotted!r}
 _ENTRY_REL = {entry_rel!r}
 _PKG_ROOT_REL = {pkg_root_rel!r}
 _PKG_ROOT = os.path.normpath(os.path.join(_DIST_DIR, _PKG_ROOT_REL))
 
+# 进入用户入口打点：此后 runpy 会 import 用户代码（含入口包 __init__ 链）并执行
+# __main__；entry_done 与 entry_start 的差值即用户入口总耗时（导入+执行）。
+_fspack_tick("entry_start")
 if _ENTRY_MODULE:
     # 包模式：加入包根让首层包可 import，run_module 保留包上下文（相对导入可用）
     if _PKG_ROOT not in sys.path:
@@ -301,6 +325,9 @@ else:
     if _SRC_DIR not in sys.path:
         sys.path.insert(0, _SRC_DIR)
     runpy.run_path(os.path.join(_SRC_DIR, _ENTRY_REL), run_name="__main__")
+# 用户入口执行完成打点：CLI 应用 main() 返回、GUI 事件循环退出后到达；
+# 用户代码调用 os._exit() 时不会到达（runner 侧显示为未返回）。
+_fspack_tick("entry_done")
 '''
 
 

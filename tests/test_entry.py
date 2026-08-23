@@ -376,3 +376,20 @@ def test_generate_wrapper_source_open_browser_false_no_injection() -> None:
     assert "_OPEN_BROWSER = False" in source
     # if 块条件 _WEB_STATIC_DIRS and _OPEN_BROWSER 不满足
     assert "if _WEB_STATIC_DIRS and _OPEN_BROWSER:" in source
+
+
+def test_generate_wrapper_source_timing_ticks() -> None:
+    """wrapper 注入 FSPACK_TIMING 打点：env_ready/entry_start/entry_done 三处调用.
+
+    ``compile`` 验证生成源码语法（模板中 ``\\n`` 转义错误会导致跨行字符串
+    语法错误，在此提前拦截）。
+    """
+    source = EntryWrapper.generate_wrapper_source("app", None, "app.py")
+    compile(source, "_entry_app.py", "exec")
+    assert '_FSPACK_TIMING = os.environ.get("FSPACK_TIMING") == "1"' in source
+    assert '_fspack_tick("env_ready")' in source
+    assert '_fspack_tick("entry_start")' in source
+    assert '_fspack_tick("entry_done")' in source
+    # 打点行格式：换行必须为字面反斜杠 n（模板普通字符串中 \n 会被解释为
+    # 真实换行，破坏生成源码语法）
+    assert '"[fspack timing] %s @%.1fms\\n"' in source
