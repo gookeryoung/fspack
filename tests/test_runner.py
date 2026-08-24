@@ -13,7 +13,7 @@ import pytest
 
 from fspack.config import AppType, EntryPoint, ProjectInfo
 from fspack.exceptions import FspackError
-from fspack.runner import _build_cmd, _find_exe, _select_entry
+from fspack.runner import RunOptions, _build_cmd, _find_exe, _select_entry
 from fspack.runner import run as run_run
 
 
@@ -88,7 +88,7 @@ def test_run_run_debug_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
     monkeypatch.setattr("fspack.runner.subprocess.run", fake_run)
     monkeypatch.setattr("fspack.runner.platform.system", lambda: "Windows")
-    run_run(tmp_path, debug=True, rest_args=["--foo"])
+    run_run(tmp_path, rest_args=["--foo"], options=RunOptions(debug=True))
     py = dist / "runtime" / "python.exe"
     wrapper = dist / "_entry_app.py"
     assert captured["cmd"] == [str(py), str(wrapper), "--foo"]
@@ -122,7 +122,7 @@ def test_run_run_debug_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 
     monkeypatch.setattr("fspack.runner.subprocess.run", fake_run)
     monkeypatch.setattr("fspack.runner.platform.system", lambda: "Linux")
-    run_run(tmp_path, debug=True)
+    run_run(tmp_path, options=RunOptions(debug=True))
     py = bin_dir / "python3.11"
     wrapper = dist / "_entry_app.py"
     assert captured["cmd"] == [str(py), str(wrapper)]
@@ -143,7 +143,7 @@ def test_run_run_debug_missing_python(tmp_path: Path, monkeypatch: pytest.Monkey
     (dist / "_entry_app.py").write_text('"""fspack 生成的入口包装器（app）。"""\n')
     monkeypatch.setattr("fspack.runner.platform.system", lambda: "Windows")
     with pytest.raises(FspackError, match="未找到 embed python"):
-        run_run(tmp_path, debug=True)
+        run_run(tmp_path, options=RunOptions(debug=True))
 
 
 def test_run_run_debug_missing_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -155,7 +155,7 @@ def test_run_run_debug_missing_entry(tmp_path: Path, monkeypatch: pytest.MonkeyP
     (dist / "runtime" / "python.exe").write_bytes(b"")
     monkeypatch.setattr("fspack.runner.platform.system", lambda: "Windows")
     with pytest.raises(FspackError, match="未找到入口包装器"):
-        run_run(tmp_path, debug=True)
+        run_run(tmp_path, options=RunOptions(debug=True))
 
 
 def test_run_run_gui_nonzero_hints_debug(
@@ -434,7 +434,7 @@ def test_run_run_multi_entry_select(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr("fspack.runner.subprocess.run", fake_run)
     monkeypatch.setattr("fspack.runner.platform.system", lambda: "Windows")
-    run_run(tmp_path, entry="gui")
+    run_run(tmp_path, options=RunOptions(entry="gui"))
     assert captured["cmd"] == [str(gui_exe)]
 
 

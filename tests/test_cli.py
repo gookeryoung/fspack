@@ -11,7 +11,9 @@ import pytest
 
 from fspack import __version__, cli
 from fspack.config import BuildOptions, get_mirror
+from fspack.packaging.profile_log import ProfileOptions
 from fspack.platform import Platform
+from fspack.runner import RunOptions
 
 
 def test_import_does_not_pull_logging() -> None:
@@ -131,9 +133,7 @@ def _capture_build() -> tuple[dict[str, Any], Any]:
         dry_run: bool = False,
         log_file: Path | None = None,
         log_format: object = None,
-        profile: bool = False,
-        profile_out: Path | None = None,
-        profile_compare: str | None = None,
+        profile: ProfileOptions | None = None,
         auto_clean: bool = False,
     ) -> None:
         captured["project"] = project
@@ -377,19 +377,10 @@ def test_build_config_pyc_optimize_default_when_both_silent(tmp_path: Path, monk
 def test_run_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     called: dict[str, Any] = {}
 
-    def fake_run(  # noqa: PLR0913
-        project: Path,
-        rest_args: list[str] | None = None,
-        debug: bool = False,
-        entry: str | None = None,
-        profile: bool = False,
-        profile_out: Path | None = None,
-        profile_compare: str | None = None,
-    ) -> None:
+    def fake_run(project: Path, rest_args: list[str] | None = None, options: RunOptions | None = None) -> None:
         called["project"] = project
         called["rest"] = rest_args
-        called["debug"] = debug
-        called["entry"] = entry
+        called["options"] = options
 
     monkeypatch.setattr("fspack.runner.run", fake_run)
     cli.main(["r", str(tmp_path), "--", "--foo", "bar"])
@@ -404,24 +395,14 @@ def test_run_debug_flag_after_project(tmp_path: Path, monkeypatch: pytest.Monkey
     """
     called: dict[str, Any] = {}
 
-    def fake_run(  # noqa: PLR0913
-        project: Path,
-        rest_args: list[str] | None = None,
-        debug: bool = False,
-        entry: str | None = None,
-        profile: bool = False,
-        profile_out: Path | None = None,
-        profile_compare: str | None = None,
-    ) -> None:
+    def fake_run(project: Path, rest_args: list[str] | None = None, options: RunOptions | None = None) -> None:
         called["project"] = project
         called["rest"] = rest_args
-        called["debug"] = debug
-        called["entry"] = entry
-        called["profile"] = profile
+        called["options"] = options
 
     monkeypatch.setattr("fspack.runner.run", fake_run)
     cli.main(["r", str(tmp_path), "--debug"])
-    assert called["debug"] is True
+    assert called["options"].debug is True
     assert called["rest"] == []
 
 
@@ -429,16 +410,8 @@ def test_run_entry_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
     """`fspack r <project> --entry cli` 解析 entry 参数."""
     called: dict[str, Any] = {}
 
-    def fake_run(  # noqa: PLR0913
-        project: Path,
-        rest_args: list[str] | None = None,
-        debug: bool = False,
-        entry: str | None = None,
-        profile: bool = False,
-        profile_out: Path | None = None,
-        profile_compare: str | None = None,
-    ) -> None:
-        called["entry"] = entry
+    def fake_run(project: Path, rest_args: list[str] | None = None, options: RunOptions | None = None) -> None:
+        called["entry"] = options.entry if options else None
 
     monkeypatch.setattr("fspack.runner.run", fake_run)
     cli.main(["r", str(tmp_path), "--entry", "cli"])
@@ -449,20 +422,12 @@ def test_run_profile_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     """`fspack r <project> --profile` 解析 profile 开关."""
     called: dict[str, Any] = {}
 
-    def fake_run(  # noqa: PLR0913
-        project: Path,
-        rest_args: list[str] | None = None,
-        debug: bool = False,
-        entry: str | None = None,
-        profile: bool = False,
-        profile_out: Path | None = None,
-        profile_compare: str | None = None,
-    ) -> None:
-        called["profile"] = profile
+    def fake_run(project: Path, rest_args: list[str] | None = None, options: RunOptions | None = None) -> None:
+        called["profile"] = options.profile if options else None
 
     monkeypatch.setattr("fspack.runner.run", fake_run)
     cli.main(["r", str(tmp_path), "--profile"])
-    assert called["profile"] is True
+    assert called["profile"].enabled is True
 
 
 def test_clean_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

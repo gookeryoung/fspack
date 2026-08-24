@@ -32,16 +32,19 @@ JSON 日志（默认 ``<项目>/.benchmarks/fsp-b-<时间戳>.json``，``--profi
 
 公共 API：
 
+- :class:`ProfileOptions` — 剖析开关与日志输出/对比选项（build/run 共用）
 - :func:`save_profile_report` — 写入构建性能日志（目录自动命名 / 文件直写）
 - :func:`save_profile_log` — 写入完整日志 dict（启动剖析用，前缀区分）
 - :func:`load_profile_log` — 读取日志为 dict
 - :func:`find_latest_log` — 目录内最新日志（排除指定文件，按前缀过滤）
 - :func:`print_profile_compare` — 渲染本次与基准的差异对比表
+- :func:`compare_with_baseline` — 解析基准（``last``/路径）并渲染对比（两侧共用）
 """
 
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -55,18 +58,25 @@ if TYPE_CHECKING:
     from fspack.packaging.profile import ProfileReport
 
 __all__ = [
+    "BUILD_LOG_KIND",
     "DEFAULT_LOG_DIR",
     "PROFILE_LOG_SCHEMA",
     "RUN_LOG_GLOB",
+    "RUN_LOG_KIND",
     "RUN_LOG_PREFIX",
     "RUN_PROFILE_LOG_SCHEMA",
+    "LogKind",
     "ProfileLogMeta",
+    "ProfileOptions",
+    "compare_with_baseline",
     "find_latest_log",
     "load_profile_log",
     "print_profile_compare",
     "save_profile_log",
     "save_profile_report",
 ]
+
+_logger = logging.getLogger(__name__)
 
 # 日志 schema 版本：结构变更时递增，加载侧按版本校验兼容性
 PROFILE_LOG_SCHEMA = "fspack/build-profile/1"
@@ -84,6 +94,8 @@ RUN_LOG_GLOB = "fsp-r-*.json"
 # 其余折叠为计数行，避免噪声淹没真实回归
 _STAGE_MIN_DELTA = 0.05
 _STAGE_MIN_PCT = 10.0
+# 启动剖析侧的阶段显著阈值：总时长常为几十毫秒，阈值比构建侧小一个量级
+_RUN_STAGE_MIN_DELTA = 0.005
 
 
 @dataclass(frozen=True)
@@ -94,6 +106,21 @@ class ProfileLogMeta:
     version: str
     python: str
     platform: str
+
+
+@dataclass(frozen=True)
+class ProfileOptions:
+    """性能剖析选项（``--profile``/``--profile-out``/``--profile-compare``）.
+
+    build 与 run 两侧共用：``enabled`` 对应 ``--profile`` 开关；``out`` 为
+    ``.json`` 文件时直写、目录时自动命名、``None`` 落默认目录；``compare``
+    为 ``"last"`` 时与最近一次同类日志对比，其他值按基准文件路径。
+    frozen 不可变，默认值可安全共享。
+    """
+
+    enabled: bool = False
+    out: Path | None = None
+    compare: str | None = None
 
 
 def _auto_name(directory: Path, prefix: str = _LOG_PREFIX) -> Path:
@@ -195,6 +222,62 @@ def find_latest_log(directory: Path, exclude: Path | None = None, pattern: str =
         return None
     logs = [p for p in directory.glob(pattern) if exclude is None or p.resolve() != exclude.resolve()]
     return max(logs, key=lambda p: p.name) if logs else None
+
+
+@dataclass(frozen=True)
+class LogKind:
+    """同类日志的对比配置：``last`` 候选通配 / 阶段显著阈值 / 警告文案标签.
+
+    构建与启动剖析两类日志同目录共存，对比时按 :attr:`pattern` 前缀过滤
+    同类日志；启动剖析总时长常为几十毫秒，显著阈值比构建侧小一个量级。
+    """
+
+    pattern: str
+    stage_min_delta: float
+    label: str
+
+
+# 默认值是 frozen 不可变单例，可安全共享（B008/RUF009 豁免动机）
+_DEFAULT_PROFILE = ProfileOptions()
+# 构建性能日志类别（fsp-b-*.json，阶段显著阈值 50ms）
+BUILD_LOG_KIND = LogKind(pattern=_LOG_GLOB, stage_min_delta=_STAGE_MIN_DELTA, label="性能")
+# 启动剖析日志类别（fsp-r-*.json，阶段显著阈值 5ms）
+RUN_LOG_KIND = LogKind(pattern=RUN_LOG_GLOB, stage_min_delta=_RUN_STAGE_MIN_DELTA, label="启动剖析")
+
+
+def compare_with_baseline(
+    log_path: Path,
+    default_dir: Path,
+    compare: str | None,
+    kind: LogKind = BUILD_LOG_KIND,
+) -> None:
+    """解析基准日志并与本次对比渲染差异表（构建与启动剖析共用）.
+
+    ``compare`` 为 ``"last"`` 时取 ``default_dir`` 内最近一次同类日志
+    （排除本次 ``log_path``），其他值按基准文件路径加载；未指定时直接
+    返回。日志缺失/畸形/schema 与本次不一致时警告并跳过对比，不中断
+    构建或运行结果。
+
+    :param log_path: 本次刚写入的日志路径（排除在 ``last`` 候选外）
+    :param default_dir: 默认日志目录（``<项目>/.benchmarks``）
+    :param compare: ``--profile-compare`` 值（``"last"``/基准路径/``None``）
+    :param kind: 日志类别（同类过滤通配 + 阶段显著阈值 + 警告文案标签）
+    """
+    if not compare:
+        return
+    if compare == "last":
+        baseline_path = find_latest_log(default_dir, exclude=log_path, pattern=kind.pattern)
+        if baseline_path is None:
+            _logger.warning("未找到可对比的历史%s日志（%s）", kind.label, default_dir)
+            return
+    else:
+        baseline_path = Path(compare)
+    try:
+        baseline = load_profile_log(baseline_path)
+        current = load_profile_log(log_path)
+        print_profile_compare(current, baseline, baseline_path, stage_min_delta=kind.stage_min_delta)
+    except ValueError as exc:
+        _logger.warning("加载基准%s日志失败，跳过对比: %s", kind.label, exc)
 
 
 def _fmt_seconds(s: float) -> str:

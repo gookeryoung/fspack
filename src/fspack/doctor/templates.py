@@ -316,6 +316,7 @@ def _build_single_template(  # pragma: no cover
     """
     from fspack.builder import build
     from fspack.config import BuildOptions, ProjectInfo, get_mirror
+    from fspack.packaging.profile_log import ProfileOptions
     from fspack.platform import detect_platform
 
     proj_dir = work_dir / template.id
@@ -332,7 +333,7 @@ def _build_single_template(  # pragma: no cover
             mirror,
             target=target,
             options=opts,
-            profile=bench,
+            profile=ProfileOptions(enabled=bench),
         )
     except Exception as e:
         elapsed = time.perf_counter() - start

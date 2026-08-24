@@ -15,9 +15,12 @@ from typing import Any
 
 import pytest
 
+from fspack.packaging.profile_log import ProfileOptions
+from fspack.runner import RunOptions
 from fspack.runner import run as run_run
 from fspack.runner_profile import (
     PROFILE_ENV,
+    ProfileSample,
     _fmt_bar,
     _pad,
     _parse_import_lines,
@@ -25,6 +28,22 @@ from fspack.runner_profile import (
     _rpad,
     run_with_profile,
 )
+
+
+def _opts(
+    debug: bool = False,
+    entry: str | None = None,
+    profile: bool = False,
+    profile_out: Path | None = None,
+    profile_compare: str | None = None,
+) -> RunOptions:
+    """构造 RunOptions（测试便捷封装，收敛散参数）."""
+    return RunOptions(
+        debug=debug,
+        entry=entry,
+        profile=ProfileOptions(enabled=profile, out=profile_out, compare=profile_compare),
+    )
+
 
 # ---- _parse_import_lines 单元测试 ----
 
@@ -230,7 +249,7 @@ def test_run_profile_env_injected(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setattr("fspack.runner.run_with_profile", fake_profile)
     monkeypatch.setattr("fspack.runner.platform.system", lambda: "Windows")
-    run_run(project, profile=True)
+    run_run(project, options=_opts(profile=True))
     assert captured["cmd"] == [str(project / "dist" / "app.exe")]
     env = captured["env"]
     assert isinstance(env, dict)
@@ -257,7 +276,7 @@ def test_run_profile_debug_combined(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr("fspack.runner.run_with_profile", fake_profile)
     monkeypatch.setattr("fspack.runner.platform.system", lambda: "Windows")
-    run_run(tmp_path, debug=True, profile=True)
+    run_run(tmp_path, options=_opts(debug=True, profile=True))
     assert captured["cmd"] == [str(dist / "runtime" / "python.exe"), str(dist / "_entry_app.py")]
     env = captured["env"]
     assert isinstance(env, dict)
@@ -275,7 +294,7 @@ def test_run_profile_nonzero_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     from fspack.exceptions import FspackError
 
     with pytest.raises(FspackError, match="程序退出码非零: 7"):
-        run_run(project, profile=True)
+        run_run(project, options=_opts(profile=True))
 
 
 def test_run_without_profile_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -339,7 +358,7 @@ def test_print_summary_entry_breakdown(capsys: pytest.CaptureFixture[str]) -> No
         "import time:     3000 |     3000 | pathlib",
         "import time:     1000 |     1000 | shutil",
     ]
-    _print_summary(150.0, 0, [], timing, [], post)
+    _print_summary(ProfileSample(wall_ms=150.0, timing_stages=timing, post_entry_lines=post))
     out = capsys.readouterr().out
     # 入口执行 = 110 - 10 = 100ms，导入合计 = 5+3+1 = 9ms，其余执行 = 91ms
     assert "用户入口执行" in out
@@ -362,7 +381,14 @@ def test_print_summary_post_lines_without_entry_start_merged(capsys: pytest.Capt
     """防御：无 entry_start 打点却有分界数据（理论不可达）时并回主列表."""
     timing = {"env_ready": 5.0}
     post = ["import time:     3000 |     3000 | json"]
-    _print_summary(100.0, 0, [], timing, ["import time: 1000 | 1000 | encodings"], post)
+    _print_summary(
+        ProfileSample(
+            wall_ms=100.0,
+            timing_stages=timing,
+            import_lines=["import time: 1000 | 1000 | encodings"],
+            post_entry_lines=post,
+        )
+    )
     out = capsys.readouterr().out
     # 并回后无 runpy 锚点 → 全部根导入归解释器初始化段；json 经模块自身段可见
     assert "解释器初始化(约)" in out
@@ -387,7 +413,14 @@ def test_print_summary_table_layout(capsys: pytest.CaptureFixture[str]) -> None:
         "import time:   1437300 |  1437300 | app.controllers.app_controller",
         "import time:     66000 |     66000 | natsort.natsort",
     ]
-    _print_summary(2000.0, 0, [("loader 总", 10.0, "（进入 Python）")], timing, imports)
+    _print_summary(
+        ProfileSample(
+            wall_ms=2000.0,
+            loader_stages=[("loader 总", 10.0, "（进入 Python）")],
+            timing_stages=timing,
+            import_lines=imports,
+        )
+    )
     out = capsys.readouterr().out
     # 表头与分隔线（分隔线长度与五列表格总宽一致）
     assert "[fspack] 启动耗时剖析（总 2000ms，退出码 0）" in out
@@ -415,7 +448,12 @@ def test_print_summary_table_layout(capsys: pytest.CaptureFixture[str]) -> None:
 
 def test_print_summary_gap_old_dist_hint(capsys: pytest.CaptureFixture[str]) -> None:
     """旧 dist（无 wrapper 打点）大 gap 显示未细分行与重新构建提示."""
-    _print_summary(7000.0, 0, [("read_entry", 0.0, ""), ("loader 总", 0.0, "（进入 Python）")], {}, [])
+    _print_summary(
+        ProfileSample(
+            wall_ms=7000.0,
+            loader_stages=[("read_entry", 0.0, ""), ("loader 总", 0.0, "（进入 Python）")],
+        )
+    )
     out = capsys.readouterr().out
     assert "未细分" in out
     assert "旧 dist 无 wrapper 打点" in out
@@ -426,7 +464,7 @@ def test_print_summary_gap_old_dist_hint(capsys: pytest.CaptureFixture[str]) -> 
 def test_print_summary_gap_teardown_new_dist(capsys: pytest.CaptureFixture[str]) -> None:
     """新 dist 末端大 gap 归因为进程收尾，不提示重新构建."""
     timing = {"env_ready": 5.0, "entry_start": 6.0, "entry_done": 5000.0}
-    _print_summary(7000.0, 0, [("loader 总", 10.0, "")], timing, [])
+    _print_summary(ProfileSample(wall_ms=7000.0, loader_stages=[("loader 总", 10.0, "")], timing_stages=timing))
     out = capsys.readouterr().out
     assert "未细分" in out
     assert "进程收尾" in out
@@ -440,7 +478,7 @@ def test_print_summary_gap_teardown_new_dist(capsys: pytest.CaptureFixture[str])
 def test_print_summary_gap_entry_missing(capsys: pytest.CaptureFixture[str]) -> None:
     """有 env_ready 但缺 entry_done 的大 gap 归因为入口未完成打点."""
     timing = {"env_ready": 5.0, "entry_start": 6.0}
-    _print_summary(5000.0, 0, [], timing, [])
+    _print_summary(ProfileSample(wall_ms=5000.0, timing_stages=timing))
     out = capsys.readouterr().out
     assert "未细分" in out
     assert "入口执行未完成打点" in out
@@ -450,7 +488,7 @@ def test_print_summary_gap_entry_missing(capsys: pytest.CaptureFixture[str]) -> 
 def test_print_summary_small_gap_hidden(capsys: pytest.CaptureFixture[str]) -> None:
     """低于阈值的小 gap 不显示未细分行，避免噪音."""
     timing = {"env_ready": 5.0, "entry_start": 6.0, "entry_done": 5950.0}
-    _print_summary(6000.0, 0, [("loader 总", 10.0, "")], timing, [])
+    _print_summary(ProfileSample(wall_ms=6000.0, loader_stages=[("loader 总", 10.0, "")], timing_stages=timing))
     out = capsys.readouterr().out
     assert "未细分" not in out
 
@@ -463,7 +501,7 @@ def test_print_summary_fast_program_high_ratio_gap_shown(capsys: pytest.CaptureF
     退出不在任何打点段内），回答快程序的"时间去哪了"。
     """
     timing = {"env_ready": 0.1, "entry_start": 0.2, "entry_done": 26.4}
-    _print_summary(64.0, 0, [], timing, [])
+    _print_summary(ProfileSample(wall_ms=64.0, timing_stages=timing))
     out = capsys.readouterr().out
     assert "未细分" in out
     assert "进程创建与收尾(约)" in out
@@ -474,7 +512,7 @@ def test_print_summary_fast_program_high_ratio_gap_shown(capsys: pytest.CaptureF
 def test_print_summary_fast_program_low_ratio_gap_hidden(capsys: pytest.CaptureFixture[str]) -> None:
     """快程序小绝对值小占比 gap：仍隐藏（控制噪声）."""
     timing = {"env_ready": 0.1, "entry_start": 0.2, "entry_done": 60.0}
-    _print_summary(64.0, 0, [], timing, [])
+    _print_summary(ProfileSample(wall_ms=64.0, timing_stages=timing))
     out = capsys.readouterr().out
     assert "未细分" not in out
 
@@ -491,7 +529,15 @@ def test_print_summary_returns_structured_data(capsys: pytest.CaptureFixture[str
         "import time:       500 |      2000 | app.controllers",
     ]
     post = ["import time:     5000 |     5000 | argparse"]
-    data = _print_summary(150.0, 0, [("loader 总", 8.0, "（进入 Python）")], timing, imports, post)
+    data = _print_summary(
+        ProfileSample(
+            wall_ms=150.0,
+            loader_stages=[("loader 总", 8.0, "（进入 Python）")],
+            timing_stages=timing,
+            import_lines=imports,
+            post_entry_lines=post,
+        )
+    )
 
     assert data["wall_ms"] == 150.0
     assert data["returncode"] == 0
@@ -510,7 +556,7 @@ def test_print_summary_returns_structured_data(capsys: pytest.CaptureFixture[str
 
 def test_print_summary_returns_empty_stages_without_marks(capsys: pytest.CaptureFixture[str]) -> None:
     """无任何打点时返回空阶段与空导入列表（结构完整，值全空）."""
-    data = _print_summary(10.0, 0, [], {}, [])
+    data = _print_summary(ProfileSample(wall_ms=10.0))
     assert data == {
         "wall_ms": 10.0,
         "returncode": 0,
@@ -550,7 +596,7 @@ def test_run_saves_profile_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
     monkeypatch.setattr("fspack.runner.run_with_profile", fake_profile)
     monkeypatch.setattr("fspack.runner.platform.system", lambda: "Windows")
-    run_run(project, profile=True)
+    run_run(project, options=_opts(profile=True))
 
     logs = sorted((project / ".benchmarks").glob("fsp-r-*.json"))
     assert len(logs) == 1
@@ -614,7 +660,7 @@ def test_run_profile_compare_last_renders_table(
     from fspack.console import console
 
     with console.rich.capture() as capture:
-        run_run(project, profile=True, profile_compare="last")
+        run_run(project, options=_opts(profile=True, profile_compare="last"))
     out = capture.get()
     assert "性能对比" in out
     assert "墙钟时间" in out
@@ -652,7 +698,7 @@ def test_run_profile_compare_last_without_history_warns(
     monkeypatch.setattr("fspack.runner.platform.system", lambda: "Windows")
     project = _make_runnable_project(tmp_path)
     with caplog.at_level("WARNING"):
-        run_run(project, profile=True, profile_compare="last")
+        run_run(project, options=_opts(profile=True, profile_compare="last"))
     assert any("未找到可对比的历史启动剖析日志" in r.message for r in caplog.records)
 
 
@@ -687,5 +733,5 @@ def test_run_profile_specified_baseline_schema_mismatch_warns(
     build_log.parent.mkdir(parents=True, exist_ok=True)
     build_log.write_text('{"schema": "fspack/build-profile/1", "wall_time": 3.0, "stages": []}', encoding="utf-8")
     with caplog.at_level("WARNING"):
-        run_run(project, profile=True, profile_compare=str(build_log))
+        run_run(project, options=_opts(profile=True, profile_compare=str(build_log)))
     assert any("类型不一致" in r.message for r in caplog.records)

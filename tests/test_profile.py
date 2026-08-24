@@ -317,7 +317,7 @@ def _make_minimal_project(tmp_path: Path) -> Path:
 
 
 def test_cli_build_profile_flag_passed_to_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """``fsp b --profile`` 透传 profile=True 给 build()."""
+    """``fsp b --profile`` 透传 profile 开关给 build()."""
     _make_minimal_project(tmp_path)
     captured: dict[str, Any] = {}
 
@@ -334,20 +334,16 @@ def test_cli_build_profile_flag_passed_to_build(tmp_path: Path, monkeypatch: pyt
         dry_run: bool = False,
         log_file: Path | None = None,
         log_format: object = None,
-        profile: bool = False,
-        profile_out: Path | None = None,
-        profile_compare: str | None = None,
+        profile: ProfileOptions | None = None,
         auto_clean: bool = False,
     ) -> None:
         captured["profile"] = profile
-        captured["profile_out"] = profile_out
-        captured["profile_compare"] = profile_compare
 
     monkeypatch.setattr("fspack.builder.build", fake_build)
     cli.main(["b", str(tmp_path), "--profile"])
-    assert captured["profile"] is True
-    assert captured["profile_out"] is None
-    assert captured["profile_compare"] is None
+    assert captured["profile"].enabled is True
+    assert captured["profile"].out is None
+    assert captured["profile"].compare is None
 
 
 def test_cli_build_profile_out_and_compare_passed_to_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -368,24 +364,21 @@ def test_cli_build_profile_out_and_compare_passed_to_build(tmp_path: Path, monke
         dry_run: bool = False,
         log_file: Path | None = None,
         log_format: object = None,
-        profile: bool = False,
-        profile_out: Path | None = None,
-        profile_compare: str | None = None,
+        profile: ProfileOptions | None = None,
         auto_clean: bool = False,
     ) -> None:
-        captured["profile_out"] = profile_out
-        captured["profile_compare"] = profile_compare
+        captured["profile"] = profile
 
     out_dir = tmp_path / "perflogs"
     monkeypatch.setattr("fspack.builder.build", fake_build)
     cli.main(["b", str(tmp_path), "--profile", "--profile-out", str(out_dir), "--profile-compare"])
-    assert captured["profile_out"] == out_dir.resolve()
+    assert captured["profile"].out == out_dir.resolve()
     # --profile-compare 不带值 → 哨兵 "last"（与最近一次日志对比）
-    assert captured["profile_compare"] == "last"
+    assert captured["profile"].compare == "last"
 
     ref = tmp_path / "base.json"
     cli.main(["b", str(tmp_path), "--profile", "--profile-compare", str(ref)])
-    assert captured["profile_compare"] == str(ref)
+    assert captured["profile"].compare == str(ref)
 
 
 def test_cli_build_profile_out_requires_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -419,29 +412,19 @@ def test_cli_run_profile_out_and_compare_passed_to_run(tmp_path: Path, monkeypat
     _make_minimal_project(tmp_path)
     captured: dict[str, Any] = {}
 
-    def fake_run(  # noqa: PLR0913
-        project: Path,
-        rest_args: list[str] | None = None,
-        debug: bool = False,
-        entry: str | None = None,
-        profile: bool = False,
-        profile_out: Path | None = None,
-        profile_compare: str | None = None,
-    ) -> None:
-        captured["profile"] = profile
-        captured["profile_out"] = profile_out
-        captured["profile_compare"] = profile_compare
+    def fake_run(project: Path, rest_args: list[str] | None = None, options: RunOptions | None = None) -> None:
+        captured["options"] = options
 
     monkeypatch.setattr("fspack.runner.run", fake_run)
     out_dir = tmp_path / "perflogs"
     cli.main(["r", str(tmp_path), "--profile", "--profile-out", str(out_dir), "--profile-compare"])
-    assert captured["profile"] is True
-    assert captured["profile_out"] == out_dir.resolve()
-    assert captured["profile_compare"] == "last"
+    assert captured["options"].profile.enabled is True
+    assert captured["options"].profile.out == out_dir.resolve()
+    assert captured["options"].profile.compare == "last"
 
     ref = tmp_path / "base.json"
     cli.main(["r", str(tmp_path), "--profile", "--profile-compare", str(ref)])
-    assert captured["profile_compare"] == str(ref)
+    assert captured["options"].profile.compare == str(ref)
 
 
 def test_cli_run_profile_out_requires_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -478,12 +461,14 @@ from fspack.packaging.profile_log import (  # noqa: E402
     RUN_LOG_GLOB,
     RUN_PROFILE_LOG_SCHEMA,
     ProfileLogMeta,
+    ProfileOptions,
     find_latest_log,
     load_profile_log,
     print_profile_compare,
     save_profile_log,
     save_profile_report,
 )
+from fspack.runner import RunOptions  # noqa: E402
 
 _META = ProfileLogMeta(name="app", version="0.1.0", python="3.13.14", platform="windows")
 
@@ -756,7 +741,7 @@ def test_print_profile_compare_schema_mismatch() -> None:
 
 
 def test_cli_build_without_profile_defaults_false(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """未指定 --profile 时 profile=False（默认行为）."""
+    """未指定 --profile 时 profile 开关为关（默认行为）."""
     _make_minimal_project(tmp_path)
     captured: dict[str, Any] = {}
 
@@ -773,16 +758,14 @@ def test_cli_build_without_profile_defaults_false(tmp_path: Path, monkeypatch: p
         dry_run: bool = False,
         log_file: Path | None = None,
         log_format: object = None,
-        profile: bool = False,
-        profile_out: Path | None = None,
-        profile_compare: str | None = None,
+        profile: ProfileOptions | None = None,
         auto_clean: bool = False,
     ) -> None:
         captured["profile"] = profile
 
     monkeypatch.setattr("fspack.builder.build", fake_build)
     cli.main(["b", str(tmp_path)])
-    assert captured["profile"] is False
+    assert captured["profile"].enabled is False
 
 
 # ---- build() 集成：profile=True 输出报告 ----
@@ -825,7 +808,7 @@ def test_build_with_profile_outputs_report(tmp_path: Path, monkeypatch: pytest.M
     monkeypatch.setattr("fspack.packaging.pipeline.executor._build_entry_loaders", lambda *a, **kw: [])
 
     with console.rich.capture() as capture:
-        build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, profile=True)
+        build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, profile=ProfileOptions(enabled=True))
 
     out = capture.get()
     assert "耗时分析报告" in out
@@ -885,7 +868,7 @@ def test_build_profile_cleans_up_on_exception(tmp_path: Path, monkeypatch: pytes
 
     was_tracing = tracemalloc.is_tracing()
     with pytest.raises(RuntimeError, match="构建失败模拟"):
-        build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, profile=True)
+        build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS, profile=ProfileOptions(enabled=True))
     # tracemalloc 已被 ProfileContext.__exit__ 停止
     assert not tracemalloc.is_tracing() or was_tracing
 

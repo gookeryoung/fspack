@@ -120,9 +120,9 @@ def _dispatch(command: str, ns: argparse.Namespace) -> None:
             sys.exit(_run_recursive(project, "build", ns))
         _run_build(project, ns)
     elif command in ("run", "r"):
-        from pathlib import Path as _Path
-
         from fspack.exceptions import ProjectError
+        from fspack.packaging.profile_log import ProfileOptions
+        from fspack.runner import RunOptions
         from fspack.runner import run as run_cmd
 
         if (getattr(ns, "profile_out", None) or getattr(ns, "profile_compare", None)) and not ns.profile:
@@ -130,11 +130,15 @@ def _dispatch(command: str, ns: argparse.Namespace) -> None:
         run_cmd(
             project,
             rest_args=_drop_separator(ns.rest),
-            debug=ns.debug,
-            entry=ns.entry,
-            profile=ns.profile,
-            profile_out=_Path(ns.profile_out).resolve() if ns.profile_out else None,
-            profile_compare=ns.profile_compare,
+            options=RunOptions(
+                debug=ns.debug,
+                entry=ns.entry,
+                profile=ProfileOptions(
+                    enabled=ns.profile,
+                    out=Path(ns.profile_out).resolve() if ns.profile_out else None,
+                    compare=ns.profile_compare,
+                ),
+            ),
         )
     elif command in ("clean", "c"):
         from fspack.builder import clean_dist
@@ -216,6 +220,8 @@ def _run_build(project: Path, ns: argparse.Namespace) -> None:
     log_format = LogFormat.parse(ns.log_format)
     if (ns.profile_out or ns.profile_compare) and not ns.profile:
         raise ProjectError("--profile-out/--profile-compare 需配合 --profile 使用")
+    from fspack.packaging.profile_log import ProfileOptions
+
     build(
         project,
         _resolve_mirror(ns.mirror),
@@ -227,9 +233,11 @@ def _run_build(project: Path, ns: argparse.Namespace) -> None:
         dry_run=ns.dry_run,
         log_file=log_file,
         log_format=log_format,
-        profile=ns.profile,
-        profile_out=Path(ns.profile_out).resolve() if ns.profile_out else None,
-        profile_compare=ns.profile_compare,
+        profile=ProfileOptions(
+            enabled=ns.profile,
+            out=Path(ns.profile_out).resolve() if ns.profile_out else None,
+            compare=ns.profile_compare,
+        ),
         auto_clean=getattr(ns, "auto_clean", False),
     )
 

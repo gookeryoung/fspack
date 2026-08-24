@@ -26,12 +26,32 @@ import sys
 import time
 import unicodedata
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Any
 
-__all__ = ["PROFILE_ENV", "run_with_profile"]
+__all__ = ["PROFILE_ENV", "ProfileSample", "run_with_profile"]
 
 # 激活三个数据源所需注入的环境变量（loader 打点 / wrapper 打点 / importtime）
 PROFILE_ENV = {"FSPACK_LOADER_VERBOSE": "1", "FSPACK_TIMING": "1", "PYTHONPROFILEIMPORTTIME": "1"}
+
+
+@dataclass
+class ProfileSample:
+    """一次运行的剖析采集结果（``run_with_profile`` 流式收集的原始数据）.
+
+    - ``loader_stages``：``(阶段名, 耗时ms, 补充说明)`` 三元组列表
+    - ``timing_stages``：wrapper 打点 ``{label: 累计时刻ms}``
+    - ``import_lines``/``post_entry_lines``：``entry_start`` 分界前后的
+      importtime 原始行（stderr 同管道行序即时间序）
+    """
+
+    wall_ms: float = 0.0
+    returncode: int = 0
+    loader_stages: list[tuple[str, float, str]] = field(default_factory=list)
+    timing_stages: dict[str, float] = field(default_factory=dict)
+    import_lines: list[str] = field(default_factory=list)
+    post_entry_lines: list[str] = field(default_factory=list)
+
 
 _LOADER_PREFIX = "[fspack loader]"
 _TIMING_PREFIX = "[fspack timing]"
@@ -85,26 +105,26 @@ def run_with_profile(
     """
     t_start = time.perf_counter()
     proc = subprocess.Popen(cmd, env=env, stderr=subprocess.PIPE)
-    loader_stages: list[tuple[str, float, str]] = []
-    timing_stages: dict[str, float] = {}
-    import_lines: list[str] = []
-    post_entry_lines: list[str] = []
+    sample = ProfileSample()
     entry_started = False
     assert proc.stderr is not None
     for raw in proc.stderr:
         line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
         if line.startswith(_IMPORTTIME_PREFIX):
-            (post_entry_lines if entry_started else import_lines).append(line)
+            if entry_started:
+                sample.post_entry_lines.append(line)
+            else:
+                sample.import_lines.append(line)
             continue
         if line.startswith(_LOADER_PREFIX):
             m = _LOADER_RE.match(line)
             if m is not None:
-                loader_stages.append((m.group(1), float(m.group(2)), m.group(3)))
+                sample.loader_stages.append((m.group(1), float(m.group(2)), m.group(3)))
                 continue
         if line.startswith(_TIMING_PREFIX):
             m = _TIMING_RE.match(line)
             if m is not None:
-                timing_stages[m.group(1)] = float(m.group(2))
+                sample.timing_stages[m.group(1)] = float(m.group(2))
                 if m.group(1) == "entry_start":
                     entry_started = True
                 continue
@@ -112,12 +132,12 @@ def run_with_profile(
         sys.stderr.write(line + "\n")
     sys.stderr.flush()
     proc.stderr.close()
-    returncode = proc.wait()
-    wall_ms = (time.perf_counter() - t_start) * 1000.0
-    data = _print_summary(wall_ms, returncode, loader_stages, timing_stages, import_lines, post_entry_lines)
+    sample.returncode = proc.wait()
+    sample.wall_ms = (time.perf_counter() - t_start) * 1000.0
+    data = _print_summary(sample)
     if on_summary is not None:
         on_summary(data)
-    return returncode
+    return sample.returncode
 
 
 def _parse_import_lines(
@@ -318,17 +338,10 @@ def _print_unaccounted(
     print("  " + _pad("", _TAG_W) + reason)
 
 
-def _print_summary(  # noqa: PLR0913
-    wall_ms: float,
-    returncode: int,
-    loader_stages: list[tuple[str, float, str]],
-    timing_stages: dict[str, float],
-    import_lines: list[str],
-    post_entry_lines: list[str] | None = None,
-) -> dict[str, Any]:
+def _print_summary(sample: ProfileSample) -> dict[str, Any]:
     """打印启动耗时汇总表：loader → 环境准备 → 解释器初始化 → import 细分 → 入口执行（导入/执行细分）→ 未细分.
 
-    ``post_entry_lines`` 为 ``entry_start`` 打点之后的 importtime 行
+    ``sample.post_entry_lines`` 为 ``entry_start`` 打点之后的 importtime 行
     （入口执行期间的导入），有 ``entry_start`` 打点时用于细分"用户入口
     执行"段；缺失（旧 dist）时入口执行整段展示，行为与旧版一致。
 
@@ -345,14 +358,16 @@ def _print_summary(  # noqa: PLR0913
     ``stages`` 仅含主阶段（子项与"未细分"归因不稳定，不参与对比）；
     导入列表存全量根导入（打印截 top，落盘全量供后续分析）。
     """
-    if post_entry_lines is None:
-        post_entry_lines = []
+    wall_ms = sample.wall_ms
+    timing_stages = sample.timing_stages
+    import_lines = sample.import_lines
+    post_entry_lines: list[str] = sample.post_entry_lines
     entry_start = timing_stages.get("entry_start")
     # 防御：无 entry_start 打点却有分界数据（理论不可达），并回主列表
     if entry_start is None and post_entry_lines:
         import_lines = [*import_lines, *post_entry_lines]
         post_entry_lines = []
-    print(f"[fspack] 启动耗时剖析（总 {wall_ms:.0f}ms，退出码 {returncode}）")
+    print(f"[fspack] 启动耗时剖析（总 {wall_ms:.0f}ms，退出码 {sample.returncode}）")
     print("─" * _SEP_LEN)
     interp_ms = 0.0
     user_roots: list[tuple[str, float]] = []
@@ -367,7 +382,7 @@ def _print_summary(  # noqa: PLR0913
         # 模块自身耗时 top 合并两段（各自 top 的并集再取全局 top）
         self_top = sorted([*self_top, *post_self], key=lambda x: -x[1])[:_TOP_SELF]
     loader_total = 0.0
-    for stage, ms, suffix in loader_stages:
+    for stage, ms, suffix in sample.loader_stages:
         loader_total = max(loader_total, ms)
         _row("[loader]", f"{stage}{suffix}", _fmt_ms(ms), _fmt_pct(ms, wall_ms), _fmt_bar(ms, wall_ms))
     env_ready = timing_stages.get("env_ready")
@@ -385,7 +400,7 @@ def _print_summary(  # noqa: PLR0913
     _print_unaccounted(wall_ms, loader_total, interp_ms, timing_stages)
     # 落盘数据：主阶段用 loader 打点原文阶段名（suffix 为补充说明，跨次
     # 运行不稳定，不并入名字）
-    stages: list[tuple[str, float]] = [(stage, ms) for stage, ms, _ in loader_stages]
+    stages: list[tuple[str, float]] = [(stage, ms) for stage, ms, _ in sample.loader_stages]
     if env_ready is not None:
         stages.append(("环境准备", env_ready))
     if interp_ms > 0:
@@ -394,7 +409,7 @@ def _print_summary(  # noqa: PLR0913
         stages.append(("用户入口执行", entry_done - entry_start))
     return {
         "wall_ms": wall_ms,
-        "returncode": returncode,
+        "returncode": sample.returncode,
         "stages": stages,
         "top_imports": list(user_roots),
         "entry_imports": list(post_roots),

@@ -55,6 +55,7 @@ from fspack.packaging.pipeline.stages import (
     _slim_runtime,
     _zip_stdlib,
 )
+from fspack.packaging.profile_log import ProfileOptions
 from fspack.packaging.runtime import write_pth
 from fspack.packaging.sync import copy_source
 from fspack.platform import Platform, detect_platform
@@ -67,6 +68,8 @@ if TYPE_CHECKING:
     # ProfileReport 仅用于 _save_and_compare_profile 签名注解。
     # 顶部不导入 fspack.packaging.profile 避免连锁触发 fspack.console
     # （~17ms）+ rich.table 加载，build() 内启用 profile 时才 import。
+    # ProfileOptions 本可 TYPE_CHECKING 导入（仅签名注解），但它所在的
+    # profile_log 模块顶部只有标准库轻依赖，runtime 导入不触发 rich。
     from fspack.packaging.profile import ProfileContext, ProfileReport
     from fspack.progress import BuildTracker
 
@@ -76,6 +79,9 @@ if TYPE_CHECKING:
 _PRINT_BUILD_PLAN_NAME = "_print_build_plan"
 
 _logger = logging.getLogger(__name__)
+
+# frozen 不可变单例，作为 build() profile 参数的默认值安全共享
+_DEFAULT_PROFILE = ProfileOptions()
 
 
 def resolve_project_info(project_dir: Path, py_version: str | None, target: Platform) -> ProjectInfo:
@@ -108,9 +114,7 @@ def build(  # noqa: PLR0913
     dry_run: bool = False,
     log_file: Path | None = None,
     log_format: LogFormat = LogFormat.TEXT,
-    profile: bool = False,
-    profile_out: Path | None = None,
-    profile_compare: str | None = None,
+    profile: ProfileOptions = _DEFAULT_PROFILE,
     auto_clean: bool = False,
 ) -> ProjectInfo:
     """执行完整构建流水线，返回项目信息。
@@ -186,7 +190,7 @@ def build(  # noqa: PLR0913
     # 延迟导入：profile 模块顶部 from fspack.console import console 会连锁触发
     # rich.console/rich.logging/rich.theme 加载（~17ms）。仅在启用 profile 时加载。
     profile_ctx: ProfileContext | None = None
-    if profile:
+    if profile.enabled:
         from fspack.packaging.profile import ProfileContext
 
         profile_ctx = ProfileContext()
@@ -236,32 +240,30 @@ def build(  # noqa: PLR0913
 
         report = profile_ctx.collect(tracker)
         print_profile_report(report)
-        _save_and_compare_profile(report, project_dir, info, target, profile_out, profile_compare)
+        _save_and_compare_profile(report, project_dir, info, target, profile)
     return info
 
 
-def _save_and_compare_profile(  # noqa: PLR0913
+def _save_and_compare_profile(
     report: ProfileReport,
     project_dir: Path,
     info: ProjectInfo,
     target: Platform,
-    profile_out: Path | None,
-    profile_compare: str | None,
+    opts: ProfileOptions,
 ) -> None:
     """落盘性能日志并按需渲染历史对比（``--profile-out``/``--profile-compare``）.
 
-    落盘：``profile_out`` 为 ``.json`` 文件直写，为目录/其他路径自动命名；
-    未指定时写默认目录 ``<项目>/.benchmarks/``。对比：``profile_compare``
-    为 ``"last"`` 时取默认目录内最近一次日志（排除本次），否则按基准文件
-    路径加载；日志缺失/畸形时警告并跳过对比，不中断构建结果。
+    落盘：``opts.out`` 为 ``.json`` 文件直写，为目录/其他路径自动命名；
+    未指定时写默认目录 ``<项目>/.benchmarks/``。对比逻辑复用
+    :func:`fspack.packaging.profile_log.compare_with_baseline`：
+    ``opts.compare`` 为 ``"last"`` 时取默认目录内最近一次日志（排除本次），
+    否则按基准文件路径加载；日志缺失/畸形时警告并跳过对比，不中断构建结果。
     """
     # 延迟导入：profile_log 触发 rich 渲染链加载，仅在 profile 构建时执行
     from fspack.packaging.profile_log import (
         DEFAULT_LOG_DIR,
         ProfileLogMeta,
-        find_latest_log,
-        load_profile_log,
-        print_profile_compare,
+        compare_with_baseline,
         save_profile_report,
     )
 
@@ -272,25 +274,9 @@ def _save_and_compare_profile(  # noqa: PLR0913
         platform=target.value,
     )
     default_dir = project_dir / DEFAULT_LOG_DIR
-    log_path = save_profile_report(report, Path(profile_out) if profile_out else default_dir, meta)
+    log_path = save_profile_report(report, opts.out or default_dir, meta)
     _logger.info("性能日志已写入: %s", log_path)
-    if not profile_compare:
-        return
-    if profile_compare == "last":
-        baseline_path = find_latest_log(default_dir, exclude=log_path)
-        if baseline_path is None:
-            _logger.warning("未找到可对比的历史性能日志（%s）", default_dir)
-            return
-    else:
-        baseline_path = Path(profile_compare)
-    try:
-        baseline = load_profile_log(baseline_path)
-        current = load_profile_log(log_path)
-        # 对比渲染同样可能抛 ValueError（如基准是启动剖析日志、双方 schema
-        # 不一致），一并按警告跳过，不中断构建结果
-        print_profile_compare(current, baseline, baseline_path)
-    except ValueError as exc:
-        _logger.warning("加载基准性能日志失败，跳过对比: %s", exc)
+    compare_with_baseline(log_path, default_dir, opts.compare)
 
 
 def _execute_build(  # noqa: PLR0912, PLR0913
