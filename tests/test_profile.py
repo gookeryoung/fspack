@@ -373,8 +373,13 @@ def test_cli_build_profile_out_and_compare_passed_to_build(tmp_path: Path, monke
     monkeypatch.setattr("fspack.builder.build", fake_build)
     cli.main(["b", str(tmp_path), "--profile", "--profile-out", str(out_dir), "--profile-compare"])
     assert captured["profile"].out == out_dir.resolve()
-    # --profile-compare 不带值 → 哨兵 "last"（与最近一次日志对比）
+    # --profile-compare 不带值 → 哨兵 "trend"（历次趋势表）
+    assert captured["profile"].compare == "trend"
+    # last=与最近一次对比；正整数=近 N 次趋势
+    cli.main(["b", str(tmp_path), "--profile", "--profile-compare", "last"])
     assert captured["profile"].compare == "last"
+    cli.main(["b", str(tmp_path), "--profile", "--profile-compare", "5"])
+    assert captured["profile"].compare == "5"
 
     ref = tmp_path / "base.json"
     cli.main(["b", str(tmp_path), "--profile", "--profile-compare", str(ref)])
@@ -420,6 +425,9 @@ def test_cli_run_profile_out_and_compare_passed_to_run(tmp_path: Path, monkeypat
     cli.main(["r", str(tmp_path), "--profile", "--profile-out", str(out_dir), "--profile-compare"])
     assert captured["options"].profile.enabled is True
     assert captured["options"].profile.out == out_dir.resolve()
+    # --profile-compare 不带值 → 哨兵 "trend"（历次趋势表）
+    assert captured["options"].profile.compare == "trend"
+    cli.main(["r", str(tmp_path), "--profile", "--profile-compare", "last"])
     assert captured["options"].profile.compare == "last"
 
     ref = tmp_path / "base.json"
@@ -462,9 +470,12 @@ from fspack.packaging.profile_log import (  # noqa: E402
     RUN_PROFILE_LOG_SCHEMA,
     ProfileLogMeta,
     ProfileOptions,
+    compare_with_baseline,
     find_latest_log,
+    find_recent_logs,
     load_profile_log,
     print_profile_compare,
+    print_profile_trend,
     save_profile_log,
     save_profile_report,
 )
@@ -550,6 +561,23 @@ def test_find_latest_log(tmp_path: Path) -> None:
     empty = tmp_path / "empty"
     empty.mkdir()
     assert find_latest_log(empty) is None
+
+
+def test_find_recent_logs(tmp_path: Path) -> None:
+    """时间升序返回最近 N 条；exclude 排除本次；limit<=0 不截断；空目录返回空列表."""
+    names = ["fsp-b-20260101-100000.json", "fsp-b-20260102-100000.json", "fsp-b-20260103-100000.json"]
+    for n in [*names, "unrelated.json"]:
+        (tmp_path / n).write_text("{}", encoding="utf-8")
+    # 默认：时间升序（旧→新），非同类前缀不入选
+    assert [p.name for p in find_recent_logs(tmp_path)] == names
+    # limit=2 取最近两条
+    assert [p.name for p in find_recent_logs(tmp_path, limit=2)] == names[1:]
+    # exclude 排除最新一条
+    excluded = tmp_path / names[2]
+    assert [p.name for p in find_recent_logs(tmp_path, exclude=excluded)] == names[:2]
+    # limit<=0 不截断
+    assert len(find_recent_logs(tmp_path, limit=0)) == 3
+    assert find_recent_logs(tmp_path / "no-such-dir") == []
 
 
 def _log_dict(
@@ -641,6 +669,130 @@ def test_print_profile_compare_improvement_green() -> None:
     out = capture.get()
     assert "-20.0%" in out
     assert "▼" in out
+
+
+# ---- profile_log：历次趋势表（print_profile_trend）----
+
+
+def test_print_profile_trend_renders(tmp_path: Path) -> None:
+    """趋势表渲染：历史行 + 本次/中位数/vs 中位数统计行（中位数抗单次抖动）."""
+    current = _log_dict(wall=3.0, cpu=1.5)
+    history = [
+        (tmp_path / "a.json", _log_dict(wall=2.0, cpu=1.0)),
+        (tmp_path / "b.json", _log_dict(wall=4.0, cpu=2.0)),
+    ]
+
+    with console.rich.capture() as capture:
+        print_profile_trend(current, history)
+    out = capture.get()
+
+    assert "性能趋势" in out
+    assert "历史 2 次" in out
+    assert "本次" in out
+    # 中位数 = median(2.0, 4.0) = 3.0，本次 3.0 → 持平 ＝
+    assert "中位数(n=2)" in out
+    assert "3.00s" in out
+    assert "本次 vs 中位数" in out
+    # created 均为同一 ISO 时间，历史行时间列渲染 MM-DD HH:MM:SS
+    assert "08-24 10:00:00" in out
+
+
+def test_print_profile_trend_env_filter(tmp_path: Path) -> None:
+    """环境不一致行以 * 展示且不参与中位数；全部不一致时退化为全部并注明."""
+    current = _log_dict(wall=1.0)
+    # 环境一致（2 次）：中位数 = median(2.0, 4.0) = 3.0
+    matched = [(tmp_path / "m1.json", _log_dict(wall=2.0)), (tmp_path / "m2.json", _log_dict(wall=4.0))]
+    # 环境不一致（版本不同）：不参与统计
+    mismatched = [(tmp_path / "x1.json", _log_dict(wall=100.0, version="9.9.9"))]
+
+    with console.rich.capture() as capture:
+        print_profile_trend(current, [*matched, *mismatched])
+    flat = "".join(capture.get().split())
+    assert "中位数(n=2)" in flat
+    # rich 会按终端宽度对 caption 自动换行，断言前去除全部空白
+    assert "*环境不一致1次" in flat
+
+    # 全部不一致：统计退化用全部历史，注明
+    with console.rich.capture() as capture:
+        print_profile_trend(current, mismatched)
+    flat = "".join(capture.get().split())
+    assert "中位数(n=1)" in flat
+    assert "无环境一致历史" in flat
+
+
+def test_print_profile_trend_stage_deviation(tmp_path: Path) -> None:
+    """阶段偏离表：显著项列出；不显著折叠；新增/移除阶段单列；无偏离不渲染."""
+    current = _log_dict(
+        wall=2.0,
+        stages=[
+            {"name": "依赖解析", "elapsed": 0.8},
+            {"name": "解析项目", "elapsed": 0.3},
+            {"name": "新阶段", "elapsed": 0.1},
+        ],
+    )
+    history = [
+        (
+            tmp_path / "a.json",
+            _log_dict(
+                wall=1.0,
+                stages=[
+                    {"name": "依赖解析", "elapsed": 0.4},
+                    {"name": "解析项目", "elapsed": 0.31},
+                    {"name": "旧阶段", "elapsed": 0.1},
+                ],
+            ),
+        )
+    ]
+
+    with console.rich.capture() as capture:
+        print_profile_trend(current, history)
+    out = capture.get()
+    assert "性能阶段偏离" in out
+    # 显著：0.8 vs 0.4 中位数 → +100.0%
+    assert "依赖解析" in out
+    assert "+100.0%" in out
+    # 新增/移除阶段
+    assert "新阶段" in out
+    assert "新增" in out
+    assert "旧阶段" in out
+    assert "移除" in out
+
+    # 无显著偏离（差异低于阈值）时不渲染偏离表
+    quiet_cur = _log_dict(wall=1.0, stages=[{"name": "解析项目", "elapsed": 0.3}])
+    quiet_hist = [(tmp_path / "b.json", _log_dict(wall=1.0, stages=[{"name": "解析项目", "elapsed": 0.31}]))]
+    with console.rich.capture() as capture:
+        print_profile_trend(quiet_cur, quiet_hist)
+    assert "阶段偏离" not in capture.get()
+
+
+def test_compare_with_baseline_trend_branch(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """compare=trend/正整数走趋势分支：读目录历史渲染；畸形历史跳过不中断."""
+    # 造一份畸形（最旧）+ 两份合法历史 + 本次
+    (tmp_path / "fsp-b-20260101-100000.json").write_text("{broken", encoding="utf-8")
+    save_profile_log(_log_dict(wall=2.0), tmp_path / "fsp-b-20260102-100000.json")
+    save_profile_log(_log_dict(wall=4.0), tmp_path / "fsp-b-20260103-100000.json")
+    log_path = save_profile_log(_log_dict(wall=3.0), tmp_path / "fsp-b-20260104-100000.json")
+
+    with console.rich.capture() as capture, caplog.at_level("WARNING"):
+        compare_with_baseline(log_path, tmp_path, "trend")
+    out = capture.get()
+    assert "性能趋势" in out
+    assert "中位数(n=2)" in out  # 畸形文件被跳过
+    assert "跳过无法读取" in caplog.text
+
+    # 正整数语义：近 1 次历史
+    with console.rich.capture() as capture:
+        compare_with_baseline(log_path, tmp_path, "1")
+    out = capture.get()
+    assert "历史 1 次" in out
+
+
+def test_compare_with_baseline_trend_no_history(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """无历史日志时趋势分支告警跳过，不抛异常."""
+    log_path = save_profile_log(_log_dict(), tmp_path / "fsp-b-20260101-100000.json")
+    with caplog.at_level("WARNING"):
+        compare_with_baseline(log_path, tmp_path, "trend")
+    assert "未找到可对比的历史" in caplog.text
 
 
 # ---- profile_log：启动剖析（fsp r --profile）日志 ----

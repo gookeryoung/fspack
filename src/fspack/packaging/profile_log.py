@@ -2,8 +2,10 @@
 
 ``fsp b --profile`` 构建结束后将 :class:`ProfileReport` 连同元数据写入
 JSON 日志（默认 ``<项目>/.benchmarks/fsp-b-<时间戳>.json``，``--profile-out``
-可指定目录或文件），``--profile-compare`` 与最近一次或指定基准日志对比，
-渲染差异表格定位性能回归。
+可指定目录或文件），``--profile-compare`` 与历史日志对比：不带值输出历次
+趋势表（近 :data:`_TREND_LIMIT` 次历史 + 本次，统计基准为环境一致历史的
+中位数，抗单次抖动），``last`` 与最近一次对比，正整数取近 N 次，或指定
+基准 JSON 文件路径两两对比。
 
 ``fsp r --profile`` 启动剖析同样落盘（``fsp-r-<时间戳>.json``，schema
 ``fspack/run-profile/1``，由 :func:`save_profile_log` 写入完整 dict），
@@ -37,8 +39,10 @@ JSON 日志（默认 ``<项目>/.benchmarks/fsp-b-<时间戳>.json``，``--profi
 - :func:`save_profile_log` — 写入完整日志 dict（启动剖析用，前缀区分）
 - :func:`load_profile_log` — 读取日志为 dict
 - :func:`find_latest_log` — 目录内最新日志（排除指定文件，按前缀过滤）
+- :func:`find_recent_logs` — 目录内最近 N 条日志（时间升序，趋势表数据源）
 - :func:`print_profile_compare` — 渲染本次与基准的差异对比表
-- :func:`compare_with_baseline` — 解析基准（``last``/路径）并渲染对比（两侧共用）
+- :func:`print_profile_trend` — 渲染历次趋势表（明细 + 中位数统计 + 阶段偏离）
+- :func:`compare_with_baseline` — 解析对比目标（趋势/``last``/路径）并渲染（两侧共用）
 """
 
 from __future__ import annotations
@@ -49,6 +53,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from statistics import median
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -70,8 +75,10 @@ __all__ = [
     "ProfileOptions",
     "compare_with_baseline",
     "find_latest_log",
+    "find_recent_logs",
     "load_profile_log",
     "print_profile_compare",
+    "print_profile_trend",
     "save_profile_log",
     "save_profile_report",
 ]
@@ -96,6 +103,8 @@ _STAGE_MIN_DELTA = 0.05
 _STAGE_MIN_PCT = 10.0
 # 启动剖析侧的阶段显著阈值：总时长常为几十毫秒，阈值比构建侧小一个量级
 _RUN_STAGE_MIN_DELTA = 0.005
+# 趋势表默认展示的历史条数（--profile-compare 不带值 / 传 trend 时）
+_TREND_LIMIT = 15
 
 
 @dataclass(frozen=True)
@@ -114,7 +123,8 @@ class ProfileOptions:
 
     build 与 run 两侧共用：``enabled`` 对应 ``--profile`` 开关；``out`` 为
     ``.json`` 文件时直写、目录时自动命名、``None`` 落默认目录；``compare``
-    为 ``"last"`` 时与最近一次同类日志对比，其他值按基准文件路径。
+    为 ``"trend"`` 时渲染历次趋势表（默认近 :data:`_TREND_LIMIT` 次）、
+    正整数取近 N 次、``"last"`` 与最近一次对比，其他值按基准文件路径。
     frozen 不可变，默认值可安全共享。
     """
 
@@ -224,6 +234,25 @@ def find_latest_log(directory: Path, exclude: Path | None = None, pattern: str =
     return max(logs, key=lambda p: p.name) if logs else None
 
 
+def find_recent_logs(
+    directory: Path,
+    exclude: Path | None = None,
+    pattern: str = _LOG_GLOB,
+    limit: int = _TREND_LIMIT,
+) -> list[Path]:
+    """返回目录内最近的性能日志路径列表（时间升序，旧→新），趋势表数据源.
+
+    与 :func:`find_latest_log` 同样的文件名字典序假设，排序后截取最近
+    ``limit`` 条（不足则全部）。``limit <= 0`` 时不截断（测试与全量
+    分析场景）。排除 ``exclude``（本次刚写入的日志，不作为历史）。
+    """
+    if not directory.is_dir():
+        return []
+    logs = [p for p in directory.glob(pattern) if exclude is None or p.resolve() != exclude.resolve()]
+    logs.sort(key=lambda p: p.name)
+    return logs[-limit:] if limit > 0 else logs
+
+
 @dataclass(frozen=True)
 class LogKind:
     """同类日志的对比配置：``last`` 候选通配 / 阶段显著阈值 / 警告文案标签.
@@ -251,19 +280,28 @@ def compare_with_baseline(
     compare: str | None,
     kind: LogKind = BUILD_LOG_KIND,
 ) -> None:
-    """解析基准日志并与本次对比渲染差异表（构建与启动剖析共用）.
+    """解析对比目标并与本次渲染（构建与启动剖析共用）.
 
-    ``compare`` 为 ``"last"`` 时取 ``default_dir`` 内最近一次同类日志
-    （排除本次 ``log_path``），其他值按基准文件路径加载；未指定时直接
-    返回。日志缺失/畸形/schema 与本次不一致时警告并跳过对比，不中断
-    构建或运行结果。
+    ``compare`` 四种语义：
 
-    :param log_path: 本次刚写入的日志路径（排除在 ``last`` 候选外）
+    - ``"trend"``（``--profile-compare`` 不带值的哨兵）：渲染历次趋势表
+      （近 :data:`_TREND_LIMIT` 次历史 + 本次 + 中位数统计 + 阶段偏离）
+    - 正整数字符串（如 ``"5"``）：同趋势表，历史取近 N 次
+    - ``"last"``：与最近一次同类日志两两对比（差异表）
+    - 其他值：按基准文件路径加载并两两对比
+
+    未指定时直接返回。日志缺失/畸形/schema 与本次不一致时警告并跳过
+    对比，不中断构建或运行结果。
+
+    :param log_path: 本次刚写入的日志路径（排除在历史候选外）
     :param default_dir: 默认日志目录（``<项目>/.benchmarks``）
-    :param compare: ``--profile-compare`` 值（``"last"``/基准路径/``None``）
+    :param compare: ``--profile-compare`` 值（``"trend"``/``"last"``/数字/路径/``None``）
     :param kind: 日志类别（同类过滤通配 + 阶段显著阈值 + 警告文案标签）
     """
     if not compare:
+        return
+    if compare == "trend" or compare.isdigit():
+        _print_trend_from_dir(log_path, default_dir, int(compare) if compare.isdigit() else _TREND_LIMIT, kind)
         return
     if compare == "last":
         baseline_path = find_latest_log(default_dir, exclude=log_path, pattern=kind.pattern)
@@ -278,6 +316,38 @@ def compare_with_baseline(
         print_profile_compare(current, baseline, baseline_path, stage_min_delta=kind.stage_min_delta)
     except ValueError as exc:
         _logger.warning("加载基准%s日志失败，跳过对比: %s", kind.label, exc)
+
+
+def _print_trend_from_dir(log_path: Path, default_dir: Path, limit: int, kind: LogKind) -> None:
+    """从默认目录收集历史日志并渲染趋势表（``compare_with_baseline`` 的趋势分支）.
+
+    历史日志逐个加载：畸形/schema 与本次不一致的跳过（warning），全部
+    不可用时跳过趋势对比，不中断构建或运行结果。
+    """
+    paths = find_recent_logs(default_dir, exclude=log_path, pattern=kind.pattern, limit=limit)
+    if not paths:
+        _logger.warning("未找到可对比的历史%s日志（%s）", kind.label, default_dir)
+        return
+    try:
+        current = load_profile_log(log_path)
+    except ValueError as exc:
+        _logger.warning("加载本次%s日志失败，跳过对比: %s", kind.label, exc)
+        return
+    history: list[tuple[Path, dict[str, Any]]] = []
+    for path in paths:
+        try:
+            data = load_profile_log(path)
+        except ValueError as exc:
+            _logger.warning("跳过无法读取的历史%s日志: %s", kind.label, exc)
+            continue
+        if data.get("schema") != current.get("schema"):
+            _logger.warning("跳过类型不一致的历史%s日志: %s", kind.label, path.name)
+            continue
+        history.append((path, data))
+    if not history:
+        _logger.warning("历史%s日志均不可用，跳过趋势对比", kind.label)
+        return
+    print_profile_trend(current, history, stage_min_delta=kind.stage_min_delta, label=kind.label)
 
 
 def _fmt_seconds(s: float) -> str:
@@ -439,3 +509,169 @@ def print_profile_compare(
         table.add_row(f"其余 {quiet} 个阶段", "", "", Text("差异不显著", style="dim"))
     console.rich.print(subtitle)
     console.rich.print(table)
+
+
+def _fmt_trend_time(iso_created: str) -> str:
+    """格式化日志创建时间为 ``MM-DD HH:MM:SS``（同年省略年份），解析失败返回空串."""
+    try:
+        created = datetime.fromisoformat(iso_created)
+    except ValueError:
+        return ""
+    return created.strftime("%m-%d %H:%M:%S")
+
+
+def _env_matches(current: dict[str, Any], baseline: dict[str, Any]) -> bool:
+    """判定两份日志环境是否一致（复用 :func:`_env_notes` 的全部维度）."""
+    return not _env_notes(current, baseline)
+
+
+def print_profile_trend(
+    current: dict[str, Any],
+    history: list[tuple[Path, dict[str, Any]]],
+    *,
+    stage_min_delta: float = _STAGE_MIN_DELTA,
+    label: str = "性能",
+) -> None:
+    """渲染历次趋势表：明细 + 本次 + 中位数统计 + 阶段显著偏离（构建与启动剖析共用）.
+
+    两张表：
+
+    1. 趋势表：每行一次历史运行（时间升序，按日期直观看走势），末尾
+       ``本次``/``中位数``/``本次 vs 中位数`` 三行——中位数基准抗单次
+       抖动（缓存冷热/网络波动），比"与最近一次对比"更能回答"本次是否
+       异常"。统计基准仅用环境一致（项目版本/Python/平台/入口/调试模式
+       相同）的历史行，不一致行以 ``*`` 前缀 + 暗色展示且不参与统计；
+       无一致行时退化为全部历史并在表尾注明。
+    2. 阶段偏离表：本次各阶段 vs 环境一致历史的阶段中位数，仅列显著项
+       （绝对差超 ``stage_min_delta`` 且相对差超 10%，按差值降序上限 8 行）
+       ；新增/移除阶段单列（上限 4）。无显著偏离时不渲染。
+
+    :param current: 本次刚写入的日志 dict
+    :param history: 历史日志 ``(路径, dict)`` 列表（时间升序，不含本次）
+    :param stage_min_delta: 阶段显著阈值（秒），构建与启动剖析量级不同
+    :param label: 日志类别标签（"性能"/"启动剖析"），用于表标题
+    """
+    # 延迟导入：rich 渲染链与 console 仅在真正输出趋势表时加载
+    from rich.table import Table
+    from rich.text import Text
+
+    from fspack.console import console
+    from fspack.progress import fmt_bytes
+
+    matched = [(p, d) for p, d in history if _env_matches(current, d)]
+    mismatched_rows = [(p, d) for p, d in history if not _env_matches(current, d)]
+    # 统计基准优先用环境一致行；全部不一致时退化为全部（表尾注明）
+    stats_source = matched if matched else history
+    n_stats = len(stats_source)
+
+    show_cpu = "cpu_time" in current or any("cpu_time" in d for _, d in history)
+    show_mem = "memory_peak" in current or any("memory_peak" in d for _, d in history)
+
+    table = Table(title=f"{label}趋势（历史 {len(history)} 次）", title_style="bold magenta")
+    table.add_column("时间", style="cyan", no_wrap=True)
+    table.add_column("墙钟时间", justify="right")
+    if show_cpu:
+        table.add_column("CPU 时间", justify="right")
+    if show_mem:
+        table.add_column("内存峰值", justify="right")
+
+    def _history_row(path: Path, data: dict[str, Any], env_ok: bool) -> None:
+        time_str = ("  " if env_ok else "* ") + (_fmt_trend_time(str(data.get("created", ""))) or path.stem)
+        cells: list[Any] = [
+            Text(time_str, style="" if env_ok else "dim"),
+            _fmt_seconds(float(data.get("wall_time", 0))),
+        ]
+        if show_cpu:
+            cells.append(_fmt_seconds(float(data.get("cpu_time", 0))))
+        if show_mem:
+            cells.append(fmt_bytes(int(data.get("memory_peak", 0))))
+        table.add_row(*cells)
+
+    for path, data in matched:
+        _history_row(path, data, env_ok=True)
+    for path, data in mismatched_rows:
+        _history_row(path, data, env_ok=False)
+
+    # 统计三行：本次 / 中位数 / 本次 vs 中位数
+    cur_wall = float(current.get("wall_time", 0))
+    med_wall = median(float(d.get("wall_time", 0)) for _, d in stats_source)
+    cur_cells: list[Any] = [Text("本次", style="bold"), _fmt_seconds(cur_wall)]
+    stat_cells: list[Any] = [f"中位数(n={n_stats})", _fmt_seconds(med_wall)]
+    delta_cells: list[Any] = ["本次 vs 中位数", _delta_cell(cur_wall, med_wall, _fmt_seconds)]
+    if show_cpu:
+        cur_cpu = float(current.get("cpu_time", 0))
+        med_cpu = median(float(d.get("cpu_time", 0)) for _, d in stats_source)
+        cur_cells.append(_fmt_seconds(cur_cpu))
+        stat_cells.append(_fmt_seconds(med_cpu))
+        delta_cells.append(_delta_cell(cur_cpu, med_cpu, _fmt_seconds))
+    if show_mem:
+        cur_mem = int(current.get("memory_peak", 0))
+        med_mem = median(int(d.get("memory_peak", 0)) for _, d in stats_source)
+        cur_cells.append(fmt_bytes(cur_mem))
+        stat_cells.append(fmt_bytes(int(med_mem)))
+        delta_cells.append(_delta_cell(cur_mem, med_mem, lambda v: fmt_bytes(int(v))))
+    table.add_section()
+    table.add_row(*cur_cells)
+    table.add_row(*stat_cells)
+    table.add_row(*delta_cells)
+
+    notes: list[str] = []
+    if mismatched_rows:
+        notes.append(f"* 环境不一致 {len(mismatched_rows)} 次（Python/平台/版本/入口不同），不参与统计基准")
+    if not matched and history:
+        notes.append("无环境一致历史，统计基准退化为全部历史")
+    table.caption = "；".join(notes) or None
+    table.caption_style = "dim yellow"
+    console.rich.print(table)
+    _print_stage_deviation(current, stats_source, stage_min_delta, label)
+
+
+def _print_stage_deviation(
+    current: dict[str, Any],
+    stats_source: list[tuple[Path, dict[str, Any]]],
+    stage_min_delta: float,
+    label: str,
+) -> None:
+    """渲染阶段偏离表：本次各阶段 vs 统计基准的阶段中位数，仅列显著项.
+
+    显著判定与 :func:`print_profile_compare` 一致（绝对差超
+    ``stage_min_delta`` 且相对差超 10%），按差值降序上限 8 行；新增/
+    移除阶段单列（上限 4）。无显著偏离时不渲染。
+    """
+    from rich.table import Table
+    from rich.text import Text
+
+    from fspack.console import console
+
+    per_stage: dict[str, list[float]] = {}
+    for _, data in stats_source:
+        for stage in data.get("stages", []):
+            per_stage.setdefault(str(stage.get("name")), []).append(float(stage.get("elapsed", 0)))
+    cur_stages = {str(s.get("name")): float(s.get("elapsed", 0)) for s in current.get("stages", [])}
+    significant: list[tuple[str, float, float]] = []
+    for name, cur in cur_stages.items():
+        samples = per_stage.get(name)
+        if not samples:
+            continue
+        med = median(samples)
+        delta = cur - med
+        pct = delta / med * 100 if med > 0 else 0.0
+        if abs(delta) > stage_min_delta and abs(pct) > _STAGE_MIN_PCT:
+            significant.append((name, cur, med))
+    significant.sort(key=lambda x: -abs(x[1] - x[2]))
+    added = [n for n in cur_stages if n not in per_stage]
+    removed = [n for n in per_stage if n not in cur_stages]
+    if not (significant or added or removed):
+        return
+    deviation = Table(title=f"{label}阶段偏离（vs 中位数）", title_style="bold magenta")
+    deviation.add_column("阶段", style="bold cyan", no_wrap=True)
+    deviation.add_column("本次", justify="right")
+    deviation.add_column("中位数", justify="right")
+    deviation.add_column("差异", justify="right")
+    for name, cur, med in significant[:8]:
+        deviation.add_row(name, _fmt_seconds(cur), _fmt_seconds(med), _delta_cell(cur, med, _fmt_seconds))
+    for name in added[:4]:
+        deviation.add_row(name, _fmt_seconds(cur_stages[name]), "-", Text("新增", style="yellow"))
+    for name in removed[:4]:
+        deviation.add_row(name, "-", _fmt_seconds(median(per_stage[name])), Text("移除", style="dim"))
+    console.rich.print(deviation)

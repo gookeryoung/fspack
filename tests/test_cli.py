@@ -458,8 +458,8 @@ def test_profile_short_aliases_build(tmp_path: Path, monkeypatch: pytest.MonkeyP
     cli.main(["b", str(tmp_path), "-P", "-PO", str(tmp_path / "perflogs"), "-PC"])
     assert called["profile"].enabled is True
     assert called["profile"].out == (tmp_path / "perflogs").resolve()
-    # -PC 不带值 → 哨兵 "last"
-    assert called["profile"].compare == "last"
+    # -PC 不带值 → 哨兵 "trend"（历次趋势表）
+    assert called["profile"].compare == "trend"
 
 
 def test_clean_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
