@@ -224,6 +224,35 @@ def test_run_with_profile_no_markers(capsys: pytest.CaptureFixture[str]) -> None
     assert "[wrapper]" not in captured.out
 
 
+def test_run_with_profile_parent_side_tail_measurement(capsys: pytest.CaptureFixture[str]) -> None:
+    """真实子进程：末行 stderr 后 sleep 拉大收尾 gap，父进程侧实测拆分生效.
+
+    子进程打完 wrapper 打点行后 sleep 0.3s 再退出：已归因仅 entry_done
+    累计（毫秒级）→ gap 超 100ms 阈值展示拆分；末行到达后的 ~300ms 落入
+    tail（进程收尾实测），python 启动到首行到达落入 head。验证 readline
+    逐行时间戳在真实管道下工作（迭代器批量预读会使首/末行时刻失真）。
+    """
+    code = (
+        "import sys, time\n"
+        "sys.stderr.write('[fspack timing] env_ready @1.0ms\\n')\n"
+        "sys.stderr.write('[fspack timing] entry_start @2.0ms\\n')\n"
+        "sys.stderr.write('[fspack timing] entry_done @3.0ms\\n')\n"
+        "sys.stderr.flush()\n"
+        "time.sleep(0.3)\n"
+    )
+    data: dict[str, Any] = {}
+    rc = run_with_profile([sys.executable, "-c", code], on_summary=data.update)
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "进程创建与映像加载(约)" in out
+    assert "进程收尾(约)" in out
+    # 末行（entry_done 打点）到达后 sleep ~300ms 全部计入 tail；head 覆盖
+    # python 解释器启动到首行写出（>0）
+    assert data["gap_breakdown"]["tail_ms"] > 200.0
+    assert data["gap_breakdown"]["head_ms"] > 0.0
+    assert data["gap_breakdown"]["blind_ms"] >= 0.0
+
+
 # ---- runner.run 的 profile 分流测试 ----
 
 
@@ -567,6 +596,131 @@ def test_print_summary_returns_empty_stages_without_marks(capsys: pytest.Capture
     }
 
 
+def test_print_summary_gap_parent_side_breakdown(capsys: pytest.CaptureFixture[str]) -> None:
+    """有首/末行实测时未细分拆为三行：进程创建与映像加载/进程收尾/其余盲区.
+
+    复刻用户实测场景：wall 91ms、entry_done 累计 41ms → gap ~50ms 占比
+    55% 超 30% 阈值展示；首行 25ms（含 read_entry 2ms，扣除后 head 23ms）、
+    末行 42ms（tail 49ms）、blind = 50 - 23 - 49 < 0 归零不展示。
+    """
+    timing = {"env_ready": 0.1, "entry_start": 0.2, "entry_done": 41.0}
+    data = _print_summary(
+        ProfileSample(
+            wall_ms=91.0,
+            loader_stages=[("read_entry", 2.0, ""), ("loader 总", 3.0, "（进入 Python）")],
+            timing_stages=timing,
+            first_line_ms=25.0,
+            last_line_ms=42.0,
+        )
+    )
+    out = capsys.readouterr().out
+    # 头部 = 首行 25ms - 首 loader 阶段 2ms（read_entry 已单独归因）
+    assert "进程创建与映像加载(约)" in out
+    assert "~23ms" in out
+    assert "子进程创建/杀软扫描/映像加载/管道延迟" in out
+    # 尾部 = wall 91 - 末行 42
+    assert "进程收尾(约)" in out
+    assert "~49ms" in out
+    assert "解释器退出/管道 EOF/父进程调度" in out
+    # blind = gap(50) - head(23) - tail(49) < 0 → clamp 0，不展示该行
+    assert "其余盲区" not in out
+    # 落盘拆分数据（毫秒）
+    assert data["gap_breakdown"] == {"head_ms": 23.0, "tail_ms": 49.0, "blind_ms": 0.0}
+
+
+def test_print_summary_gap_parent_side_breakdown_with_blind(capsys: pytest.CaptureFixture[str]) -> None:
+    """首尾之和小于 gap 时展示其余盲区行（残余无打点段与测量噪声）."""
+    timing = {"env_ready": 1.0, "entry_start": 2.0, "entry_done": 10.0}
+    data = _print_summary(
+        ProfileSample(
+            wall_ms=200.0,
+            loader_stages=[("loader 总", 5.0, "")],
+            timing_stages=timing,
+            first_line_ms=30.0,
+            last_line_ms=50.0,
+        )
+    )
+    out = capsys.readouterr().out
+    # gap = 200 - (loader 5 + 0 + max(10, 1)) = 185；head = 30 - 首 loader 阶段
+    # 5（已归因）= 25；tail = 200 - 50 = 150；blind = 185 - 25 - 150 = 10
+    assert "其余盲区(约)" in out
+    assert "~10ms" in out
+    assert "残余无打点段" in out
+    assert data["gap_breakdown"] == {"head_ms": 25.0, "tail_ms": 150.0, "blind_ms": 10.0}
+
+
+def test_run_with_profile_collects_timing_gap_lines(capsys: pytest.CaptureFixture[str]) -> None:
+    """timing-gap 行（py_init 实测）被收集不透传，汇总展示并从 gap 扣除."""
+    code = (
+        "import sys\n"
+        "sys.stderr.write('[fspack loader] loader 总耗时 3.2ms（进入 Python）\\n')\n"
+        "sys.stderr.write('[fspack timing-gap] py_init 8.5ms\\n')\n"
+        "sys.stderr.write('[fspack timing] env_ready @0.1ms\\n')\n"
+        "sys.stderr.write('[fspack timing] entry_start @0.2ms\\n')\n"
+        "sys.stderr.write('[fspack timing] entry_done @40.0ms\\n')\n"
+        "sys.stderr.flush()\n"
+    )
+    data: dict[str, Any] = {}
+    rc = run_with_profile([sys.executable, "-c", code], on_summary=data.update)
+    assert rc == 0
+    captured = capsys.readouterr()
+    out = captured.out
+    # py_init 实测段展示在 loader 段后
+    assert "C 层初始化(实测)" in out
+    assert "8.5ms" in out
+    # 标记行不透传
+    assert "[fspack timing-gap]" not in captured.err
+    # 落盘 stages 含实测段
+    assert ("C 层初始化(实测)", 8.5) in data["stages"]
+
+
+def test_print_summary_py_init_narrows_gap(capsys: pytest.CaptureFixture[str]) -> None:
+    """py_init 实测参与 gap 扣除：其余盲区相应收窄."""
+    timing = {"env_ready": 1.0, "entry_start": 2.0, "entry_done": 10.0}
+    sample_no_gap = ProfileSample(
+        wall_ms=200.0,
+        loader_stages=[("loader 总", 5.0, "")],
+        timing_stages=timing,
+        first_line_ms=30.0,
+        last_line_ms=50.0,
+    )
+    sample_with_gap = ProfileSample(
+        wall_ms=200.0,
+        loader_stages=[("loader 总", 5.0, "")],
+        timing_stages=timing,
+        gap_stages={"py_init": 8.0},
+        first_line_ms=30.0,
+        last_line_ms=50.0,
+    )
+    data_no = _print_summary(sample_no_gap)
+    out_no = capsys.readouterr().out
+    data_with = _print_summary(sample_with_gap)
+    out_with = capsys.readouterr().out
+    # 无 py_init：blind = 185 - 25 - 150 = 10；有 py_init(8)：gap = 177，
+    # blind = 177 - 25 - 150 = 2
+    assert "~10ms" in out_no
+    assert "~2ms" in out_with
+    assert data_with["gap_breakdown"]["blind_ms"] == 2.0
+    assert data_no["gap_breakdown"]["blind_ms"] == 10.0
+
+
+def test_print_summary_gap_below_threshold_no_breakdown_data(capsys: pytest.CaptureFixture[str]) -> None:
+    """gap 低于展示阈值时不拆分也不落盘 gap_breakdown（控制噪声）."""
+    timing = {"env_ready": 5.0, "entry_start": 6.0, "entry_done": 5950.0}
+    data = _print_summary(
+        ProfileSample(
+            wall_ms=6000.0,
+            loader_stages=[("loader 总", 10.0, "")],
+            timing_stages=timing,
+            first_line_ms=80.0,
+            last_line_ms=5960.0,
+        )
+    )
+    out = capsys.readouterr().out
+    assert "未细分" not in out
+    assert "gap_breakdown" not in data
+
+
 # ---- runner.run 落盘与对比集成（mock run_with_profile） ----
 
 
@@ -590,6 +744,7 @@ def test_run_saves_profile_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
                 "top_imports": [("runpy", 0.7)],
                 "entry_imports": [("argparse", 9.0)],
                 "top_self": [("argparse", 3.2)],
+                "gap_breakdown": {"head_ms": 12.0, "tail_ms": 6.5, "blind_ms": 0.5},
             }
         )
         return 0
@@ -611,6 +766,8 @@ def test_run_saves_profile_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     assert {"name": "runpy", "elapsed": 0.0007} in data["top_imports"]
     assert {"name": "argparse", "elapsed": 0.009} in data["entry_imports"]
     assert {"name": "argparse", "elapsed": 0.0032} in data["top_self"]
+    # gap_breakdown 落盘同步转秒（4 位小数）
+    assert data["gap_breakdown"] == {"head_ms": 0.012, "tail_ms": 0.0065, "blind_ms": 0.0005}
 
 
 def test_run_profile_compare_last_renders_table(

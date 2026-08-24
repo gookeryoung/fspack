@@ -82,7 +82,15 @@ def test_generate_loader_source_startup_perf() -> None:
     # FSPACK_LOADER_VERBOSE=1 输出各阶段耗时（默认关闭零开销）
     assert "FSPACK_LOADER_VERBOSE" in src
     assert "verbose_enabled" in src
-    assert "GetTickCount64" in src
+    # QPC 高精度计时：GetTickCount64 精度 15.6ms 会把快速阶段量化成 0ms
+    # （仅注释提及 GetTickCount64，计时调用不再使用）
+    assert "QueryPerformanceCounter" in src
+    assert "now_ms" in src
+    assert "GetTickCount64()" not in src
+    # Py_Main 调用前写 QPC 锚点（wrapper 的 perf_counter 同源），供
+    # fsp r --profile 实测 C 层初始化缝隙
+    assert "FSPACK_LOADER_QPC_MS" in src
+    assert "timing_enabled" in src
     # 禁用运行时 pyc 回写（发行目录只读/杀软监控场景），用户已设置时不覆盖
     assert "PYTHONDONTWRITEBYTECODE" in src
     assert "set_dont_write_bytecode" in src

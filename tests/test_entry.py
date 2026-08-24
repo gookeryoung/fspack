@@ -396,3 +396,18 @@ def test_generate_wrapper_source_timing_ticks() -> None:
     # 打点行格式：换行必须为字面反斜杠 n（模板普通字符串中 \n 会被解释为
     # 真实换行，破坏生成源码语法）
     assert '"[fspack timing] %s @%.1fms\\n"' in source
+
+
+def test_generate_wrapper_source_py_init_gap() -> None:
+    """wrapper 读 loader QPC 锚点计算 C 层初始化缝隙，输出 timing-gap 行.
+
+    Windows loader 在 Py_Main 调用前写 FSPACK_LOADER_QPC_MS（perf_counter
+    同源 QPC），wrapper 首语句相减得缝隙；负值（时钟源异常/旧 dist 无锚点）
+    不打点。``compile`` 验证生成源码语法。
+    """
+    source = EntryWrapper.generate_wrapper_source("app", None, "app.py")
+    compile(source, "_entry_app.py", "exec")
+    assert 'os.environ.get("FSPACK_LOADER_QPC_MS")' in source
+    assert '"[fspack timing-gap] py_init %.1fms\\n"' in source
+    # 负值防御：时钟源异常时不输出打点
+    assert "if _py_init_ms >= 0.0:" in source

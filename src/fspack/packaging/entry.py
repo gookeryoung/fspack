@@ -60,6 +60,21 @@ import time
 _FSPACK_TIMING = os.environ.get("FSPACK_TIMING") == "1"
 _T0 = time.perf_counter() if _FSPACK_TIMING else 0.0
 
+# Windows loader 在 Py_Main 调用前写入 QPC 绝对毫秒锚点（perf_counter 底层
+# 同为 QueryPerformanceCounter，同一单调时间线），差值即 Py_Main C 层初始化
+# （runtime/io/codecs 等非 import 部分）+ wrapper 模块加载前段的实测耗时，
+# 填补 loader 打点与 wrapper 打点之间的测量盲区。Linux/macOS loader 与旧
+# dist 无此锚点，跳过（行为不变）。
+_LOADER_QPC_MS = os.environ.get("FSPACK_LOADER_QPC_MS") if _FSPACK_TIMING else None
+if _FSPACK_TIMING and _LOADER_QPC_MS:
+    try:
+        _py_init_ms = _T0 * 1000.0 - float(_LOADER_QPC_MS)
+    except ValueError:
+        _py_init_ms = -1.0
+    if _py_init_ms >= 0.0:
+        sys.stderr.write("[fspack timing-gap] py_init %.1fms\\n" % _py_init_ms)
+        sys.stderr.flush()
+
 
 def _fspack_tick(label):
     """输出累计时刻打点行 ``[fspack timing] <label> @<ms>ms``（未启用时无操作）."""

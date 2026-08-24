@@ -131,7 +131,7 @@ def _run_log_data(
     # 延迟导入：profile_log 的对比渲染链触发 rich 加载，仅在 profile 运行时执行
     from fspack.packaging.profile_log import RUN_PROFILE_LOG_SCHEMA
 
-    return {
+    log: dict[str, Any] = {
         "schema": RUN_PROFILE_LOG_SCHEMA,
         "created": datetime.now().isoformat(timespec="seconds"),
         "project": {"name": info.name, "version": info.version},
@@ -146,6 +146,11 @@ def _run_log_data(
         "entry_imports": [{"name": n, "elapsed": round(ms / 1000.0, 4)} for n, ms in data["entry_imports"]],
         "top_self": [{"name": n, "elapsed": round(ms / 1000.0, 4)} for n, ms in data["top_self"]],
     }
+    # 父进程侧未细分拆分（有首/末行实测才有）：head=进程创建与映像加载、
+    # tail=进程收尾、blind=其余盲区；含管道延迟噪声，仅供逐次诊断不参与对比
+    if "gap_breakdown" in data:
+        log["gap_breakdown"] = {k: round(v / 1000.0, 4) for k, v in data["gap_breakdown"].items()}
+    return log
 
 
 def _save_and_compare_run_profile(log_data: dict[str, Any], project: Path, opts: ProfileOptions) -> None:

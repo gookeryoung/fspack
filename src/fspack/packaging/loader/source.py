@@ -108,6 +108,27 @@ static int verbose_enabled(void) {{
     return GetEnvironmentVariableW(L"FSPACK_LOADER_VERBOSE", v, 8) == 1 && v[0] == L'1';
 }}
 
+static int timing_enabled(void) {{
+    /* FSPACK_TIMING=1（fsp r --profile 注入）时向子 Python 传递 QPC 锚点，
+       供 wrapper 计算 Py_Main C 层初始化缝隙；默认关闭零开销 */
+    wchar_t v[8];
+    return GetEnvironmentVariableW(L"FSPACK_TIMING", v, 8) == 1 && v[0] == L'1';
+}}
+
+static double now_ms(void) {{
+    /* QueryPerformanceCounter 高精度计时（~100ns 精度）。GetTickCount64
+       精度仅 15.6ms，read_entry/LoadLibrary 等快速阶段会被量化成 0ms，
+       使启动剖析的 loader 段失真（真实耗时被并入"未细分"）。频率查询
+       结果恒定，static 缓存仅执行一次。 */
+    static LARGE_INTEGER freq = {{0}};
+    LARGE_INTEGER counter;
+    if (freq.QuadPart == 0) {{
+        QueryPerformanceFrequency(&freq);
+    }}
+    QueryPerformanceCounter(&counter);
+    return (double)counter.QuadPart * 1000.0 / (double)freq.QuadPart;
+}}
+
 static void set_dont_write_bytecode(void) {{
     /* 发行目录常被杀软实时监控或挂载为只读，运行时 pyc 回写既慢又可能失败。
        禁用后每次 import 省去 __pycache__ 写尝试；用户已显式设置时不覆盖。
@@ -185,7 +206,7 @@ int wmain(int argc, wchar_t **argv) {{
     if (slash) *slash = L'\0';
 
     int verbose = verbose_enabled();
-    ULONGLONG t_start = GetTickCount64();
+    double t_start = now_ms();
 
     wchar_t dll[MAX_PATH], entry[MAX_ENTRY], entry_full[MAX_PATH + MAX_ENTRY];
     wchar_t runtime_dir[MAX_PATH], msg[MAX_PATH * 3];
@@ -209,12 +230,12 @@ int wmain(int argc, wchar_t **argv) {{
     }}
     if (verbose) {{
         wchar_t tmsg[128];
-        _snwprintf(tmsg, 128, L"[fspack loader] read_entry 耗时 %lums", (unsigned long)(GetTickCount64() - t_start));
+        _snwprintf(tmsg, 128, L"[fspack loader] read_entry 耗时 %.1fms", now_ms() - t_start);
         stderr_write(tmsg);
     }}
     _snwprintf(entry_full, sizeof(entry_full)/sizeof(entry_full[0]), L"%s\\%s", dir, entry);
 
-    ULONGLONG t_dll = GetTickCount64();
+    double t_dll = now_ms();
     HMODULE h = LoadLibraryW(dll);
     if (!h) {{
         DWORD err = GetLastError();
@@ -228,7 +249,7 @@ int wmain(int argc, wchar_t **argv) {{
     }}
     if (verbose) {{
         wchar_t tmsg[160];
-        _snwprintf(tmsg, 160, L"[fspack loader] 加载 %s 耗时 %lums", PYTHON_DLL, (unsigned long)(GetTickCount64() - t_dll));
+        _snwprintf(tmsg, 160, L"[fspack loader] 加载 %s 耗时 %.1fms", PYTHON_DLL, now_ms() - t_dll);
         stderr_write(tmsg);
     }}
     Py_Main_t py_main = (Py_Main_t)GetProcAddress(h, "Py_Main");
@@ -253,8 +274,17 @@ int wmain(int argc, wchar_t **argv) {{
     new_argv[argc + 1] = NULL;
     if (verbose) {{
         wchar_t tmsg[128];
-        _snwprintf(tmsg, 128, L"[fspack loader] loader 总耗时 %lums（进入 Python）", (unsigned long)(GetTickCount64() - t_start));
+        _snwprintf(tmsg, 128, L"[fspack loader] loader 总耗时 %.1fms（进入 Python）", now_ms() - t_start);
         stderr_write(tmsg);
+    }}
+    /* Py_Main 调用前写入 QPC 绝对毫秒锚点：CPython 的 perf_counter 底层
+       同为 QueryPerformanceCounter（同一单调时间线、同零点），wrapper 首语句
+       相减即得 Py_Main C 层初始化（runtime/io/codecs 等非 import 部分）
+       实测耗时，填补 loader 打点与 wrapper 打点之间的测量盲区 */
+    if (timing_enabled()) {{
+        char qpc_buf[32];
+        _snprintf(qpc_buf, 32, "%.6f", now_ms());
+        SetEnvironmentVariableA("FSPACK_LOADER_QPC_MS", qpc_buf);
     }}
     return py_main(argc + 1, new_argv);
 }}
