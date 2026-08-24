@@ -17,6 +17,7 @@ import pytest
 from fspack.runner import run as run_run
 from fspack.runner_profile import (
     PROFILE_ENV,
+    _fmt_bar,
     _pad,
     _parse_import_lines,
     _print_summary,
@@ -117,9 +118,11 @@ def test_run_with_profile_collect_and_summarize(capsys: pytest.CaptureFixture[st
     assert rc == 0
     captured = capsys.readouterr()
     # 汇总头、分隔线与总耗时
-    assert "[fspack] 启动耗时剖析（总 wall time" in captured.out
+    assert "[fspack] 启动耗时剖析（总 " in captured.out
     assert "退出码 0" in captured.out
     assert "─" * 30 in captured.out
+    # 条形图列存在（空槽 ░ 或实心 █）
+    assert "░" in captured.out
     # loader 段：结构化展示（阶段名 + "耗时"词并入列展示，"loader 总"重组为
     # "loader 总（进入 Python）"）
     assert "read_entry" in captured.out
@@ -128,11 +131,13 @@ def test_run_with_profile_collect_and_summarize(capsys: pytest.CaptureFixture[st
     assert "16.4ms" in captured.out
     assert "loader 总（进入 Python）" in captured.out
     assert "18.9ms" in captured.out
-    # wrapper 段：环境准备 = env_ready 累计值；用户入口执行 = done - start
+    # wrapper 段：环境准备 = env_ready 累计值；用户入口执行 = done - start；
+    # 无 entry_start 后 importtime 行 → 入口执行细分只剩"其余执行"行
     assert "环境准备" in captured.out
     assert "2.0ms" in captured.out
     assert "用户入口执行" in captured.out
     assert "2.5ms" in captured.out
+    assert "其余执行" in captured.out
     # import 段：真实解释器受 PYTHONPROFILEIMPORTTIME 激活输出 importtime
     assert "解释器初始化(约)" in captured.out
     # 占比列存在（"%"结尾的字段）
@@ -300,6 +305,68 @@ def test_pad_cjk_display_width() -> None:
     assert _pad("超长名称超过列宽时不截断", 6) == "超长名称超过列宽时不截断"
 
 
+def test_fmt_bar() -> None:
+    """_fmt_bar 按 12 格映射占比：整格 █ + 半格 ▓ + 空槽 ░，超界 clamp."""
+    # 零耗时 → 全空槽
+    assert _fmt_bar(0.0, 100.0) == "░" * 12
+    # 50% → 恰 6.0 整格，无余数不补 ▓
+    assert _fmt_bar(50.0, 100.0) == "██████░░░░░░"
+    # 54% → 6.48 格，余 0.48 < 0.5 无 ▓
+    assert _fmt_bar(54.0, 100.0) == "██████░░░░░░"
+    # 58% → 6.96 格，余 0.96 ≥ 0.5 补 ▓
+    assert _fmt_bar(58.0, 100.0) == "██████▓░░░░░"
+    # 满格与超界 clamp
+    assert _fmt_bar(100.0, 100.0) == "█" * 12
+    assert _fmt_bar(150.0, 100.0) == "█" * 12
+    # wall 非正（防御）→ 全空槽
+    assert _fmt_bar(10.0, 0.0) == "░" * 12
+
+
+def test_print_summary_entry_breakdown(capsys: pytest.CaptureFixture[str]) -> None:
+    """入口执行段细分：entry_start 后根导入归"导入合计"，差额归"其余执行".
+
+    直接调用私有 _print_summary 注入构造数据（故障注入例外，避免真实
+    秒级 wall time 起子进程）。
+    """
+    timing = {"env_ready": 5.0, "entry_start": 10.0, "entry_done": 110.0}
+    post = [
+        "import time:     5000 |     5000 | argparse",
+        "import time:     3000 |     3000 | pathlib",
+        "import time:     1000 |     1000 | shutil",
+    ]
+    _print_summary(150.0, 0, [], timing, [], post)
+    out = capsys.readouterr().out
+    # 入口执行 = 110 - 10 = 100ms，导入合计 = 5+3+1 = 9ms，其余执行 = 91ms
+    assert "用户入口执行" in out
+    assert "100.0ms" in out
+    assert "导入合计 top3" in out
+    assert "9.0ms" in out
+    assert "其余执行" in out
+    assert "91.0ms" in out
+    # 导入子项逐条展示且缩进 2 列展示层级（名称列 12 空格前缀 + 2；
+    # argparse 同时出现在模块自身段（12 前缀），须匹配入口细分段行）
+    argparse_line = next(ln for ln in out.splitlines() if ln.startswith(" " * 14) and "argparse" in ln)
+    assert "5.0ms" in argparse_line
+    # entry_start 前无 importtime 行 → 无解释器初始化/顶层导入段
+    assert "解释器初始化" not in out
+    # gap = 150 - max(110, 5) = 40ms < 100ms 阈值，无未细分行
+    assert "未细分" not in out
+
+
+def test_print_summary_post_lines_without_entry_start_merged(capsys: pytest.CaptureFixture[str]) -> None:
+    """防御：无 entry_start 打点却有分界数据（理论不可达）时并回主列表."""
+    timing = {"env_ready": 5.0}
+    post = ["import time:     3000 |     3000 | json"]
+    _print_summary(100.0, 0, [], timing, ["import time: 1000 | 1000 | encodings"], post)
+    out = capsys.readouterr().out
+    # 并回后无 runpy 锚点 → 全部根导入归解释器初始化段；json 经模块自身段可见
+    assert "解释器初始化(约)" in out
+    assert "json" in out
+    # 无入口执行细分段
+    assert "导入合计" not in out
+    assert "其余执行" not in out
+
+
 def test_print_summary_table_layout(capsys: pytest.CaptureFixture[str]) -> None:
     """汇总表逐行展示顶层导入/模块自身耗时子项，含耗时与占比两列.
 
@@ -317,9 +384,11 @@ def test_print_summary_table_layout(capsys: pytest.CaptureFixture[str]) -> None:
     ]
     _print_summary(2000.0, 0, [("loader 总", 10.0, "（进入 Python）")], timing, imports)
     out = capsys.readouterr().out
-    # 表头与分隔线
-    assert "[fspack] 启动耗时剖析（总 wall time 2000ms，退出码 0）" in out
-    assert "─" * 60 in out
+    # 表头与分隔线（分隔线长度与五列表格总宽一致）
+    assert "[fspack] 启动耗时剖析（总 2000ms，退出码 0）" in out
+    assert "─" * 78 in out
+    # 条形图：1437.3/2000 = 71.9% → 8.6 格 → 8 实心 + 半格 ▓
+    assert "████████▓" in out
     # loader 行结构化：阶段名 + 耗时 + 占比
     assert "loader 总（进入 Python）" in out
     assert "10.0ms" in out
