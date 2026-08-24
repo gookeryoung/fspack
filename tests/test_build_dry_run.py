@@ -486,3 +486,65 @@ def test_cli_build_dry_run_alias_b(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr("fspack.builder.build", fake_build)
     cli.main(["b", str(tmp_path), "--dry-run"])
     assert captured["dry_run"] is True
+
+
+# ---- macOS 目标交叉构建守卫 ----
+
+
+def test_guard_cross_target_rejects_macos_on_non_macos_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    """非 macOS 构建机请求 macOS 目标：抛 ProjectError 并说明支持矩阵."""
+    from fspack.exceptions import ProjectError
+    from fspack.packaging.pipeline.executor import _guard_cross_target
+
+    for host in (Platform.WINDOWS, Platform.LINUX):
+        monkeypatch.setattr("fspack.packaging.pipeline.executor.detect_platform", lambda h=host: h)
+        with pytest.raises(ProjectError, match="macOS 目标暂不支持交叉构建"):
+            _guard_cross_target(Platform.MACOS)
+
+
+def test_guard_cross_target_allows_valid_combinations(monkeypatch: pytest.MonkeyPatch) -> None:
+    """放行组合：macOS 本机构建、dry_run 预览、Windows/Linux 目标任意构建机."""
+    from fspack.packaging.pipeline.executor import _guard_cross_target
+
+    monkeypatch.setattr("fspack.packaging.pipeline.executor.detect_platform", lambda: Platform.MACOS)
+    _guard_cross_target(Platform.MACOS)
+    monkeypatch.setattr("fspack.packaging.pipeline.executor.detect_platform", lambda: Platform.WINDOWS)
+    _guard_cross_target(Platform.MACOS, dry_run=True)
+    _guard_cross_target(Platform.WINDOWS)
+    _guard_cross_target(Platform.LINUX)
+
+
+def test_build_macos_target_on_windows_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """build() 集成：Windows 构建机请求 macOS 目标在进入流水线前抛错."""
+    from fspack.exceptions import ProjectError
+
+    monkeypatch.setattr("fspack.packaging.pipeline.executor.detect_platform", lambda: Platform.WINDOWS)
+    with pytest.raises(ProjectError, match="当前构建机为 windows"):
+        build(tmp_path, get_mirror("huawei"), target=Platform.MACOS)
+
+
+def test_build_macos_target_dry_run_allowed_on_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """dry_run 预览放行：Windows 构建机可 dry-run macOS 目标查看打包计划."""
+    proj = tmp_path / "app"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n', encoding="utf-8")
+    (proj / "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
+
+    monkeypatch.setattr("fspack.packaging.pipeline.executor.detect_platform", lambda: Platform.WINDOWS)
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.download_standalone", lambda *a, **k: tmp_path / "f.tar.gz")
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.extract_standalone", lambda *a, **k: None)
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.download_wheels", lambda *a, **k: [])
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.unpack_wheels", lambda *a, **k: 0)
+    monkeypatch.setattr(
+        "fspack.packaging.pipeline.stages.compile_loader",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("不应编译 loader")),
+    )
+    monkeypatch.setattr(
+        "fspack.packaging.pipeline.executor.copy_source",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("不应复制源码")),
+    )
+
+    with console.rich.capture():
+        build(proj, get_mirror("huawei"), "3.11.10", target=Platform.MACOS, dry_run=True)
+
+    assert not (proj / "dist").exists()

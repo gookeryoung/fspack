@@ -11,7 +11,9 @@
 
 1. **解析** ``pyproject.toml``，识别项目名、版本、入口模块、CLI/GUI 类型
 2. **下载运行时**：Windows 下载 embed python zip 并解压到 ``dist/runtime/``；
-   Linux 下载 python-build-standalone tar.gz 并解压到 ``dist/runtime/python/``
+   Linux/macOS 下载 python-build-standalone tar.gz 并解压到 ``dist/runtime/python/``；
+   macOS 目标仅支持 macOS 构建机（clang 无法可靠交叉产出 Mach-O，其余目标
+   报错拦截）
 3. **分析依赖**：AST 扫描源码 import，分类标准库/本地/第三方，与
    ``pyproject.toml`` 声明依赖比对；结果按源码指纹缓存，未改动跳过。
    ``[project.optional-dependencies]`` 分组经 ``--extra`` / ``[tool.fspack] extras``
@@ -23,7 +25,7 @@
 5. **下载 wheel**：用 ``uv`` 解析精确版本与平台 wheel，再 ``pip download --no-deps``
    并行下载（ThreadPoolExecutor，I/O 密集网络下载提速 ~17%），解包到
    ``dist/runtime/Lib/site-packages/``（Windows）或
-   ``dist/runtime/python/lib/python3.X/site-packages/``（Linux）。
+   ``dist/runtime/python/lib/python3.X/site-packages/``（Linux/macOS）。
    解包时按 AST 收集的子模块使用信息选择性保留（wheel 精简）：Qt 库按依赖闭包
    （如 ``QtWidgets`` → ``Gui``/``Core``）保留对应 ``.pyd``/``.dll``，剥离未用子模块、
    translations/include/metatypes 开发资源、``.exe`` 工具、``.pyi`` 类型 stub；
@@ -32,7 +34,7 @@
    ``..\src`` 路径；``--no-site`` 时省略 ``import site`` 行节省启动时间
 7. **复制源码**：项目源码复制到 ``dist/src/``，排除 dist/build/.venv 等构建产物；
    按 mtime 跳过未改动文件
-8. **标准库精简**（默认，仅 Linux）：剥离 standalone 的 test/ensurepip/idlelib 等
+8. **标准库精简**（默认，仅 Linux/macOS）：剥离 standalone 的 test/ensurepip/idlelib 等
    无用模块；``--no-stdlib-trim`` 可关闭
 9. **字节码预编译**（默认）：``compileall`` 预编译 src+site-packages 为 ``.pyc``
    加速首次启动；stamp 缓存命中跳过；``--pyc-optimize`` 控制 -O/-OO 级别；
@@ -49,7 +51,7 @@
 11. **Win7 兼容 DLL 注入**（Windows，Python 3.9+）：注入 api-ms-win-core-path
     替代 DLL，支持在 Win7/Win2008R2 运行
 12. **生成 C loader**：按平台模板生成 C 源码（烧入入口脚本相对路径），
-    mingw（Windows）或 gcc（Linux）编译为可执行文件
+    mingw（Windows）、gcc（Linux）或 clang（macOS）编译为可执行文件
 
 dist 布局
 ---------

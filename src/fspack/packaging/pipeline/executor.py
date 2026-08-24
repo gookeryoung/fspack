@@ -32,6 +32,7 @@ from fspack.config import (
     embed_cache_dir,
     resolve_py_version,
 )
+from fspack.exceptions import ProjectError
 from fspack.packaging.log_file import LogFormat, setup_log_file, teardown_log_file
 from fspack.packaging.pipeline.dist_helpers import (
     _handle_dist_incomplete,
@@ -82,6 +83,24 @@ _logger = logging.getLogger(__name__)
 
 # frozen 不可变单例，作为 build() profile 参数的默认值安全共享
 _DEFAULT_PROFILE = ProfileOptions()
+
+
+def _guard_cross_target(target: Platform, *, dry_run: bool = False) -> None:
+    """macOS 目标交叉构建守卫.
+
+    MacLoader 编译命令未指定 ``-target``，非 macOS 构建机上的 clang 按宿主
+    平台默认 target 产出 PE/ELF 而非 Mach-O——构建表面成功但产物格式错误。
+    进入流水线前明确拒绝（``dry_run`` 预览不写产物，放行）。Windows/Linux
+    目标支持交叉构建（mingw/gcc 可产出对应格式）。
+    """
+    if dry_run or target is not Platform.MACOS:
+        return
+    host = detect_platform()
+    if host is not Platform.MACOS:
+        raise ProjectError(
+            f"macOS 目标暂不支持交叉构建（当前构建机为 {host.value}），请在 macOS 上执行"
+            " fsp b --target macos；Windows/Linux 目标支持交叉构建"
+        )
 
 
 def resolve_project_info(project_dir: Path, py_version: str | None, target: Platform) -> ProjectInfo:
@@ -142,6 +161,11 @@ def build(  # noqa: PLR0913
     ``dry_run=True`` 时仅执行项目解析与依赖分析，打印打包计划后返回，
     不执行下载/编译/复制等任何写操作。用于打包前确认配置正确。
 
+    平台守卫：macOS 目标仅支持在 macOS 构建机上构建（clang 无法可靠产出
+    交叉平台 Mach-O），非 macOS 构建机请求 macOS 目标时抛
+    :class:`ProjectError`（``dry_run`` 预览放行）；Windows/Linux 目标
+    支持任意构建机交叉构建。
+
     ``log_file`` 指定时将构建日志写入文件（含时间戳、级别、logger 名、消息、
     异常栈），便于 CI 上传与问题排查。``log_format`` 控制 格式：``TEXT``（默认，
     人类可读）或 ``JSON``（结构化，便于 ELK/Loki 采集）。日志文件在构建开始时
@@ -172,6 +196,7 @@ def build(  # noqa: PLR0913
     tracker = BuildTracker()
     project_dir = Path(project_dir).resolve()
     target = target or detect_platform()
+    _guard_cross_target(target, dry_run=dry_run)
     dist = dist_dir or project_dir / "dist"
     cache = embed_cache or embed_cache_dir()
     cfg = BuildConfig(

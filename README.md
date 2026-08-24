@@ -59,7 +59,7 @@ fsp b                                    # 打包为 my-gui.exe
 | 一行命令打包 | `fsp b` 生成可执行文件，`fsp p` 生成安装包，cargo 风格两字母短命令 |
 | 不改源码 | 自动 AST 扫描 import 推断依赖，无需手动声明打包配置 |
 | 小体积安装包 | 自动精简 wheel（剥离未用子模块/翻译/头文件）、预编译 `.pyc`、可选剥离 `.py` |
-| 跨平台分发 | Windows 出 `.exe` + NSIS 安装包，Linux 出 `.deb` + `.tar.gz`，支持交叉编译 |
+| 跨平台分发 | Windows 出 `.exe` + NSIS 安装包，Linux 出 `.deb` + `.tar.gz`，macOS 出 `.pkg` + `.dmg` |
 | 双击就能跑 | 内置便携运行时，用户机无需装 Python；Windows 安装包含快捷方式与卸载器 |
 | 首次启动快 | 默认预编译字节码，`--nuitka` 可本机编译提速 30-50% |
 | 多入口项目 | 一个项目生成多个 exe（cli/gui/web），共享运行时与依赖 |
@@ -114,7 +114,7 @@ tkinter 补充包）只从本地缓存读取，缓存未命中时立即报清晰
 ```text
 <cache_root>/
 ├── embed/          # Windows embed python zip
-├── standalone/     # Linux python-build-standalone tar.gz
+├── standalone/     # Linux/macOS python-build-standalone tar.gz
 ├── wheels/         # 第三方 wheel + 依赖解析缓存
 ├── nuitka/         # Nuitka 包 + 编译用 standalone python
 ├── loaders/        # C loader 编译缓存
@@ -261,8 +261,8 @@ fsp b [project] [--mirror <name>] [--py-version <ver>] [--target <platform>]
 |------|------|
 | `project` | 项目目录，默认当前目录 |
 | `--mirror` | 镜像源（aliyun/huawei/tsinghua），默认 aliyun |
-| `--py-version` | Python 版本，默认 3.11.9（Windows）/ 3.11.10（Linux） |
-| `--target` | 目标平台（windows/linux），默认当前平台 |
+| `--py-version` | Python 版本，默认 3.11.9（Windows）/ 3.11.10（Linux/macOS） |
+| `--target` | 目标平台（windows/linux/macos），默认当前平台；macOS 目标仅支持 macOS 构建机 |
 | `--keep-module` | 显式保留子模块（如 `PySide2.QtGui`），可重复 |
 | `--icon` | exe 图标（.ico/.png/.jpg），覆盖配置与自动搜索 |
 | `--no-stdlib-trim` | 关闭标准库精简 |
@@ -320,10 +320,11 @@ fsp p [project] [--mirror <name>] [--py-version <ver>] [--target <plat>] [--no-b
 
 | 格式 | 说明 |
 |------|------|
-| `auto` | 平台默认（Windows=nsis，Linux=tar.gz+deb） |
+| `auto` | 平台默认（Windows=nsis，Linux=tar.gz+deb，macOS=pkg+dmg） |
 | `zip` | 跨平台便携包 |
 | `nsis` | Windows 安装包 |
 | `tar.gz`/`deb` | Linux 便携包/安装包 |
+| `pkg`/`dmg` | macOS 安装包/磁盘镜像 |
 | `all` | 当前平台全部格式 |
 
 ### fsp init
@@ -351,7 +352,7 @@ fsp doctor                # 环境诊断：检查打包工具与配置
 输出三色诊断报告（绿=OK / 黄=WARN / 红=ERROR）：
 
 - **环境信息**：Python 版本、平台、fspack 版本、镜像源、缓存目录大小
-- **工具检查**：mingw-w64/gcc/NSIS/wine/pip/uv/Pillow（按平台过滤）
+- **工具检查**：mingw-w64/gcc/clang/NSIS/wine/pip/uv/Pillow（按平台过滤）
 - **修复建议**：缺失工具给出安装命令（如 `choco install mingw` / `sudo apt install gcc`）
 
 打包失败时先跑 `fsp doctor` 前置发现环境问题。
@@ -491,8 +492,11 @@ fsp p --extra full               # package 子命令同样支持
 |------|--------|--------|
 | Windows | 便携 Python（官方 embed） | NSIS `.exe` |
 | Linux | python-build-standalone | `.deb` + `.tar.gz` |
+| macOS | python-build-standalone | `.pkg` + `.dmg` |
 
-Linux 可交叉编译 Windows 包（`fsp b --target windows`），反之亦然。
+Linux 可交叉编译 Windows 包（`fsp b --target windows`），反之亦然；macOS 目标
+需在 macOS 构建机上构建（`clang` 无法可靠产出交叉平台 Mach-O，非 macOS 构建机
+请求 macOS 目标会明确报错，`--dry-run` 预览不受限）。
 
 ### Windows 7 支持
 
