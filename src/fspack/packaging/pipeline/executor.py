@@ -285,11 +285,12 @@ def _save_and_compare_profile(  # noqa: PLR0913
         baseline_path = Path(profile_compare)
     try:
         baseline = load_profile_log(baseline_path)
+        current = load_profile_log(log_path)
+        # 对比渲染同样可能抛 ValueError（如基准是启动剖析日志、双方 schema
+        # 不一致），一并按警告跳过，不中断构建结果
+        print_profile_compare(current, baseline, baseline_path)
     except ValueError as exc:
         _logger.warning("加载基准性能日志失败，跳过对比: %s", exc)
-        return
-    current = load_profile_log(log_path)
-    print_profile_compare(current, baseline, baseline_path)
 
 
 def _execute_build(  # noqa: PLR0912, PLR0913

@@ -1,11 +1,15 @@
-"""构建性能日志：落盘、加载与历史对比.
+"""性能日志：落盘、加载与历史对比（构建剖析与启动剖析共用）.
 
 ``fsp b --profile`` 构建结束后将 :class:`ProfileReport` 连同元数据写入
 JSON 日志（默认 ``<项目>/.benchmarks/fsp-b-<时间戳>.json``，``--profile-out``
 可指定目录或文件），``--profile-compare`` 与最近一次或指定基准日志对比，
 渲染差异表格定位性能回归。
 
-日志 JSON 结构（schema ``fspack/build-profile/1``）::
+``fsp r --profile`` 启动剖析同样落盘（``fsp-r-<时间戳>.json``，schema
+``fspack/run-profile/1``，由 :func:`save_profile_log` 写入完整 dict），
+与构建日志同目录共存、按前缀区分，对比渲染共用同一张差异表。
+
+构建日志 JSON 结构（schema ``fspack/build-profile/1``）::
 
     {
       "schema": "fspack/build-profile/1",
@@ -20,11 +24,18 @@ JSON 日志（默认 ``<项目>/.benchmarks/fsp-b-<时间戳>.json``，``--profi
       "stages": [{"name": "...", "elapsed": 0.5, ...}]
     }
 
+启动剖析日志（schema ``fspack/run-profile/1``）结构相同，差异为：无
+``cpu_time``/``memory_peak``（对比表总览自适应跳过），另有 ``entry``/
+``debug``/``returncode`` 字段（入口名/运行模式/退出码，对比时环境
+不一致会注明），``stages`` 为启动阶段（loader 各阶段/环境准备/解释器
+初始化/用户入口执行）。
+
 公共 API：
 
-- :func:`save_profile_report` — 写入性能日志（目录自动命名 / 文件直写）
+- :func:`save_profile_report` — 写入构建性能日志（目录自动命名 / 文件直写）
+- :func:`save_profile_log` — 写入完整日志 dict（启动剖析用，前缀区分）
 - :func:`load_profile_log` — 读取日志为 dict
-- :func:`find_latest_log` — 目录内最新日志（排除指定文件）
+- :func:`find_latest_log` — 目录内最新日志（排除指定文件，按前缀过滤）
 - :func:`print_profile_compare` — 渲染本次与基准的差异对比表
 """
 
@@ -44,20 +55,31 @@ if TYPE_CHECKING:
     from fspack.packaging.profile import ProfileReport
 
 __all__ = [
+    "DEFAULT_LOG_DIR",
+    "PROFILE_LOG_SCHEMA",
+    "RUN_LOG_GLOB",
+    "RUN_LOG_PREFIX",
+    "RUN_PROFILE_LOG_SCHEMA",
     "ProfileLogMeta",
     "find_latest_log",
     "load_profile_log",
     "print_profile_compare",
+    "save_profile_log",
     "save_profile_report",
 ]
 
 # 日志 schema 版本：结构变更时递增，加载侧按版本校验兼容性
 PROFILE_LOG_SCHEMA = "fspack/build-profile/1"
+RUN_PROFILE_LOG_SCHEMA = "fspack/run-profile/1"
+# 加载侧接受的 schema 集合（对比前另行校验双方 schema 一致，防跨类型对比）
+_KNOWN_SCHEMAS = frozenset({PROFILE_LOG_SCHEMA, RUN_PROFILE_LOG_SCHEMA})
 # 默认日志目录名（项目根下，与 pytest-benchmark 共存，文件名前缀区分）
 DEFAULT_LOG_DIR = ".benchmarks"
-# 日志文件名前缀与通配（fsp-b-YYYYMMDD-HHMMSS.json）
+# 日志文件名前缀与通配（fsp-b-/fsp-r-YYYYMMDD-HHMMSS.json，构建与启动剖析共存）
 _LOG_PREFIX = "fsp-b-"
 _LOG_GLOB = "fsp-b-*.json"
+RUN_LOG_PREFIX = "fsp-r-"
+RUN_LOG_GLOB = "fsp-r-*.json"
 # 阶段差异显著阈值：绝对差超 50ms 且相对差超 10% 才列入对比表，
 # 其余折叠为计数行，避免噪声淹没真实回归
 _STAGE_MIN_DELTA = 0.05
@@ -74,22 +96,38 @@ class ProfileLogMeta:
     platform: str
 
 
-def _auto_name(directory: Path) -> Path:
-    """在目录内生成不冲突的日志文件路径（``fsp-b-<时间戳>.json``）.
+def _auto_name(directory: Path, prefix: str = _LOG_PREFIX) -> Path:
+    """在目录内生成不冲突的日志文件路径（``<prefix><时间戳>.json``）.
 
     同秒内多次构建自动追加 ``-2``/``-3`` 序号，避免覆盖既有日志。
     """
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    candidate = directory / f"{_LOG_PREFIX}{stamp}.json"
+    candidate = directory / f"{prefix}{stamp}.json"
     seq = 2
     while candidate.exists():
-        candidate = directory / f"{_LOG_PREFIX}{stamp}-{seq}.json"
+        candidate = directory / f"{prefix}{stamp}-{seq}.json"
         seq += 1
     return candidate
 
 
+def save_profile_log(data: dict[str, Any], out: Path, prefix: str = _LOG_PREFIX) -> Path:
+    """写入完整日志 dict 为 JSON，返回实际写入路径.
+
+    :param data: 完整日志数据（调用方负责 schema/元数据/阶段字段）
+    :param out: 输出路径——``.json`` 后缀按文件直写（父目录自动创建）；
+        其余（目录或不存在路径）按目录处理，自动命名写入
+    :param prefix: 目录模式下自动命名的文件名前缀（构建 ``fsp-b-`` /
+        启动剖析 ``fsp-r-``）
+    :return: 实际写入的文件路径
+    """
+    path = out if out.suffix == ".json" else _auto_name(out, prefix)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
 def save_profile_report(report: ProfileReport, out: Path, meta: ProfileLogMeta) -> Path:
-    """写入性能日志 JSON，返回实际写入路径.
+    """写入构建性能日志 JSON，返回实际写入路径.
 
     :param report: 构建耗时报告
     :param out: 输出路径——``.json`` 后缀按文件直写（父目录自动创建）；
@@ -97,8 +135,6 @@ def save_profile_report(report: ProfileReport, out: Path, meta: ProfileLogMeta) 
     :param meta: 项目/解释器/平台元数据
     :return: 实际写入的文件路径
     """
-    path = out if out.suffix == ".json" else _auto_name(out)
-    path.parent.mkdir(parents=True, exist_ok=True)
     data: dict[str, Any] = {
         "schema": PROFILE_LOG_SCHEMA,
         "created": datetime.now().isoformat(timespec="seconds"),
@@ -123,12 +159,15 @@ def save_profile_report(report: ProfileReport, out: Path, meta: ProfileLogMeta) 
             for s in report.stages
         ],
     }
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    return path
+    return save_profile_log(data, out)
 
 
 def load_profile_log(path: Path) -> dict[str, Any]:
     """读取性能日志 JSON 为 dict，文件不存在/畸形/schema 不符时抛 :class:`ValueError`.
+
+    接受构建（``fspack/build-profile/1``）与启动剖析（``fspack/run-profile/1``）
+    两种 schema；对比渲染前由 :func:`print_profile_compare` 另行校验双方
+    schema 一致，防止跨类型对比产生无意义的全量新增/移除。
 
     :param path: 日志文件路径
     :raises ValueError: 文件不存在 / JSON 畸形 / schema 版本不识别
@@ -140,20 +179,21 @@ def load_profile_log(path: Path) -> dict[str, Any]:
     except json.JSONDecodeError as exc:
         raise ValueError(f"性能日志不是合法 JSON: {path} ({exc})") from exc
     schema = data.get("schema")
-    if schema != PROFILE_LOG_SCHEMA:
-        raise ValueError(f"性能日志 schema 不受支持（{schema}，期望 {PROFILE_LOG_SCHEMA}）: {path}")
+    if schema not in _KNOWN_SCHEMAS:
+        raise ValueError(f"性能日志 schema 不受支持（{schema}，期望 {'/'.join(sorted(_KNOWN_SCHEMAS))}）: {path}")
     return data
 
 
-def find_latest_log(directory: Path, exclude: Path | None = None) -> Path | None:
+def find_latest_log(directory: Path, exclude: Path | None = None, pattern: str = _LOG_GLOB) -> Path | None:
     """返回目录内最新的性能日志（排除 ``exclude``），无则返回 ``None``.
 
-    文件名 ``fsp-b-YYYYMMDD-HHMMSS[-N].json`` 的字典序即时间序，直接按名
-    排序取最大，无需读文件内容。
+    文件名 ``<前缀>YYYYMMDD-HHMMSS[-N].json`` 的字典序即时间序，直接按名
+    排序取最大，无需读文件内容。``pattern`` 按前缀过滤（构建 ``fsp-b-*`` /
+    启动剖析 ``fsp-r-*``），两类日志同目录共存互不干扰。
     """
     if not directory.is_dir():
         return None
-    logs = [p for p in directory.glob(_LOG_GLOB) if exclude is None or p.resolve() != exclude.resolve()]
+    logs = [p for p in directory.glob(pattern) if exclude is None or p.resolve() != exclude.resolve()]
     return max(logs, key=lambda p: p.name) if logs else None
 
 
@@ -213,22 +253,12 @@ def _delta_cell(cur: float, base: float, fmt: Callable[[float], str]) -> Any:
     return Text(f"{_fmt_signed(fmt, delta)} {arrow}", style=style)
 
 
-def print_profile_compare(current: dict[str, Any], baseline: dict[str, Any], baseline_path: Path) -> None:
-    """渲染本次与基准性能日志的差异对比表到控制台.
+def _env_notes(current: dict[str, Any], baseline: dict[str, Any]) -> list[str]:
+    """收集双方环境差异提示（项目版本/Python/平台/入口/调试模式）.
 
-    表格分两段：总览（墙钟/CPU/内存，差异带符号百分比与箭头着色）与
-    阶段明细（仅差异显著项：绝对差 > 50ms 且相对差 > 10%；新增/移除
-    阶段单列；其余折叠为一行计数）。环境不一致（项目版本/Python/平台
-    不同）时在表尾注明，提示对比结论需谨慎。
+    任一维度不一致即生成一条说明，对比结论需谨慎；双方均无该字段
+    （如构建日志无 entry/debug）时不提示。
     """
-    # 延迟导入：rich 渲染链与 console 仅在真正输出对比表时加载
-    from rich.table import Table
-    from rich.text import Text
-
-    from fspack.console import console
-    from fspack.progress import fmt_bytes
-
-    # 环境差异提示：项目版本/解释器/平台任一不同即标注
     notes: list[str] = []
     cur_proj, base_proj = current.get("project", {}), baseline.get("project", {})
     if cur_proj.get("version") != base_proj.get("version"):
@@ -237,6 +267,47 @@ def print_profile_compare(current: dict[str, Any], baseline: dict[str, Any], bas
         notes.append(f"Python {baseline.get('python', '?')} → {current.get('python', '?')}")
     if current.get("platform") != baseline.get("platform"):
         notes.append(f"平台 {baseline.get('platform', '?')} → {current.get('platform', '?')}")
+    # 启动剖析特有：入口名与 --debug 模式（debug 下无 loader 段，阶段构成不同）
+    if current.get("entry") != baseline.get("entry"):
+        notes.append(f"入口 {baseline.get('entry', '?')} → {current.get('entry', '?')}")
+    if bool(current.get("debug")) != bool(baseline.get("debug")):
+        notes.append(
+            f"调试模式 {'开' if current.get('debug') else '关'}（基准为 {'开' if baseline.get('debug') else '关'}）"
+        )
+    return notes
+
+
+def print_profile_compare(
+    current: dict[str, Any],
+    baseline: dict[str, Any],
+    baseline_path: Path,
+    *,
+    stage_min_delta: float = _STAGE_MIN_DELTA,
+) -> None:
+    """渲染本次与基准性能日志的差异对比表到控制台.
+
+    表格分两段：总览（墙钟恒显；CPU/内存仅当日志含该字段——构建剖析有、
+    启动剖析无）与阶段明细（仅差异显著项：绝对差超 ``stage_min_delta``
+    且相对差超 10%；新增/移除阶段单列；其余折叠为一行计数）。环境不一致
+    （项目版本/Python/平台/入口/调试模式不同）时在表尾注明，提示对比
+    结论需谨慎。
+
+    :raises ValueError: 双方 schema 不一致（构建日志与启动剖析日志不可比）
+    """
+    # 延迟导入：rich 渲染链与 console 仅在真正输出对比表时加载
+    from rich.table import Table
+    from rich.text import Text
+
+    from fspack.console import console
+    from fspack.progress import fmt_bytes
+
+    if current.get("schema") != baseline.get("schema"):
+        raise ValueError(
+            f"对比双方日志类型不一致（{current.get('schema')} vs {baseline.get('schema')}）: {baseline_path}"
+        )
+
+    # 环境差异提示：项目版本/解释器/平台/入口/调试模式任一不同即标注
+    notes = _env_notes(current, baseline)
 
     ago = _fmt_ago(str(baseline.get("created", "")))
     subtitle = f"基准: {baseline_path.name}" + (f"（{ago}）" if ago else "")
@@ -252,8 +323,10 @@ def print_profile_compare(current: dict[str, Any], baseline: dict[str, Any], bas
         table.add_row(label, fmt(cur), fmt(base), _delta_cell(cur, base, fmt))
 
     _overview_row("墙钟时间", "wall_time", _fmt_seconds)
-    _overview_row("CPU 时间", "cpu_time", _fmt_seconds)
-    _overview_row("内存峰值", "memory_peak", lambda v: fmt_bytes(int(v)))
+    if "cpu_time" in current or "cpu_time" in baseline:
+        _overview_row("CPU 时间", "cpu_time", _fmt_seconds)
+    if "memory_peak" in current or "memory_peak" in baseline:
+        _overview_row("内存峰值", "memory_peak", lambda v: fmt_bytes(int(v)))
 
     # 阶段差异：按名字对齐，显著项按 |差值| 降序列出（上限 8 行）
     cur_stages = {s["name"]: float(s.get("elapsed", 0)) for s in current.get("stages", [])}
@@ -264,7 +337,7 @@ def print_profile_compare(current: dict[str, Any], baseline: dict[str, Any], bas
         cur, base = cur_stages[name], base_stages[name]
         delta = cur - base
         pct = delta / base * 100 if base > 0 else 0.0
-        if abs(delta) > _STAGE_MIN_DELTA and abs(pct) > _STAGE_MIN_PCT:
+        if abs(delta) > stage_min_delta and abs(pct) > _STAGE_MIN_PCT:
             significant.append((name, cur, base))
     significant.sort(key=lambda x: -abs(x[1] - x[2]))
     added = [n for n in cur_stages if n not in base_stages]

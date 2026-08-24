@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -153,13 +154,17 @@ def test_run_with_profile_collect_and_summarize(capsys: pytest.CaptureFixture[st
 def test_run_with_profile_importtime_raw_lines_not_passed_through(capsys: pytest.CaptureFixture[str]) -> None:
     """importtime 原始行不透传（由汇总替代），顶层导入段来自真实 import."""
     env = {**os.environ, "PYTHONPROFILEIMPORTTIME": "1"}
-    code = "import json\nprint('done')\n"
-    rc = run_with_profile([sys.executable, "-c", code], env=env)
+    # -S 跳过 site 使导入链干净（venv 的 site 链会挤满模块自身 top10，
+    # 且 json/csv 偶被 site 预载不产生 importtime 行，见历史会话）。
+    # pickle 的 self 耗时（~0.8ms）稳定位居前三，不受运行波动挤出 top10
+    # （csv 排名第 9 与第 10 名接近，曾被挤出导致断言偶发失败）
+    code = "import pickle\nprint('done')\n"
+    rc = run_with_profile([sys.executable, "-S", "-c", code], env=env)
     assert rc == 0
     captured = capsys.readouterr()
     assert "解释器初始化(约)" in captured.out
-    # import json 是真实顶层导入，应出现在汇总中
-    assert "json" in captured.out
+    # import pickle 是真实顶层导入，应出现在汇总中（self 耗时稳定进 top10）
+    assert "pickle" in captured.out
     # 原始 import time: 行不透传
     assert "import time:" not in captured.err
 
@@ -218,7 +223,7 @@ def test_run_profile_env_injected(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     project = _make_runnable_project(tmp_path)
     captured: dict[str, Any] = {}
 
-    def fake_profile(cmd: list[str], env: dict[str, str] | None = None) -> int:
+    def fake_profile(cmd: list[str], env: dict[str, str] | None = None, on_summary: object = None) -> int:
         captured["cmd"] = cmd
         captured["env"] = env
         return 0
@@ -245,7 +250,7 @@ def test_run_profile_debug_combined(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
     captured: dict[str, Any] = {}
 
-    def fake_profile(cmd: list[str], env: dict[str, str] | None = None) -> int:
+    def fake_profile(cmd: list[str], env: dict[str, str] | None = None, on_summary: object = None) -> int:
         captured["cmd"] = cmd
         captured["env"] = env
         return 0
@@ -265,7 +270,7 @@ def test_run_profile_nonzero_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     """profile 模式非零退出码与普通模式一致抛 FspackError."""
     project = _make_runnable_project(tmp_path)
 
-    monkeypatch.setattr("fspack.runner.run_with_profile", lambda cmd, env=None: 7)
+    monkeypatch.setattr("fspack.runner.run_with_profile", lambda cmd, env=None, on_summary=None: 7)
     monkeypatch.setattr("fspack.runner.platform.system", lambda: "Windows")
     from fspack.exceptions import FspackError
 
@@ -472,3 +477,215 @@ def test_print_summary_fast_program_low_ratio_gap_hidden(capsys: pytest.CaptureF
     _print_summary(64.0, 0, [], timing, [])
     out = capsys.readouterr().out
     assert "未细分" not in out
+
+
+# ---- _print_summary 返回值：结构化剖析数据（落盘用） ----
+
+
+def test_print_summary_returns_structured_data(capsys: pytest.CaptureFixture[str]) -> None:
+    """返回结构化数据：主阶段/loader 原文阶段名/顶层与入口导入列表（毫秒）."""
+    timing = {"env_ready": 5.0, "entry_start": 10.0, "entry_done": 110.0}
+    imports = [
+        "import time:      100 |      150 | encodings",
+        "import time:       700 |       760 | runpy",
+        "import time:       500 |      2000 | app.controllers",
+    ]
+    post = ["import time:     5000 |     5000 | argparse"]
+    data = _print_summary(150.0, 0, [("loader 总", 8.0, "（进入 Python）")], timing, imports, post)
+
+    assert data["wall_ms"] == 150.0
+    assert data["returncode"] == 0
+    # 主阶段：loader 原文阶段名（不含 suffix）→ 环境准备 → 解释器初始化 → 用户入口执行
+    assert ("loader 总", 8.0) in data["stages"]
+    assert ("环境准备", 5.0) in data["stages"]
+    assert ("解释器初始化(约)", 0.15) in data["stages"]
+    assert ("用户入口执行", 100.0) in data["stages"]
+    # 顶层导入（runpy 锚点后）与入口执行期间导入分开存放
+    assert [n for n, _ in data["top_imports"]] == ["runpy", "app.controllers"]
+    assert data["top_imports"][1] == ("app.controllers", 2.0)
+    assert data["entry_imports"] == [("argparse", 5.0)]
+    # 模块自身耗时列表存在（self 降序）
+    assert ("argparse", 5.0) in data["top_self"]
+
+
+def test_print_summary_returns_empty_stages_without_marks(capsys: pytest.CaptureFixture[str]) -> None:
+    """无任何打点时返回空阶段与空导入列表（结构完整，值全空）."""
+    data = _print_summary(10.0, 0, [], {}, [])
+    assert data == {
+        "wall_ms": 10.0,
+        "returncode": 0,
+        "stages": [],
+        "top_imports": [],
+        "entry_imports": [],
+        "top_self": [],
+    }
+
+
+# ---- runner.run 落盘与对比集成（mock run_with_profile） ----
+
+
+def test_run_saves_profile_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """profile=True 时剖析数据落盘 .benchmarks/fsp-r-*.json（run schema）."""
+    from fspack.packaging.profile_log import RUN_PROFILE_LOG_SCHEMA, load_profile_log
+
+    project = _make_runnable_project(tmp_path)
+
+    def fake_profile(
+        cmd: list[str],
+        env: dict[str, str] | None = None,
+        on_summary: Callable[[dict[str, Any]], None] | None = None,
+    ) -> int:
+        assert callable(on_summary)
+        on_summary(
+            {
+                "wall_ms": 52.0,
+                "returncode": 0,
+                "stages": [("loader 总", 8.0), ("环境准备", 5.0), ("用户入口执行", 25.0)],
+                "top_imports": [("runpy", 0.7)],
+                "entry_imports": [("argparse", 9.0)],
+                "top_self": [("argparse", 3.2)],
+            }
+        )
+        return 0
+
+    monkeypatch.setattr("fspack.runner.run_with_profile", fake_profile)
+    monkeypatch.setattr("fspack.runner.platform.system", lambda: "Windows")
+    run_run(project, profile=True)
+
+    logs = sorted((project / ".benchmarks").glob("fsp-r-*.json"))
+    assert len(logs) == 1
+    data = load_profile_log(logs[0])
+    assert data["schema"] == RUN_PROFILE_LOG_SCHEMA
+    assert data["project"] == {"name": "app", "version": "0.0.0"}
+    assert data["entry"] == "app"
+    assert data["debug"] is False
+    assert data["wall_time"] == 0.052
+    assert data["returncode"] == 0
+    assert {"name": "环境准备", "elapsed": 0.005} in data["stages"]
+    assert {"name": "runpy", "elapsed": 0.0007} in data["top_imports"]
+    assert {"name": "argparse", "elapsed": 0.009} in data["entry_imports"]
+    assert {"name": "argparse", "elapsed": 0.0032} in data["top_self"]
+
+
+def test_run_profile_compare_last_renders_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """profile_compare="last" 与最近一次启动剖析日志对比：渲染差异表格."""
+    project = _make_runnable_project(tmp_path)
+
+    def fake_profile(
+        cmd: list[str],
+        env: dict[str, str] | None = None,
+        on_summary: Callable[[dict[str, Any]], None] | None = None,
+    ) -> int:
+        if on_summary is not None:
+            on_summary(
+                {
+                    "wall_ms": 80.0,
+                    "returncode": 0,
+                    "stages": [("环境准备", 12.0), ("用户入口执行", 30.0)],
+                    "top_imports": [],
+                    "entry_imports": [],
+                    "top_self": [],
+                }
+            )
+        return 0
+
+    monkeypatch.setattr("fspack.runner.run_with_profile", fake_profile)
+    monkeypatch.setattr("fspack.runner.platform.system", lambda: "Windows")
+    # 预置历史启动剖析日志（比本次慢 30ms，环境准备慢 8ms 显著）
+    from fspack.packaging.profile_log import save_profile_log
+
+    baseline_data = {
+        "schema": "fspack/run-profile/1",
+        "created": "2026-08-24T09:00:00",
+        "project": {"name": "app", "version": "0.0.0"},
+        "python": "3.13.14",
+        "platform": "windows",
+        "entry": "app",
+        "debug": False,
+        "wall_time": 0.11,
+        "returncode": 0,
+        "stages": [{"name": "环境准备", "elapsed": 0.02}, {"name": "用户入口执行", "elapsed": 0.032}],
+    }
+    save_profile_log(baseline_data, project / ".benchmarks", prefix="fsp-r-")
+
+    # 对比表经 fspack.console 的 rich console 输出，须用 rich capture 捕获
+    from fspack.console import console
+
+    with console.rich.capture() as capture:
+        run_run(project, profile=True, profile_compare="last")
+    out = capture.get()
+    assert "性能对比" in out
+    assert "墙钟时间" in out
+    # 80ms vs 110ms = -27.3% ▼ 改善
+    assert "-27.3%" in out
+    assert "▼" in out
+    # 环境准备 12ms vs 20ms：差 8ms 超 5ms 阈值且 -40% 显著列入
+    assert "环境准备" in out
+
+
+def test_run_profile_compare_last_without_history_warns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """profile_compare="last" 无历史日志时警告跳过，不报错."""
+
+    def fake_profile(
+        cmd: list[str],
+        env: dict[str, str] | None = None,
+        on_summary: Callable[[dict[str, Any]], None] | None = None,
+    ) -> int:
+        if on_summary is not None:
+            on_summary(
+                {
+                    "wall_ms": 80.0,
+                    "returncode": 0,
+                    "stages": [],
+                    "top_imports": [],
+                    "entry_imports": [],
+                    "top_self": [],
+                }
+            )
+        return 0
+
+    monkeypatch.setattr("fspack.runner.run_with_profile", fake_profile)
+    monkeypatch.setattr("fspack.runner.platform.system", lambda: "Windows")
+    project = _make_runnable_project(tmp_path)
+    with caplog.at_level("WARNING"):
+        run_run(project, profile=True, profile_compare="last")
+    assert any("未找到可对比的历史启动剖析日志" in r.message for r in caplog.records)
+
+
+def test_run_profile_specified_baseline_schema_mismatch_warns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """指定基准为构建日志（schema 不一致）时警告跳过对比."""
+
+    def fake_profile(
+        cmd: list[str],
+        env: dict[str, str] | None = None,
+        on_summary: Callable[[dict[str, Any]], None] | None = None,
+    ) -> int:
+        if on_summary is not None:
+            on_summary(
+                {
+                    "wall_ms": 80.0,
+                    "returncode": 0,
+                    "stages": [],
+                    "top_imports": [],
+                    "entry_imports": [],
+                    "top_self": [],
+                }
+            )
+        return 0
+
+    monkeypatch.setattr("fspack.runner.run_with_profile", fake_profile)
+    monkeypatch.setattr("fspack.runner.platform.system", lambda: "Windows")
+    project = _make_runnable_project(tmp_path)
+    # 预置一个构建日志（fsp-b 前缀 + build schema）
+    build_log = project / ".benchmarks" / "fsp-b-20260824-100000.json"
+    build_log.parent.mkdir(parents=True, exist_ok=True)
+    build_log.write_text('{"schema": "fspack/build-profile/1", "wall_time": 3.0, "stages": []}', encoding="utf-8")
+    with caplog.at_level("WARNING"):
+        run_run(project, profile=True, profile_compare=str(build_log))
+    assert any("类型不一致" in r.message for r in caplog.records)

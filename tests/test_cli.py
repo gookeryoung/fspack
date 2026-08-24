@@ -377,12 +377,14 @@ def test_build_config_pyc_optimize_default_when_both_silent(tmp_path: Path, monk
 def test_run_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     called: dict[str, Any] = {}
 
-    def fake_run(
+    def fake_run(  # noqa: PLR0913
         project: Path,
         rest_args: list[str] | None = None,
         debug: bool = False,
         entry: str | None = None,
         profile: bool = False,
+        profile_out: Path | None = None,
+        profile_compare: str | None = None,
     ) -> None:
         called["project"] = project
         called["rest"] = rest_args
@@ -402,12 +404,14 @@ def test_run_debug_flag_after_project(tmp_path: Path, monkeypatch: pytest.Monkey
     """
     called: dict[str, Any] = {}
 
-    def fake_run(
+    def fake_run(  # noqa: PLR0913
         project: Path,
         rest_args: list[str] | None = None,
         debug: bool = False,
         entry: str | None = None,
         profile: bool = False,
+        profile_out: Path | None = None,
+        profile_compare: str | None = None,
     ) -> None:
         called["project"] = project
         called["rest"] = rest_args
@@ -425,12 +429,14 @@ def test_run_entry_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
     """`fspack r <project> --entry cli` 解析 entry 参数."""
     called: dict[str, Any] = {}
 
-    def fake_run(
+    def fake_run(  # noqa: PLR0913
         project: Path,
         rest_args: list[str] | None = None,
         debug: bool = False,
         entry: str | None = None,
         profile: bool = False,
+        profile_out: Path | None = None,
+        profile_compare: str | None = None,
     ) -> None:
         called["entry"] = entry
 
@@ -443,12 +449,14 @@ def test_run_profile_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     """`fspack r <project> --profile` 解析 profile 开关."""
     called: dict[str, Any] = {}
 
-    def fake_run(
+    def fake_run(  # noqa: PLR0913
         project: Path,
         rest_args: list[str] | None = None,
         debug: bool = False,
         entry: str | None = None,
         profile: bool = False,
+        profile_out: Path | None = None,
+        profile_compare: str | None = None,
     ) -> None:
         called["profile"] = profile
 

@@ -120,9 +120,22 @@ def _dispatch(command: str, ns: argparse.Namespace) -> None:
             sys.exit(_run_recursive(project, "build", ns))
         _run_build(project, ns)
     elif command in ("run", "r"):
+        from pathlib import Path as _Path
+
+        from fspack.exceptions import ProjectError
         from fspack.runner import run as run_cmd
 
-        run_cmd(project, rest_args=_drop_separator(ns.rest), debug=ns.debug, entry=ns.entry, profile=ns.profile)
+        if (getattr(ns, "profile_out", None) or getattr(ns, "profile_compare", None)) and not ns.profile:
+            raise ProjectError("--profile-out/--profile-compare 需配合 --profile 使用")
+        run_cmd(
+            project,
+            rest_args=_drop_separator(ns.rest),
+            debug=ns.debug,
+            entry=ns.entry,
+            profile=ns.profile,
+            profile_out=_Path(ns.profile_out).resolve() if ns.profile_out else None,
+            profile_compare=ns.profile_compare,
+        )
     elif command in ("clean", "c"):
         from fspack.builder import clean_dist
 

@@ -25,6 +25,8 @@ import subprocess
 import sys
 import time
 import unicodedata
+from collections.abc import Callable
+from typing import Any
 
 __all__ = ["PROFILE_ENV", "run_with_profile"]
 
@@ -63,7 +65,11 @@ _GAP_MIN_RATIO = 0.05
 _GAP_HIGH_RATIO = 0.30
 
 
-def run_with_profile(cmd: list[str], env: dict[str, str] | None = None) -> int:
+def run_with_profile(
+    cmd: list[str],
+    env: dict[str, str] | None = None,
+    on_summary: Callable[[dict[str, Any]], None] | None = None,
+) -> int:
     """运行目标程序并采集启动耗时打点，子进程退出后打印汇总.
 
     stdout/stdin 继承父进程（交互与正常输出不受影响）；stderr 经管道流式
@@ -72,6 +78,9 @@ def run_with_profile(cmd: list[str], env: dict[str, str] | None = None) -> int:
     importtime 行按 ``entry_start`` 打点分界为两段：之前的归 wrapper
     （解释器初始化 + wrapper 顶层导入），之后的归用户入口执行期间的导入
     （stderr 同管道行序即时间序，入口细分由 :func:`_print_summary` 完成）。
+
+    ``on_summary`` 非空时在打印汇总后回调结构化剖析数据（键见
+    :func:`_print_summary` 返回值），供调用方落盘性能日志（毫秒单位）。
     返回子进程退出码。
     """
     t_start = time.perf_counter()
@@ -105,7 +114,9 @@ def run_with_profile(cmd: list[str], env: dict[str, str] | None = None) -> int:
     proc.stderr.close()
     returncode = proc.wait()
     wall_ms = (time.perf_counter() - t_start) * 1000.0
-    _print_summary(wall_ms, returncode, loader_stages, timing_stages, import_lines, post_entry_lines)
+    data = _print_summary(wall_ms, returncode, loader_stages, timing_stages, import_lines, post_entry_lines)
+    if on_summary is not None:
+        on_summary(data)
     return returncode
 
 
@@ -314,12 +325,25 @@ def _print_summary(  # noqa: PLR0913
     timing_stages: dict[str, float],
     import_lines: list[str],
     post_entry_lines: list[str] | None = None,
-) -> None:
+) -> dict[str, Any]:
     """打印启动耗时汇总表：loader → 环境准备 → 解释器初始化 → import 细分 → 入口执行（导入/执行细分）→ 未细分.
 
     ``post_entry_lines`` 为 ``entry_start`` 打点之后的 importtime 行
     （入口执行期间的导入），有 ``entry_start`` 打点时用于细分"用户入口
     执行"段；缺失（旧 dist）时入口执行整段展示，行为与旧版一致。
+
+    返回结构化剖析数据（毫秒单位），供落盘性能日志（``fsp r --profile``）::
+
+        {
+          "wall_ms": 总墙钟毫秒, "returncode": 退出码,
+          "stages": [("loader 各阶段/环境准备/解释器初始化(约)/用户入口执行", ms), ...],
+          "top_imports": [("wrapper 顶层根导入名", cumulative_ms), ...],
+          "entry_imports": [("入口执行期间根导入名", cumulative_ms), ...],
+          "top_self": [("模块名", self_ms), ...],
+        }
+
+    ``stages`` 仅含主阶段（子项与"未细分"归因不稳定，不参与对比）；
+    导入列表存全量根导入（打印截 top，落盘全量供后续分析）。
     """
     if post_entry_lines is None:
         post_entry_lines = []
@@ -359,3 +383,20 @@ def _print_summary(  # noqa: PLR0913
     elif entry_start is not None:
         _row("[wrapper]", "用户入口执行", "未返回")
     _print_unaccounted(wall_ms, loader_total, interp_ms, timing_stages)
+    # 落盘数据：主阶段用 loader 打点原文阶段名（suffix 为补充说明，跨次
+    # 运行不稳定，不并入名字）
+    stages: list[tuple[str, float]] = [(stage, ms) for stage, ms, _ in loader_stages]
+    if env_ready is not None:
+        stages.append(("环境准备", env_ready))
+    if interp_ms > 0:
+        stages.append(("解释器初始化(约)", interp_ms))
+    if entry_start is not None and entry_done is not None:
+        stages.append(("用户入口执行", entry_done - entry_start))
+    return {
+        "wall_ms": wall_ms,
+        "returncode": returncode,
+        "stages": stages,
+        "top_imports": list(user_roots),
+        "entry_imports": list(post_roots),
+        "top_self": list(self_top),
+    }

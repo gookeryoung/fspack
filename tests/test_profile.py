@@ -414,15 +414,74 @@ def test_cli_build_profile_compare_requires_profile(tmp_path: Path, monkeypatch:
     assert exc_info.value.code == 2
 
 
+def test_cli_run_profile_out_and_compare_passed_to_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``fsp r`` 的 ``--profile-out``/``--profile-compare`` 透传给 run()，缺省值为 last."""
+    _make_minimal_project(tmp_path)
+    captured: dict[str, Any] = {}
+
+    def fake_run(  # noqa: PLR0913
+        project: Path,
+        rest_args: list[str] | None = None,
+        debug: bool = False,
+        entry: str | None = None,
+        profile: bool = False,
+        profile_out: Path | None = None,
+        profile_compare: str | None = None,
+    ) -> None:
+        captured["profile"] = profile
+        captured["profile_out"] = profile_out
+        captured["profile_compare"] = profile_compare
+
+    monkeypatch.setattr("fspack.runner.run", fake_run)
+    out_dir = tmp_path / "perflogs"
+    cli.main(["r", str(tmp_path), "--profile", "--profile-out", str(out_dir), "--profile-compare"])
+    assert captured["profile"] is True
+    assert captured["profile_out"] == out_dir.resolve()
+    assert captured["profile_compare"] == "last"
+
+    ref = tmp_path / "base.json"
+    cli.main(["r", str(tmp_path), "--profile", "--profile-compare", str(ref)])
+    assert captured["profile_compare"] == str(ref)
+
+
+def test_cli_run_profile_out_requires_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``fsp r --profile-out`` 未配合 ``--profile`` 时报 ProjectError（退出码 2）."""
+    _make_minimal_project(tmp_path)
+
+    def fake_run(**kwargs: Any) -> None:  # pragma: no cover - 不应被调用
+        raise AssertionError("未启用 --profile 时不应执行运行")
+
+    monkeypatch.setattr("fspack.runner.run", fake_run)
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["r", str(tmp_path), "--profile-out", str(tmp_path / "out.json")])
+    assert exc_info.value.code == 2
+
+
+def test_cli_run_profile_compare_requires_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``fsp r --profile-compare`` 未配合 ``--profile`` 时报 ProjectError（退出码 2）."""
+    _make_minimal_project(tmp_path)
+
+    def fake_run(**kwargs: Any) -> None:  # pragma: no cover - 不应被调用
+        raise AssertionError("未启用 --profile 时不应执行运行")
+
+    monkeypatch.setattr("fspack.runner.run", fake_run)
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["r", str(tmp_path), "--profile-compare"])
+    assert exc_info.value.code == 2
+
+
 # ---- profile_log：性能日志落盘 / 加载 / 查找 / 对比 ----
 
 
 from fspack.packaging.profile_log import (  # noqa: E402
     PROFILE_LOG_SCHEMA,
+    RUN_LOG_GLOB,
+    RUN_PROFILE_LOG_SCHEMA,
     ProfileLogMeta,
     find_latest_log,
     load_profile_log,
     print_profile_compare,
+    save_profile_log,
     save_profile_report,
 )
 
@@ -597,6 +656,103 @@ def test_print_profile_compare_improvement_green() -> None:
     out = capture.get()
     assert "-20.0%" in out
     assert "▼" in out
+
+
+# ---- profile_log：启动剖析（fsp r --profile）日志 ----
+
+
+def _run_log_dict(
+    wall: float = 0.05,
+    stages: list[dict[str, Any]] | None = None,
+    entry: str = "app",
+    debug: bool = False,
+) -> dict[str, Any]:
+    """构造启动剖析日志 dict（模拟 load_profile_log 返回值，毫秒→秒）."""
+    return {
+        "schema": RUN_PROFILE_LOG_SCHEMA,
+        "created": "2026-08-24T10:00:00",
+        "project": {"name": "app", "version": "0.1.0"},
+        "python": "3.13.14",
+        "platform": "windows",
+        "entry": entry,
+        "debug": debug,
+        "wall_time": wall,
+        "returncode": 0,
+        "stages": stages or [],
+    }
+
+
+def test_save_profile_log_run_prefix(tmp_path: Path) -> None:
+    """启动剖析日志：目录模式按 fsp-r- 前缀自动命名，run schema 可加载回读."""
+    out_dir = tmp_path / ".benchmarks"
+    data = _run_log_dict(stages=[{"name": "环境准备", "elapsed": 0.005}])
+    path = save_profile_log(data, out_dir, prefix="fsp-r-")
+    assert path.parent == out_dir
+    assert path.name.startswith("fsp-r-")
+    assert path.suffix == ".json"
+    loaded = load_profile_log(path)
+    assert loaded["schema"] == RUN_PROFILE_LOG_SCHEMA
+    assert loaded["entry"] == "app"
+    assert loaded["stages"][0]["name"] == "环境准备"
+
+
+def test_find_latest_log_prefix_filter(tmp_path: Path) -> None:
+    """构建与启动剖析日志同目录共存：按前缀过滤互不干扰."""
+    (tmp_path / "fsp-b-20260824-100000.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "fsp-r-20260824-090000.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "fsp-r-20260824-110000.json").write_text("{}", encoding="utf-8")
+    latest_build = find_latest_log(tmp_path)
+    latest_run = find_latest_log(tmp_path, pattern=RUN_LOG_GLOB)
+    assert latest_build is not None
+    assert latest_run is not None
+    assert latest_build.name == "fsp-b-20260824-100000.json"
+    assert latest_run.name == "fsp-r-20260824-110000.json"
+
+
+def test_print_profile_compare_run_mode() -> None:
+    """启动剖析对比：无 cpu/内存字段时总览仅墙钟行，小阈值阶段差异可见."""
+    current = _run_log_dict(
+        wall=0.08,
+        stages=[{"name": "环境准备", "elapsed": 0.014}, {"name": "用户入口执行", "elapsed": 0.03}],
+    )
+    baseline = _run_log_dict(
+        wall=0.05,
+        stages=[{"name": "环境准备", "elapsed": 0.008}, {"name": "用户入口执行", "elapsed": 0.032}],
+    )
+
+    with console.rich.capture() as capture:
+        print_profile_compare(current, baseline, Path("base.json"), stage_min_delta=0.005)
+    out = capture.get()
+    assert "墙钟时间" in out
+    # 启动剖析无 CPU/内存字段，总览自适应跳过
+    assert "CPU 时间" not in out
+    assert "内存峰值" not in out
+    # 环境准备 8ms→14ms 差 6ms 超 5ms 阈值且 +75%，列入显著项；入口执行差 5ms 不显著
+    assert "环境准备" in out
+    assert "+75.0%" in out
+    assert "差异不显著" in out
+
+
+def test_print_profile_compare_run_env_notes() -> None:
+    """启动剖析对比：入口名与调试模式不一致时表尾注明."""
+    current = _run_log_dict(entry="cli", debug=True)
+    baseline = _run_log_dict(entry="gui", debug=False)
+
+    with console.rich.capture() as capture:
+        print_profile_compare(current, baseline, Path("base.json"))
+    # rich 会按终端宽度对 caption 自动换行，断言前去除全部空白
+    flat = "".join(capture.get().split())
+    assert "入口gui→cli" in flat
+    assert "调试模式开（基准为关）" in flat
+
+
+def test_print_profile_compare_schema_mismatch() -> None:
+    """构建日志与启动剖析日志不可比：抛 ValueError 提示类型不一致."""
+    current = _run_log_dict()
+    baseline = _log_dict()
+
+    with pytest.raises(ValueError, match="类型不一致"):
+        print_profile_compare(current, baseline, Path("base.json"))
 
 
 def test_cli_build_without_profile_defaults_false(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
