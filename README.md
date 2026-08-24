@@ -494,9 +494,10 @@ fsp p --extra full               # package 子命令同样支持
 | Linux | python-build-standalone | `.deb` + `.tar.gz` |
 | macOS | python-build-standalone | `.pkg` + `.dmg` |
 
-Linux 可交叉编译 Windows 包（`fsp b --target windows`），反之亦然；macOS 目标
-需在 macOS 构建机上构建（`clang` 无法可靠产出交叉平台 Mach-O，非 macOS 构建机
-请求 macOS 目标会明确报错，`--dry-run` 预览不受限）。
+Windows 目标支持任意构建机交叉编译（Linux/macOS 装 mingw-w64 即可 `fsp b --target windows`）；
+macOS/Linux 目标需在同平台构建机上构建（macOS 的 `gcc` 为 clang 垫片、Windows 的 `gcc`
+为 mingw，均无法产出 ELF；非 macOS 的 `clang` 无法产出 Mach-O。跨机请求会明确报错，
+`--dry-run` 预览不受限）。
 
 ### Windows 7 支持
 

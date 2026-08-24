@@ -430,6 +430,38 @@ def test_run_profile_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     assert called["profile"].enabled is True
 
 
+def test_profile_short_aliases_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`-P`/`-PO`/`-PC` 短别名与长选项等价（-PO 精确匹配优先于 -P 前缀）."""
+    called: dict[str, Any] = {}
+
+    def fake_run(project: Path, rest_args: list[str] | None = None, options: RunOptions | None = None) -> None:
+        called["profile"] = options.profile if options else None
+
+    monkeypatch.setattr("fspack.runner.run", fake_run)
+    ref = tmp_path / "base.json"
+    cli.main(["r", str(tmp_path), "-P", "-PO", str(tmp_path / "perflogs"), "-PC", str(ref)])
+    assert called["profile"].enabled is True
+    assert called["profile"].out == (tmp_path / "perflogs").resolve()
+    assert called["profile"].compare == str(ref)
+
+
+def test_profile_short_aliases_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """build 侧 `-P`/`-PO`/`-PC` 短别名与长选项等价."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n', encoding="utf-8")
+    (tmp_path / "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
+    called: dict[str, Any] = {}
+
+    def fake_build(*a: Any, **kw: Any) -> None:
+        called["profile"] = kw.get("profile")
+
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    cli.main(["b", str(tmp_path), "-P", "-PO", str(tmp_path / "perflogs"), "-PC"])
+    assert called["profile"].enabled is True
+    assert called["profile"].out == (tmp_path / "perflogs").resolve()
+    # -PC 不带值 → 哨兵 "last"
+    assert called["profile"].compare == "last"
+
+
 def test_clean_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     called: dict[str, Path] = {}
     monkeypatch.setattr("fspack.builder.clean_dist", lambda project: called.__setitem__("p", project))

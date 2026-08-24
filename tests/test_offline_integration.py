@@ -253,6 +253,8 @@ def test_build_offline_standalone_cache_miss_raises_embed_error(
     monkeypatch.setenv("FSPACK_OFFLINE", "1")
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.setattr("urllib.request.urlopen", fail_urlopen)
+    # 守卫要求 Linux 目标在 Linux 构建机上（测试可在任意宿主运行）
+    monkeypatch.setattr("fspack.packaging.pipeline.executor.detect_platform", lambda: Platform.LINUX)
 
     proj = _make_min_project(tmp_path)
     from fspack.builder import build
@@ -273,6 +275,8 @@ def test_build_offline_wheel_cache_miss_raises_dependency_error_linux(
     monkeypatch.setenv("FSPACK_OFFLINE", "1")
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.setattr("urllib.request.urlopen", fail_urlopen)
+    # 守卫要求 Linux 目标在 Linux 构建机上（测试可在任意宿主运行）
+    monkeypatch.setattr("fspack.packaging.pipeline.executor.detect_platform", lambda: Platform.LINUX)
 
     proj = _copy_example("web/web_app", tmp_path)
     # Linux runtime marker：runtime/python/bin/python3.11（对应 py_version 3.11.15）
@@ -381,6 +385,8 @@ def test_build_offline_error_lists_searched_paths_linux(tmp_path: Path, monkeypa
     custom_cache = tmp_path / "my-cache"
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(custom_cache))
     monkeypatch.setattr("urllib.request.urlopen", fail_urlopen)
+    # 守卫要求 Linux 目标在 Linux 构建机上（测试可在任意宿主运行）
+    monkeypatch.setattr("fspack.packaging.pipeline.executor.detect_platform", lambda: Platform.LINUX)
 
     proj = _make_min_project(tmp_path)
     from fspack.builder import build

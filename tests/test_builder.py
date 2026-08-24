@@ -284,6 +284,8 @@ def test_build_skips_runtime_when_already_prepared_linux(tmp_path: Path, monkeyp
 
     monkeypatch.setattr("fspack.packaging.pipeline.stages.download_standalone", fake_download_standalone)
     monkeypatch.setattr("fspack.packaging.pipeline.stages.extract_standalone", fake_extract_standalone)
+    # 守卫要求 Linux 目标在 Linux 构建机上（测试可在任意宿主运行）
+    monkeypatch.setattr("fspack.packaging.pipeline.executor.detect_platform", lambda: Platform.LINUX)
     monkeypatch.setattr(
         "fspack.packaging.pipeline.stages.compile_loader",
         lambda source, out_exe, app_type, work_dir, platform, **kw: (
@@ -778,6 +780,8 @@ def test_build_orchestration_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         return out_exe
 
     monkeypatch.setattr("fspack.packaging.pipeline.stages.compile_loader", fake_compile)
+    # 守卫要求 Linux 目标在 Linux 构建机上（测试可在任意宿主运行）
+    monkeypatch.setattr("fspack.packaging.pipeline.executor.detect_platform", lambda: Platform.LINUX)
     # mock 预编译阶段的 subprocess.run（Linux python3.11 二进制在 Windows 上无法执行）
     monkeypatch.setattr("subprocess.run", lambda cmd, **kw: _CompileCompleted())
 
@@ -1018,6 +1022,8 @@ def test_build_skips_win7_compat_dll_for_linux(tmp_path: Path, monkeypatch: pyte
             out_exe.write_text(source),
         )[-1],
     )
+    # 守卫要求 Linux 目标在 Linux 构建机上（测试可在任意宿主运行）
+    monkeypatch.setattr("fspack.packaging.pipeline.executor.detect_platform", lambda: Platform.LINUX)
     # mock 预编译阶段的 subprocess.run（Linux python3.11 二进制在 Windows 上无法执行）
     monkeypatch.setattr("subprocess.run", lambda cmd, **kw: _CompileCompleted())
 

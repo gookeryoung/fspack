@@ -234,7 +234,7 @@ _BUILD_OPTS: tuple[_Opt, ...] = (
         choices=("text", "json"),
     ),
     _Opt(
-        ("--profile",),
+        ("-P", "--profile"),
         "启用耗时分析报告：构建结束后输出各阶段 wall time/占比/缓存命中/下载/节省，"
         "以及资源总览（wall/CPU/CPU 占比/内存峰值），识别瓶颈阶段。"
         "用 tracemalloc 采集内存峰值（无新依赖）。"
@@ -242,13 +242,13 @@ _BUILD_OPTS: tuple[_Opt, ...] = (
         action="store_true",
     ),
     _Opt(
-        ("--profile-out",),
+        ("-PO", "--profile-out"),
         "性能日志输出路径（需 --profile）：目录则自动命名写入，.json 文件则直写；默认 <项目>/.benchmarks/",
         default=None,
         metavar="PATH",
     ),
     _Opt(
-        ("--profile-compare",),
+        ("-PC", "--profile-compare"),
         "与历史性能日志对比（需 --profile）：不带值与最近一次对比，"
         "也可指定基准 JSON 文件路径。差异表格标红回归/标绿改善，"
         "阶段仅列差异显著项（>50ms 且 >10%）",
@@ -350,18 +350,18 @@ _RUN_OPTS: tuple[_Opt, ...] = (
     _Opt(("--debug",), "用 embed python 直跑入口脚本（绕过 GUI loader，输出可见）", action="store_true"),
     _Opt(("--entry",), "多入口项目指定要运行的入口名（与 [project.scripts] 键匹配）", default=None),
     _Opt(
-        ("--profile",),
+        ("-P", "--profile"),
         "输出启动耗时剖析汇总（loader/环境准备/import 各阶段耗时）并生成性能日志",
         action="store_true",
     ),
     _Opt(
-        ("--profile-out",),
+        ("-PO", "--profile-out"),
         "启动剖析日志输出路径（需 --profile）：目录则自动命名写入，.json 文件则直写；默认 <项目>/.benchmarks/",
         default=None,
         metavar="PATH",
     ),
     _Opt(
-        ("--profile-compare",),
+        ("-PC", "--profile-compare"),
         "与历史启动剖析日志对比（需 --profile）：不带值与最近一次对比，"
         "也可指定基准 JSON 文件路径。差异表格标红回归/标绿改善",
         nargs="?",

@@ -491,27 +491,38 @@ def test_cli_build_dry_run_alias_b(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 # ---- macOS 目标交叉构建守卫 ----
 
 
-def test_guard_cross_target_rejects_macos_on_non_macos_host(monkeypatch: pytest.MonkeyPatch) -> None:
-    """非 macOS 构建机请求 macOS 目标：抛 ProjectError 并说明支持矩阵."""
+def test_guard_cross_target_rejects_non_native_targets(monkeypatch: pytest.MonkeyPatch) -> None:
+    """非本机构建请求 macOS/Linux 目标：抛 ProjectError 并说明支持矩阵."""
     from fspack.exceptions import ProjectError
     from fspack.packaging.pipeline.executor import _guard_cross_target
 
+    # macOS 目标：仅 macOS 构建机（其余宿主 clang 产出非 Mach-O）
     for host in (Platform.WINDOWS, Platform.LINUX):
         monkeypatch.setattr("fspack.packaging.pipeline.executor.detect_platform", lambda h=host: h)
         with pytest.raises(ProjectError, match="macOS 目标暂不支持交叉构建"):
             _guard_cross_target(Platform.MACOS)
+    # Linux 目标：仅 Linux 构建机（macOS gcc 为 clang 垫片 / Windows gcc 为 mingw）
+    for host in (Platform.WINDOWS, Platform.MACOS):
+        monkeypatch.setattr("fspack.packaging.pipeline.executor.detect_platform", lambda h=host: h)
+        with pytest.raises(ProjectError, match="Linux 目标暂不支持交叉构建"):
+            _guard_cross_target(Platform.LINUX)
 
 
 def test_guard_cross_target_allows_valid_combinations(monkeypatch: pytest.MonkeyPatch) -> None:
-    """放行组合：macOS 本机构建、dry_run 预览、Windows/Linux 目标任意构建机."""
+    """放行组合：本机构建、dry_run 预览、Windows 目标任意构建机."""
     from fspack.packaging.pipeline.executor import _guard_cross_target
 
     monkeypatch.setattr("fspack.packaging.pipeline.executor.detect_platform", lambda: Platform.MACOS)
     _guard_cross_target(Platform.MACOS)
+    monkeypatch.setattr("fspack.packaging.pipeline.executor.detect_platform", lambda: Platform.LINUX)
+    _guard_cross_target(Platform.LINUX)
     monkeypatch.setattr("fspack.packaging.pipeline.executor.detect_platform", lambda: Platform.WINDOWS)
     _guard_cross_target(Platform.MACOS, dry_run=True)
+    _guard_cross_target(Platform.LINUX, dry_run=True)
     _guard_cross_target(Platform.WINDOWS)
-    _guard_cross_target(Platform.LINUX)
+    # Windows 目标任意构建机（mingw 交叉成熟）
+    monkeypatch.setattr("fspack.packaging.pipeline.executor.detect_platform", lambda: Platform.LINUX)
+    _guard_cross_target(Platform.WINDOWS)
 
 
 def test_build_macos_target_on_windows_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
