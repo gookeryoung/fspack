@@ -2702,6 +2702,54 @@ def test_compile_with_stamp_passes_build_python_to_compile_src(tmp_path: Path, m
     assert captured["build_python_exe"] == fake_py
 
 
+def test_compile_with_stamp_passes_data_dirs_to_compile_src(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """compile_with_stamp 透传 data_dirs 到 compile_src（数据资源目录不编译）."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("print('hi')")
+    (src / "assets" / "templates").mkdir(parents=True)
+    (src / "assets" / "templates" / "demo.py").write_text("x = 1")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    cache_root = tmp_path / "nuitka_cache"
+
+    monkeypatch.setattr(NuitkaCompiler, "ensure_env", classmethod(lambda cls, *a, **kw: "4.1.3"))
+    fake_py = tmp_path / "fake_standalone_python.exe"
+    fake_py.write_text("")
+    monkeypatch.setattr(
+        NuitkaCompiler,
+        "_ensure_build_python",
+        classmethod(lambda cls, *a, **kw: fake_py),
+    )
+
+    captured: dict[str, object] = {}
+
+    def _capture_compile(cls: Any, *a: Any, **kw: Any) -> list[str]:
+        captured["data_dirs"] = kw.get("data_dirs")
+        return []
+
+    monkeypatch.setattr(NuitkaCompiler, "compile_src", classmethod(_capture_compile))
+
+    st = StageRecorder("Nuitka 编译")
+    data_dirs = (src / "assets" / "templates",)
+    NuitkaCompiler.compile_with_stamp(
+        src,
+        dist,
+        runtime,
+        "3.11.9",
+        Platform.WINDOWS,
+        get_mirror("aliyun"),
+        cache_root,
+        stage=st,
+        data_dirs=data_dirs,
+    )
+
+    # 关键断言：compile_src 收到的 data_dirs 原样透传
+    assert captured["data_dirs"] == data_dirs
+
+
 def test_stamp_key_includes_nuitka_version_py_version_src_fingerprint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2712,10 +2760,11 @@ def test_stamp_key_includes_nuitka_version_py_version_src_fingerprint(
     key = NuitkaCompiler._stamp_key(src, "4.1.3", "3.11.9")
     assert "4.1.3" in key
     assert "3.11.9" in key
-    # 五段式：version|py_version|src_fp|entry_part|pkg_part（entry_rels=None 时 entry_part 为空）
-    assert key.count("|") == 4
-    # 末尾两段为空（entry_rels=None + nuitka_packages=()）
-    assert key.endswith("||")
+    # 六段式：version|py_version|src_fp|entry_part|pkg_part|data_part
+    # （entry_rels=None 时 entry_part 为空）
+    assert key.count("|") == 5
+    # 末尾三段为空（entry_rels=None + nuitka_packages=() + data_dirs=()）
+    assert key.endswith("|||")
 
 
 def test_stamp_key_includes_entry_rels(tmp_path: Path) -> None:
@@ -2748,6 +2797,71 @@ def test_stamp_key_entry_rels_order_independent(tmp_path: Path) -> None:
     key1 = NuitkaCompiler._stamp_key(src, "4.1.3", "3.11.9", frozenset({"snake.py", "util.py"}))
     key2 = NuitkaCompiler._stamp_key(src, "4.1.3", "3.11.9", frozenset({"util.py", "snake.py"}))
     assert key1 == key2
+
+
+def test_stamp_key_includes_data_dirs(tmp_path: Path) -> None:
+    """data_dirs 纳入 stamp key：配置变化时编译范围变化，须强制重编.
+
+    data-dirs 增删会改变哪些 .py 被跳过编译；stamp 仍命中会导致新纳入编译的
+    文件永不编译（其 .py 已被上次构建剥离的场景）。
+    """
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("print('hi')")
+    (src / "assets").mkdir()
+    (src / "assets" / "tpl.py").write_text("x = 1")
+
+    key_none = NuitkaCompiler._stamp_key(src, "4.1.3", "3.11.9")
+    key_a = NuitkaCompiler._stamp_key(src, "4.1.3", "3.11.9", None, (), (src / "assets",))
+    key_b = NuitkaCompiler._stamp_key(src, "4.1.3", "3.11.9", None, (), (src / "other",))
+
+    # data_dirs 不同则 stamp key 不同（含指纹段差异与 data_part 差异）
+    assert key_none != key_a
+    assert key_a != key_b
+    # data_dir 相对路径出现在 key 中（排序后拼接）
+    assert "assets" in key_a
+
+
+def test_stamp_key_data_dirs_order_independent(tmp_path: Path) -> None:
+    """data_dirs 顺序无关：排序后拼接，集合相同则 key 相同."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("x = 1")
+    (src / "a").mkdir()
+    (src / "b").mkdir()
+
+    key1 = NuitkaCompiler._stamp_key(src, "4.1.3", "3.11.9", None, (), (src / "a", src / "b"))
+    key2 = NuitkaCompiler._stamp_key(src, "4.1.3", "3.11.9", None, (), (src / "b", src / "a"))
+    assert key1 == key2
+
+
+def test_stamp_key_data_dirs_content_changes_do_not_invalidate(tmp_path: Path) -> None:
+    """data_dirs 内 .py 内容变化不改变 stamp key（不参与编译，无需重编）.
+
+    fspack 自构建 dev 循环：assets/templates/ 模板示例项目 .py 频繁编辑，
+    若纳入指纹会导致 Nuitka 全量重编。data-dirs 树从指纹排除后仅非数据
+    源码变化触发失效。指纹有构建级缓存，写文件后须手动失效再取 key。
+    """
+    from fspack.analyzer.fingerprint import clear_fingerprint_cache
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("x = 1")
+    tpl = src / "assets" / "templates"
+    tpl.mkdir(parents=True)
+    (tpl / "demo.py").write_text("v = 1")
+
+    key_before = NuitkaCompiler._stamp_key(src, "4.1.3", "3.11.9", None, (), (tpl,))
+    (tpl / "demo.py").write_text("v = 222")
+    clear_fingerprint_cache()
+    key_after = NuitkaCompiler._stamp_key(src, "4.1.3", "3.11.9", None, (), (tpl,))
+    assert key_before == key_after
+
+    # 非数据源码变化仍须失效
+    (src / "app.py").write_text("x = 222")
+    clear_fingerprint_cache()
+    key_src_changed = NuitkaCompiler._stamp_key(src, "4.1.3", "3.11.9", None, (), (tpl,))
+    assert key_src_changed != key_after
 
 
 def test_stamp_path_under_dist(tmp_path: Path) -> None:
@@ -4981,6 +5095,41 @@ def test_collect_py_files_skip_files_none_preserves_all(tmp_path: Path) -> None:
     (src / "b.py").write_text("")
 
     collected = NuitkaCompiler._collect_py_files(src, entry_rels=None, skip_files=None)
+    assert len(collected) == 2
+
+
+def test_collect_py_files_skips_data_dirs(tmp_path: Path) -> None:
+    """_collect_py_files 跳过 data_dirs 目录树内的 .py（数据资源不编译）.
+
+    fspack 自构建场景：assets/templates/ 含完整示例项目模板，逐一 Nuitka
+    编译既拖慢构建也无运行收益（模板 .py 是数据资源，原样保留供下游使用）。
+    """
+    from fspack.packaging.nuitka import NuitkaCompiler
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("x = 1")
+    demo = src / "assets" / "templates" / "demo"
+    demo.mkdir(parents=True)
+    (demo / "main.py").write_text("x = 2")
+    (demo / "sub").mkdir()
+    (demo / "sub" / "mod.py").write_text("x = 3")
+
+    collected = NuitkaCompiler._collect_py_files(src, entry_rels=None, data_dirs=(src / "assets" / "templates",))
+    assert [p.relative_to(src).as_posix() for p in collected] == ["app.py"]
+
+
+def test_collect_py_files_data_dirs_empty_compiles_all(tmp_path: Path) -> None:
+    """data_dirs=() 时不排除任何文件（默认行为，向后兼容）."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("")
+    (src / "tpl").mkdir()
+    (src / "tpl" / "demo.py").write_text("")
+
+    collected = NuitkaCompiler._collect_py_files(src, entry_rels=None, data_dirs=())
     assert len(collected) == 2
 
 

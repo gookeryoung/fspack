@@ -120,16 +120,22 @@ def test_parse_import_lines_nested_not_root() -> None:
 
 # 子进程脚本：输出 loader/timing 标记行与普通 stderr 行，退出码 0。
 # \\n 在测试源码字符串中是字面反斜杠 n，传给子进程后是源码级换行转义。
+# 标记行经 sys.stderr.buffer 显式写 UTF-8 字节：真实 C loader 管道输出即
+# UTF-8（WideCharToMultiByte CP_UTF8），若用 sys.stderr.write 会按子进程
+# 本地编码（中文 Windows 为 GBK）写出，父进程 UTF-8 解码后中文成替换符，
+# 含"耗时"字样的 loader 正则失配、标记行不被收集。
 _CHILD_CODE = (
     "import sys\n"
-    "sys.stderr.write('[fspack loader] read_entry 耗时 1.5ms\\n')\n"
-    "sys.stderr.write('[fspack loader] 加载 python313.dll 耗时 16.4ms\\n')\n"
-    "sys.stderr.write('[fspack loader] loader 总耗时 18.9ms（进入 Python）\\n')\n"
-    "sys.stderr.write('[fspack timing] env_ready @2.0ms\\n')\n"
-    "sys.stderr.write('[fspack timing] entry_start @3.0ms\\n')\n"
-    "sys.stderr.write('[fspack timing] entry_done @5.5ms\\n')\n"
-    "sys.stderr.write('user-stderr-line\\n')\n"
-    "sys.stderr.flush()\n"
+    "def _w(s):\n"
+    "    sys.stderr.buffer.write(s.encode('utf-8'))\n"
+    "_w('[fspack loader] read_entry 耗时 1.5ms\\n')\n"
+    "_w('[fspack loader] 加载 python313.dll 耗时 16.4ms\\n')\n"
+    "_w('[fspack loader] loader 总耗时 18.9ms（进入 Python）\\n')\n"
+    "_w('[fspack timing] env_ready @2.0ms\\n')\n"
+    "_w('[fspack timing] entry_start @3.0ms\\n')\n"
+    "_w('[fspack timing] entry_done @5.5ms\\n')\n"
+    "_w('user-stderr-line\\n')\n"
+    "sys.stderr.buffer.flush()\n"
     "print('user-stdout-line')\n"
 )
 
@@ -773,9 +779,10 @@ def test_print_summary_gap_parent_side_breakdown_with_blind(capsys: pytest.Captu
 
 def test_run_with_profile_collects_timing_gap_lines(capsys: pytest.CaptureFixture[str]) -> None:
     """timing-gap 行（py_init 实测）被收集不透传，汇总展示并从 gap 扣除."""
+    # loader 行含中文，须与真实 loader 一致按 UTF-8 字节写出（见 _CHILD_CODE 注释）
     code = (
         "import sys\n"
-        "sys.stderr.write('[fspack loader] loader 总耗时 3.2ms（进入 Python）\\n')\n"
+        "sys.stderr.buffer.write('[fspack loader] loader 总耗时 3.2ms（进入 Python）\\n'.encode('utf-8'))\n"
         "sys.stderr.write('[fspack timing-gap] py_init 8.5ms\\n')\n"
         "sys.stderr.write('[fspack timing] env_ready @0.1ms\\n')\n"
         "sys.stderr.write('[fspack timing] entry_start @0.2ms\\n')\n"

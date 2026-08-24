@@ -2581,8 +2581,13 @@ def test_build_with_nuitka_invokes_compiler(tmp_path: Path, monkeypatch: pytest.
     """nuitka=True 时 build() 调用 NuitkaCompiler.compile_with_stamp 编译用户源码."""
     proj = tmp_path / "app"
     proj.mkdir()
-    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (proj / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\ndata-dirs = ["assets"]\n'
+    )
     (proj / "app.py").write_text("def main():\n    pass\n")
+    # data-dirs 数据资源目录：含示例 .py，Nuitka 编译应跳过
+    (proj / "assets" / "templates").mkdir(parents=True)
+    (proj / "assets" / "templates" / "demo.py").write_text("x = 1")
 
     _setup_embed_mocks(tmp_path, monkeypatch, "3.11.9")
     runtime = proj / "dist" / "runtime"
@@ -2608,6 +2613,7 @@ def test_build_with_nuitka_invokes_compiler(tmp_path: Path, monkeypatch: pytest.
         entry_rels: frozenset[str] | None = None,
         ccache: bool = False,
         nuitka_packages: tuple[str, ...] = (),
+        data_dirs: tuple[Path, ...] = (),
     ) -> None:
         nuitka_called["src_dir"] = src_dir
         nuitka_called["dist_dir"] = dist_dir
@@ -2617,6 +2623,7 @@ def test_build_with_nuitka_invokes_compiler(tmp_path: Path, monkeypatch: pytest.
         nuitka_called["entry_rels"] = entry_rels
         nuitka_called["ccache"] = ccache
         nuitka_called["nuitka_packages"] = nuitka_packages
+        nuitka_called["data_dirs"] = data_dirs
         stage.processed()
         stage.set_detail("mock 编译")
 
@@ -2637,6 +2644,8 @@ def test_build_with_nuitka_invokes_compiler(tmp_path: Path, monkeypatch: pytest.
     assert Path(str(nuitka_called["cache_root"])).name == "nuitka"
     # entry_rels 包含入口文件 app.py（入口文件跳过编译，保留 .py 供 runpy.run_path 调用）
     assert nuitka_called["entry_rels"] == {"app.py"}
+    # data_dirs 解析为 dist/src 下的绝对路径（assets 数据资源目录不编译）
+    assert nuitka_called["data_dirs"] == (proj / "dist" / "src" / "assets",)
 
 
 def test_build_nuitka_skipped_on_cross_compile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

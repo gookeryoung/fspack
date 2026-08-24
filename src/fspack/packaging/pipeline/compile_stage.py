@@ -82,15 +82,25 @@ def _compile_user_sources(ctx: BuildContext, src_dst: Path) -> None:
 
     ``[tool.fspack] data-dirs`` 配置的数据资源目录树（``ctx.info.data_dirs``）
     与 ``web-static-dirs`` 配置的前端构建产物目录（``ctx.info.web_static_dirs``）
-    传递给 ``_precompile_pyc``，其下 ``.py`` 不被剥离：这些目录视为完整资源原样
-    保留（如 fspack 的 ``assets/templates/`` 含项目模板源码，下游 ``fsp doctor
-    --test`` 复制后需 ``.py`` 存在才能构建；前端 ``dist/`` 内含 JS 工具脚本）。
+    解析为 dist/src 下绝对路径后传给 Nuitka 编译与 ``_precompile_pyc``，
+    其下 ``.py`` 既不被 Nuitka 编译也不被剥离：这些目录视为完整资源原样保留
+    （如 fspack 的 ``assets/templates/`` 含项目模板源码，逐一 Nuitka 编译既拖慢
+    构建也无运行收益，且下游 ``fsp doctor --test`` 复制后需 ``.py`` 存在才能构建；
+    前端 ``dist/`` 内含 JS 工具脚本）。
     """
     target = ctx.cfg.target
     detect_platform_dispatch = _S("detect_platform", _default_detect_platform)
     build_host_platform = detect_platform_dispatch()
     # 入口文件相对 src 的 POSIX 路径集合：Nuitka 编译与 pyc_strip 剥离均跳过这些文件
     entry_rels = frozenset(ep.entry_rel(ctx.info.src_dir) for ep in ctx.info.all_entries)
+    # data_dirs/web_static_dirs 配置为相对项目目录的 POSIX 路径，解析为 dist/src
+    # 下的绝对路径：project_dir/<rel> → dist/src/<rel>（src_dst 即 dist/src，镜像
+    # 项目根）。仅解析存在的目录，避免传不存在的路径（无副作用但增加判断开销）。
+    # Nuitka 编译收集与 pyc 剥离共用，两类资源目录树同等保护。
+    resolved_data_dirs = tuple(src_dst / Path(rel) for rel in ctx.info.data_dirs if (src_dst / Path(rel)).is_dir())
+    resolved_web_static_dirs = tuple(
+        src_dst / Path(rel) for rel in ctx.info.web_static_dirs if (src_dst / Path(rel)).is_dir()
+    )
     if ctx.opts.nuitka and target is build_host_platform:
         with ctx.tracker.stage("Nuitka 编译") as st:
             from fspack.packaging.nuitka import NuitkaCompiler
@@ -108,6 +118,7 @@ def _compile_user_sources(ctx: BuildContext, src_dst: Path) -> None:
                 entry_rels=entry_rels,
                 ccache=ctx.opts.ccache,
                 nuitka_packages=ctx.opts.nuitka_packages,
+                data_dirs=(*resolved_data_dirs, *resolved_web_static_dirs),
             )
 
     # 预编译字节码：用 runtime 自身 python 编译 src + site-packages 为 .pyc，加速首次启动。
@@ -115,19 +126,9 @@ def _compile_user_sources(ctx: BuildContext, src_dst: Path) -> None:
     # 交叉构建时（构建机平台 ≠ 目标平台）runtime python 无法执行，跳过预编译。
     # Nuitka 模式下 src 已编译为 .pyd，compileall 会跳过（找不到 .py 不生成 .pyc），
     # site-packages 仍按 pyc_optimize 编译，故本步保留不跳过。
-    # data_dirs/web_static_dirs 解析为 dist/src 下的绝对路径，传递给 _precompile_pyc
-    # 跳过其下 .py 剥离。
+    # data_dirs/web_static_dirs 已在上方解析（与 Nuitka 编译共用），其下 .py 不剥离。
     if not ctx.opts.no_pyc and target is build_host_platform:
         with ctx.tracker.stage("预编译字节码") as st:
-            # data_dirs/web_static_dirs 配置为相对项目目录的 POSIX 路径，解析为 dist/src
-            # 下的绝对路径：project_dir/<rel> → dist/src/<rel>（src_dst 即 dist/src）。
-            # 仅解析存在的目录，避免传不存在的路径（无副作用但增加判断开销）。
-            resolved_data_dirs = tuple(
-                src_dst / Path(rel) for rel in ctx.info.data_dirs if (src_dst / Path(rel)).is_dir()
-            )
-            resolved_web_static_dirs = tuple(
-                src_dst / Path(rel) for rel in ctx.info.web_static_dirs if (src_dst / Path(rel)).is_dir()
-            )
             _precompile_pyc(
                 ctx.cfg.dist_dir,
                 ctx.runtime_dir,

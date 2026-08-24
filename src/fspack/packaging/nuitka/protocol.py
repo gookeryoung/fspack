@@ -174,6 +174,7 @@ class NuitkaCompilerProtocol(Protocol):  # pragma: no cover - 纯类型契约，
         ccache: bool = False,
         cache_root: Path | None = None,
         skip_files: frozenset[str] | None = None,
+        data_dirs: tuple[Path, ...] = (),
     ) -> list[str]:
         """编译 src_dir 下所有 .py 为 .pyd/.so，返回失败文件相对 POSIX 路径列表."""
         ...
@@ -213,8 +214,9 @@ class NuitkaCompilerProtocol(Protocol):  # pragma: no cover - 纯类型契约，
         src_dir: Path,
         entry_rels: frozenset[str] | None,
         skip_files: frozenset[str] | None = None,
+        data_dirs: tuple[Path, ...] = (),
     ) -> list[Path]:
-        """收集待编译的 .py 文件，排除上次失败文件."""
+        """收集待编译的 .py 文件，排除上次失败文件与数据资源目录树."""
         ...
 
     @staticmethod
@@ -242,12 +244,13 @@ class NuitkaCompilerProtocol(Protocol):  # pragma: no cover - 纯类型契约，
         ...
 
     @staticmethod
-    def _stamp_key(
+    def _stamp_key(  # noqa: PLR0913
         src_dir: Path,
         nuitka_version: str,
         py_version: str,
         entry_rels: frozenset[str] | None = None,
         nuitka_packages: tuple[str, ...] = (),
+        data_dirs: tuple[Path, ...] = (),
     ) -> str:
         """计算 Nuitka 编译 stamp 键."""
         ...
@@ -267,6 +270,7 @@ class NuitkaCompilerProtocol(Protocol):  # pragma: no cover - 纯类型契约，
         entry_rels: frozenset[str] | None = None,
         ccache: bool = False,
         nuitka_packages: tuple[str, ...] = (),
+        data_dirs: tuple[Path, ...] = (),
     ) -> None:
         """整合 ensure_env + standalone python + stamp 缓存 + compile_src 的入口."""
         ...
