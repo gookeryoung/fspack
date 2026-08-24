@@ -36,8 +36,10 @@ jobs:
       - name: Pyrefly check
         run: uv run pyrefly check
 
-  # ===== 单元测试矩阵：ubuntu + windows × Python 3.8/3.14 =====
+  # ===== 单元测试矩阵：ubuntu + windows + macos × Python 3.8/3.14 =====
   # Windows 矩阵覆盖 Windows 路径处理、PATH 分隔符、注册表访问等平台特有逻辑
+  # macOS 矩阵验证 MacLoader/clang 检测、detect_platform 的 Darwin 分支与
+  # doctor 的 MACOS 工具检查链路（req-04 macOS 运行时支持）
   test:
     name: Test (${{ matrix.os }}, Python ${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
@@ -45,7 +47,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ["3.8", "3.14"]
     steps:
       - uses: actions/checkout@v5
