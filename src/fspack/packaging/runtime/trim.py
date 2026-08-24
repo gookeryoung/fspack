@@ -14,13 +14,16 @@ subprocess.run，因此本模块通过 :func:`_P` 延迟从 pyc facade 解析 ``
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import shutil
 import subprocess as _default_subprocess
+import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fspack.config.versions import _split_t_suffix
+from fspack.packaging.runtime.urls import embed_dirname
 from fspack.packaging.sync import _dir_size
 from fspack.platform import Platform
 
@@ -35,9 +38,9 @@ _logger = logging.getLogger(__name__)
 _WIN7_COMPAT_DLL_NAME = "api-ms-win-core-path-l1-1-0.dll"
 
 # Linux standalone 标准库精简：剥离运行时无用的模块目录。
-# Windows embed 标准库在 python3XX.zip 内（只读、官方已精简），无需处理。
 # 顶层目录：test/ensurepip/idlelib/pydoc_data/turtledemo 是开发/测试/文档工具，运行时不用
 # 嵌套 test/tests：各 stdlib 子模块下的测试目录（Python 3.12+ 移除 distutils/lib2to3 时跳过）
+# Windows embed 标准库在 python3XX.zip 内，走 zip 重写（见 _EMBED_TRIM_*）
 _STDLIB_TRIM_DIRS = (
     "test",
     "ensurepip",
@@ -50,6 +53,55 @@ _STDLIB_TRIM_DIRS = (
     "unittest/test",
     "distutils/tests",
     "lib2to3/tests",
+)
+
+# Windows embed 标准库 zip（python3XX.zip）重写剥离清单——保守档（默认）：
+# 仅删确定安全项（纯文档/演示数据），任何正常运行代码都不导入这些模块，
+# 剥离后产物行为零变化，收益约 0.2MB/发行版
+_EMBED_TRIM_CONSERVATIVE = frozenset(
+    {
+        "pydoc_data",  # pydoc 主题/关键字数据（纯文档数据）
+        "idlelib",  # IDLE 编辑器（官方 embed 通常已删，防御性）
+        "turtledemo",  # 海龟绘图演示（同上）
+        "__phello__",  # 嵌入示例包
+        "__hello__",  # 嵌入示例包
+        "site-packages",  # embed zip 内残留目录（防御性）
+    }
+)
+
+# 激进档（``slim-stdlib = "aggressive"`` 显式开启）：保守档 + 大块可选模块。
+# 剥离后 import 对应模块直接 ImportError——面向确定不使用这些模块的项目：
+# xml/email/http/html（网络标记与邮件）、unittest（测试）、asyncio/
+# multiprocessing（并发模型）、wsgiref/xmlrpc/dbm/zoneinfo（服务与数据源）、
+# lib2to3/distutils/msilib（3.12+/3.13+ 已移除，老版本残留）与开发工具单文件
+# （pydoc/pdb/doctest/tarfile 等，embed zip 内为 ``*.pyc`` 形态，按 stem 匹配）。
+# logging/concurrent 不在清单：前者几乎所有应用都用，后者 futures 与线程池
+# 是通用基础设施
+_EMBED_TRIM_AGGRESSIVE = _EMBED_TRIM_CONSERVATIVE | frozenset(
+    {
+        "xml",
+        "xmlrpc",
+        "email",
+        "http",
+        "html",
+        "unittest",
+        "wsgiref",
+        "dbm",
+        "zoneinfo",
+        "asyncio",
+        "multiprocessing",
+        "lib2to3",
+        "distutils",
+        "msilib",
+        "pydoc",
+        "pdb",
+        "doctest",
+        "this",
+        "antigravity",
+        "pickletools",
+        "tarfile",
+        "mailbox",
+    }
 )
 
 # Linux/macOS standalone 运行时精简：剥离构建期需要但运行时无用的文件
@@ -149,21 +201,28 @@ def _inject_win7_compat_dll(runtime_dir: Path) -> None:
     _logger.info("注入 Win7 兼容 DLL: %s", dest)
 
 
-def _trim_stdlib(runtime_dir: Path, py_version: str, target: Platform, stage: StageRecorder) -> None:
-    """剥离 standalone 标准库中运行时无用的模块目录.
+def _trim_stdlib(
+    runtime_dir: Path,
+    py_version: str,
+    target: Platform,
+    stage: StageRecorder,
+    *,
+    aggressive: bool = False,
+) -> None:
+    """剥离标准库中运行时无用的模块（三平台分支，幂等）.
 
-    Windows embed 标准库在 python3XX.zip 内（只读、官方已精简），跳过。
-    Linux 与 macOS 用 python-build-standalone，标准库在
-    ``runtime/python/lib/pythonX.Y[t]/`` 下，需剥离 test/ensurepip/idlelib 等。
-    Windows 自由线程版（``py_version`` 末尾 ``t``）走 standalone 路径，扁平化后
-    标准库位于 ``runtime/Lib/``（首字母大写、无版本后缀，与 Linux 不同），按相同规则精简。
-    重复构建时已剥离的目录不存在则跳过，幂等。
+    - **Windows 标准版**（embed zip）：标准库在 ``python3XX.zip`` 内，走
+      :func:`_rewrite_embed_stdlib_zip` 重写剥离（保守/激进两档）
+    - **Windows 自由线程版**（``t`` 后缀）：standalone 路径，扁平化后标准库
+      位于 ``runtime/Lib/``，按目录剥离
+    - **Linux/macOS**：python-build-standalone，标准库在
+      ``runtime/python/lib/pythonX.Y[t]/`` 下，按目录剥离 test/ensurepip 等
+
+    :param aggressive: Windows embed zip 重写采用激进档剥离清单
     """
     is_t = py_version.endswith("t")
-    # Windows 标准版 embed zip 标准库在 python3XX.zip 内（只读、官方已精简），跳过；
-    # Windows 自由线程版走 standalone 路径，Lib/ 在 runtime_dir 根，需精简
     if target is Platform.WINDOWS and not is_t:
-        stage.set_detail("embed zip 已精简，跳过")
+        _rewrite_embed_stdlib_zip(runtime_dir, py_version, stage, aggressive=aggressive)
         return
     if target is Platform.WINDOWS and is_t:
         # python-build-standalone Windows freethreaded tarball 解压扁平化后
@@ -191,6 +250,87 @@ def _trim_stdlib(runtime_dir: Path, py_version: str, target: Platform, stage: St
     stage.skip(removed)
     stage.add_saved_bytes(saved_bytes)
     stage.set_detail(f"剥离 {removed} 目录")
+
+
+def _embed_entry_blacklisted(name: str, blacklist: frozenset[str]) -> bool:
+    """判定 embed zip 条目是否命中剥离清单（目录按前缀、单文件按 stem 匹配）.
+
+    embed zip 内条目为 ``.pyc`` 形态（3.11+ 官方全量冻结，``os.pyc``/
+    ``pydoc_data/topics.pyc``），单文件黑名单存 stem（``pdb`` 匹配
+    ``pdb.pyc``），目录黑名单按路径首段匹配（``xml/`` 命中 ``xml/`` 下
+    全部条目）。
+    """
+    top = name.split("/", 1)[0]
+    if top in blacklist:
+        return True
+    stem = top.rsplit(".", 1)[0] if "." in top else top
+    return stem in blacklist
+
+
+def _rewrite_embed_stdlib_zip(
+    runtime_dir: Path,
+    py_version: str,
+    stage: StageRecorder,
+    *,
+    aggressive: bool = False,
+) -> None:
+    """重写 Windows embed ``python3XX.zip``：按剥离清单过滤条目后原子替换.
+
+    embed zip 内标准库并非只读——读旧 zip → 过滤黑名单条目 → 写临时 zip →
+    同目录 ``replace`` 原子替换。官方 embed 仅剥离 test/ensurepip/idlelib，
+    ``pydoc_data``（~172KB）等文档数据与大块可选模块仍留在 zip 内。
+
+    档位（:data:`_EMBED_TRIM_CONSERVATIVE` / :data:`_EMBED_TRIM_AGGRESSIVE`）：
+
+    - 保守档（默认）：仅删纯文档/演示数据，任何正常运行代码不受影响
+    - 激进档（``aggressive=True``）：再删 xml/email/http/unittest/asyncio 等
+      大块模块，剥离后 ``import`` 即 ``ImportError``，面向确定不用的项目
+
+    幂等：重写后黑名单条目已不在 zip 内，二次调用剥离数为 0 直接跳过。
+    zip 畸形/读写失败时警告并保留原 zip，不中断构建。
+    """
+    pyxy = embed_dirname(py_version)
+    zip_path = runtime_dir / f"{pyxy}.zip"
+    if not zip_path.is_file():
+        stage.set_detail("embed stdlib zip 不存在，跳过")
+        return
+    blacklist = _EMBED_TRIM_AGGRESSIVE if aggressive else _EMBED_TRIM_CONSERVATIVE
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            infos = zf.infolist()
+            keep = [
+                (info, zf.read(info.filename))
+                for info in infos
+                if not _embed_entry_blacklisted(info.filename, blacklist)
+            ]
+    except (zipfile.BadZipFile, OSError) as e:
+        _logger.warning("读取 embed stdlib zip 失败，跳过精简: %s", e)
+        stage.set_detail("zip 读取失败，跳过")
+        return
+    removed = len(infos) - len(keep)
+    if removed == 0:
+        stage.set_detail("已精简，跳过")
+        return
+    size_before = zip_path.stat().st_size
+    # 临时文件 + 同目录替换保证原子性：写一半崩溃时原 zip 完整
+    zip_tmp = zip_path.with_name(f"{zip_path.name}.tmp")
+    try:
+        with zipfile.ZipFile(zip_tmp, "w", zipfile.ZIP_DEFLATED) as zf:
+            for info, data in keep:
+                zf.writestr(info, data)
+        zip_tmp.replace(zip_path)
+    except OSError as e:
+        _logger.warning("重写 embed stdlib zip 失败，保留原 zip: %s", e)
+        with contextlib.suppress(OSError):
+            zip_tmp.unlink(missing_ok=True)
+        stage.set_detail("zip 写入失败，跳过")
+        return
+    saved = max(0, size_before - zip_path.stat().st_size)
+    stage.skip(removed)
+    stage.add_saved_bytes(saved)
+    level = "激进" if aggressive else "保守"
+    stage.set_detail(f"{level}档剥离 {removed} 条目")
+    _logger.info("精简标准库: 重写 %s（%s档剥离 %d 条目，净省 %d 字节）", zip_path.name, level, removed, saved)
 
 
 def _trim_standalone_runtime(  # noqa: PLR0912, PLR0913

@@ -212,6 +212,9 @@ class BuildDefaults:
     no_slim_runtime: bool | None = None
     # 关闭 Linux/macOS 标准库 zip 化（默认打包为 lib/pythonXY[t].zip 启动提速）
     no_stdlib_zip: bool | None = None
+    # Windows embed stdlib zip 重写档位：default（保守，仅删文档/演示数据）/
+    # aggressive（再删 xml/email/http/asyncio 等大块可选模块，import 即失败）
+    slim_stdlib: str | None = None
     # 启用 Windows splash 启动画面（默认关闭；GUI 首窗口/WEB server 启动/30s 超时自动关闭）
     splash: bool | None = None
     ccache: bool | None = None
@@ -527,6 +530,10 @@ class BuildOptions:
       删 python3.X 二进制 + 删 include/share + 非 tkinter 项目剥离 Tcl/Tk，省 ~100MB）
     - ``no_stdlib_zip``：关闭 Linux/macOS 标准库 zip 化（默认打包为
       ``lib/pythonXY[t].zip`` 省去 stdlib 目录遍历，冷启动提速 30-80ms）
+    - ``slim_stdlib``：Windows embed stdlib zip 重写档位，``"default"`` 保守
+      （仅删 pydoc_data 等纯文档/演示数据，~0.2MB）、``"aggressive"`` 激进
+      （再删 xml/email/http/unittest/asyncio 等大块可选模块，~1.3MB，
+      剥离后 import 即 ImportError，仅面向确定不用的项目）
     - ``splash``：启用 Windows splash 启动画面（默认关闭；loader 启动期显示
       无边框画面，GUI 首窗口出现/WEB server 启动/30s 超时自动关闭）
     - ``no_pyc``：关闭字节码预编译
@@ -543,6 +550,9 @@ class BuildOptions:
     no_slim_runtime: bool = False
     # 关闭 Linux/macOS 标准库 zip 化（默认开启；zip 失败自动降级保留目录形态）
     no_stdlib_zip: bool = False
+    # Windows embed stdlib zip 重写档位：default（保守）/ aggressive（激进，
+    # 删 xml/email/http/asyncio 等大块模块，import 即 ImportError）
+    slim_stdlib: str = "default"
     # 启用 Windows splash 启动画面（默认关闭；仅 Windows 目标生效，其余平台忽略）
     splash: bool = False
     no_pyc: bool = False
@@ -605,6 +615,7 @@ def build_options_from_defaults(defaults: BuildDefaults) -> BuildOptions:
         no_stdlib_trim=defaults.no_stdlib_trim if defaults.no_stdlib_trim is not None else base.no_stdlib_trim,
         no_slim_runtime=defaults.no_slim_runtime if defaults.no_slim_runtime is not None else base.no_slim_runtime,
         no_stdlib_zip=defaults.no_stdlib_zip if defaults.no_stdlib_zip is not None else base.no_stdlib_zip,
+        slim_stdlib=defaults.slim_stdlib if defaults.slim_stdlib is not None else base.slim_stdlib,
         splash=defaults.splash if defaults.splash is not None else base.splash,
         no_pyc=defaults.no_pyc if defaults.no_pyc is not None else base.no_pyc,
         pyc_strip=defaults.pyc_strip if defaults.pyc_strip is not None else base.pyc_strip,

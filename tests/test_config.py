@@ -1775,6 +1775,37 @@ def test_parse_project_lazy_imports_config(tmp_path: Path) -> None:
     assert opts.lazy_imports == ("numpy", "pandas")
 
 
+def test_parse_project_slim_stdlib_config(tmp_path: Path) -> None:
+    """[tool.fspack] slim-stdlib 枚举解析并透传到 BuildOptions."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nslim-stdlib = "aggressive"\n'
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    info = parse_project(tmp_path)
+    assert info.build_defaults.slim_stdlib == "aggressive"
+    opts = build_options_from_defaults(info.build_defaults)
+    assert opts.slim_stdlib == "aggressive"
+
+
+def test_parse_project_slim_stdlib_default_none(tmp_path: Path) -> None:
+    """未配置 slim-stdlib 时默认 None，BuildOptions 回退 default（保守档）."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    info = parse_project(tmp_path)
+    assert info.build_defaults.slim_stdlib is None
+    assert build_options_from_defaults(info.build_defaults).slim_stdlib == "default"
+
+
+def test_parse_project_slim_stdlib_invalid_raises(tmp_path: Path) -> None:
+    """slim-stdlib 非法枚举值时报错."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\nslim-stdlib = "extreme"\n'
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    with pytest.raises(ProjectError, match="slim-stdlib 必须是 default 或 aggressive"):
+        parse_project(tmp_path)
+
+
 def test_parse_project_lazy_imports_default_empty(tmp_path: Path) -> None:
     """未配置 lazy_imports 时默认空元组."""
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')

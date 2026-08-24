@@ -292,6 +292,18 @@ def test_build_splash_and_stdlib_zip_default(tmp_path: Path, monkeypatch: pytest
     assert called["options"].no_stdlib_zip is False
 
 
+def test_build_slim_stdlib_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`--slim-stdlib aggressive` 解析并封装到 BuildOptions；未指定默认 default."""
+    _make_minimal_project(tmp_path)
+    called, fake_build = _capture_build()
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    cli.main(["b", str(tmp_path), "--slim-stdlib", "aggressive"])
+    assert called["options"].slim_stdlib == "aggressive"
+
+    cli.main(["b", str(tmp_path)])
+    assert called["options"].slim_stdlib == "default"
+
+
 def test_build_new_options_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`--pyc-optimize`/`--no-site`/`--nuitka` 解析并封装到 BuildOptions."""
     _make_minimal_project(tmp_path)

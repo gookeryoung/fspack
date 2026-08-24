@@ -1074,7 +1074,7 @@ def test_trim_stdlib_linux_records_saved_bytes(tmp_path: Path) -> None:
 
 
 def test_trim_stdlib_windows_standard_skips(tmp_path: Path) -> None:
-    """Windows 标准版 embed zip 标准库在 zip 内已精简，跳过不剥离."""
+    """Windows 标准版无 embed stdlib zip（缓存未就绪等场景）时跳过不剥离."""
     runtime = tmp_path / "runtime"
     stdlib = runtime / "python" / "lib" / "python3.11"
     (stdlib / "test").mkdir(parents=True)  # 构造验证跳过
@@ -1082,10 +1082,168 @@ def test_trim_stdlib_windows_standard_skips(tmp_path: Path) -> None:
     st = StageRecorder("精简标准库")
     _trim_stdlib(runtime, "3.11.9", Platform.WINDOWS, st)
 
-    # Windows 标准版（embed zip）不剥离
+    # 无 python311.zip 时跳过，散装目录不动
     assert (stdlib / "test").exists()
     record = st._finalize()
     assert record.bytes_saved == 0
+
+
+# ---- _rewrite_embed_stdlib_zip 测试 ----
+
+
+def _make_embed_zip(runtime: Path, entries: dict[str, bytes]) -> Path:
+    """构造伪 embed stdlib zip（python3XX.zip）供重写测试."""
+    runtime.mkdir(parents=True, exist_ok=True)
+    zip_path = runtime / "python311.zip"
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, data in entries.items():
+            zf.writestr(name, data)
+    return zip_path
+
+
+def test_rewrite_embed_stdlib_zip_conservative(tmp_path: Path) -> None:
+    """保守档重写：删 pydoc_data/__phello__ 等纯文档条目，保留 xml/json/logging.
+
+    embed zip 内条目为 .pyc 形态（官方全量冻结），测试条目同真实形态。
+    """
+    from fspack.packaging.runtime.trim import _rewrite_embed_stdlib_zip
+
+    runtime = tmp_path / "runtime"
+    zip_path = _make_embed_zip(
+        runtime,
+        {
+            "pydoc_data/topics.pyc": b"x" * 100,  # 纯文档数据，删
+            "pydoc_data/__init__.pyc": b"",
+            "__phello__/__init__.pyc": b"",  # 嵌入示例，删
+            "xml/__init__.pyc": b"y" * 100,  # 保守档保留
+            "json/__init__.pyc": b"z" * 100,  # 保留
+            "logging/__init__.pyc": b"w" * 100,  # 保留
+            "os.pyc": b"os",  # 保留
+        },
+    )
+    size_before = zip_path.stat().st_size
+
+    st = StageRecorder("精简标准库")
+    _rewrite_embed_stdlib_zip(runtime, "3.11.9", st)
+
+    with zipfile.ZipFile(zip_path) as zf:
+        names = zf.namelist()
+    assert not any(n.startswith("pydoc_data/") for n in names)
+    assert not any(n.startswith("__phello__") for n in names)
+    assert any(n.startswith("xml/") for n in names)
+    assert any(n.startswith("json/") for n in names)
+    record = st._finalize()
+    assert record.bytes_saved > 0
+    assert record.bytes_saved <= size_before  # 净节省不超过原大小
+    assert record.skipped == 3  # pydoc_data 2 条 + __phello__ 1 条
+
+
+def test_rewrite_embed_stdlib_zip_aggressive(tmp_path: Path) -> None:
+    """激进档重写：再删 xml/unittest/asyncio 与开发工具单文件（.pyc 按 stem 匹配）."""
+    from fspack.packaging.runtime.trim import _rewrite_embed_stdlib_zip
+
+    runtime = tmp_path / "runtime"
+    zip_path = _make_embed_zip(
+        runtime,
+        {
+            "pydoc_data/topics.pyc": b"x" * 100,
+            "xml/__init__.pyc": b"y" * 100,  # 激进档删
+            "unittest/__init__.pyc": b"u" * 100,  # 激进档删
+            "asyncio/__init__.pyc": b"a" * 100,  # 激进档删
+            "pdb.pyc": b"p" * 100,  # 激进档删（开发工具单文件，stem 匹配）
+            "json/__init__.pyc": b"z" * 100,  # 保留
+            "logging/__init__.pyc": b"w" * 100,  # 保留（常用）
+            "concurrent/futures/__init__.pyc": b"c" * 100,  # 保留（通用基础设施）
+        },
+    )
+
+    st = StageRecorder("精简标准库")
+    _rewrite_embed_stdlib_zip(runtime, "3.11.9", st, aggressive=True)
+
+    with zipfile.ZipFile(zip_path) as zf:
+        names = zf.namelist()
+    assert not any(n.startswith(("pydoc_data/", "xml/", "unittest/", "asyncio/")) for n in names)
+    assert "pdb.pyc" not in names
+    assert any(n.startswith("json/") for n in names)
+    assert any(n.startswith("logging/") for n in names)
+    assert any(n.startswith("concurrent/") for n in names)
+    record = st._finalize()
+    # 激进档节省多于仅保守档（xml/unittest/asyncio/pdb 共 400+ 字节原始数据）
+    assert record.bytes_saved > 400
+    assert record.skipped == 5
+
+
+def test_rewrite_embed_stdlib_zip_idempotent(tmp_path: Path) -> None:
+    """幂等：重写后黑名单条目不在 zip 内，二次调用剥离数为 0 跳过."""
+    from fspack.packaging.runtime.trim import _rewrite_embed_stdlib_zip
+
+    runtime = tmp_path / "runtime"
+    zip_path = _make_embed_zip(runtime, {"pydoc_data/topics.pyc": b"x" * 100, "os.pyc": b"os"})
+
+    st1 = StageRecorder("精简标准库")
+    _rewrite_embed_stdlib_zip(runtime, "3.11.9", st1)
+    saved1 = st1._finalize().bytes_saved
+    assert saved1 > 0
+
+    st2 = StageRecorder("精简标准库")
+    _rewrite_embed_stdlib_zip(runtime, "3.11.9", st2)
+    record2 = st2._finalize()
+    assert record2.bytes_saved == 0
+    assert record2.skipped == 0
+    # zip 完整保留非黑名单条目
+    with zipfile.ZipFile(zip_path) as zf:
+        assert "os.pyc" in zf.namelist()
+
+
+def test_rewrite_embed_stdlib_zip_bad_zip_warns(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """畸形 zip 警告跳过不抛异常，原文件保留."""
+    from fspack.packaging.runtime.trim import _rewrite_embed_stdlib_zip
+
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(parents=True)
+    zip_path = runtime / "python311.zip"
+    zip_path.write_bytes(b"{not a zip")
+
+    st = StageRecorder("精简标准库")
+    with caplog.at_level("WARNING"):
+        _rewrite_embed_stdlib_zip(runtime, "3.11.9", st)
+
+    assert "读取 embed stdlib zip 失败" in caplog.text
+    assert zip_path.stat().st_size == len(b"{not a zip")  # 原文件未动
+    assert st._finalize().bytes_saved == 0
+
+
+def test_trim_stdlib_windows_standard_rewrites_zip(tmp_path: Path) -> None:
+    """_trim_stdlib Windows 标准版分支走 embed zip 重写（集成）."""
+    runtime = tmp_path / "runtime"
+    _make_embed_zip(
+        runtime,
+        {"pydoc_data/topics.pyc": b"x" * 100, "xml/__init__.pyc": b"y" * 100, "os.pyc": b"os"},
+    )
+
+    st = StageRecorder("精简标准库")
+    _trim_stdlib(runtime, "3.11.9", Platform.WINDOWS, st)
+
+    with zipfile.ZipFile(runtime / "python311.zip") as zf:
+        names = zf.namelist()
+    assert not any(n.startswith("pydoc_data/") for n in names)
+    assert any(n.startswith("xml/") for n in names)  # 保守档保留
+    assert "os.pyc" in names
+    assert st._finalize().bytes_saved > 0
+
+
+def test_trim_stdlib_windows_standard_aggressive_via_flag(tmp_path: Path) -> None:
+    """_trim_stdlib aggressive=True 透传激进档剥离清单."""
+    runtime = tmp_path / "runtime"
+    _make_embed_zip(runtime, {"xml/__init__.pyc": b"y" * 100, "json/__init__.pyc": b"z" * 100})
+
+    st = StageRecorder("精简标准库")
+    _trim_stdlib(runtime, "3.11.9", Platform.WINDOWS, st, aggressive=True)
+
+    with zipfile.ZipFile(runtime / "python311.zip") as zf:
+        names = zf.namelist()
+    assert not any(n.startswith("xml/") for n in names)  # 激进档删除
+    assert any(n.startswith("json/") for n in names)
 
 
 def test_trim_stdlib_windows_t_strips_lib_at_root(tmp_path: Path) -> None:

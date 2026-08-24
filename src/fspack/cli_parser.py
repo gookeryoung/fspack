@@ -135,6 +135,16 @@ _BUILD_OPTS: tuple[_Opt, ...] = (
         action="store_true",
     ),
     _Opt(
+        ("--slim-stdlib",),
+        "Windows embed 标准库 zip 重写档位：default=保守（仅删 pydoc_data 等纯文档数据，"
+        "零风险）；aggressive=激进（再删 xml/email/http/unittest/asyncio 等大块可选模块，"
+        "省 ~1.3MB，剥离后 import 即 ImportError，仅面向确定不用的项目）。"
+        "覆盖 [tool.fspack] slim-stdlib 配置",
+        choices=("default", "aggressive"),
+        default=None,
+        metavar="LEVEL",
+    ),
+    _Opt(
         ("--splash",),
         "启用 Windows splash 启动画面（默认关闭）：loader 启动期显示应用名无边框画面，"
         "GUI 首窗口出现/WEB server 启动/30s 超时自动关闭。仅 Windows 目标生效",

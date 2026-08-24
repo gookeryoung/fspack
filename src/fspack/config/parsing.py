@@ -396,6 +396,12 @@ def _parse_build_defaults(fspack_cfg: dict[str, Any]) -> BuildDefaults:  # noqa:
         if not isinstance(raw_pkgs, list) or not all(isinstance(x, str) for x in raw_pkgs):
             raise ProjectError(f"[tool.fspack] nuitka_packages 必须是字符串列表，得到 {raw_pkgs!r}")
         kwargs["nuitka_packages"] = tuple(raw_pkgs)
+    # slim-stdlib 为枚举字符串：Windows embed stdlib zip 重写档位
+    raw_slim = fspack_cfg.get("slim-stdlib")
+    if raw_slim is not None:
+        if not isinstance(raw_slim, str) or raw_slim.strip() not in ("default", "aggressive"):
+            raise ProjectError(f"[tool.fspack] slim-stdlib 必须是 default 或 aggressive，得到 {raw_slim!r}")
+        kwargs["slim_stdlib"] = raw_slim.strip()
     # extras 为字符串列表：默认启用的 optional-dependencies 分组名
     kwargs["extras"] = _parse_string_list_cfg(fspack_cfg.get("extras"), "extras", reject_empty=True)
     # lazy_imports 为字符串列表：延迟导入的顶层模块名

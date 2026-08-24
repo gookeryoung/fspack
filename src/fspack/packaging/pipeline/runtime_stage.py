@@ -126,12 +126,15 @@ def _prepare_runtime(ctx: BuildContext) -> Path:
         if target is Platform.WINDOWS and _needs_win7_compat_dll(ctx.info.py_version):
             _inject_win7_compat_dll(ctx.runtime_dir)
 
-    # 标准库精简：剥离 standalone 中的 test/ensurepip/idlelib 等运行时无用模块。
-    # Windows embed 标准库在 python3XX.zip 内（官方已精简），阶段内自动跳过；
-    # Windows 自由线程版（走 standalone 路径，Lib/ 解压）与 Linux/macOS 一样精简。
+    # 标准库精简：剥离运行时无用模块。
+    # Windows 标准版 embed zip 走 zip 重写（保守档默认删 pydoc_data 等文档数据，
+    # slim-stdlib=aggressive 再删 xml/email/http 等大块可选模块）；
+    # Windows 自由线程版（standalone 路径，Lib/ 解压）与 Linux/macOS 按目录剥离。
     if not ctx.opts.no_stdlib_trim:
         with ctx.tracker.stage("精简标准库") as st:
-            _trim_stdlib(ctx.runtime_dir, ctx.info.py_version, target, st)
+            _trim_stdlib(
+                ctx.runtime_dir, ctx.info.py_version, target, st, aggressive=ctx.opts.slim_stdlib == "aggressive"
+            )
 
     return site_packages
 
