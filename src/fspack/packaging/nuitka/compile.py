@@ -210,15 +210,21 @@ class NuitkaCompile:
         try:
             try:
                 compiled_files, failed_files = cls._compile_files(
-                    py_exe, bootstrap_script, py_files, stage, target=target, ccache_exe=ccache_exe
+                    py_exe,
+                    bootstrap_script,
+                    py_files,
+                    stage,
+                    target=target,
+                    ccache_exe=ccache_exe,
+                    py_version=py_version,
                 )
             finally:
                 shutil.rmtree(bootstrap_script.parent, ignore_errors=True)
 
-            # 验证 .pyd 可加载才删除 .py：Nuitka 4.x 在 Python 3.13+ Windows 上忽略 CC
-            # 环境变量自动回退到 zig 编译器，zig 编译的 .pyd 可能损坏（运行时访问违例）。
-            # 用 runtime python（.pyd ABI 绑定 runtime）批量 import 验证，损坏的 .pyd
-            # 删除产物保留 .py，回退到 .pyc 加载。
+            # 验证 .pyd 可加载才删除 .py：防御层（历史教训：Nuitka zig 编译器产物
+            # 曾大量损坏——returncode==0 但运行时访问违例，现已强制 winlibs 根治，
+            # 验证保留兜底编译器异常/静默失败）。用 runtime python（.pyd ABI 绑定
+            # runtime）批量 import 验证，损坏的 .pyd 删除产物保留 .py，回退到 .pyc 加载。
             runtime_py_exe = cls._runtime_python(runtime_dir, py_version, target)  # NuitkaEnv mixin（MRO 派发）
             verify_py_exe = runtime_py_exe if runtime_py_exe.is_file() else None
             stripped = cls._strip_compiled_sources(
@@ -308,7 +314,7 @@ class NuitkaCompile:
         bootstrap_script = cls._create_bootstrap_script(nuitka_cache)
         try:
             compiled_files, failed_files = cls._compile_files(
-                py_exe, bootstrap_script, py_files, stage, target=target, ccache_exe=ccache_exe
+                py_exe, bootstrap_script, py_files, stage, target=target, ccache_exe=ccache_exe, py_version=py_version
             )
         finally:
             shutil.rmtree(bootstrap_script.parent, ignore_errors=True)

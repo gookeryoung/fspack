@@ -2037,7 +2037,7 @@ def test_ensure_winlibs_mingw_cache_hit(tmp_path: Path, monkeypatch: pytest.Monk
 
 
 def test_ensure_winlibs_mingw_offline_miss_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """离线模式缓存未命中时 fail-fast raise NuitkaError（与其他下载层一致）."""
+    """离线模式缓存未命中（无 gcc.exe 且无本地归档）时 fail-fast raise NuitkaError."""
     from fspack.exceptions import NuitkaError
     from fspack.packaging.nuitka import NuitkaCompiler
     from fspack.progress import StageRecorder
@@ -2048,6 +2048,139 @@ def test_ensure_winlibs_mingw_offline_miss_raises(tmp_path: Path, monkeypatch: p
     st = StageRecorder("Nuitka 编译")
     with pytest.raises(NuitkaError, match="离线模式下 winlibs-mingw 缓存未命中"):
         NuitkaCompiler.ensure_winlibs_mingw("3.11.9", st)
+
+
+def test_ensure_winlibs_mingw_extracts_local_zip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """缓存目录存在用户手动放置的 winlibs zip 时解压替代下载（离线同样适用，zip 保留）."""
+    import zipfile
+
+    from fspack.packaging.nuitka import NuitkaCompiler
+    from fspack.packaging.nuitka.winlibs import WINLIBS_URLS
+    from fspack.progress import StageRecorder
+
+    cache_root = tmp_path / "cache"
+    monkeypatch.setenv("FSPACK_CACHE_DIR", str(cache_root))
+    # 离线模式也应能用本地 zip（纯本地解压不联网）
+    monkeypatch.setenv("FSPACK_OFFLINE", "1")
+
+    # 缓存根放置正确版本命名的 zip（顶层 mingw64/bin/gcc.exe）
+    zip_name = WINLIBS_URLS["4.1.3"].rsplit("/", 1)[1]
+    local_zip = cache_root / "nuitka-winlibs-mingw" / zip_name
+    local_zip.parent.mkdir(parents=True)
+    staging = tmp_path / "staging" / "mingw64" / "bin"
+    staging.mkdir(parents=True)
+    (staging / "gcc.exe").write_bytes(b"fake-gcc")
+    with zipfile.ZipFile(local_zip, "w") as zf:
+        zf.write(staging / "gcc.exe", "mingw64/bin/gcc.exe")
+
+    # 误走下载路径时立即失败（本地 zip 应被识别，双保险）
+    class _NoDownload:
+        def __init__(self, timeout: float = 0.0) -> None:
+            pass
+
+        def download(self, url: str, dest: Path, label: str = "") -> None:
+            raise AssertionError("不应触发下载（本地 zip 应被识别）")
+
+    monkeypatch.setattr("fspack.packaging.net.Downloader", _NoDownload)
+
+    st = StageRecorder("Nuitka 编译")
+    result = NuitkaCompiler.ensure_winlibs_mingw("3.11.9", st)
+
+    assert result == cache_root / "nuitka-winlibs-mingw"
+    gcc_exe = NuitkaCompiler._winlibs_gcc_dir("4.1.3") / "mingw64" / "bin" / "gcc.exe"
+    assert gcc_exe.is_file()
+    # 用户手动放置的 zip 保留（资产不删除）
+    assert local_zip.is_file()
+    assert "本地归档" in st._detail
+
+
+def test_ensure_winlibs_mingw_local_zip_wrong_name_ignored(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """版本不匹配的 winlibs zip 不被识别（精确匹配文件名，避免 ABI 不兼容误用）."""
+    from fspack.exceptions import NuitkaError
+    from fspack.packaging.nuitka import NuitkaCompiler
+    from fspack.progress import StageRecorder
+
+    monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("FSPACK_OFFLINE", "1")
+
+    # 文件名版本不匹配（对应 2.5.1 的归档名，当前查询 4.1.3）
+    wrong_zip = (
+        tmp_path
+        / "cache"
+        / "nuitka-winlibs-mingw"
+        / ("winlibs-x86_64-posix-seh-gcc-14.2.0-llvm-19.1.1-mingw-w64msvcrt-12.0.0-r2.zip")
+    )
+    wrong_zip.parent.mkdir(parents=True)
+    wrong_zip.write_bytes(b"whatever")
+
+    st = StageRecorder("Nuitka 编译")
+    with pytest.raises(NuitkaError, match="离线模式下 winlibs-mingw 缓存未命中"):
+        NuitkaCompiler.ensure_winlibs_mingw("3.11.9", st)
+
+
+def test_ensure_winlibs_mingw_corrupt_local_zip_falls_back_to_download(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """本地 zip 损坏（下载中断残留）时删除后回退下载，下载产物正常解压."""
+    import zipfile
+
+    from fspack.packaging.nuitka import NuitkaCompiler
+    from fspack.packaging.nuitka.winlibs import WINLIBS_URLS
+    from fspack.progress import StageRecorder
+
+    cache_root = tmp_path / "cache"
+    monkeypatch.setenv("FSPACK_CACHE_DIR", str(cache_root))
+
+    zip_name = WINLIBS_URLS["4.1.3"].rsplit("/", 1)[1]
+    corrupt_zip = cache_root / "nuitka-winlibs-mingw" / zip_name
+    corrupt_zip.parent.mkdir(parents=True)
+    corrupt_zip.write_bytes(b"not a zip")
+
+    class _FakeDownloader:
+        def __init__(self, timeout: float = 0.0) -> None:
+            pass
+
+        def download(self, url: str, dest: Path, label: str = "") -> None:
+            staging = tmp_path / "staging" / "mingw64" / "bin"
+            staging.mkdir(parents=True, exist_ok=True)
+            (staging / "gcc.exe").write_bytes(b"fake-gcc")
+            with zipfile.ZipFile(dest, "w") as zf:
+                zf.write(staging / "gcc.exe", "mingw64/bin/gcc.exe")
+
+    monkeypatch.setattr("fspack.packaging.net.Downloader", _FakeDownloader)
+
+    st = StageRecorder("Nuitka 编译")
+    NuitkaCompiler.ensure_winlibs_mingw("3.11.9", st)
+
+    gcc_exe = NuitkaCompiler._winlibs_gcc_dir("4.1.3") / "mingw64" / "bin" / "gcc.exe"
+    assert gcc_exe.is_file()
+    # 损坏的本地 zip 已删除；下载的临时 zip 解压后同样删除
+    assert not corrupt_zip.exists()
+    downloaded_zip = NuitkaCompiler._winlibs_gcc_dir("4.1.3") / zip_name
+    assert not downloaded_zip.exists()
+    assert "下载完成" in st._detail
+
+
+def test_ensure_winlibs_mingw_corrupt_local_zip_offline_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """离线模式本地 zip 损坏时删除 zip 并重抛解压失败（无法下载回退）."""
+    from fspack.exceptions import NuitkaError
+    from fspack.packaging.nuitka import NuitkaCompiler
+    from fspack.packaging.nuitka.winlibs import WINLIBS_URLS
+    from fspack.progress import StageRecorder
+
+    monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("FSPACK_OFFLINE", "1")
+
+    zip_name = WINLIBS_URLS["4.1.3"].rsplit("/", 1)[1]
+    corrupt_zip = tmp_path / "cache" / "nuitka-winlibs-mingw" / zip_name
+    corrupt_zip.parent.mkdir(parents=True)
+    corrupt_zip.write_bytes(b"not a zip")
+
+    st = StageRecorder("Nuitka 编译")
+    with pytest.raises(NuitkaError, match="解压失败"):
+        NuitkaCompiler.ensure_winlibs_mingw("3.11.9", st)
+    # 损坏归档已删除（下次构建不再误识别）
+    assert not corrupt_zip.exists()
 
 
 def test_ensure_winlibs_mingw_downloads_and_extracts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2165,25 +2298,27 @@ def test_ensure_env_windows_prefills_winlibs(tmp_path: Path, monkeypatch: pytest
     assert called == ["3.11.9"]
 
 
-def test_ensure_env_windows_py313_skips_winlibs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """ensure_env 在 Windows 且 py>=3.13 时不预填充 winlibs（Nuitka 走 zig 自动下载）."""
+def test_ensure_env_windows_py313_prefills_winlibs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """ensure_env 在 Windows py>=3.13 也预填充 winlibs（编译命令 force-mingw64 强制走 winlibs）."""
     from fspack.packaging.nuitka import NuitkaCompiler
     from fspack.progress import StageRecorder
 
     monkeypatch.setattr("fspack.packaging.loader.mingw_available", lambda: True)
-    monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
+    _patch_winlibs_hit(tmp_path, monkeypatch, nuitka_ver="4.1.3")
     cache_root = tmp_path / "nuitka_cache"
     _make_nuitka_cache(NuitkaCompiler._nuitka_cache_dir(cache_root, "3.13.1"))
 
+    called: list[str] = []
     monkeypatch.setattr(
         NuitkaCompiler,
         "ensure_winlibs_mingw",
-        classmethod(lambda cls, *a, **kw: (_ for _ in ()).throw(AssertionError("不应预填充"))),
+        classmethod(lambda cls, py_version, stage: called.append(py_version) or tmp_path),
     )
 
     st = StageRecorder("Nuitka 环境")
     nuitka_ver = NuitkaCompiler.ensure_env(cache_root, "3.13.1", Platform.WINDOWS, get_mirror("aliyun"), stage=st)
     assert nuitka_ver == "4.1.3"
+    assert called == ["3.13.1"]
 
 
 def test_ensure_env_linux_skips_winlibs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -3813,6 +3948,98 @@ def test_compile_files_parallel_max_workers_capped(
     assert len(captured_max_workers) == 1
     expected = min(os.cpu_count() or 1, _MAX_COMPILE_WORKERS)
     assert captured_max_workers[0] == expected
+
+
+def test_compile_files_windows_py313_forces_mingw64(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows py>=3.13 编译命令追加 force-mingw64（zig 产物损坏，强制走 winlibs）."""
+    captured: list[list[str]] = []
+
+    def fake_stream(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int, str, str]:
+        captured.append(cmd)
+        return (0, "", "")
+
+    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(fake_stream))
+    monkeypatch.setattr(NuitkaCompiler, "_build_compile_env", classmethod(lambda cls, *a, **kw: {}))
+
+    src = tmp_path / "src"
+    src.mkdir()
+    f = src / "f0.py"
+    f.write_text("x = 1", encoding="utf-8")
+
+    st = StageRecorder("编译")
+    NuitkaCompiler._compile_files(
+        tmp_path / "python.exe",
+        tmp_path / "bootstrap.py",
+        [f],
+        st,
+        target=Platform.WINDOWS,
+        py_version="3.13.1",
+    )
+
+    assert captured, "应至少编译一个文件"
+    assert "--experimental=force-mingw64" in captured[0]
+    # py 文件保持末位（诊断日志与测试依赖 cmd[-1] 定位源文件）
+    assert captured[0][-1] == str(f)
+
+
+def test_compile_files_windows_py312_no_force_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows py<3.13 不加 force-mingw64（scons 默认即 winlibs）."""
+    captured: list[list[str]] = []
+
+    def fake_stream(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int, str, str]:
+        captured.append(cmd)
+        return (0, "", "")
+
+    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(fake_stream))
+    monkeypatch.setattr(NuitkaCompiler, "_build_compile_env", classmethod(lambda cls, *a, **kw: {}))
+
+    src = tmp_path / "src"
+    src.mkdir()
+    f = src / "f0.py"
+    f.write_text("x = 1", encoding="utf-8")
+
+    st = StageRecorder("编译")
+    NuitkaCompiler._compile_files(
+        tmp_path / "python.exe",
+        tmp_path / "bootstrap.py",
+        [f],
+        st,
+        target=Platform.WINDOWS,
+        py_version="3.12.10",
+    )
+
+    assert captured, "应至少编译一个文件"
+    assert "--experimental=force-mingw64" not in captured[0]
+
+
+def test_compile_files_linux_no_force_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Linux 不加 force-mingw64（用系统 gcc，无 zig fallback 问题）."""
+    captured: list[list[str]] = []
+
+    def fake_stream(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int, str, str]:
+        captured.append(cmd)
+        return (0, "", "")
+
+    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(fake_stream))
+    monkeypatch.setattr(NuitkaCompiler, "_build_compile_env", classmethod(lambda cls, *a, **kw: {}))
+
+    src = tmp_path / "src"
+    src.mkdir()
+    f = src / "f0.py"
+    f.write_text("x = 1", encoding="utf-8")
+
+    st = StageRecorder("编译")
+    NuitkaCompiler._compile_files(
+        tmp_path / "python.exe",
+        tmp_path / "bootstrap.py",
+        [f],
+        st,
+        target=Platform.LINUX,
+        py_version="3.13.1",
+    )
+
+    assert captured, "应至少编译一个文件"
+    assert "--experimental=force-mingw64" not in captured[0]
 
 
 def test_compile_files_parallel_completes_all_files(

@@ -111,7 +111,17 @@ class NuitkaCompilerProtocol(Protocol):  # pragma: no cover - 纯类型契约，
         ...
 
     @staticmethod
-    def _download_and_extract_winlibs(nuitka_ver: str, gcc_dir: Path, gcc_exe: Path) -> None:
+    def _find_local_winlibs_zip(nuitka_ver: str) -> Path | None:
+        """在 winlibs 缓存目录递归查找对应版本的 zip 归档."""
+        ...
+
+    @staticmethod
+    def _extract_winlibs(archive: Path, gcc_dir: Path, gcc_exe: Path) -> None:
+        """解压 winlibs zip 归档到 gcc_dir，验证 gcc.exe 就位."""
+        ...
+
+    @classmethod
+    def _download_and_extract_winlibs(cls, nuitka_ver: str, gcc_dir: Path, gcc_exe: Path) -> None:
         """下载 winlibs zip 并解压到 gcc_dir，验证 gcc.exe 就位."""
         ...
 
@@ -234,6 +244,7 @@ class NuitkaCompilerProtocol(Protocol):  # pragma: no cover - 纯类型契约，
         *,
         target: Platform,
         ccache_exe: Path | None = None,
+        py_version: str = "",
     ) -> tuple[set[Path], list[Path]]:
         """逐个编译 .py 文件，返回 (成功编译的文件集合, 失败文件路径列表)."""
         ...

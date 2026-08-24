@@ -46,8 +46,11 @@
     python 运行编译（embed python 不完整会触发 reExecute fork bomb），tarball 与
     tkinter 打包共享 ``standalone-windows/`` 缓存；Windows 编译器由 Nuitka 下载缓存
     提供（注入 ``NUITKA_CACHE_DIR_DOWNLOADS`` 重定向到 ``nuitka-winlibs-mingw/``，
-    py<3.13 预填充 winlibs gcc，py>=3.13 走 zig 自动下载，系统 mingw 会被 scons
-    拒绝不使用）；入口文件保留 ``.py`` 不编译（``runpy.run_path()`` 兼容）；
+    全版本预填充 winlibs gcc：py<3.13 scons 默认即 winlibs，py>=3.13 经
+    ``--experimental=force-mingw64`` 强制——zig 编译的 .pyd 可能损坏不再使用；
+    预填充时识别缓存目录下用户手动放置的 winlibs zip 解压替代下载，损坏归档
+    删除后回退下载；系统 mingw 会被 scons 拒绝不使用）；入口文件保留 ``.py``
+    不编译（``runpy.run_path()`` 兼容）；
     stamp 缓存键 = ``nuitka_version|py_version|src_fingerprint|entry_rels``，
     命中跳过整个阶段；交叉构建自动跳过
 11. **Win7 兼容 DLL 注入**（Windows，Python 3.9+）：注入 api-ms-win-core-path
@@ -137,8 +140,9 @@ fspack 支持通过环境变量或 CLI 标志启用的离线模式，适用于�
    ├── wheels/               # 第三方 wheel + 依赖解析缓存（.deps_cache.json）
    ├── python/               # Nuitka 编译用 standalone python（按 standalone 版本分目录）
    ├── nuitka/               # Nuitka 包（按 py_version 分目录）
-   ├── nuitka-winlibs-mingw/ # Nuitka winlibs gcc 工具链（Windows 编译 .pyd，py<3.13；
-   │                         #   内部按 Nuitka downloads 约定 gcc/x86_64/<specificity>/）
+   ├── nuitka-winlibs-mingw/ # Nuitka winlibs gcc 工具链（Windows 编译 .pyd，全版本强制
+   │                         #   winlibs；内部按 Nuitka downloads 约定 gcc/x86_64/<specificity>/，
+   │                         #   根目录可放 winlibs zip 归档供识别解压）
    ├── loaders/              # C loader 编译缓存（按 source hash 命名）
    ├── ccache/               # ccache 二进制与编译缓存
    └── tkinter/              # tkinter 补充包缓存（按 standalone 版本命名的 zip）
@@ -225,7 +229,7 @@ fspack 支持通过环境变量或 CLI 标志启用的离线模式，适用于�
      - standalone python / Nuitka 包缓存未命中
    * - ``nuitka/winlibs.py``
      - ``NuitkaError``
-     - Windows py<3.13 时 winlibs gcc 工具链缓存未命中
+     - Windows 时 winlibs gcc 工具链缓存未命中（无 gcc.exe 且无本地归档）
    * - ``builtin.py``
      - ``BuiltinError``
      - tkinter 补充包的 standalone Windows tarball 缓存未命中

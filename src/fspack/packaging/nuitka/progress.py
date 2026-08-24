@@ -36,6 +36,7 @@ from concurrent.futures import as_completed
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, Any, TextIO
 
+from fspack.packaging.nuitka.winlibs import uses_winlibs
 from fspack.platform import Platform
 from fspack.progress import StageRecorder
 
@@ -231,6 +232,7 @@ class NuitkaProgress:
         *,
         target: Platform,
         ccache_exe: Path | None = None,
+        py_version: str = "",
     ) -> tuple[set[Path], list[Path]]:
         """并行编译 .py 文件，返回 (成功编译的文件集合, 失败文件路径列表).
 
@@ -254,6 +256,12 @@ class NuitkaProgress:
         - ``--no-pyi-file``：不生成 .pyi 类型存根（运行时不需要）
         - ``--remove-output``：编译后删除临时构建文件（.build/ 目录）
         - ``--jobs=N``：单进程内 C 编译并行度
+        - ``--experimental=force-mingw64``（仅 Windows py>=3.13）：强制 scons
+          fallback 到 winlibs gcc 而非 zig——zig 编译的 .pyd 可能损坏
+          （returncode==0、文件已生成，运行时访问违例 0xC0000005）。
+          py<3.13 默认即 winlibs 无需 flag；Linux 不涉及（用系统 gcc）。
+          winlibs 工具链由 :meth:`NuitkaEnv.ensure_env` 预填充到
+          ``nuitka-winlibs-mingw`` 缓存，scons 缓存命中不下载
 
         ``ccache_exe`` 非 None 时，设置 ``CC="ccache <compiler>"`` 环境变量注入子进程，
         scons 通过 ccache 调用 gcc，缓存 C 编译结果加速重复编译。
@@ -291,26 +299,30 @@ class NuitkaProgress:
             系统句柄耗尽）时按"退出码非零"等价结果处理（返回 -1），与
             "单文件失败仅告警不中断构建"的承诺一致，不向上重抛中断整个构建。
             """
+            cmd = [
+                str(py_exe),
+                str(bootstrap_script),
+                # Nuitka 4.x：--module 已废弃为兼容写法，须用 --mode=module，
+                # 否则 --no-pyi-file 等模块模式专属选项触发无效果 WARNING
+                "--mode=module",
+                # 显式声明不跟随导入：单文件逐个编译本就不跟随（模块模式默认行为），
+                # 显式传入避免 Nuitka "did not specify to follow or include anything" 警告
+                "--nofollow-imports",
+                f"--output-dir={py_file.parent}",
+                "--no-pyi-file",
+                "--remove-output",
+                "--assume-yes-for-downloads",
+                f"--jobs={jobs}",
+            ]
+            # Windows py>=3.13：Nuitka 默认 fallback 到 zig 编译器，其产物可能
+            # 损坏（运行时访问违例）。强制走 winlibs gcc（ensure_env 已预填充
+            # 缓存），与 py<3.13 默认行为一致。空 py_version（未知版本）不加
+            # flag 保持旧行为
+            if target is Platform.WINDOWS and py_version and not uses_winlibs(py_version):
+                cmd.append("--experimental=force-mingw64")
+            cmd.append(str(py_file))
             try:
-                returncode, _stdout, _stderr = cls._stream_compile(
-                    [
-                        str(py_exe),
-                        str(bootstrap_script),
-                        # Nuitka 4.x：--module 已废弃为兼容写法，须用 --mode=module，
-                        # 否则 --no-pyi-file 等模块模式专属选项触发无效果 WARNING
-                        "--mode=module",
-                        # 显式声明不跟随导入：单文件逐个编译本就不跟随（模块模式默认行为），
-                        # 显式传入避免 Nuitka "did not specify to follow or include anything" 警告
-                        "--nofollow-imports",
-                        f"--output-dir={py_file.parent}",
-                        "--no-pyi-file",
-                        "--remove-output",
-                        "--assume-yes-for-downloads",
-                        f"--jobs={jobs}",
-                        str(py_file),
-                    ],
-                    env=compile_env,
-                )
+                returncode, _stdout, _stderr = cls._stream_compile(cmd, env=compile_env)
             except OSError as e:
                 # Popen 启动失败（FileNotFoundError/句柄不足等）：按该文件编译失败处理，
                 # 与 CalledProcessError（退出码非零）路径一致仅告警，不中断其余文件

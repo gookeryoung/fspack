@@ -61,9 +61,9 @@ class NuitkaStrip:
         .pyd（如文件名含 ``-`` 触发 Nuitka 内部静默失败），此时删除 .py 会导致运行时
         ImportError/访问违例。验证产物存在避免误删。
 
-        **可选 import 验证**（``verify_py_exe`` + ``verify_search_root``）：Nuitka 4.x
-        在 Python 3.13+ Windows 上忽略 ``CC`` 环境变量自动回退到 zig 编译器，zig 编译的
-        .pyd 可能损坏（returncode==0、文件已生成，但运行时访问违例 0xC0000005）。
+        **可选 import 验证**（``verify_py_exe`` + ``verify_search_root``）：防御层
+        （历史教训：Nuitka zig 编译器产物曾大量损坏——returncode==0 但运行时访问
+        违例 0xC0000005，现已强制 winlibs 根治，验证兜底编译器异常/静默失败）。
         提供验证参数时，删除 .py 前用 subprocess 批量 import 验证 .pyd 可加载，
         不可加载的 .pyd 删除产物并保留 .py，回退到 .pyc 加载。
         **依赖缺失不算损坏**：验证环境 sys.path 仅含包根，模块顶层 import 的第三方

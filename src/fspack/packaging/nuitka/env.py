@@ -8,7 +8,7 @@ facade，所有 ``cls.`` 调用经 MRO 自动派发到对应 mixin。
 
 - C 编译器检查（Windows mingw / Linux gcc）
 - Windows winlibs-mingw 预填充编排（经 :mod:`fspack.packaging.nuitka.winlibs`
-  的 :meth:`NuitkaWinlibs.ensure_winlibs_mingw`，py<3.13 时 Nuitka 走 winlibs）
+  的 :meth:`NuitkaWinlibs.ensure_winlibs_mingw`，全版本强制 winlibs 避免 zig 产物损坏）
 - nuitka 锁定版本安装到本地缓存（``pip install --target`` 从 sdist 构建）
 - 构建机 pip 模块可用性检查与两轮自助安装（ensurepip / uv pip install pip）
 - 构建机编译环境变量构建（``_build_compile_env``：Linux 设 ``CC``，
@@ -34,7 +34,6 @@ from typing import TYPE_CHECKING
 from fspack.config import MirrorConfig, is_offline, nuitka_version_for
 from fspack.config.versions import _split_t_suffix
 from fspack.exceptions import NuitkaError
-from fspack.packaging.nuitka.winlibs import uses_winlibs
 from fspack.platform import Platform
 from fspack.progress import StageRecorder
 
@@ -129,10 +128,11 @@ class NuitkaEnv:
         - ``CC``：Nuitka scons 在 Windows 上无条件拒绝外部 gcc（打印
           "Non downloaded winlibs-gcc ... is being ignored" 后忽略，仅信任
           自己下载缓存的 winlibs gcc），设置无效且产生噪音提示。清除宿主
-          可能残留的 ``CC``/``CFLAGS``，让 scons 走下载缓存 fallback
-          （py<3.13 → winlibs，py>=3.13 → zig），winlibs 由
-          :meth:`NuitkaWinlibs.ensure_winlibs_mingw` 预填充，zig 由
-          ``--assume-yes-for-downloads`` 自动下载
+          可能残留的 ``CC``/``CFLAGS``，让 scons 走下载缓存 fallback 到
+          winlibs gcc：py<3.13 默认即 winlibs；py>=3.13 由编译命令
+          ``--experimental=force-mingw64`` 强制（zig 产物可能损坏不再使用）。
+          winlibs 由 :meth:`NuitkaWinlibs.ensure_winlibs_mingw` 预填充，
+          scons 检测 gcc.exe 已存在即缓存命中不下载
         - ``CFLAGS``：scons 自设 ``_WIN32_WINNT``（Nuitka 4.1.3 无条件
           ``0x0601`` 即 Win7，2.5.1 mingw 分支 ``0x0501`` 更保守），fspack
           再注入同宏触发 "Inherited CFLAGS" 提示且值被覆盖，纯冗余已删除
@@ -311,9 +311,10 @@ class NuitkaEnv:
         步骤：
 
         1. :meth:`_check_c_compiler` 检查 C 编译器，缺失 raise :class:`NuitkaError`
-        2. Windows 且 py<3.13（:func:`fspack.packaging.nuitka.winlibs.uses_winlibs`）：
-           :meth:`NuitkaWinlibs.ensure_winlibs_mingw` 预填充 winlibs gcc 到
-           ``<cache_root>/nuitka-winlibs-mingw``，scons 编译时缓存命中不下载
+        2. Windows：:meth:`NuitkaWinlibs.ensure_winlibs_mingw` 预填充 winlibs gcc
+           到 ``<cache_root>/nuitka-winlibs-mingw``（全版本：py<3.13 scons 默认
+           走 winlibs，py>=3.13 由编译命令 force-mingw64 强制走 winlibs），
+           scons 编译时缓存命中不下载
         3. 按 :func:`nuitka_version_for` 取锁定版本号
         4. :meth:`_is_nuitka_cached` 检查缓存目录是否已有 nuitka
         5. 无则用构建机 ``pip install --target`` 从 sdist 构建并解压到缓存目录
@@ -339,10 +340,12 @@ class NuitkaEnv:
         """
         cls._check_c_compiler(target)
 
-        # Windows 且 py<3.13：Nuitka scons fallback 到 winlibs gcc（py>=3.13 走
-        # zig 由 --assume-yes-for-downloads 自动下载），预填充 winlibs 到 fspack
-        # 缓存目录，编译时 scons 缓存命中不下载、不打印拒绝提示
-        if target is Platform.WINDOWS and uses_winlibs(py_version):
+        # Windows 全版本预填充 winlibs gcc 到 fspack 缓存目录：py<3.13 时
+        # Nuitka scons 默认 fallback 到 winlibs（缓存命中不下载）；py>=3.13
+        # 默认 fallback 到 zig（其编译的 .pyd 可能损坏），编译命令已追加
+        # --experimental=force-mingw64 强制走 winlibs（见 progress 的
+        # _compile_files），此处预填充与编译命令两层须一致
+        if target is Platform.WINDOWS:
             cls.ensure_winlibs_mingw(py_version, stage)
 
         nuitka_ver = nuitka_version_for(py_version)

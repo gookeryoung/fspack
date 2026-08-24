@@ -11,9 +11,15 @@ mingw gcc 会被打印 "Non downloaded winlibs-gcc ... ignored" 后忽略），
 （``<cache_root>/nuitka-winlibs-mingw``），使 Nuitka 缓存命中直接使用，
 不重复下载、不打印拒绝提示。
 
+另：Nuitka 4.1 起 py>=3.13 默认 fallback 到 zig 编译器，其编译的 .pyd 可能
+损坏（returncode==0 但运行时访问违例 0xC0000005）。fspack 在 Windows 上
+全版本强制 winlibs：py>=3.13 时编译命令追加 ``--experimental=force-mingw64``
+（见 :mod:`fspack.packaging.nuitka.progress` 的 ``_compile_files``）。
+
 缓存目录结构（与 Nuitka ``getCachedDownload`` 约定一致）::
 
     <cache_root>/nuitka-winlibs-mingw/
+    ├── winlibs-*.zip                # 用户手动放置的归档（识别后解压，不删除）
     └── gcc/                          # basename(binary)="gcc.exe" 去扩展名
         └── x86_64/                   # is_arch_specific（target_arch）
             └── <specificity>/        # winlibs release URL 倒数第二段
@@ -25,8 +31,9 @@ mingw gcc 会被打印 "Non downloaded winlibs-gcc ... ignored" 后忽略），
 
 - winlibs URL 按 Nuitka 版本映射（与 Nuitka 源码 ``getCachedDownloadedMinGW64``
   同步维护，版本升级时须核对）
-- 缓存命中检查与下载解压（:meth:`NuitkaWinlibs.ensure_winlibs_mingw`）
-- 离线模式缓存未命中 fail-fast
+- 缓存命中检查、本地归档识别解压与下载解压
+  （:meth:`NuitkaWinlibs.ensure_winlibs_mingw`）
+- 离线模式缓存未命中（无 gcc.exe 且无本地归档）fail-fast
 
 不涉及：编译环境变量注入（见 :mod:`fspack.packaging.nuitka.env` 的
 ``_build_compile_env``）、ccache 管理（见 :mod:`fspack.packaging.nuitka.ccache`）。
@@ -125,12 +132,15 @@ class NuitkaWinlibs:
 
         查找顺序：
 
-        1. fspack 缓存 ``<cache_root>/nuitka-winlibs-mingw/gcc/x86_64/<specificity>/
-           mingw64/bin/gcc.exe`` 已存在 → 缓存命中
-        2. 在线模式 → 下载 winlibs zip 解压到上述目录（zip 解压后删除，
-           Nuitka 按 gcc.exe 存在判定命中）
-        3. 离线模式缓存未命中 → raise :class:`NuitkaError`（与其他下载层
-           fail-fast 行为一致）
+        1. fspack 缓存 ``gcc/x86_64/<specificity>/mingw64/bin/gcc.exe`` 已存在
+           → 缓存命中
+        2. 缓存目录下存在对应版本的 winlibs zip 归档（用户手动放置，或上次
+           下载中断的残留）→ 解压到约定目录替代下载（**不删除归档**：用户
+           资产须保留；纯本地操作，离线模式同样适用）。归档损坏时删除该
+           归档回退下载，离线模式直接 raise
+        3. 离线模式 → raise :class:`NuitkaError`（与其他下载层 fail-fast 一致）
+        4. 在线模式 → 下载 winlibs zip 解压（zip 解压后删除，Nuitka 按
+           gcc.exe 存在判定命中）
 
         调用方（:meth:`NuitkaEnv.ensure_env`）在 Windows 目标时调用；
         返回的缓存根目录经 ``_build_compile_env`` 注入
@@ -158,11 +168,31 @@ class NuitkaWinlibs:
             stage.set_detail(f"winlibs-mingw {nuitka_ver} 已就绪")
             return nuitka_winlibs_cache_dir()
 
+        # 本地归档解压：识别缓存目录下用户手动放置（或下载中断残留）的 zip，
+        # 解压替代下载；纯本地操作，离线模式同样适用
+        local_zip = cls._find_local_winlibs_zip(nuitka_ver)
+        if local_zip is not None:
+            _logger.info("从本地归档解压 winlibs-mingw: %s", local_zip)
+            try:
+                cls._extract_winlibs(local_zip, gcc_dir, gcc_exe)
+            except NuitkaError:
+                # 归档损坏（如下载中断的半成品）：删除后回退下载；
+                # 离线模式无法下载，重抛原异常
+                _logger.warning("本地 winlibs 归档损坏，删除后回退下载: %s", local_zip)
+                with contextlib.suppress(OSError):
+                    local_zip.unlink()
+                if is_offline():
+                    raise
+            else:
+                stage.set_detail(f"winlibs-mingw {nuitka_ver} 从本地归档解压完成")
+                return nuitka_winlibs_cache_dir()
+
         # 离线模式 fail-fast：无法下载 winlibs
         if is_offline():
             raise NuitkaError(
                 f"离线模式下 winlibs-mingw 缓存未命中: {gcc_exe}，"
                 "请预先在联网机器执行一次 Nuitka 构建填充缓存后拷贝，"
+                f"或将 winlibs zip 归档放入 {nuitka_winlibs_cache_dir()}，"
                 "或取消 FSPACK_OFFLINE 环境变量"
             )
 
@@ -172,12 +202,55 @@ class NuitkaWinlibs:
         return nuitka_winlibs_cache_dir()
 
     @staticmethod
-    def _download_and_extract_winlibs(nuitka_ver: str, gcc_dir: Path, gcc_exe: Path) -> None:
-        """下载 winlibs zip 并解压到 ``gcc_dir``，验证 gcc.exe 就位.
+    def _find_local_winlibs_zip(nuitka_ver: str) -> Path | None:
+        """在 winlibs 缓存目录递归查找当前 Nuitka 版本对应的 zip 归档.
+
+        精确匹配 :data:`WINLIBS_URLS` 的归档文件名（版本不匹配的 winlibs
+        工具链不识别，避免 ABI 不兼容的 gcc 被误用）。缓存根目录与任意
+        子目录（含 specificity 目录下下载中断的残留）均扫描。
+
+        前置条件：``nuitka_ver`` 已收录（调用方 :meth:`ensure_winlibs_mingw`
+        先经 :meth:`_winlibs_gcc_dir` 校验 raise）。
+        """
+        zip_name = WINLIBS_URLS[nuitka_ver].rsplit("/", 1)[1]
+        cache_dir = nuitka_winlibs_cache_dir()
+        if not cache_dir.is_dir():
+            return None
+        for zip_path in sorted(cache_dir.rglob(zip_name)):
+            if zip_path.is_file():
+                return zip_path
+        return None
+
+    @staticmethod
+    def _extract_winlibs(archive: Path, gcc_dir: Path, gcc_exe: Path) -> None:
+        """解压 winlibs zip 归档到 ``gcc_dir``，验证 gcc.exe 就位.
 
         zip 顶层即 ``mingw64/`` 目录树，解压到 ``gcc_dir`` 得到
         ``gcc_dir/mingw64/bin/gcc.exe``，与 Nuitka 自行下载解压的布局一致。
-        解压完成后删除 zip（Nuitka 按 gcc.exe 存在判定缓存命中，无需保留）。
+        不删除归档（删除时机由调用方决定：本地资产保留、下载临时文件清理）。
+
+        :raises NuitkaError: 解压失败（I/O 错误、归档损坏）或 gcc.exe 缺失。
+        """
+        gcc_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            with zipfile.ZipFile(archive) as zf:
+                zf.extractall(gcc_dir)
+        except (OSError, zipfile.BadZipFile) as e:
+            raise NuitkaError(f"winlibs-mingw 解压失败 {archive}: {e}") from e
+        if not gcc_exe.is_file():
+            raise NuitkaError(f"winlibs-mingw 解压后未找到 gcc: {gcc_exe}")
+
+    @classmethod
+    def _download_and_extract_winlibs(
+        cls: type[NuitkaCompilerProtocol],
+        nuitka_ver: str,
+        gcc_dir: Path,
+        gcc_exe: Path,
+    ) -> None:
+        """下载 winlibs zip 并解压到 ``gcc_dir``，验证 gcc.exe 就位.
+
+        下载的 zip 解压完成后删除（成功与失败路径均清理，避免半成品占
+        ~200MB；Nuitka 按 gcc.exe 存在判定缓存命中，无需保留归档）。
 
         :raises NuitkaError: 下载或解压失败、解压后 gcc.exe 缺失。
         """
@@ -188,15 +261,10 @@ class NuitkaWinlibs:
         gcc_dir.mkdir(parents=True, exist_ok=True)
         try:
             Downloader(timeout=_WINLIBS_DOWNLOAD_TIMEOUT).download(url, archive, label="winlibs-mingw")
-            with zipfile.ZipFile(archive) as zf:
-                zf.extractall(gcc_dir)
+            cls._extract_winlibs(archive, gcc_dir, gcc_exe)
         except (OSError, zipfile.BadZipFile) as e:
             raise NuitkaError(f"winlibs-mingw 下载或解压失败: {e}") from e
         finally:
-            # zip 解压完成后删除（成功与失败路径均清理，避免半成品占 ~200MB）；
-            # 删除失败（如杀软占用）不中断流程
+            # zip 解压完成后删除（删除失败如杀软占用不中断流程）
             with contextlib.suppress(OSError):
                 archive.unlink(missing_ok=True)
-
-        if not gcc_exe.is_file():
-            raise NuitkaError(f"winlibs-mingw 解压后未找到 gcc: {gcc_exe}")

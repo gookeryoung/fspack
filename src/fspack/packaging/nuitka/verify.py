@@ -14,9 +14,10 @@ facade，所有 ``cls.`` 调用经 MRO 自动派发。
 不涉及：环境就绪（见 :mod:`fspack.packaging.nuitka.env`）、
 编译流程（见 :mod:`fspack.packaging.nuitka.compile`）。
 
-**为何需要验证**：Nuitka 4.x 在 Python 3.13+ Windows 上忽略 ``CC`` 环境变量自动
-回退到 zig 编译器，zig 编译的 .pyd 可能损坏（returncode==0、文件已生成，但运行时
-访问违例 0xC0000005）。仅检查文件存在不够，必须实际 import 验证。
+**为何需要验证**：编译器异常或 Nuitka 静默失败可能产出损坏的 .pyd（returncode==0、
+文件已生成，但运行时访问违例 0xC0000005）。历史教训：Nuitka 4.x zig 编译器产物
+曾大量损坏（现已强制 winlibs 根治，见 :mod:`fspack.packaging.nuitka.progress`），
+验证作为防御层保留。仅检查文件存在不够，必须实际 import 验证。
 
 **损坏判定标准**（见 :data:`_BINARY_LOAD_FAILURE_SNIPPET`）：验证 subprocess
 硬崩溃（访问违例）、或 .pyd 自身加载失败（``ImportError`` 无法定位缺失依赖名，
@@ -105,10 +106,10 @@ class NuitkaVerify:
     ) -> tuple[set[Path], list[Path]]:
         """用 subprocess 批量验证 .pyd 可加载，返回 (可加载的 .py 集合, 损坏 .pyd 路径列表).
 
-        **为何需要 import 验证**：Nuitka 4.x 在 Python 3.13+ Windows 上忽略 ``CC``
-        环境变量自动回退到 zig 编译器，zig 编译的 .pyd 可能损坏（returncode==0、
-        文件已生成，但运行时访问违例 0xC0000005）。仅检查文件存在不够，必须实际
-        import 验证。
+        **为何需要 import 验证**：编译器异常或 Nuitka 静默失败可能产出损坏的
+        .pyd（returncode==0、文件已生成，但运行时访问违例 0xC0000005；历史教训：
+        Nuitka 4.x zig 编译器产物曾大量损坏，现已强制 winlibs 根治，验证作为
+        防御层保留）。仅检查文件存在不够，必须实际 import 验证。
 
         **依赖缺失不算损坏**：验证 subprocess 的 sys.path 仅含包根（无完整
         site-packages），模块顶层 ``import PySide2``/``import lxml`` 等第三方依赖
