@@ -417,6 +417,8 @@ def test_cli_build_dry_run_flag_passed_to_build(tmp_path: Path, monkeypatch: pyt
         log_file: Path | None = None,
         log_format: object = None,
         profile: bool = False,
+        profile_out: Path | None = None,
+        profile_compare: str | None = None,
         auto_clean: bool = False,
     ) -> None:
         captured["dry_run"] = dry_run
@@ -445,6 +447,8 @@ def test_cli_build_without_dry_run_flag_defaults_false(tmp_path: Path, monkeypat
         log_file: Path | None = None,
         log_format: object = None,
         profile: bool = False,
+        profile_out: Path | None = None,
+        profile_compare: str | None = None,
         auto_clean: bool = False,
     ) -> None:
         captured["dry_run"] = dry_run
@@ -473,6 +477,8 @@ def test_cli_build_dry_run_alias_b(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         log_file: Path | None = None,
         log_format: object = None,
         profile: bool = False,
+        profile_out: Path | None = None,
+        profile_compare: str | None = None,
         auto_clean: bool = False,
     ) -> None:
         captured["dry_run"] = dry_run

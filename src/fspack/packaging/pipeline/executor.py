@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Sequence
@@ -63,9 +64,10 @@ if TYPE_CHECKING:
     # annotations`` 使注解不在运行时求值），顶部不导入 fspack.progress 避免连锁
     # 触发 rich.progress/rich.table 加载（省 ~12ms）。build() 内实例化时才 import。
     # ProfileContext 仅用于 build() 内 ``profile_ctx`` 局部变量类型注解。
+    # ProfileReport 仅用于 _save_and_compare_profile 签名注解。
     # 顶部不导入 fspack.packaging.profile 避免连锁触发 fspack.console
     # （~17ms）+ rich.table 加载，build() 内启用 profile 时才 import。
-    from fspack.packaging.profile import ProfileContext
+    from fspack.packaging.profile import ProfileContext, ProfileReport
     from fspack.progress import BuildTracker
 
 # _print_build_plan 延迟加载：避免顶层加载 fspack.console 模块（rich 控制台），
@@ -107,6 +109,8 @@ def build(  # noqa: PLR0913
     log_file: Path | None = None,
     log_format: LogFormat = LogFormat.TEXT,
     profile: bool = False,
+    profile_out: Path | None = None,
+    profile_compare: str | None = None,
     auto_clean: bool = False,
 ) -> ProjectInfo:
     """执行完整构建流水线，返回项目信息。
@@ -142,7 +146,14 @@ def build(  # noqa: PLR0913
     ``profile=True`` 时启用耗时分析：用 ``tracemalloc`` 采集内存峰值，
     ``time.process_time()`` 采集 CPU 时间，构建结束后输出各阶段 wall time /
     占比 / 缓存命中 / 下载 / 节省等指标的表格，以及资源总览（wall/CPU/CPU 占比/
-    内存峰值）。便于识别瓶颈阶段。
+    内存峰值）。便于识别瓶颈阶段。同时将报告写入性能日志 JSON（默认
+    ``<项目>/.benchmarks/fsp-b-<时间戳>.json``，``profile_out`` 可指定目录
+    或 ``.json`` 文件），供后续对比分析性能回归。
+
+    ``profile_compare`` 指定时与历史性能日志对比（需 ``profile=True``）：
+    ``"last"`` 与默认目录内最近一次日志对比（排除本次刚写入的），其他值
+    视为基准日志文件路径。渲染差异表格：总览指标带符号百分比与回归/改善
+    箭头，阶段仅列差异显著项（绝对差 > 50ms 且相对差 > 10%）。
 
     ``auto_clean=True`` 时构建前自动清理 dist 残留（含 ``.build_failed`` 标记），
     避免上次中断/失败的构建产物干扰。构建异常时写入 ``dist/.build_failed`` JSON
@@ -225,7 +236,60 @@ def build(  # noqa: PLR0913
 
         report = profile_ctx.collect(tracker)
         print_profile_report(report)
+        _save_and_compare_profile(report, project_dir, info, target, profile_out, profile_compare)
     return info
+
+
+def _save_and_compare_profile(  # noqa: PLR0913
+    report: ProfileReport,
+    project_dir: Path,
+    info: ProjectInfo,
+    target: Platform,
+    profile_out: Path | None,
+    profile_compare: str | None,
+) -> None:
+    """落盘性能日志并按需渲染历史对比（``--profile-out``/``--profile-compare``）.
+
+    落盘：``profile_out`` 为 ``.json`` 文件直写，为目录/其他路径自动命名；
+    未指定时写默认目录 ``<项目>/.benchmarks/``。对比：``profile_compare``
+    为 ``"last"`` 时取默认目录内最近一次日志（排除本次），否则按基准文件
+    路径加载；日志缺失/畸形时警告并跳过对比，不中断构建结果。
+    """
+    # 延迟导入：profile_log 触发 rich 渲染链加载，仅在 profile 构建时执行
+    from fspack.packaging.profile_log import (
+        DEFAULT_LOG_DIR,
+        ProfileLogMeta,
+        find_latest_log,
+        load_profile_log,
+        print_profile_compare,
+        save_profile_report,
+    )
+
+    meta = ProfileLogMeta(
+        name=info.name,
+        version=info.version,
+        python=sys.version.split()[0],
+        platform=target.value,
+    )
+    default_dir = project_dir / DEFAULT_LOG_DIR
+    log_path = save_profile_report(report, Path(profile_out) if profile_out else default_dir, meta)
+    _logger.info("性能日志已写入: %s", log_path)
+    if not profile_compare:
+        return
+    if profile_compare == "last":
+        baseline_path = find_latest_log(default_dir, exclude=log_path)
+        if baseline_path is None:
+            _logger.warning("未找到可对比的历史性能日志（%s）", default_dir)
+            return
+    else:
+        baseline_path = Path(profile_compare)
+    try:
+        baseline = load_profile_log(baseline_path)
+    except ValueError as exc:
+        _logger.warning("加载基准性能日志失败，跳过对比: %s", exc)
+        return
+    current = load_profile_log(log_path)
+    print_profile_compare(current, baseline, baseline_path)
 
 
 def _execute_build(  # noqa: PLR0912, PLR0913

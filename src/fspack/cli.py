@@ -201,6 +201,8 @@ def _run_build(project: Path, ns: argparse.Namespace) -> None:
     )
     log_file = Path(ns.log_file).resolve() if ns.log_file else None
     log_format = LogFormat.parse(ns.log_format)
+    if (ns.profile_out or ns.profile_compare) and not ns.profile:
+        raise ProjectError("--profile-out/--profile-compare 需配合 --profile 使用")
     build(
         project,
         _resolve_mirror(ns.mirror),
@@ -213,6 +215,8 @@ def _run_build(project: Path, ns: argparse.Namespace) -> None:
         log_file=log_file,
         log_format=log_format,
         profile=ns.profile,
+        profile_out=Path(ns.profile_out).resolve() if ns.profile_out else None,
+        profile_compare=ns.profile_compare,
         auto_clean=getattr(ns, "auto_clean", False),
     )
 

@@ -103,6 +103,8 @@ def test_cli_build_extra_flag_propagates_to_options(tmp_path: Path, monkeypatch:
         log_file: Path | None = None,
         log_format: object = None,
         profile: bool = False,
+        profile_out: Path | None = None,
+        profile_compare: str | None = None,
         auto_clean: bool = False,
     ) -> None:
         captured["options"] = options
@@ -140,6 +142,8 @@ def test_cli_build_extra_overrides_config_default(tmp_path: Path, monkeypatch: p
         log_file: Path | None = None,
         log_format: object = None,
         profile: bool = False,
+        profile_out: Path | None = None,
+        profile_compare: str | None = None,
         auto_clean: bool = False,
     ) -> None:
         captured["options"] = options
@@ -178,6 +182,8 @@ def test_cli_build_config_default_used_when_no_extra_flag(tmp_path: Path, monkey
         log_file: Path | None = None,
         log_format: object = None,
         profile: bool = False,
+        profile_out: Path | None = None,
+        profile_compare: str | None = None,
         auto_clean: bool = False,
     ) -> None:
         captured["options"] = options

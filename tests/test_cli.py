@@ -132,6 +132,8 @@ def _capture_build() -> tuple[dict[str, Any], Any]:
         log_file: Path | None = None,
         log_format: object = None,
         profile: bool = False,
+        profile_out: Path | None = None,
+        profile_compare: str | None = None,
         auto_clean: bool = False,
     ) -> None:
         captured["project"] = project

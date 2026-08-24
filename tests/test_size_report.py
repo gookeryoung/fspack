@@ -369,6 +369,8 @@ def test_cli_build_no_size_report_flag_passed_to_build(tmp_path: Path, monkeypat
         log_file: Path | None = None,
         log_format: object = None,
         profile: bool = False,
+        profile_out: Path | None = None,
+        profile_compare: str | None = None,
         auto_clean: bool = False,
     ) -> None:
         captured["options"] = options
@@ -397,6 +399,8 @@ def test_cli_build_without_no_size_report_defaults_false(tmp_path: Path, monkeyp
         log_file: Path | None = None,
         log_format: object = None,
         profile: bool = False,
+        profile_out: Path | None = None,
+        profile_compare: str | None = None,
         auto_clean: bool = False,
     ) -> None:
         captured["options"] = options

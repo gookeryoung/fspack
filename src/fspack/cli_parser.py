@@ -46,6 +46,7 @@ class _Opt(NamedTuple):
     choices: tuple[object, ...] | None = None
     type: object = None
     nargs: str | None = None
+    const: object = _UNSET
 
 
 def _add_options(parser: argparse.ArgumentParser, opts: tuple[_Opt, ...]) -> None:
@@ -69,6 +70,8 @@ def _add_options(parser: argparse.ArgumentParser, opts: tuple[_Opt, ...]) -> Non
             kwargs["type"] = opt.type
         if opt.nargs is not None:
             kwargs["nargs"] = opt.nargs
+        if opt.const is not _UNSET:
+            kwargs["const"] = opt.const
         parser.add_argument(*opt.flags, **kwargs)
 
 
@@ -234,8 +237,25 @@ _BUILD_OPTS: tuple[_Opt, ...] = (
         ("--profile",),
         "启用耗时分析报告：构建结束后输出各阶段 wall time/占比/缓存命中/下载/节省，"
         "以及资源总览（wall/CPU/CPU 占比/内存峰值），识别瓶颈阶段。"
-        "用 tracemalloc 采集内存峰值（无新依赖）",
+        "用 tracemalloc 采集内存峰值（无新依赖）。"
+        "同时写入性能日志 JSON（默认 <项目>/.benchmarks/fsp-b-<时间戳>.json），供历史对比",
         action="store_true",
+    ),
+    _Opt(
+        ("--profile-out",),
+        "性能日志输出路径（需 --profile）：目录则自动命名写入，.json 文件则直写；默认 <项目>/.benchmarks/",
+        default=None,
+        metavar="PATH",
+    ),
+    _Opt(
+        ("--profile-compare",),
+        "与历史性能日志对比（需 --profile）：不带值与最近一次对比，"
+        "也可指定基准 JSON 文件路径。差异表格标红回归/标绿改善，"
+        "阶段仅列差异显著项（>50ms 且 >10%）",
+        nargs="?",
+        const="last",
+        default=None,
+        metavar="REF",
     ),
     _Opt(
         ("--analyze-deps",),

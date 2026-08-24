@@ -335,13 +335,268 @@ def test_cli_build_profile_flag_passed_to_build(tmp_path: Path, monkeypatch: pyt
         log_file: Path | None = None,
         log_format: object = None,
         profile: bool = False,
+        profile_out: Path | None = None,
+        profile_compare: str | None = None,
         auto_clean: bool = False,
     ) -> None:
         captured["profile"] = profile
+        captured["profile_out"] = profile_out
+        captured["profile_compare"] = profile_compare
 
     monkeypatch.setattr("fspack.builder.build", fake_build)
     cli.main(["b", str(tmp_path), "--profile"])
     assert captured["profile"] is True
+    assert captured["profile_out"] is None
+    assert captured["profile_compare"] is None
+
+
+def test_cli_build_profile_out_and_compare_passed_to_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``--profile-out``/``--profile-compare`` 透传给 build()，缺省值为 last."""
+    _make_minimal_project(tmp_path)
+    captured: dict[str, Any] = {}
+
+    def fake_build(  # noqa: PLR0913
+        project: Path,
+        mirror: object = None,
+        py_version: str | None = None,
+        dist_dir: Path | None = None,
+        embed_cache: Path | None = None,
+        target: object = None,
+        options: object = None,
+        extra_index_urls: tuple[str, ...] = (),
+        find_links: tuple[str, ...] = (),
+        dry_run: bool = False,
+        log_file: Path | None = None,
+        log_format: object = None,
+        profile: bool = False,
+        profile_out: Path | None = None,
+        profile_compare: str | None = None,
+        auto_clean: bool = False,
+    ) -> None:
+        captured["profile_out"] = profile_out
+        captured["profile_compare"] = profile_compare
+
+    out_dir = tmp_path / "perflogs"
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    cli.main(["b", str(tmp_path), "--profile", "--profile-out", str(out_dir), "--profile-compare"])
+    assert captured["profile_out"] == out_dir.resolve()
+    # --profile-compare 不带值 → 哨兵 "last"（与最近一次日志对比）
+    assert captured["profile_compare"] == "last"
+
+    ref = tmp_path / "base.json"
+    cli.main(["b", str(tmp_path), "--profile", "--profile-compare", str(ref)])
+    assert captured["profile_compare"] == str(ref)
+
+
+def test_cli_build_profile_out_requires_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``--profile-out`` 未配合 ``--profile`` 时报 ProjectError（退出码 2）."""
+    _make_minimal_project(tmp_path)
+
+    def fake_build(**kwargs: Any) -> None:  # pragma: no cover - 不应被调用
+        raise AssertionError("未启用 --profile 时不应执行构建")
+
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["b", str(tmp_path), "--profile-out", str(tmp_path / "out.json")])
+    assert exc_info.value.code == 2
+
+
+def test_cli_build_profile_compare_requires_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``--profile-compare`` 未配合 ``--profile`` 时报 ProjectError（退出码 2）."""
+    _make_minimal_project(tmp_path)
+
+    def fake_build(**kwargs: Any) -> None:  # pragma: no cover - 不应被调用
+        raise AssertionError("未启用 --profile 时不应执行构建")
+
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["b", str(tmp_path), "--profile-compare"])
+    assert exc_info.value.code == 2
+
+
+# ---- profile_log：性能日志落盘 / 加载 / 查找 / 对比 ----
+
+
+from fspack.packaging.profile_log import (  # noqa: E402
+    PROFILE_LOG_SCHEMA,
+    ProfileLogMeta,
+    find_latest_log,
+    load_profile_log,
+    print_profile_compare,
+    save_profile_report,
+)
+
+_META = ProfileLogMeta(name="app", version="0.1.0", python="3.13.14", platform="windows")
+
+
+def _make_report(wall: float = 1.0, stages: tuple[StageRecord, ...] = ()) -> ProfileReport:
+    """构造 ProfileReport 用于 profile_log 测试."""
+    return ProfileReport(wall_time=wall, cpu_time=wall * 0.5, memory_peak=1024, stages=stages)
+
+
+def test_save_profile_report_directory_mode(tmp_path: Path) -> None:
+    """目录模式：自动命名 fsp-b-*.json，目录自动创建，内容含元数据."""
+    out_dir = tmp_path / "nested" / ".benchmarks"
+    report = _make_report(stages=(_make_stage("解析项目", elapsed=0.5),))
+
+    path = save_profile_report(report, out_dir, _META)
+
+    assert path.parent == out_dir
+    assert path.name.startswith("fsp-b-") and path.name.endswith(".json")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["schema"] == PROFILE_LOG_SCHEMA
+    assert data["project"] == {"name": "app", "version": "0.1.0"}
+    assert data["python"] == "3.13.14"
+    assert data["platform"] == "windows"
+    assert data["wall_time"] == 1.0
+    assert data["stages"][0]["name"] == "解析项目"
+    assert data["created"]  # ISO 时间戳非空
+
+
+def test_save_profile_report_file_mode(tmp_path: Path) -> None:
+    """文件模式：.json 后缀直写指定文件名，父目录自动创建."""
+    out_file = tmp_path / "logs" / "manual.json"
+    path = save_profile_report(_make_report(), out_file, _META)
+    assert path == out_file
+    assert out_file.is_file()
+
+
+def test_save_profile_report_same_second_sequence(tmp_path: Path) -> None:
+    """同秒冲突：第二次落盘自动追加 -2 序号，不覆盖既有日志."""
+    first = save_profile_report(_make_report(), tmp_path, _META)
+    second = save_profile_report(_make_report(), tmp_path, _META)
+    assert first != second
+    assert second.name != first.name
+    # 同秒序号 -2，或跨秒新时间戳——均不覆盖
+    assert first.is_file() and second.is_file()
+
+
+def test_load_profile_log_roundtrip(tmp_path: Path) -> None:
+    """保存后加载 roundtrip：字段一致."""
+    path = save_profile_report(_make_report(stages=(_make_stage("依赖解析", elapsed=0.2),)), tmp_path, _META)
+    data = load_profile_log(path)
+    assert data["wall_time"] == 1.0
+    assert data["stages"][0]["elapsed"] == 0.2
+
+
+def test_load_profile_log_errors(tmp_path: Path) -> None:
+    """加载失败三情形：文件不存在 / 非法 JSON / schema 不符，均抛 ValueError."""
+    with pytest.raises(ValueError, match="不存在"):
+        load_profile_log(tmp_path / "missing.json")
+    bad_json = tmp_path / "bad.json"
+    bad_json.write_text("{not json", encoding="utf-8")
+    with pytest.raises(ValueError, match="合法 JSON"):
+        load_profile_log(bad_json)
+    bad_schema = tmp_path / "schema.json"
+    bad_schema.write_text('{"schema": "other/1"}', encoding="utf-8")
+    with pytest.raises(ValueError, match="schema"):
+        load_profile_log(bad_schema)
+
+
+def test_find_latest_log(tmp_path: Path) -> None:
+    """按文件名时间戳取最新；exclude 排除本次日志；空目录返回 None."""
+    older = tmp_path / "fsp-b-20260101-100000.json"
+    newer = tmp_path / "fsp-b-20260102-100000.json"
+    other = tmp_path / "unrelated.json"
+    for p in (older, newer, other):
+        p.write_text("{}", encoding="utf-8")
+    assert find_latest_log(tmp_path) == newer
+    assert find_latest_log(tmp_path, exclude=newer) == older
+    assert find_latest_log(tmp_path / "no-such-dir") is None
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert find_latest_log(empty) is None
+
+
+def _log_dict(
+    wall: float = 1.0,
+    cpu: float = 0.5,
+    mem: int = 1024,
+    stages: list[dict[str, Any]] | None = None,
+    version: str = "0.1.0",
+) -> dict[str, Any]:
+    """构造性能日志 dict（模拟 load_profile_log 返回值）."""
+    return {
+        "schema": PROFILE_LOG_SCHEMA,
+        "created": "2026-08-24T10:00:00",
+        "project": {"name": "app", "version": version},
+        "python": "3.13.14",
+        "platform": "windows",
+        "wall_time": wall,
+        "cpu_time": cpu,
+        "memory_peak": mem,
+        "cpu_ratio": cpu / wall if wall else 0.0,
+        "stages": stages or [],
+    }
+
+
+def test_print_profile_compare_renders(tmp_path: Path) -> None:
+    """对比表渲染：总览差异带符号百分比，显著阶段/新增/移除/折叠行齐全."""
+    current = _log_dict(
+        wall=1.2,
+        stages=[
+            {"name": "依赖解析", "elapsed": 0.8},
+            {"name": "解析项目", "elapsed": 0.3},
+            {"name": "新阶段", "elapsed": 0.2},
+        ],
+    )
+    baseline = _log_dict(
+        wall=1.0,
+        stages=[
+            {"name": "依赖解析", "elapsed": 0.4},
+            {"name": "解析项目", "elapsed": 0.31},
+            {"name": "旧阶段", "elapsed": 0.1},
+        ],
+    )
+    baseline_path = tmp_path / "fsp-b-20260101-100000.json"
+
+    with console.rich.capture() as capture:
+        print_profile_compare(current, baseline, baseline_path)
+    out = capture.get()
+
+    assert "性能对比" in out
+    assert "基准: fsp-b-20260101-100000.json" in out
+    # 总览差异：1.2 - 1.0 = +0.20s +20.0% ▲
+    assert "+20.0%" in out
+    # 显著阶段：0.8 - 0.4 = +0.40s +100.0%
+    assert "依赖解析" in out
+    assert "+100.0%" in out
+    # 不显著阶段折叠（0.3 vs 0.31）
+    assert "其余 1 个阶段" in out
+    assert "差异不显著" in out
+    # 新增/移除阶段
+    assert "新阶段" in out
+    assert "新增" in out
+    assert "旧阶段" in out
+    assert "移除" in out
+
+
+def test_print_profile_compare_environment_notes() -> None:
+    """环境不一致（版本/Python/平台）时表尾注明，提示对比需谨慎."""
+    current = _log_dict(version="0.2.0")
+    current["python"] = "3.14.0"
+    current["platform"] = "linux"
+    baseline = _log_dict(version="0.1.0")
+
+    with console.rich.capture() as capture:
+        print_profile_compare(current, baseline, Path("base.json"))
+    # rich 会按终端宽度对 caption 自动换行，断言前去除全部空白
+    flat = "".join(capture.get().split())
+    assert "项目版本0.1.0→0.2.0" in flat
+    assert "Python3.13.14→3.14.0" in flat
+    assert "平台windows→linux" in flat
+
+
+def test_print_profile_compare_improvement_green() -> None:
+    """改善方向（耗时减少）渲染 ▼ 与负百分比."""
+    current = _log_dict(wall=0.8)
+    baseline = _log_dict(wall=1.0)
+
+    with console.rich.capture() as capture:
+        print_profile_compare(current, baseline, Path("base.json"))
+    out = capture.get()
+    assert "-20.0%" in out
+    assert "▼" in out
 
 
 def test_cli_build_without_profile_defaults_false(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -363,6 +618,8 @@ def test_cli_build_without_profile_defaults_false(tmp_path: Path, monkeypatch: p
         log_file: Path | None = None,
         log_format: object = None,
         profile: bool = False,
+        profile_out: Path | None = None,
+        profile_compare: str | None = None,
         auto_clean: bool = False,
     ) -> None:
         captured["profile"] = profile
