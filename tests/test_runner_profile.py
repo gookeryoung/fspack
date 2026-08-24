@@ -448,3 +448,27 @@ def test_print_summary_small_gap_hidden(capsys: pytest.CaptureFixture[str]) -> N
     _print_summary(6000.0, 0, [("loader 总", 10.0, "")], timing, [])
     out = capsys.readouterr().out
     assert "未细分" not in out
+
+
+def test_print_summary_fast_program_high_ratio_gap_shown(capsys: pytest.CaptureFixture[str]) -> None:
+    """快程序小绝对值大占比 gap：显示并归因为进程创建与收尾等外部开销.
+
+    wall 64ms、已归因 26.4ms（entry_done 累计）→ gap ~38ms 占比 ~59%
+    超 30% 阈值：展示"进程创建与收尾(约)"（子进程创建/杀毒扫描/解释器
+    退出不在任何打点段内），回答快程序的"时间去哪了"。
+    """
+    timing = {"env_ready": 0.1, "entry_start": 0.2, "entry_done": 26.4}
+    _print_summary(64.0, 0, [], timing, [])
+    out = capsys.readouterr().out
+    assert "未细分" in out
+    assert "进程创建与收尾(约)" in out
+    assert "外部开销" in out
+    assert "~38ms" in out
+
+
+def test_print_summary_fast_program_low_ratio_gap_hidden(capsys: pytest.CaptureFixture[str]) -> None:
+    """快程序小绝对值小占比 gap：仍隐藏（控制噪声）."""
+    timing = {"env_ready": 0.1, "entry_start": 0.2, "entry_done": 60.0}
+    _print_summary(64.0, 0, [], timing, [])
+    out = capsys.readouterr().out
+    assert "未细分" not in out

@@ -55,10 +55,12 @@ _PCT_W = 7
 _BAR_W = 12
 # 汇总表总列宽 = 2 + TAG + LABEL + MS + 2 + PCT + 2 + BAR
 _SEP_LEN = 2 + _TAG_W + _LABEL_W + _MS_W + 2 + _PCT_W + 2 + _BAR_W
-# "未细分"行的显示阈值：gap 超过该绝对值且占总时长 5% 以上才显示，
-# 避免短运行的控制噪声触发
+# "未细分"行的显示阈值：gap 超过 100ms 且占总时长 5% 以上，或占比超
+# 30%（快程序的外部开销占比天然高）时显示，避免控制噪声的同时保留
+# 对"时间去哪了"的自解释能力
 _GAP_MIN_MS = 100.0
 _GAP_MIN_RATIO = 0.05
+_GAP_HIGH_RATIO = 0.30
 
 
 def run_with_profile(cmd: list[str], env: dict[str, str] | None = None) -> int:
@@ -280,19 +282,25 @@ def _print_unaccounted(
     timing_stages: dict[str, float],
 ) -> None:
     """打印"未细分"行：wall 减去已归因阶段（loader 总耗时 + 解释器初始化 +
-    wrapper 末次打点累计值）。gap 显著（超过 100ms 且占总时长 5% 以上）时
-    展示并按可用打点解释去向：旧 dist 无 wrapper 打点 → 提示重新构建细分；
-    有打点 → 进程收尾；缺末次打点 → 入口未完成。
+    wrapper 末次打点累计值）。
+
+    - gap ≥ 100ms 且占 5% 以上：按可用打点解释去向——旧 dist 无 wrapper
+      打点 → 提示重新构建细分；缺末次打点 → 入口未完成；否则进程收尾。
+    - gap < 100ms 但占比超 30%：快程序的外部开销占比天然高（子进程创建、
+      杀毒扫描、解释器退出等不在任何打点段内），同样展示并注明。
     """
     env_ready = timing_stages.get("env_ready")
     entry_done = timing_stages.get("entry_done")
     gap = wall_ms - (loader_total + interp_ms + max(entry_done or 0.0, env_ready or 0.0))
-    if gap < _GAP_MIN_MS or gap < wall_ms * _GAP_MIN_RATIO:
+    high_ratio = gap >= wall_ms * _GAP_HIGH_RATIO
+    if not high_ratio and (gap < _GAP_MIN_MS or gap < wall_ms * _GAP_MIN_RATIO):
         return
     if env_ready is None:
         label, reason = "旧 dist 无 wrapper 打点", "重新 fsp b 后可细分环境准备与入口执行"
     elif entry_done is None:
         label, reason = "入口执行未完成打点", "os._exit 或异常退出，入口内耗时未归因"
+    elif gap < _GAP_MIN_MS:
+        label, reason = "进程创建与收尾(约)", "子进程创建/杀毒扫描/解释器退出等外部开销"
     else:
         label, reason = "进程收尾", "解释器退出与资源清理"
     _row("[未细分]", label, f"~{gap:.0f}ms", _fmt_pct(gap, wall_ms), _fmt_bar(gap, wall_ms))
