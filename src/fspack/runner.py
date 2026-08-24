@@ -62,8 +62,8 @@ def run(
     ``options.debug=True`` 时绕过 loader exe，用 embed python 直接跑入口
     脚本，使 GUI 应用（Windows subsystem）的 stdout/stderr 可见。
 
-    ``options.entry`` 指定多入口项目中要运行的入口名（与 ``[project.scripts]``/
-    ``[tool.fspack.entries]`` 键匹配）；单入口项目或 ``entry=None`` 时使用默认入口。
+    ``options.entry`` 指定多入口项目中要运行的入口名（与 ``[project.scripts]``
+    键匹配）；单入口项目或 ``entry=None`` 时使用默认入口。
 
     ``options.profile.enabled=True`` 时注入 ``FSPACK_LOADER_VERBOSE``/
     ``FSPACK_TIMING``/``PYTHONPROFILEIMPORTTIME`` 环境变量激活三级打点，

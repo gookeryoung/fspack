@@ -77,7 +77,7 @@ fspack 扫描源码 `import` 推断依赖，并按使用情况精简 wheel。例
 ### 多入口项目
 
 一个项目里有 CLI 工具 + GUI 界面 + Web 服务，可声明多个入口，一次打包生成多个
-exe，共享运行时与依赖。默认推荐使用 PEP 621 标准的 `[project.scripts]`（fspack
+exe，共享运行时与依赖。使用 PEP 621 标准的 `[project.scripts]`（fspack
 自动识别 flat/src layout，将 dotted module 解析为脚本路径）：
 
 ```toml
@@ -87,14 +87,8 @@ gui = "myapp.gui:main"   # 生成 gui.exe（GUI 类型，无控制台窗口）
 web = "myapp.web:main"   # 生成 web.exe
 ```
 
-已声明 `[project.scripts]` 时无需再定义 `[tool.fspack.entries]`。后者仅在需要
-覆盖同名入口或补充打包专属入口（如调试脚本）时使用：
-
-```toml
-[tool.fspack.entries]
-cli = "scripts/cli.py"   # 覆盖同名入口，指定脚本相对路径
-debug = "debug.py"       # 补充额外入口
-```
+顶层脚本（单段模块名）同样支持，如 `cli = "cli:main"` 解析为项目根目录的
+`cli.py`。
 
 ### 离线打包
 
@@ -102,11 +96,15 @@ debug = "debug.py"       # 补充额外入口
 tkinter 补充包）只从本地缓存读取，缓存未命中时立即报清晰错误，不卡死、不重试网络。
 适用于内网 CI、离线打包机或需精确控制缓存来源的场景。
 
-#### 环境变量
+也可用 `fsp b -O`（或 `--offline`）做单次约定：仅本次构建启用离线模式，
+无需预先设置环境变量。
 
-| 变量 | 作用 | 默认值 |
+#### 环境变量与 CLI 标志
+
+| 变量/标志 | 作用 | 默认值 |
 |------|------|--------|
 | `FSPACK_OFFLINE=1` | 启用离线模式（值为 `1`/`true`/`yes`/`on`，不区分大小写） | 关闭 |
+| `fsp b -O` / `--offline` | 单次构建启用离线模式（等价 `FSPACK_OFFLINE=1`，仅当前命令生效） | 关闭 |
 | `FSPACK_CACHE_DIR` | 自定义缓存根目录 | `~/.fspack/cache` |
 
 缓存目录结构：
@@ -117,6 +115,7 @@ tkinter 补充包）只从本地缓存读取，缓存未命中时立即报清晰
 ├── standalone/     # Linux/macOS python-build-standalone tar.gz
 ├── wheels/         # 第三方 wheel + 依赖解析缓存
 ├── nuitka/         # Nuitka 包 + 编译用 standalone python
+├── nuitka-winlibs-mingw/  # Nuitka winlibs gcc 工具链（Windows 编译 .pyd，py<3.13）
 ├── loaders/        # C loader 编译缓存
 ├── ccache/         # ccache 二进制与编译缓存
 └── tkinter/        # tkinter 补充包缓存
@@ -137,11 +136,13 @@ fsp b                    # 正常构建，自动下载并缓存
 **2. 离线机器构建**
 
 ```bash
-# 设置环境变量启用离线模式 + 指定缓存路径
+# 方式一：环境变量 + 指定缓存路径
 export FSPACK_OFFLINE=1
 export FSPACK_CACHE_DIR=/path/to/cache
-
 fsp b                    # 仅从本地缓存读取，不联网
+
+# 方式二：-O 单次约定（仅本次构建离线）
+fsp b -O
 ```
 
 **3. 用 --find-links 指定额外的本地 wheel 目录**
@@ -150,8 +151,7 @@ fsp b                    # 仅从本地缓存读取，不联网
 `find-links`）指定额外的本地 wheel 仓库，离线模式下也会搜索这些路径：
 
 ```bash
-export FSPACK_OFFLINE=1
-fsp b --find-links /data/wheels --find-links /shared/wheels
+fsp b -O --find-links /data/wheels --find-links /shared/wheels
 ```
 
 ```toml
@@ -417,12 +417,9 @@ slim-exclude = [                           # wheel 精简：强制剥离
 extra-index-urls = ["https://pypi.company.com/simple/"]  # 私有 PyPI 源
 find-links = ["./wheels"]                  # 本地 wheel 目录
 
-[project.scripts]                          # 多入口声明（推荐，PEP 621 标准）
+[project.scripts]                          # 多入口声明（PEP 621 标准）
 cli = "myapp.cli:main"
 gui = "myapp.gui:main"
-
-[tool.fspack.entries]                      # 可选：覆盖同名入口/补充打包专属入口
-debug = "debug.py"
 ```
 
 ### wheel 精简用户规则

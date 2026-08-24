@@ -214,6 +214,13 @@ _BUILD_OPTS: tuple[_Opt, ...] = (
         dest="find_links",
     ),
     _Opt(
+        ("-O", "--offline"),
+        "单次构建启用离线模式（与 FSPACK_OFFLINE=1 环境变量等价）：所有下载阶段"
+        "（运行时、wheel、Nuitka、ccache、tkinter 补充包）只从本地缓存读取，"
+        "缓存未命中时立即报错，不联网",
+        action="store_true",
+    ),
+    _Opt(
         ("-R", "--recursive"),
         "递归扫描 project 目录下所有含 pyproject.toml 的子项目，依次构建。"
         "跳过 .venv/dist/build/.git 等开发期目录；单项目失败不中断，"

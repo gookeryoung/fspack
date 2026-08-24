@@ -7,13 +7,17 @@ facade，所有 ``cls.`` 调用经 MRO 自动派发到对应 mixin。
 职责边界：
 
 - C 编译器检查（Windows mingw / Linux gcc）
+- Windows winlibs-mingw 预填充编排（经 :mod:`fspack.packaging.nuitka.winlibs`
+  的 :meth:`NuitkaWinlibs.ensure_winlibs_mingw`，py<3.13 时 Nuitka 走 winlibs）
 - nuitka 锁定版本安装到本地缓存（``pip install --target`` 从 sdist 构建）
 - 构建机 pip 模块可用性检查与两轮自助安装（ensurepip / uv pip install pip）
-- 构建机编译环境变量构建（``_build_compile_env`` 设置 ``CC`` / ``CFLAGS``）
+- 构建机编译环境变量构建（``_build_compile_env``：Linux 设 ``CC``，
+  Windows 重定向 ``NUITKA_CACHE_DIR_DOWNLOADS`` 到 fspack 缓存目录）
 - nuitka 缓存目录推导与缓存命中检查
 
 不涉及：standalone python 准备（见 :mod:`fspack.packaging.nuitka.standalone`）、
 ccache 管理（见 :mod:`fspack.packaging.nuitka.ccache`）、
+winlibs 下载解压实现（见 :mod:`fspack.packaging.nuitka.winlibs`）、
 编译流程（见 :mod:`fspack.packaging.nuitka.compile`）、
 验证逻辑（见 :mod:`fspack.packaging.nuitka.verify`）。
 """
@@ -30,6 +34,7 @@ from typing import TYPE_CHECKING
 from fspack.config import MirrorConfig, is_offline, nuitka_version_for
 from fspack.config.versions import _split_t_suffix
 from fspack.exceptions import NuitkaError
+from fspack.packaging.nuitka.winlibs import uses_winlibs
 from fspack.platform import Platform
 from fspack.progress import StageRecorder
 
@@ -116,34 +121,63 @@ class NuitkaEnv:
 
     @staticmethod
     def _build_compile_env(target: Platform, ccache_exe: Path | None) -> dict[str, str]:
-        """构建注入 Nuitka 子进程的环境变量，始终设置 ``CC`` 指定 C 编译器.
+        """构建注入 Nuitka 子进程的环境变量：Linux 设 ``CC``，Windows 重定向下载缓存.
 
-        **为何始终设置 ``CC``**：Nuitka 4.x 内置 zig 作为可选 C 编译器，默认交互式
-        询问是否下载。即使用 ``--assume-yes-for-downloads`` 自动接受，离线时仍会
-        等待下载超时。显式设置 ``CC`` 让 scons 直接用指定编译器，Nuitka 不会选择
-        zig，从根源上避免 zig 下载。:meth:`ensure_env` 已校验 gcc/mingw 可用。
+        **Windows**：不设 ``CC``/``CFLAGS``，仅设 ``NUITKA_CACHE_DIR_DOWNLOADS``
+        指向 fspack 缓存目录 ``<cache_root>/nuitka-winlibs-mingw``：
 
-        scons 读取 ``CC`` 环境变量决定 C 编译器路径：
+        - ``CC``：Nuitka scons 在 Windows 上无条件拒绝外部 gcc（打印
+          "Non downloaded winlibs-gcc ... is being ignored" 后忽略，仅信任
+          自己下载缓存的 winlibs gcc），设置无效且产生噪音提示。清除宿主
+          可能残留的 ``CC``/``CFLAGS``，让 scons 走下载缓存 fallback
+          （py<3.13 → winlibs，py>=3.13 → zig），winlibs 由
+          :meth:`NuitkaWinlibs.ensure_winlibs_mingw` 预填充，zig 由
+          ``--assume-yes-for-downloads`` 自动下载
+        - ``CFLAGS``：scons 自设 ``_WIN32_WINNT``（Nuitka 4.1.3 无条件
+          ``0x0601`` 即 Win7，2.5.1 mingw 分支 ``0x0501`` 更保守），fspack
+          再注入同宏触发 "Inherited CFLAGS" 提示且值被覆盖，纯冗余已删除
+          （Win7 兼容不受影响，见上两版本自设值）
+        - ``NUITKA_CACHE_DIR_DOWNLOADS``：重定向 Nuitka 下载缓存（winlibs
+          gcc / zig）到 fspack 缓存目录，与 :meth:`ensure_winlibs_mingw`
+          预填充布局一致，scons 检测 gcc.exe 已存在即缓存命中不下载
 
-        - ccache 启用：``CC="ccache <compiler>"``，ccache 透明缓存编译结果
+        **Linux**：始终设置 ``CC`` 指定 C 编译器。Nuitka 4.x 内置 zig 作为
+        可选 C 编译器，默认交互式询问是否下载。即使用
+        ``--assume-yes-for-downloads`` 自动接受，离线时仍会等待下载超时。
+        显式设置 ``CC`` 让 scons 直接用指定编译器，Nuitka 不会选择 zig，
+        从根源上避免 zig 下载。:meth:`ensure_env` 已校验 gcc 可用。
+
+        - ccache 启用：``CC="ccache gcc"``，ccache 透明缓存编译结果
           （源码未变时直接返回 .o 缓存），并设 ``CCACHE_DIR`` 指定缓存目录
-        - ccache 未启用：``CC="<compiler>"``，直接用 gcc/mingw 编译
+        - ccache 未启用：``CC="gcc"``，直接编译
 
-        Linux 用 ``gcc``，Windows 用 mingw 交叉编译器 ``x86_64-w64-mingw32-gcc``
-        （与 :func:`fspack.packaging.loader.MINGW_GCC` 一致）。
-
-        **Win7 兼容**：Windows 目标额外设置 ``CFLAGS=-D_WIN32_WINNT=0x0601``，
-        限制 MinGW 头文件 targeting Win7（默认 ``0x0A00`` 即 Win10），避免 .pyd
-        调用 Win10+ API 导致 Win7 加载失败。scons 读取 ``CFLAGS`` 追加到 ``CCFLAGS``。
+        Windows 上 ccache 不生效（``CC`` 被 scons 忽略，编译走 Nuitka 下载的
+        winlibs/zig 完整路径不经 ccache 包装），``ccache_exe`` 参数被忽略。
         """
-        from fspack.packaging.loader import LINUX_GCC, MINGW_GCC
+        from fspack.packaging.loader import LINUX_GCC
 
-        compiler = LINUX_GCC if target is Platform.LINUX else MINGW_GCC
         env = os.environ.copy()
+
+        if target is Platform.WINDOWS:
+            # Windows：CC 被 scons 无条件忽略（见 docstring），清除宿主可能残留的
+            # CC/CFLAGS 避免噪音提示（"Non downloaded winlibs-gcc ... ignored" /
+            # "Inherited CFLAGS ... variable"），编译器来源由 fspack 接管；
+            # 重定向 Nuitka 下载缓存到 fspack 缓存目录，与 ensure_winlibs_mingw
+            # 预填充布局一致，scons 检测 gcc.exe 存在即直接使用
+            from fspack.config.cache import nuitka_winlibs_cache_dir
+
+            env.pop("CC", None)
+            env.pop("CFLAGS", None)
+            winlibs_dir = nuitka_winlibs_cache_dir()
+            winlibs_dir.mkdir(parents=True, exist_ok=True)
+            env["NUITKA_CACHE_DIR_DOWNLOADS"] = str(winlibs_dir)
+            _logger.info("Nuitka 下载缓存重定向到 %s", env["NUITKA_CACHE_DIR_DOWNLOADS"])
+            return env
+
         if ccache_exe is not None:
             # ccache 路径含空格（如 Windows 用户目录）时须引号包裹，
             # 否则 scons 解析 CC 会按空格切分导致编译器路径截断
-            env["CC"] = f'"{ccache_exe}" {compiler}'
+            env["CC"] = f'"{ccache_exe}" {LINUX_GCC}'
             # ccache 缓存目录：默认 ~/.cache/ccache，显式指定到 fspack 缓存根便于管理
             from fspack.config.cache import cache_root
 
@@ -152,18 +186,8 @@ class NuitkaEnv:
             env["CCACHE_DIR"] = str(ccache_dir)
             _logger.info("启用 ccache: CC=%s, CCACHE_DIR=%s", env["CC"], env["CCACHE_DIR"])
         else:
-            env["CC"] = compiler
+            env["CC"] = LINUX_GCC
             _logger.info("使用系统 C 编译器: CC=%s", env["CC"])
-
-        # Win7 兼容：MinGW 头文件默认 _WIN32_WINNT=0x0A00（Win10），.pyd 可能调用
-        # Win10+ API 导致 Win7 加载失败。覆盖为 0x0601（Win7）确保 .pyd 仅调用
-        # Win7 可用 API。scons 读取 CFLAGS 环境变量追加到 CCFLAGS 传给 gcc。
-        if target is Platform.WINDOWS:
-            win7_flag = "-D_WIN32_WINNT=0x0601"
-            existing_cflags = env.get("CFLAGS", "")
-            if win7_flag not in existing_cflags:
-                env["CFLAGS"] = f"{existing_cflags} {win7_flag}".strip()
-                _logger.info("设置 CFLAGS=%s（Win7 兼容）", env["CFLAGS"])
 
         return env
 
@@ -287,10 +311,13 @@ class NuitkaEnv:
         步骤：
 
         1. :meth:`_check_c_compiler` 检查 C 编译器，缺失 raise :class:`NuitkaError`
-        2. 按 :func:`nuitka_version_for` 取锁定版本号
-        3. :meth:`_is_nuitka_cached` 检查缓存目录是否已有 nuitka
-        4. 无则用构建机 ``pip install --target`` 从 sdist 构建并解压到缓存目录
-        5. :meth:`_is_nuitka_cached` 再次验证安装成功
+        2. Windows 且 py<3.13（:func:`fspack.packaging.nuitka.winlibs.uses_winlibs`）：
+           :meth:`NuitkaWinlibs.ensure_winlibs_mingw` 预填充 winlibs gcc 到
+           ``<cache_root>/nuitka-winlibs-mingw``，scons 编译时缓存命中不下载
+        3. 按 :func:`nuitka_version_for` 取锁定版本号
+        4. :meth:`_is_nuitka_cached` 检查缓存目录是否已有 nuitka
+        5. 无则用构建机 ``pip install --target`` 从 sdist 构建并解压到缓存目录
+        6. :meth:`_is_nuitka_cached` 再次验证安装成功
 
         nuitka 4.x 在 PyPI 只发布 sdist（无预构建 wheel），:func:`download_wheels` 的
         ``--only-binary=:all:`` 无法处理。改用 ``pip install --target <cache>`` 让 pip
@@ -311,6 +338,12 @@ class NuitkaEnv:
             NuitkaError: C 编译器缺失、构建机缺 pip、或安装后缓存目录仍无 nuitka。
         """
         cls._check_c_compiler(target)
+
+        # Windows 且 py<3.13：Nuitka scons fallback 到 winlibs gcc（py>=3.13 走
+        # zig 由 --assume-yes-for-downloads 自动下载），预填充 winlibs 到 fspack
+        # 缓存目录，编译时 scons 缓存命中不下载、不打印拒绝提示
+        if target is Platform.WINDOWS and uses_winlibs(py_version):
+            cls.ensure_winlibs_mingw(py_version, stage)
 
         nuitka_ver = nuitka_version_for(py_version)
         cache_dir = cls._nuitka_cache_dir(cache_root, py_version)

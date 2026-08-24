@@ -44,8 +44,10 @@
     ``~/.fspack/cache/nuitka/``；Windows 优先复用构建机自身 python（major.minor
     与目标一致时免下载），否则用缓存于 ``~/.fspack/cache/python/`` 的 standalone
     python 运行编译（embed python 不完整会触发 reExecute fork bomb），tarball 与
-    tkinter 打包共享 ``standalone-windows/`` 缓存；
-    入口文件保留 ``.py`` 不编译（``runpy.run_path()`` 兼容）；
+    tkinter 打包共享 ``standalone-windows/`` 缓存；Windows 编译器由 Nuitka 下载缓存
+    提供（注入 ``NUITKA_CACHE_DIR_DOWNLOADS`` 重定向到 ``nuitka-winlibs-mingw/``，
+    py<3.13 预填充 winlibs gcc，py>=3.13 走 zig 自动下载，系统 mingw 会被 scons
+    拒绝不使用）；入口文件保留 ``.py`` 不编译（``runpy.run_path()`` 兼容）；
     stamp 缓存键 = ``nuitka_version|py_version|src_fingerprint|entry_rels``，
     命中跳过整个阶段；交叉构建自动跳过
 11. **Win7 兼容 DLL 注入**（Windows，Python 3.9+）：注入 api-ms-win-core-path
@@ -78,12 +80,12 @@ dist 布局
 
 入口声明来源与优先级：
 
-1. ``[project.scripts]``（PEP 621 标准，默认推荐）：``name = "module:function"``，
-   fspack 自动识别 flat/src layout 将 dotted module 解析为脚本文件路径；
-   已声明该表时无需再定义 ``[tool.fspack.entries]``。
-2. ``[tool.fspack.entries]``（可选）：``name = "script_rel"``，相对项目目录的
-   脚本路径；同名入口覆盖 ``[project.scripts]``，也可补充打包专属入口。
-3. 无任何入口声明时按文件名兜底扫描（``detect_entry``）。
+1. ``[project.scripts]``（PEP 621 标准）：``name = "module:function"``，
+   fspack 自动识别 flat/src layout 将 dotted module 解析为脚本文件路径。
+2. 无任何入口声明时按文件名兜底扫描（``detect_entry``）。
+
+``[tool.fspack.entries]`` 已移除支持：声明该表时报错，提示迁移到
+``[project.scripts]``。
 
 多入口模式下每个入口写入 ``<name>.entry`` 文件，C loader 运行时按
 ``<exe_basename>.entry`` 查找入口脚本。单入口项目仍写 ``.entry`` 文件，向后兼容。
@@ -102,20 +104,22 @@ dist 布局
 离线模式
 --------
 
-fspack 支持通过环境变量启用的离线模式，适用于无网络环境（内网 CI、离线打包机）
-或需精确控制缓存来源的场景。
+fspack 支持通过环境变量或 CLI 标志启用的离线模式，适用于无网络环境（内网 CI、
+离线打包机）或需精确控制缓存来源的场景。
 
-环境变量
+启用方式
 ~~~~~~~~
 
 .. list-table::
    :widths: 30 70
    :header-rows: 1
 
-   * - 变量
+   * - 变量/标志
      - 作用
    * - ``FSPACK_OFFLINE``
      - 设为 ``1``/``true``/``yes``/``on``（不区分大小写）启用离线模式
+   * - ``fsp b -O`` / ``--offline``
+     - 单次构建启用离线模式（分发时设 ``FSPACK_OFFLINE=1``，仅当前命令进程生效）
    * - ``FSPACK_CACHE_DIR``
      - 覆盖缓存根目录（默认 ``~/.fspack/cache``），所有子模块缓存目录派生自此
 
@@ -133,20 +137,23 @@ fspack 支持通过环境变量启用的离线模式，适用于无网络环境�
    ├── wheels/               # 第三方 wheel + 依赖解析缓存（.deps_cache.json）
    ├── python/               # Nuitka 编译用 standalone python（按 standalone 版本分目录）
    ├── nuitka/               # Nuitka 包（按 py_version 分目录）
+   ├── nuitka-winlibs-mingw/ # Nuitka winlibs gcc 工具链（Windows 编译 .pyd，py<3.13；
+   │                         #   内部按 Nuitka downloads 约定 gcc/x86_64/<specificity>/）
    ├── loaders/              # C loader 编译缓存（按 source hash 命名）
    ├── ccache/               # ccache 二进制与编译缓存
    └── tkinter/              # tkinter 补充包缓存（按 standalone 版本命名的 zip）
 
 子模块缓存目录通过 :mod:`fspack.config.cache` 的 ``embed_cache_dir()``/
 ``standalone_cache_dir()``/``wheel_cache_dir()``/``nuitka_cache_dir()``/
-``loader_cache_dir()``/``ccache_cache_dir()``/``tkinter_cache_dir()`` 派生，
-统一从 ``cache_root()`` 计算，确保 ``FSPACK_CACHE_DIR`` 环境变量对所有子模块生效。
+``nuitka_winlibs_cache_dir()``/``loader_cache_dir()``/``ccache_cache_dir()``/
+``tkinter_cache_dir()`` 派生，统一从 ``cache_root()`` 计算，确保
+``FSPACK_CACHE_DIR`` 环境变量对所有子模块生效。
 
 工作原理
 ~~~~~~~~
 
 离线模式在所有下载入口（``runtime/download.py``/``wheels/downloader.py``/``nuitka/env.py``/
-``builtin.py``）检查 ``is_offline()``，缓存命中时正常返回，缓存未命中时立即抛出
+``nuitka/winlibs.py``/``builtin.py``）检查 ``is_offline()``，缓存命中时正常返回，缓存未命中时立即抛出
 包含"离线模式"关键字的明确异常，不尝试网络请求。错误信息包含：
 
 - 缺失的文件名或依赖名
@@ -216,6 +223,9 @@ fspack 支持通过环境变量启用的离线模式，适用于无网络环境�
    * - ``nuitka/env.py``
      - ``NuitkaError``
      - standalone python / Nuitka 包缓存未命中
+   * - ``nuitka/winlibs.py``
+     - ``NuitkaError``
+     - Windows py<3.13 时 winlibs gcc 工具链缓存未命中
    * - ``builtin.py``
      - ``BuiltinError``
      - tkinter 补充包的 standalone Windows tarball 缓存未命中
@@ -292,8 +302,8 @@ packaging/ 子包
      - 安装包 facade：NSIS / .deb + tar.gz / .pkg + .dmg / 跨平台 zip（``ReleaseRequest``/``SignOptions`` 参数收敛）
    * - ``wheels/``（``__init__.py`` / ``downloader.py`` / ``resolver.py`` / ``uv_bridge.py`` / ``parallel.py`` / ``sdist.py`` / ``cache.py`` / ``markers.py``）
      - wheel 下载 facade：pip/uv 调用 + sdist 回退 + 并行下载 + 依赖解析缓存 + python_version 标记预过滤
-   * - ``nuitka/``（``__init__.py`` / ``compiler.py`` / ``env.py`` / ``standalone.py`` / ``ccache.py`` / ``compile.py`` / ``strip.py`` / ``verify.py`` / ``protocol.py``）
-     - Nuitka 编译 facade：环境就绪 + standalone python + ccache + 编译流程 + 产物剥离 + 验证
+   * - ``nuitka/``（``__init__.py`` / ``compiler.py`` / ``env.py`` / ``standalone.py`` / ``winlibs.py`` / ``ccache.py`` / ``compile.py`` / ``strip.py`` / ``verify.py`` / ``protocol.py`` / ``progress.py``）
+     - Nuitka 编译 facade：环境就绪 + standalone python + winlibs gcc 工具链 + ccache + 并行编译调度 + 编译流程 + 产物剥离 + 验证
    * - ``pyc/``（``__init__.py`` / ``compile.py`` / ``stamp.py`` / ``source_strip.py``）
      - 字节码预编译（``compileall`` + stamp 缓存 + .py 源码剥离）
    * - ``win7/``（``__init__.py`` / ``check.py`` / ``dll.py`` / ``scan.py``）

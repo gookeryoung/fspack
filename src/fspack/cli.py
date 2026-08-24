@@ -81,6 +81,11 @@ def main(argv: list[str] | None = None) -> None:
 
     console.setup_logging(verbose=ns.verbose)
 
+    # -O/--offline 单次约定：设 FSPACK_OFFLINE 使 is_offline() 生效，
+    # 与环境变量 FSPACK_OFFLINE=1 等价，仅当前命令进程内有效
+    if getattr(ns, "offline", False):
+        os.environ["FSPACK_OFFLINE"] = "1"
+
     try:
         _dispatch(command, ns)
     except FspackError as exc:

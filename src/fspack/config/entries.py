@@ -1,13 +1,11 @@
-"""入口脚本识别：``[tool.fspack.entries]``/``[project.scripts]`` 解析与兜底扫描.
+"""入口脚本识别：``[project.scripts]`` 解析与兜底扫描.
 
-从 :mod:`fspack.config.parsing` 拆分而来，封装三类入口识别逻辑：
+从 :mod:`fspack.config.parsing` 拆分而来，封装两类入口识别逻辑：
 
-1. ``[tool.fspack.entries]`` 解析（:func:`_parse_entries`）：``name = "script_rel"``，
-   值为脚本相对项目目录的路径，优先级高于 ``[project.scripts]``。
-2. ``[project.scripts]`` 解析（:func:`_parse_project_scripts`，PEP 621）：
+1. ``[project.scripts]`` 解析（:func:`_parse_project_scripts`，PEP 621）：
    ``name = "module:function"``，自动识别 flat/src layout 将 dotted module
    解析为脚本文件路径。
-3. 兜底扫描（:func:`detect_entry`）：无任何入口声明时按 ``<name>.py``/
+2. 兜底扫描（:func:`detect_entry`）：无任何入口声明时按 ``<name>.py``/
    ``<name>/__main__.py``/顶层 ``*.py`` 顺序识别含 ``def main()`` 或
    ``if __name__ == "__main__"`` 的脚本。
 
@@ -26,34 +24,6 @@ from fspack.config.models import AppType, EntryPoint
 from fspack.exceptions import ProjectError
 
 __all__ = ["detect_entry"]
-
-
-def _parse_entries(
-    project_dir: Path,
-    entries_tbl: dict[str, Any],
-) -> tuple[EntryPoint, ...]:
-    """解析 ``[tool.fspack.entries]`` 表为 EntryPoint 元组。
-
-    键为入口名（用作 exe 名，须为合法标识符风格），值为入口脚本相对
-    项目目录的路径。脚本路径不存在或为空时报错。Python 字典保持插入序，
-    首个入口作为主入口（保持向后兼容）。
-
-    多入口模式下每个入口的 ``app_type`` 按脚本自身 import 推断，不看项目级
-    declared（不同入口可能是不同类型，如 cli/gui/web 混合）。
-    """
-    if not entries_tbl:
-        raise ProjectError("[tool.fspack.entries] 为空，请删除该表或至少声明一个入口")
-    entries: list[EntryPoint] = []
-    for entry_name, script_rel in entries_tbl.items():
-        if not isinstance(entry_name, str) or not entry_name:
-            raise ProjectError(f"[tool.fspack.entries] 入口名无效: {entry_name!r}")
-        if not isinstance(script_rel, str) or not script_rel.strip():
-            raise ProjectError(f"[tool.fspack.entries] {entry_name} 的脚本路径为空")
-        script_path = (project_dir / script_rel).resolve()
-        if not script_path.is_file():
-            raise ProjectError(f"[tool.fspack.entries] {entry_name} 的脚本不存在: {script_rel}")
-        entries.append(EntryPoint.from_script(entry_name, script_path))
-    return tuple(entries)
 
 
 def _parse_project_scripts(
@@ -137,38 +107,6 @@ def _resolve_module_script(project_dir: Path, module_dotted: str) -> Path | None
             if candidate.is_file():
                 return candidate
     return None
-
-
-def _merge_entries(
-    scripts_entries: tuple[EntryPoint, ...],
-    fspack_entries: tuple[EntryPoint, ...],
-) -> tuple[EntryPoint, ...]:
-    """合并两个入口元组，``fspack_entries`` 覆盖 ``scripts_entries`` 同名入口.
-
-    合并顺序：先 ``scripts_entries``（保持原序），再追加 ``fspack_entries``
-    中未在 scripts 出现的新入口。同名入口（按 ``name`` 比较）取 ``fspack_entries``
-    的版本（fspack 优先级更高，符合"重复定义以 fspack 为准"语义）。
-
-    返回合并后的 EntryPoint 元组，保留各来源的插入序。
-    """
-    if not scripts_entries:
-        return fspack_entries
-    if not fspack_entries:
-        return scripts_entries
-    fspack_by_name = {ep.name: ep for ep in fspack_entries}
-    fspack_only_names = set(fspack_by_name)
-    merged: list[EntryPoint] = []
-    for ep in scripts_entries:
-        if ep.name in fspack_by_name:
-            merged.append(fspack_by_name[ep.name])
-            fspack_only_names.discard(ep.name)
-        else:
-            merged.append(ep)
-    # 追加 fspack 独有的入口（保持 fspack entries 原序）
-    for ep in fspack_entries:
-        if ep.name in fspack_only_names:
-            merged.append(ep)
-    return tuple(merged)
 
 
 def detect_entry(

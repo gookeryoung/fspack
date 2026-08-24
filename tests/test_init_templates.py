@@ -268,9 +268,10 @@ def test_pyinstaller_template_contains_tool_fspack_config() -> None:
     assert "pyc_strip" in pyproject
     assert "pyc_optimize" in pyproject
     assert "exclude" in pyproject
-    # 多入口声明示例（注释形式）：[project.scripts] 推荐 + [tool.fspack.entries] 可选覆盖
+    # 多入口声明示例（注释形式）：仅 [project.scripts]（PEP 621 标准）
     assert "# [project.scripts]" in pyproject
-    assert "# [tool.fspack.entries]" in pyproject
+    # [tool.fspack.entries] 已移除支持，模板不应再出现
+    assert "[tool.fspack.entries]" not in pyproject
 
 
 def test_init_project_pygame(tmp_path: Path) -> None:

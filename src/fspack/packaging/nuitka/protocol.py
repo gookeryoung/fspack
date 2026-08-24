@@ -94,6 +94,27 @@ class NuitkaCompilerProtocol(Protocol):  # pragma: no cover - 纯类型契约，
         """准备 standalone python（Windows 专用）."""
         ...
 
+    # ==== NuitkaWinlibs 提供（winlibs-mingw 工具链管理）====
+
+    @staticmethod
+    def _winlibs_gcc_dir(nuitka_ver: str) -> Path:
+        """返回 winlibs gcc 缓存目录（不含 gcc.exe 自身）."""
+        ...
+
+    @classmethod
+    def ensure_winlibs_mingw(
+        cls,
+        py_version: str,
+        stage: StageRecorder,
+    ) -> Path:
+        """确保 Nuitka 所需的 winlibs-mingw 工具链就绪，返回下载缓存根目录."""
+        ...
+
+    @staticmethod
+    def _download_and_extract_winlibs(nuitka_ver: str, gcc_dir: Path, gcc_exe: Path) -> None:
+        """下载 winlibs zip 并解压到 gcc_dir，验证 gcc.exe 就位."""
+        ...
+
     # ==== NuitkaCcache 提供（ccache 管理）====
 
     @classmethod

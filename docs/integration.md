@@ -144,7 +144,7 @@ cp templates/release-pack.yml your-project/.github/workflows/
 |--------|------|------|--------|
 | `PROJECT_NAME` | 是 | 项目名（与 `pyproject.toml` 的 `name` 字段一致） | `my_app` |
 | `EXPECTED_OUTPUT` | 是 | 运行打包后 exe 应输出的预期字符串 | `hello from my_app` |
-| `ENTRY_NAMES` | 否 | 多入口项目的入口名列表（逗号分隔，与 `[tool.fspack.entries]` 键匹配），未设置时按单入口处理 | `cli,gui,web` |
+| `ENTRY_NAMES` | 否 | 多入口项目的入口名列表（逗号分隔，与 `[project.scripts]` 键匹配），未设置时按单入口处理 | `cli,gui,web` |
 
 ### 3. 触发验证
 
@@ -176,7 +176,7 @@ git push origin v0.1.0
 
 ## 多入口项目的 CI 验证
 
-多入口项目（`[project.scripts]` 或 `[tool.fspack.entries]`）在 CI 中应循环验证每个入口：
+多入口项目（`[project.scripts]`）在 CI 中应循环验证每个入口：
 
 ```bash
 # 构建一次生成所有入口 exe

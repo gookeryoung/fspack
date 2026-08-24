@@ -413,7 +413,7 @@ def test_default_entry_single_project_returns_only_entry() -> None:
 def test_run_run_multi_entry_select(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """fspack r --entry gui 运行对应入口的 exe."""
     (tmp_path / "pyproject.toml").write_text(
-        '[project]\nname = "multi"\nversion = "0.1"\n\n[tool.fspack.entries]\ncli = "cli.py"\ngui = "gui.py"\n'
+        '[project]\nname = "multi"\nversion = "0.1"\n\n[project.scripts]\ncli = "cli:main"\ngui = "gui:main"\n'
     )
     (tmp_path / "cli.py").write_text("def main():\n    pass\n")
     (tmp_path / "gui.py").write_text("def main():\n    pass\n")

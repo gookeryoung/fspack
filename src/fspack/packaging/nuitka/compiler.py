@@ -1,10 +1,10 @@
-""":class:`NuitkaCompiler` facade 类定义：多继承组合六个 mixin.
+""":class:`NuitkaCompiler` facade 类定义：多继承组合八个 mixin.
 
 本模块仅承载 :class:`NuitkaCompiler` 类定义，facade 文档与 monkeypatch 兼容
 import 在 :mod:`fspack.packaging.nuitka` 包 ``__init__.py``。本模块通过多继承
-组合六个职责单一的 mixin（env/standalone/ccache/strip/compile/verify），
-所有方法为 staticmethod/classmethod，无实例状态。``cls.`` 调用经 MRO 自动派发
-到对应 mixin，对外暴露统一的 :class:`NuitkaCompiler` API。
+组合八个职责单一的 mixin（env/standalone/winlibs/ccache/strip/progress/
+compile/verify），所有方法为 staticmethod/classmethod，无实例状态。``cls.``
+调用经 MRO 自动派发到对应 mixin，对外暴露统一的 :class:`NuitkaCompiler` API。
 
 参考 RimSort 的 Nuitka 打包方案，用 ``python -m nuitka --mode=module`` 将每个 ``.py``
 编译为对应平台的 ``.pyd``（Windows）/ ``.so``（Linux）。运行时 ``.pyd`` 优先级
@@ -36,26 +36,35 @@ from fspack.packaging.nuitka.progress import NuitkaProgress
 from fspack.packaging.nuitka.standalone import NuitkaStandalone
 from fspack.packaging.nuitka.strip import NuitkaStrip
 from fspack.packaging.nuitka.verify import NuitkaVerify
+from fspack.packaging.nuitka.winlibs import NuitkaWinlibs
 
 __all__ = ["NuitkaCompiler"]
 
 
 class NuitkaCompiler(
-    NuitkaEnv, NuitkaStandalone, NuitkaCcache, NuitkaStrip, NuitkaProgress, NuitkaCompile, NuitkaVerify
+    NuitkaEnv,
+    NuitkaStandalone,
+    NuitkaWinlibs,
+    NuitkaCcache,
+    NuitkaStrip,
+    NuitkaProgress,
+    NuitkaCompile,
+    NuitkaVerify,
 ):
-    """Nuitka 编译器 facade（多继承自七个 mixin）.
+    """Nuitka 编译器 facade（多继承自八个 mixin）.
 
     所有方法为 staticmethod/classmethod，无实例状态。按 MRO 顺序
-    ``NuitkaCompiler → NuitkaEnv → NuitkaStandalone → NuitkaCcache → NuitkaStrip →
-    NuitkaProgress → NuitkaCompile → NuitkaVerify → object`` 派发 ``cls.`` 调用
-    到对应 mixin。
+    ``NuitkaCompiler → NuitkaEnv → NuitkaStandalone → NuitkaWinlibs → NuitkaCcache →
+    NuitkaStrip → NuitkaProgress → NuitkaCompile → NuitkaVerify → object`` 派发
+    ``cls.`` 调用到对应 mixin。
 
     **MRO 顺序设计**：``NuitkaStrip`` 必须在 ``NuitkaCompile`` 前面，否则
     ``NuitkaCompile`` 类内的 ``_strip_compiled_sources`` / ``_cleanup_build_dirs``
     stub 会覆盖 ``NuitkaStrip`` 的真实实现。同理 ``NuitkaStandalone`` /
-    ``NuitkaCcache`` / ``NuitkaProgress`` 必须在 ``NuitkaCompile`` 前面，
-    避免 ``_ensure_build_python`` / ``_ensure_ccache`` /
-    ``_stream_compile`` / ``_compile_files`` stub 或缺失覆盖真实实现。
+    ``NuitkaWinlibs`` / ``NuitkaCcache`` / ``NuitkaProgress`` 必须在 ``NuitkaCompile``
+    前面，避免 ``_ensure_build_python`` / ``ensure_winlibs_mingw`` /
+    ``_ensure_ccache`` / ``_stream_compile`` / ``_compile_files`` stub 或缺失覆盖
+    真实实现。
 
     nuitka 装到本地缓存 ``~/.fspack/cache/nuitka/<py_version>/site-packages/``，
     不污染 ``dist/runtime`` 发行产物。编译时用 **standalone python**（非 embed runtime）

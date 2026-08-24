@@ -16,6 +16,7 @@
 - :func:`embed_cache_dir` / :func:`standalone_cache_dir` / :func:`wheel_cache_dir` /
   :func:`nuitka_cache_dir` / :func:`loader_cache_dir` / :func:`ccache_cache_dir` /
   :func:`tkinter_cache_dir` / :func:`win7_dll_cache_dir` — 各子模块缓存目录
+- :func:`nuitka_winlibs_cache_dir` — Nuitka winlibs-mingw 工具链缓存目录
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ __all__ = [
     "is_offline",
     "loader_cache_dir",
     "nuitka_cache_dir",
+    "nuitka_winlibs_cache_dir",
     "standalone_cache_dir",
     "tkinter_cache_dir",
     "wheel_cache_dir",
@@ -103,3 +105,13 @@ def tkinter_cache_dir() -> Path:
 def win7_dll_cache_dir() -> Path:
     """Win7 重编译版 python3XX.dll 的 embed zip 缓存目录（``<cache_root>/win7-dll``）."""
     return cache_root() / "win7-dll"
+
+
+def nuitka_winlibs_cache_dir() -> Path:
+    """Nuitka winlibs-mingw 工具链缓存目录（``<cache_root>/nuitka-winlibs-mingw``）.
+
+    作为 Nuitka 的 downloads 缓存根（注入 ``NUITKA_CACHE_DIR_DOWNLOADS``），
+    内部按 Nuitka ``getCachedDownload`` 的目录约定存放 winlibs gcc：
+    ``gcc/x86_64/<specificity>/mingw64/bin/gcc.exe``。
+    """
+    return cache_root() / "nuitka-winlibs-mingw"

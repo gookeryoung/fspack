@@ -430,3 +430,55 @@ def test_tkinter_offline_cache_zip_hit(tmp_path: Path, monkeypatch: pytest.Monke
     stage = StageRecorder("test")
     TkinterBundler.ensure(runtime_dir, "3.11.9", cache_dir, stage)
     assert (runtime_dir / "Lib" / "tkinter" / "__init__.py").is_file()
+
+
+# ---- cli.py：--offline/-O 单次约定 ----
+
+
+def test_build_offline_flag_parsed() -> None:
+    """``--offline``/``-O`` 解析为 ns.offline=True，未指定时为 False."""
+    from fspack.cli_parser import build_parser
+
+    assert build_parser().parse_args(["b", ".", "--offline"]).offline is True
+    assert build_parser().parse_args(["b", ".", "-O"]).offline is True
+    assert build_parser().parse_args(["b", "."]).offline is False
+
+
+def test_dispatch_offline_sets_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``fsp b -O`` 分发时设 FSPACK_OFFLINE=1，构建期间 is_offline() 为 True."""
+    import os
+
+    from fspack.cli import main
+    from fspack.config import is_offline
+
+    monkeypatch.delenv("FSPACK_OFFLINE", raising=False)
+    captured: dict[str, bool] = {}
+
+    def fake_run_build(project: object, ns: object) -> None:
+        captured["offline"] = is_offline()
+
+    monkeypatch.setattr("fspack.cli._run_build", fake_run_build)
+    main(["b", str(tmp_path), "-O"])
+    assert captured["offline"] is True
+    # 命令进程内环境变量已设置（后续下载层经 is_offline() 读到）
+    assert os.environ["FSPACK_OFFLINE"] == "1"
+    # dispatch 直接写 os.environ（非 monkeypatch 管理），delenv 会把 "1" 记为
+    # 旧值并在 teardown 恢复造成泄漏，须手动 pop 清理
+    os.environ.pop("FSPACK_OFFLINE", None)
+
+
+def test_dispatch_without_offline_flag_env_untouched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """未指定 ``-O`` 时不设置 FSPACK_OFFLINE（不影响已删环境状态）."""
+    import os
+
+    from fspack.cli import main
+    from fspack.config import is_offline
+
+    monkeypatch.delenv("FSPACK_OFFLINE", raising=False)
+
+    def fake_run_build(project: object, ns: object) -> None:
+        assert is_offline() is False
+
+    monkeypatch.setattr("fspack.cli._run_build", fake_run_build)
+    main(["b", str(tmp_path)])
+    assert "FSPACK_OFFLINE" not in os.environ

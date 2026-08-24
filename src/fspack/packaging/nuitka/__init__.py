@@ -1,14 +1,19 @@
 """Nuitka 编译器 facade：将用户源码 ``.py`` 编译为 ``.pyd`` 本机执行.
 
 本包是 facade，通过 :mod:`fspack.packaging.nuitka.compiler` 的 :class:`NuitkaCompiler`
-多继承组合六个职责单一的 mixin：
+多继承组合八个职责单一的 mixin：
 
 - :class:`fspack.packaging.nuitka.env.NuitkaEnv` — 环境就绪
   （C 编译器检查、nuitka 安装、pip 可用性、构建机编译环境变量）
 - :class:`fspack.packaging.nuitka.standalone.NuitkaStandalone` — standalone python 准备
   （Windows python-build-standalone 下载与缓存）
+- :class:`fspack.packaging.nuitka.winlibs.NuitkaWinlibs` — winlibs-mingw 工具链管理
+  （Windows 预填充 Nuitka 所需 winlibs gcc 到 ``nuitka-winlibs-mingw`` 缓存目录，
+  缓存未命中时下载解压）
 - :class:`fspack.packaging.nuitka.ccache.NuitkaCcache` — ccache 管理
   （PATH 查找、本地缓存、预编译二进制下载）
+- :class:`fspack.packaging.nuitka.progress.NuitkaProgress` — 并行编译调度
+  （线程池并行 ``--mode=module`` 批量编译 .py、全局心跳进度反馈）
 - :class:`fspack.packaging.nuitka.compile.NuitkaCompile` — 编译流程
   （单文件 ``--mode=module`` 编译、stamp 缓存、第三方包编译）
 - :class:`fspack.packaging.nuitka.strip.NuitkaStrip` — 产物剥离与构建目录清理
@@ -43,8 +48,9 @@ stamp 缓存（:meth:`NuitkaCompiler.compile_with_stamp`）：重复构建时若
 from __future__ import annotations
 
 # 为兼容测试中 monkeypatch.setattr("fspack.packaging.nuitka.<module>.<attr>", ...) 路径解析，
-# facade 显式 import 这些模块（patch 设置的是模块对象的属性，全局生效，对 env/standalone/ccache/
-# compile/strip/verify 六个 mixin 模块同样有效）。详见 rule-01 公开 API 不变约束。
+# facade 显式 import 这些模块（patch 设置的是模块对象的属性，全局生效，对 env/standalone/
+# winlibs/ccache/compile/strip/verify 等 mixin 模块同样有效）。
+# 详见 rule-01 公开 API 不变约束。
 import shutil  # noqa: F401
 import subprocess  # noqa: F401
 import sys  # noqa: F401

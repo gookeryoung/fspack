@@ -9,8 +9,8 @@
   （``_parse_string_list_cfg``/``_match_any_glob``）
 - :mod:`fspack.config.parsing`：pyproject.toml 解析编排（``parse_project``）+
   ``[tool.fspack]`` 配置项解析（``_parse_build_defaults``/``_resolve_icon`` 等）
-- :mod:`fspack.config.entries`：入口识别（``detect_entry``/``_parse_entries``/
-  ``_parse_project_scripts``/``_merge_entries``）
+- :mod:`fspack.config.entries`：入口识别（``detect_entry``/
+  ``_parse_project_scripts``）
 - :mod:`fspack.config.app_type`：应用类型推断（``infer_app_type``）
 - :mod:`fspack.config.versions`：Python embed/standalone 版本映射 +
   Nuitka 版本锁定 + PEP 440 ``requires-python`` 匹配
@@ -50,8 +50,6 @@ from fspack.config.cache import (
 from fspack.config.entries import (
     _has_entry,  # noqa: F401
     _is_main_check,  # noqa: F401
-    _merge_entries,  # noqa: F401
-    _parse_entries,  # noqa: F401
     _parse_project_scripts,  # noqa: F401
     _resolve_module_script,  # noqa: F401
     detect_entry,

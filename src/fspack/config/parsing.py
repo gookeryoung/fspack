@@ -3,8 +3,8 @@
 本模块从 :mod:`fspack.config` 抽离，原职责中的入口识别与类型推断已进一步
 拆分（本模块 re-export 保持路径兼容）：
 
-- :mod:`fspack.config.entries`：入口脚本识别（``[tool.fspack.entries]``/
-  ``[project.scripts]`` 解析、dotted module → 脚本路径、兜底扫描 ``detect_entry``）
+- :mod:`fspack.config.entries`：入口脚本识别（``[project.scripts]`` 解析、
+  dotted module → 脚本路径、兜底扫描 ``detect_entry``）
 - :mod:`fspack.config.app_type`：AppType 推断（``infer_app_type`` 与判定表）
 
 本模块保留：:func:`parse_project` 解析编排、解析缓存（:func:`clear_project_cache`）、
@@ -17,8 +17,10 @@
 **入口来源与优先级**（识别细节见 :mod:`fspack.config.entries`）：
 
 1. ``[project.scripts]``（PEP 621 标准入口点）
-2. ``[tool.fspack.entries]``（优先级更高，同名入口覆盖）
-3. ``detect_entry``：无任何入口声明时按文件名兜底扫描
+2. ``detect_entry``：无任何入口声明时按文件名兜底扫描
+
+``[tool.fspack.entries]`` 已移除支持：pyproject.toml 中声明该表会报错，
+提示迁移到 ``[project.scripts]``。
 
 **解析缓存**：:func:`parse_project` 按 ``(project_dir, py_version, pyproject_mtime_ns)``
 缓存解析结果（:func:`_parse_project_cached`），同一项目目录在 pyproject.toml
@@ -43,8 +45,6 @@ from fspack.config.app_type import (  # noqa: F401
 from fspack.config.entries import (  # noqa: F401
     _has_entry,
     _is_main_check,
-    _merge_entries,
-    _parse_entries,
     _parse_project_scripts,
     _resolve_module_script,
     detect_entry,
@@ -111,9 +111,10 @@ def parse_project(project_dir: Path, py_version: str | None = None) -> ProjectIn
 
     1. ``[project.scripts]``（PEP 621）：``name = "module:function"``，
        自动识别 flat/src layout 解析 dotted module 为脚本路径。
-    2. ``[tool.fspack.entries]``：``name = "script_rel"``，相对项目目录的路径。
-       同名入口覆盖 ``[project.scripts]``。
-    3. ``detect_entry``：无任何入口声明时按文件名兜底扫描。
+    2. ``detect_entry``：无任何入口声明时按文件名兜底扫描。
+
+    ``[tool.fspack.entries]`` 已移除支持：声明该表时报 ``ProjectError``，
+    提示迁移到 ``[project.scripts]``。
 
     声明多入口时，``ProjectInfo.entries`` 非空，``entry_module``/
     ``entry_file``/``app_type`` 取首个入口（保持向后兼容）。
@@ -182,7 +183,13 @@ def _parse_project_cached(
 
     tool: dict[str, Any] = data.get("tool", {}) if isinstance(data.get("tool"), dict) else {}
     fspack_cfg: dict[str, Any] = tool.get("fspack", {}) if isinstance(tool.get("fspack"), dict) else {}
-    entries_tbl: dict[str, Any] = fspack_cfg.get("entries", {}) if isinstance(fspack_cfg.get("entries"), dict) else {}
+    # [tool.fspack.entries] 已移除支持：声明该表时报错提示迁移，
+    # 避免用户按旧文档声明后静默失效（不再是"不再误导"的静默忽略）
+    if "entries" in fspack_cfg:
+        raise ProjectError(
+            "[tool.fspack.entries] 已移除支持，请改用 [project.scripts] 声明入口："
+            '如 cli = "cli:main"（模块名:函数名，模块按 flat/src layout 解析）'
+        )
     # [project.scripts] PEP 621 标准入口点：name = "module:function"
     scripts_tbl: dict[str, Any] = proj.get("scripts", {}) if isinstance(proj.get("scripts"), dict) else {}
     icon_rel = fspack_cfg.get("icon")
@@ -205,14 +212,10 @@ def _parse_project_cached(
     # [tool.fspack] wheel 精简用户规则
     slim_rules = SlimRules.from_config(fspack_cfg)
 
-    # 合并 [project.scripts] 与 [tool.fspack.entries]：
-    # 先解析 [project.scripts]（dotted module → 脚本路径），
-    # 再用 [tool.fspack.entries] 覆盖同名入口（fspack 优先级更高）。
-    # Python 3.7+ dict 保序，按 scripts → fspack entries 顺序去重保留首次出现位置。
-    if scripts_tbl or entries_tbl:
-        scripts_entries = _parse_project_scripts(project_dir, scripts_tbl) if scripts_tbl else ()
-        fspack_entries = _parse_entries(project_dir, entries_tbl) if entries_tbl else ()
-        merged = _merge_entries(scripts_entries, fspack_entries)
+    # [project.scripts]（PEP 621）：dotted module → 脚本路径，
+    # Python 字典保持插入序，首个入口作为主入口。
+    if scripts_tbl:
+        merged = _parse_project_scripts(project_dir, scripts_tbl)
         if merged:
             first = merged[0]
             return ProjectInfo(

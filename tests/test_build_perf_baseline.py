@@ -162,7 +162,7 @@ _IMPORTABLE_DEPS = [d for d in _MEDIUM_DEPS if d.replace("_", "").isalnum() and 
 def _medium_pyproject() -> str:
     """生成中项目 ``pyproject.toml``（10 入口、20 依赖）."""
     deps = ", ".join(f'"{d}"' for d in _MEDIUM_DEPS)
-    entries_lines = "\n".join(f'app{i} = "app{i}.py"' for i in range(10))
+    entries_lines = "\n".join(f'app{i} = "app{i}:main"' for i in range(10))
     return f"""\
 [project]
 name = "mediumapp"
@@ -170,7 +170,7 @@ version = "2.0.0"
 requires-python = ">=3.9"
 dependencies = [{deps}]
 
-[tool.fspack.entries]
+[project.scripts]
 {entries_lines}
 
 [tool.fspack]
