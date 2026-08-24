@@ -74,7 +74,9 @@ def run(
     ``options.profile``（需 ``enabled=True``）：剖析数据落盘为 JSON 日志
     （默认 ``<项目>/.benchmarks/fsp-r-<时间戳>.json``，``out`` 可指定目录
     或 ``.json`` 文件）；``compare`` 为 ``"last"`` 时与最近一次启动剖析
-    日志对比，否则按基准文件路径对比（差异表格标红回归/标绿改善）。
+    日志对比，否则按基准文件路径对比（差异表格标红回归/标绿改善）；
+    ``repeat > 1`` 时多次运行取统计（中位数样本为汇总与对比基准，
+    ``runs`` 数组存各次 wall time 落盘）。
     """
     opts = options or RunOptions()
     info = ProjectInfo.from_dir(project)
@@ -104,7 +106,7 @@ def run(
             log_data = _run_log_data(data, info, ep.name, debug)
             _save_and_compare_run_profile(log_data, Path(project), profile_opts)
 
-        returncode = run_with_profile(cmd, env, on_summary=_on_summary)
+        returncode = run_with_profile(cmd, env, on_summary=_on_summary, repeat=opts.profile.repeat)
     else:
         completed = subprocess.run(cmd, check=False, env=env)
         returncode = completed.returncode
@@ -150,6 +152,11 @@ def _run_log_data(
     # tail=进程收尾、blind=其余盲区；含管道延迟噪声，仅供逐次诊断不参与对比
     if "gap_breakdown" in data:
         log["gap_breakdown"] = {k: round(v / 1000.0, 4) for k, v in data["gap_breakdown"].items()}
+    # 多次运行统计（repeat > 1 才有）：runs 存各次 wall time 秒（全量），
+    # wall_time 为中位数样本；超时被终止的样本在 runs 中仍保留原值
+    if "runs_ms" in data:
+        log["repeat"] = data["repeat"]
+        log["runs"] = [round(ms / 1000.0, 4) for ms in data["runs_ms"]]
     return log
 
 

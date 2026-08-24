@@ -10,6 +10,9 @@
 - ``[fspack timing-gap] <label> <ms>ms``：跨打点体系缝隙实测（Windows
   新 dist）：loader 在 Py_Main 调用前写 QPC 锚点环境变量，wrapper 首语句
   用同源 perf_counter 相减，得 C 层初始化缝隙（py_init）。
+- ``[fspack timing] gui_ready @<累计ms>ms``：GUI 界面就绪里程碑（wrapper
+  事件循环自终止钩子输出，Qt/tkinter 首帧上屏后），GUI 应用"进入界面后
+  自行终止"的启动终点。
 - ``import time: <self> | <cumulative> | <缩进><模块名>``：CPython 原生
   ``-X importtime`` 逐模块导入耗时，由 ``PYTHONPROFILEIMPORTTIME=1`` 激活。
 
@@ -28,6 +31,7 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+import threading
 import time
 import unicodedata
 from collections.abc import Callable
@@ -54,10 +58,13 @@ class ProfileSample:
       父进程 t_start 的偏移 ms，逐行 readline 实测），用于父进程侧
       细分"未细分"段的头部（进程创建与映像加载）与尾部（进程收尾）；
       子进程无任何 stderr 输出时为 None
+    - ``timed_out``：是否因超时被强制终止（GUI 框架不在 wrapper 自终止
+      钩子支持清单或程序长跑），此时 wall_ms 与各阶段数据不完整
     """
 
     wall_ms: float = 0.0
     returncode: int = 0
+    timed_out: bool = False
     loader_stages: list[tuple[str, float, str]] = field(default_factory=list)
     timing_stages: dict[str, float] = field(default_factory=dict)
     gap_stages: dict[str, float] = field(default_factory=dict)
@@ -100,6 +107,10 @@ _SEP_LEN = 2 + _TAG_W + _LABEL_W + _MS_W + 2 + _PCT_W + 2 + _BAR_W
 _GAP_MIN_MS = 100.0
 _GAP_MIN_RATIO = 0.05
 _GAP_HIGH_RATIO = 0.30
+# 单次运行超时兜底（秒）：GUI 应用由 wrapper 的事件循环自终止钩子
+# （FSPACK_TIMING=1 时注入，见 packaging/entry.py）在"进入界面"后自然
+# 退出；未知框架钩子未命中时进程长跑，由该超时强制终止防止剖析永久挂起
+_TIMEOUT_S = 300.0
 
 
 def _consume_marker(line: str, sample: ProfileSample, entry_started: bool) -> bool | None:
@@ -133,27 +144,24 @@ def _consume_marker(line: str, sample: ProfileSample, entry_started: bool) -> bo
     return None
 
 
-def run_with_profile(
-    cmd: list[str],
-    env: dict[str, str] | None = None,
-    on_summary: Callable[[dict[str, Any]], None] | None = None,
-) -> int:
-    """运行目标程序并采集启动耗时打点，子进程退出后打印汇总.
+def _terminate_on_timeout(proc: subprocess.Popen[bytes], sample: ProfileSample) -> None:
+    """watchdog 回调：标记超时并强制终止子进程（管道写端随进程关闭，读循环经 EOF 退出）."""
+    sample.timed_out = True
+    proc.terminate()
 
-    stdout/stdin 继承父进程（交互与正常输出不受影响）；stderr 经管道流式
-    读取：非标记行原样透传，标记行与 importtime 行由汇总替代。
 
-    importtime 行按 ``entry_start`` 打点分界为两段：之前的归 wrapper
-    （解释器初始化 + wrapper 顶层导入），之后的归用户入口执行期间的导入
-    （stderr 同管道行序即时间序，入口细分由 :func:`_print_summary` 完成）。
+def _run_once(cmd: list[str], env: dict[str, str] | None, timeout: float) -> ProfileSample:
+    """运行一次目标程序并采集启动耗时打点，返回剖析样本.
 
-    ``on_summary`` 非空时在打印汇总后回调结构化剖析数据（键见
-    :func:`_print_summary` 返回值），供调用方落盘性能日志（毫秒单位）。
-    返回子进程退出码。
+    ``timeout`` 秒后进程仍未退出（GUI 框架不在 wrapper 自终止钩子支持
+    清单或程序长跑）时强制终止，样本标记 ``timed_out=True``。
     """
     t_start = time.perf_counter()
     proc = subprocess.Popen(cmd, env=env, stderr=subprocess.PIPE)
     sample = ProfileSample()
+    watchdog = threading.Timer(timeout, _terminate_on_timeout, args=(proc, sample))
+    watchdog.daemon = True
+    watchdog.start()
     entry_started = False
     assert proc.stderr is not None
     # readline 逐行读取（不用缓冲迭代器）：迭代器可能一次预读多行，行到达
@@ -177,8 +185,77 @@ def run_with_profile(
     sys.stderr.flush()
     proc.stderr.close()
     sample.returncode = proc.wait()
+    watchdog.cancel()
     sample.wall_ms = (time.perf_counter() - t_start) * 1000.0
+    return sample
+
+
+def _median_sample(samples: list[ProfileSample]) -> ProfileSample:
+    """返回 wall_ms 处于中位数的样本（偶数取 lower median，实际样本而非均值）.
+
+    汇总表展示中位数样本：中位数对单次抖动（杀软扫描/磁盘冷读/调度）
+    天然免疫，是最能代表典型启动路径的一次运行。
+    """
+    return sorted(samples, key=lambda s: s.wall_ms)[(len(samples) - 1) // 2]
+
+
+def _print_repeat_stats(samples: list[ProfileSample]) -> None:
+    """打印多次运行统计块：中位数/最小/最大/均值/标准差（pytest-benchmark 风格）."""
+    walls = sorted(s.wall_ms for s in samples)
+    n = len(walls)
+    median = walls[(n - 1) // 2]
+    mean = sum(walls) / n
+    std = (sum((w - mean) ** 2 for w in walls) / n) ** 0.5
+    print(
+        f"[fspack] {n} 次运行统计：中位数 {median:.0f}ms，最小 {walls[0]:.0f}ms，"
+        f"最大 {walls[-1]:.0f}ms，均值 {mean:.0f}ms，标准差 {std:.1f}ms（汇总表取中位数样本）"
+    )
+
+
+def run_with_profile(
+    cmd: list[str],
+    env: dict[str, str] | None = None,
+    on_summary: Callable[[dict[str, Any]], None] | None = None,
+    repeat: int = 1,
+    timeout: float = _TIMEOUT_S,
+) -> int:
+    """运行目标程序并采集启动耗时打点，子进程退出后打印汇总.
+
+    stdout/stdin 继承父进程（交互与正常输出不受影响）；stderr 经管道流式
+    读取：非标记行原样透传，标记行与 importtime 行由汇总替代。
+
+    importtime 行按 ``entry_start`` 打点分界为两段：之前的归 wrapper
+    （解释器初始化 + wrapper 顶层导入），之后的归用户入口执行期间的导入
+    （stderr 同管道行序即时间序，入口细分由 :func:`_print_summary` 完成）。
+
+    ``repeat > 1`` 时多次运行取统计（pytest-benchmark 风格）：每次结束
+    打印进度行，全部结束后打印中位数/最小/最大/均值/标准差统计块，汇总
+    表取中位数样本（对单次抖动免疫），``runs_ms``/``repeat`` 进入剖析
+    数据供落盘；``repeat=1`` 时行为与单次运行完全一致（无统计块）。
+
+    GUI 应用由 wrapper 的事件循环自终止钩子（``FSPACK_TIMING=1`` 时注入，
+    见 :mod:`fspack.packaging.entry`）在"进入界面"后自然退出；未知框架
+    钩子未命中时由 ``timeout`` 秒超时兜底强制终止（样本标记 ``timed_out``，
+    汇总表标注数据不完整）。
+
+    ``on_summary`` 非空时在打印汇总后回调结构化剖析数据（键见
+    :func:`_print_summary` 返回值），供调用方落盘性能日志（毫秒单位）。
+    返回中位数样本的退出码。
+    """
+    samples: list[ProfileSample] = []
+    for i in range(max(repeat, 1)):
+        s = _run_once(cmd, env, timeout)
+        samples.append(s)
+        if repeat > 1:
+            note = "（超时被终止）" if s.timed_out else ""
+            print(f"[fspack] 运行 {i + 1}/{repeat}: {s.wall_ms:.0f}ms{note}")
+    if len(samples) > 1:
+        _print_repeat_stats(samples)
+    sample = _median_sample(samples)
     data = _print_summary(sample)
+    if len(samples) > 1:
+        data["runs_ms"] = [s.wall_ms for s in samples]
+        data["repeat"] = len(samples)
     if on_summary is not None:
         on_summary(data)
     return sample.returncode
@@ -432,8 +509,25 @@ def _print_loader_section(sample: ProfileSample, wall_ms: float) -> tuple[float,
     return loader_total, py_init_ms
 
 
+def _print_wrapper_section(sample: ProfileSample, wall_ms: float) -> tuple[float | None, float | None]:
+    """打印 wrapper 里程碑行（环境准备/界面就绪），返回 ``(entry_start, entry_done)``.
+
+    ``gui_ready`` 为 wrapper GUI 自终止钩子输出的累计时刻（Qt
+    ``QApplication.exec``/tkinter ``Tk.mainloop`` 进入前、首帧已上屏），
+    是 GUI 应用"进入界面"的启动终点；CLI 应用与旧 dist 无此行。
+    """
+    timing_stages = sample.timing_stages
+    env_ready = timing_stages.get("env_ready")
+    gui_ready = timing_stages.get("gui_ready")
+    if env_ready is not None:
+        _row("[wrapper]", "环境准备", _fmt_ms(env_ready), _fmt_pct(env_ready, wall_ms), _fmt_bar(env_ready, wall_ms))
+    if gui_ready is not None:
+        _row("[gui]", "界面就绪(实测)", _fmt_ms(gui_ready), _fmt_pct(gui_ready, wall_ms), _fmt_bar(gui_ready, wall_ms))
+    return timing_stages.get("entry_start"), timing_stages.get("entry_done")
+
+
 def _print_summary(sample: ProfileSample) -> dict[str, Any]:
-    """打印启动耗时汇总表：loader → 环境准备 → 解释器初始化 → import 细分 → 入口执行（导入/执行细分）→ 未细分.
+    """打印启动耗时汇总表：loader → 里程碑（环境准备/界面就绪）→ 解释器初始化 → import 细分 → 入口执行（导入/执行细分）→ 未细分.
 
     ``sample.post_entry_lines`` 为 ``entry_start`` 打点之后的 importtime 行
     （入口执行期间的导入），有 ``entry_start`` 打点时用于细分"用户入口
@@ -443,12 +537,13 @@ def _print_summary(sample: ProfileSample) -> dict[str, Any]:
 
         {
           "wall_ms": 总墙钟毫秒, "returncode": 退出码,
-          "stages": [("loader 各阶段/环境准备/解释器初始化(约)/用户入口执行", ms), ...],
+          "stages": [("loader 各阶段/环境准备/界面就绪/解释器初始化(约)/用户入口执行", ms), ...],
           "top_imports": [("wrapper 顶层根导入名", cumulative_ms), ...],
           "entry_imports": [("入口执行期间根导入名", cumulative_ms), ...],
           "top_self": [("模块名", self_ms), ...],
           "gap_breakdown": {"head_ms": 进程创建与映像加载, "tail_ms": 进程收尾,
                             "blind_ms": 其余盲区},  # 有首/末行实测时才有
+          "runs_ms": [各次运行 wall 毫秒], "repeat": 次数,  # repeat > 1 时才有
         }
 
     ``stages`` 仅含主阶段（子项与"未细分"归因不稳定，不参与对比）；
@@ -459,12 +554,13 @@ def _print_summary(sample: ProfileSample) -> dict[str, Any]:
     timing_stages = sample.timing_stages
     import_lines = sample.import_lines
     post_entry_lines: list[str] = sample.post_entry_lines
-    entry_start = timing_stages.get("entry_start")
     # 防御：无 entry_start 打点却有分界数据（理论不可达），并回主列表
-    if entry_start is None and post_entry_lines:
+    if timing_stages.get("entry_start") is None and post_entry_lines:
         import_lines = [*import_lines, *post_entry_lines]
         post_entry_lines = []
     print(f"[fspack] 启动耗时剖析（总 {wall_ms:.0f}ms，退出码 {sample.returncode}）")
+    if sample.timed_out:
+        print("  （进程超时被强制终止，数据不完整：GUI 框架不在自终止钩子支持清单或程序长跑）")
     print("─" * _SEP_LEN)
     interp_ms = 0.0
     user_roots: list[tuple[str, float]] = []
@@ -479,10 +575,7 @@ def _print_summary(sample: ProfileSample) -> dict[str, Any]:
         # 模块自身耗时 top 合并两段（各自 top 的并集再取全局 top）
         self_top = sorted([*self_top, *post_self], key=lambda x: -x[1])[:_TOP_SELF]
     loader_total, py_init_ms = _print_loader_section(sample, wall_ms)
-    env_ready = timing_stages.get("env_ready")
-    entry_done = timing_stages.get("entry_done")
-    if env_ready is not None:
-        _row("[wrapper]", "环境准备", _fmt_ms(env_ready), _fmt_pct(env_ready, wall_ms), _fmt_bar(env_ready, wall_ms))
+    entry_start, entry_done = _print_wrapper_section(sample, wall_ms)
     _print_import_sections(interp_ms, user_roots, self_top, wall_ms)
     if entry_start is not None and entry_done is not None:
         exec_ms = entry_done - entry_start
@@ -494,15 +587,7 @@ def _print_summary(sample: ProfileSample) -> dict[str, Any]:
     gap_breakdown = _print_unaccounted(sample, loader_total, interp_ms, py_init_ms)
     # 落盘数据：主阶段用 loader 打点原文阶段名（suffix 为补充说明，跨次
     # 运行不稳定，不并入名字）
-    stages: list[tuple[str, float]] = [(stage, ms) for stage, ms, _ in sample.loader_stages]
-    if py_init_ms > 0:
-        stages.append(("C 层初始化(实测)", py_init_ms))
-    if env_ready is not None:
-        stages.append(("环境准备", env_ready))
-    if interp_ms > 0:
-        stages.append(("解释器初始化(约)", interp_ms))
-    if entry_start is not None and entry_done is not None:
-        stages.append(("用户入口执行", entry_done - entry_start))
+    stages = _build_stage_list(sample, py_init_ms, interp_ms, entry_start, entry_done)
     data: dict[str, Any] = {
         "wall_ms": wall_ms,
         "returncode": sample.returncode,
@@ -514,3 +599,28 @@ def _print_summary(sample: ProfileSample) -> dict[str, Any]:
     if gap_breakdown is not None:
         data["gap_breakdown"] = gap_breakdown
     return data
+
+
+def _build_stage_list(
+    sample: ProfileSample,
+    py_init_ms: float,
+    interp_ms: float,
+    entry_start: float | None,
+    entry_done: float | None,
+) -> list[tuple[str, float]]:
+    """构造落盘主阶段列表：loader 各阶段 → C 层初始化 → 环境准备 → 解释器初始化 → 界面就绪 → 用户入口执行."""
+    timing_stages = sample.timing_stages
+    env_ready = timing_stages.get("env_ready")
+    gui_ready = timing_stages.get("gui_ready")
+    stages: list[tuple[str, float]] = [(stage, ms) for stage, ms, _ in sample.loader_stages]
+    if py_init_ms > 0:
+        stages.append(("C 层初始化(实测)", py_init_ms))
+    if env_ready is not None:
+        stages.append(("环境准备", env_ready))
+    if interp_ms > 0:
+        stages.append(("解释器初始化(约)", interp_ms))
+    if gui_ready is not None:
+        stages.append(("界面就绪", gui_ready))
+    if entry_start is not None and entry_done is not None:
+        stages.append(("用户入口执行", entry_done - entry_start))
+    return stages

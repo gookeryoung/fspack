@@ -411,3 +411,42 @@ def test_generate_wrapper_source_py_init_gap() -> None:
     assert '"[fspack timing-gap] py_init %.1fms\\n"' in source
     # 负值防御：时钟源异常时不输出打点
     assert "if _py_init_ms >= 0.0:" in source
+
+
+def test_generate_wrapper_source_gui_ready_hook() -> None:
+    """wrapper 注入 GUI 事件循环自终止钩子：import 拦截 + Qt/tkinter patch.
+
+    ``FSPACK_TIMING=1`` 时经 builtins.__import__ 拦截框架首次导入，
+    patch ``QApplication.exec``/``Tk.mainloop``：处理首帧事件后打点
+    ``gui_ready`` 并直接返回，GUI 应用"进入界面后自行终止"。``compile``
+    验证生成源码语法。
+    """
+    source = EntryWrapper.generate_wrapper_source("app", None, "app.py")
+    compile(source, "_entry_app.py", "exec")
+    # import 拦截器：仅 FSPACK_TIMING 时安装，patch 成功后恢复原生 import
+    assert "_fspack_orig_import = _builtins.__import__" in source
+    assert "_builtins.__import__ = _fspack_import_hook" in source
+    assert "builtins.__import__ = _fspack_orig_import" in source
+    # 框架清单与 patch 目标
+    assert '_GUI_TOPS = ("PySide2", "PySide6", "PyQt5", "PyQt6", "tkinter")' in source
+    assert "self.processEvents()" in source  # Qt：处理 show/paint 队列首帧上屏
+    assert "self.update()" in source  # tkinter：处理 pending 事件
+    assert "tkinter.Tk.mainloop = _fspack_mainloop" in source
+    # gui_ready 打点复用 _fspack_tick（累计时刻行，runner 侧解析）
+    assert '_fspack_tick("gui_ready")' in source
+    # patch 后直接返回：Qt 返回 0（兼容 sys.exit(app.exec()) 模式）
+    assert "return 0" in source
+
+
+def test_generate_wrapper_source_gui_hook_no_brace_literals() -> None:
+    """GUI 钩子块不含字面花括号（wrapper 模板经 str.format 填充）.
+
+    钩子代码刻意避免 dict/set 字面量与 f-string，字面 ``{``/``}`` 会被
+    format 误解析为占位符（KeyError）。此测试防止后续维护引入花括号。
+    """
+    source = EntryWrapper.generate_wrapper_source("app", None, "app.py")
+    # 提取钩子块（从 _GUI_TOPS 到 tkinter 环境变量注释前）
+    start = source.index("_GUI_TOPS")
+    end = source.index("# tkinter 环境变量")
+    hook_block = source[start:end]
+    assert "{" not in hook_block and "}" not in hook_block

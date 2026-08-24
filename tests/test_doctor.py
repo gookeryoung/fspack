@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import subprocess
 import sys
 import tarfile
@@ -3086,7 +3087,7 @@ def test_run_template_oserror_startup_failure(tmp_path: Path, monkeypatch: pytes
 
 
 def test_run_template_passes_env_to_popen(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """debug 模式传入 env 时，env 透传给 subprocess.Popen（PYTHONHOME 等）."""
+    """debug 模式传入 env 时透传给 Popen，并追加 FSPACK_TIMING=1 激活自终止钩子."""
     monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
     captured: dict[str, object] = {}
     proc = _FakeProc(returncode=0)
@@ -3098,7 +3099,43 @@ def test_run_template_passes_env_to_popen(tmp_path: Path, monkeypatch: pytest.Mo
     monkeypatch.setattr("fspack.doctor.subprocess.Popen", _capture_popen)
     env = {"PYTHONHOME": "/tmp/python", "PYTHONUNBUFFERED": "1"}
     _run_template([str(tmp_path / "app")], env, timeout=1.0)  # type: ignore[arg-type]
-    assert captured["env"] == env
+    assert captured["env"] == {**env, "FSPACK_TIMING": "1"}
+
+
+def test_run_template_env_none_injects_timing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """env=None 继承当前环境，同样追加 FSPACK_TIMING=1（回退直跑 exe 场景）."""
+    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    captured: dict[str, object] = {}
+    proc = _FakeProc(returncode=0)
+
+    def _capture_popen(*args: object, **kwargs: object) -> _FakeProc:
+        captured["env"] = kwargs.get("env")
+        return proc
+
+    monkeypatch.setattr("fspack.doctor.subprocess.Popen", _capture_popen)
+    _run_template([str(tmp_path / "app")], timeout=1.0)
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert env["FSPACK_TIMING"] == "1"
+    # 基于当前环境复制（PATH 等原键保留），未误用 env=None 继承语义
+    assert env.get("PATH") == os.environ.get("PATH")
+
+
+def test_run_template_failure_skips_timing_marker_lines(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """非零退出时 stderr 的 ``[fspack`` 打点行被跳过，error 取首个真实错误行."""
+    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    proc = _FakeProc(
+        returncode=1,
+        stdout="",
+        stderr=(
+            "[fspack timing] env_ready @1.0ms\n[fspack timing] gui_ready @50.0ms\nValueError: boom\nTraceback follows\n"
+        ),
+    )
+    monkeypatch.setattr("fspack.doctor.subprocess.Popen", lambda *a, **kw: proc)
+    result = _run_template([str(tmp_path / "app")], timeout=1.0)
+    assert result.success is False
+    assert "ValueError: boom" in result.error
+    assert "fspack timing" not in result.error
 
 
 # ---- _copy_ignore（模板复制过滤）----

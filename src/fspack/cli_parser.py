@@ -382,6 +382,15 @@ _RUN_OPTS: tuple[_Opt, ...] = (
         default=None,
         metavar="REF",
     ),
+    _Opt(
+        ("-PR", "--profile-repeat"),
+        "多次运行统计次数（需 --profile，默认 1）：pytest-benchmark 风格，"
+        "输出中位数/最小/最大/均值/标准差，汇总表取中位数样本（抗单次抖动）；"
+        "GUI 应用由界面就绪自终止钩子在进入界面后自动退出，同样适用",
+        type=int,
+        default=1,
+        metavar="N",
+    ),
 )
 
 

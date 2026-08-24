@@ -127,6 +127,8 @@ def _dispatch(command: str, ns: argparse.Namespace) -> None:
 
         if (getattr(ns, "profile_out", None) or getattr(ns, "profile_compare", None)) and not ns.profile:
             raise ProjectError("--profile-out/--profile-compare 需配合 --profile 使用")
+        if getattr(ns, "profile_repeat", 1) != 1 and not ns.profile:
+            raise ProjectError("--profile-repeat 需配合 --profile 使用")
         run_cmd(
             project,
             rest_args=_drop_separator(ns.rest),
@@ -137,6 +139,7 @@ def _dispatch(command: str, ns: argparse.Namespace) -> None:
                     enabled=ns.profile,
                     out=Path(ns.profile_out).resolve() if ns.profile_out else None,
                     compare=ns.profile_compare,
+                    repeat=ns.profile_repeat,
                 ),
             ),
         )

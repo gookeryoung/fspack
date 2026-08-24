@@ -125,12 +125,14 @@ class ProfileOptions:
     ``.json`` 文件时直写、目录时自动命名、``None`` 落默认目录；``compare``
     为 ``"trend"`` 时渲染历次趋势表（默认近 :data:`_TREND_LIMIT` 次）、
     正整数取近 N 次、``"last"`` 与最近一次对比，其他值按基准文件路径。
-    frozen 不可变，默认值可安全共享。
+    ``repeat``（仅 run 侧生效）为多次运行统计次数（pytest-benchmark 风格，
+    汇总取中位数样本）。frozen 不可变，默认值可安全共享。
     """
 
     enabled: bool = False
     out: Path | None = None
     compare: str | None = None
+    repeat: int = 1
 
 
 def _auto_name(directory: Path, prefix: str = _LOG_PREFIX) -> Path:

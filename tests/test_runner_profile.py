@@ -9,14 +9,16 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from fspack.config import AppType, ProjectInfo
 from fspack.packaging.profile_log import ProfileOptions
-from fspack.runner import RunOptions
+from fspack.runner import RunOptions, _run_log_data
 from fspack.runner import run as run_run
 from fspack.runner_profile import (
     PROFILE_ENV,
@@ -30,18 +32,19 @@ from fspack.runner_profile import (
 )
 
 
-def _opts(
+def _opts(  # noqa: PLR0913
     debug: bool = False,
     entry: str | None = None,
     profile: bool = False,
     profile_out: Path | None = None,
     profile_compare: str | None = None,
+    profile_repeat: int = 1,
 ) -> RunOptions:
     """构造 RunOptions（测试便捷封装，收敛散参数）."""
     return RunOptions(
         debug=debug,
         entry=entry,
-        profile=ProfileOptions(enabled=profile, out=profile_out, compare=profile_compare),
+        profile=ProfileOptions(enabled=profile, out=profile_out, compare=profile_compare, repeat=profile_repeat),
     )
 
 
@@ -253,6 +256,70 @@ def test_run_with_profile_parent_side_tail_measurement(capsys: pytest.CaptureFix
     assert data["gap_breakdown"]["blind_ms"] >= 0.0
 
 
+def test_run_with_profile_repeat_stats_and_runs_data(capsys: pytest.CaptureFixture[str]) -> None:
+    """repeat=3 多次运行：进度行 + 统计块（中位数/最小/最大/均值/标准差）+ runs_ms 数据.
+
+    repeat=1 时无统计块（单次运行行为与旧版一致）。
+    """
+    data: dict[str, Any] = {}
+    rc = run_with_profile([sys.executable, "-c", "print('x')"], on_summary=data.update, repeat=3)
+    assert rc == 0
+    out = capsys.readouterr().out
+    # 每次运行的进度行
+    assert "运行 1/3" in out
+    assert "运行 2/3" in out
+    assert "运行 3/3" in out
+    # 统计块：pytest-benchmark 风格五指标
+    assert "3 次运行统计" in out
+    assert "中位数" in out
+    assert "最小" in out
+    assert "最大" in out
+    assert "均值" in out
+    assert "标准差" in out
+    # 落盘数据：runs_ms 全量（3 次）且为正，repeat 回填实际次数
+    assert data["repeat"] == 3
+    assert len(data["runs_ms"]) == 3
+    assert all(ms > 0.0 for ms in data["runs_ms"])
+    # repeat=1：无进度行与统计块
+    run_with_profile([sys.executable, "-c", "print('x')"])
+    out = capsys.readouterr().out
+    assert "次运行统计" not in out
+    assert "运行 1/1" not in out
+
+
+def test_run_with_profile_timeout_terminates_long_run(capsys: pytest.CaptureFixture[str]) -> None:
+    """超时兜底：长跑子进程（未知 GUI 框架）被 watchdog 强制终止，汇总标注数据不完整."""
+    t0 = time.perf_counter()
+    rc = run_with_profile([sys.executable, "-c", "import time; time.sleep(5)"], timeout=0.5)
+    elapsed = time.perf_counter() - t0
+    # watchdog 在 0.5s terminate，读循环经 EOF 退出；远小于 sleep 5s
+    assert elapsed < 4.0
+    # 被 terminate 的进程退出码非 0（Windows 1 / POSIX -15），透传返回
+    assert rc != 0
+    out = capsys.readouterr().out
+    assert "进程超时被强制终止，数据不完整" in out
+
+
+def test_run_with_profile_gui_ready_marker(capsys: pytest.CaptureFixture[str]) -> None:
+    """gui_ready 打点行展示为 [gui] 界面就绪(实测)：GUI 应用进入界面的启动终点."""
+    code = (
+        "import sys\n"
+        "sys.stderr.write('[fspack timing] env_ready @1.0ms\\n')\n"
+        "sys.stderr.write('[fspack timing] gui_ready @50.0ms\\n')\n"
+        "sys.stderr.write('[fspack timing] entry_start @60.0ms\\n')\n"
+        "sys.stderr.write('[fspack timing] entry_done @70.0ms\\n')\n"
+        "sys.stderr.flush()\n"
+    )
+    rc = run_with_profile([sys.executable, "-c", code])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "[gui]" in out
+    assert "界面就绪(实测)" in out
+    assert "50.0ms" in out
+    # 打点行本身不透传（由汇总行替代）
+    assert "gui_ready @50.0ms" not in out
+
+
 # ---- runner.run 的 profile 分流测试 ----
 
 
@@ -271,7 +338,9 @@ def test_run_profile_env_injected(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     project = _make_runnable_project(tmp_path)
     captured: dict[str, Any] = {}
 
-    def fake_profile(cmd: list[str], env: dict[str, str] | None = None, on_summary: object = None) -> int:
+    def fake_profile(
+        cmd: list[str], env: dict[str, str] | None = None, on_summary: object = None, **kwargs: object
+    ) -> int:
         captured["cmd"] = cmd
         captured["env"] = env
         return 0
@@ -298,7 +367,9 @@ def test_run_profile_debug_combined(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
     captured: dict[str, Any] = {}
 
-    def fake_profile(cmd: list[str], env: dict[str, str] | None = None, on_summary: object = None) -> int:
+    def fake_profile(
+        cmd: list[str], env: dict[str, str] | None = None, on_summary: object = None, **kwargs: object
+    ) -> int:
         captured["cmd"] = cmd
         captured["env"] = env
         return 0
@@ -318,12 +389,63 @@ def test_run_profile_nonzero_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     """profile 模式非零退出码与普通模式一致抛 FspackError."""
     project = _make_runnable_project(tmp_path)
 
-    monkeypatch.setattr("fspack.runner.run_with_profile", lambda cmd, env=None, on_summary=None: 7)
+    monkeypatch.setattr("fspack.runner.run_with_profile", lambda cmd, env=None, on_summary=None, **kwargs: 7)
     monkeypatch.setattr("fspack.runner.platform.system", lambda: "Windows")
     from fspack.exceptions import FspackError
 
     with pytest.raises(FspackError, match="程序退出码非零: 7"):
         run_run(project, options=_opts(profile=True))
+
+
+def test_run_profile_repeat_passed_through(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """ProfileOptions.repeat 透传给 run_with_profile 的 repeat 参数."""
+    project = _make_runnable_project(tmp_path)
+    captured: dict[str, Any] = {}
+
+    def fake_profile(
+        cmd: list[str], env: dict[str, str] | None = None, on_summary: object = None, **kwargs: object
+    ) -> int:
+        captured["repeat"] = kwargs.get("repeat")
+        return 0
+
+    monkeypatch.setattr("fspack.runner.run_with_profile", fake_profile)
+    monkeypatch.setattr("fspack.runner.platform.system", lambda: "Windows")
+    run_run(project, options=_opts(profile=True, profile_repeat=5))
+    assert captured["repeat"] == 5
+
+
+def test_run_log_data_repeat_runs() -> None:
+    """runs_ms/repeat 进入剖析日志：runs 转秒（4 位小数）全量落盘，wall_time 为中位数样本."""
+    info = ProjectInfo(
+        name="app",
+        version="0.1.0",
+        src_dir=Path(),
+        entry_module="app",
+        entry_file=Path("app.py"),
+        app_type=AppType.CLI,
+        dependencies=(),
+        py_version="3.13",
+    )
+    data: dict[str, Any] = {
+        "wall_ms": 300.0,
+        "returncode": 0,
+        "stages": [("环境准备", 5.0), ("界面就绪", 250.0)],
+        "top_imports": [],
+        "entry_imports": [],
+        "top_self": [],
+        "runs_ms": [500.0, 300.0, 400.0],
+        "repeat": 3,
+    }
+    log = _run_log_data(data, info, "app", debug=False)
+    assert log["repeat"] == 3
+    assert log["runs"] == [0.5, 0.3, 0.4]
+    # wall_time 取中位数样本（0.3s），不是均值（0.4s）
+    assert log["wall_time"] == 0.3
+    # 单次运行（无 runs_ms）不写 runs/repeat 键
+    single = {k: v for k, v in data.items() if k not in ("runs_ms", "repeat")}
+    log1 = _run_log_data(single, info, "app", debug=False)
+    assert "runs" not in log1
+    assert "repeat" not in log1
 
 
 def test_run_without_profile_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -734,6 +856,7 @@ def test_run_saves_profile_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
         cmd: list[str],
         env: dict[str, str] | None = None,
         on_summary: Callable[[dict[str, Any]], None] | None = None,
+        **kwargs: object,
     ) -> int:
         assert callable(on_summary)
         on_summary(
@@ -780,6 +903,7 @@ def test_run_profile_compare_last_renders_table(
         cmd: list[str],
         env: dict[str, str] | None = None,
         on_summary: Callable[[dict[str, Any]], None] | None = None,
+        **kwargs: object,
     ) -> int:
         if on_summary is not None:
             on_summary(
@@ -837,6 +961,7 @@ def test_run_profile_compare_last_without_history_warns(
         cmd: list[str],
         env: dict[str, str] | None = None,
         on_summary: Callable[[dict[str, Any]], None] | None = None,
+        **kwargs: object,
     ) -> int:
         if on_summary is not None:
             on_summary(
@@ -868,6 +993,7 @@ def test_run_profile_specified_baseline_schema_mismatch_warns(
         cmd: list[str],
         env: dict[str, str] | None = None,
         on_summary: Callable[[dict[str, Any]], None] | None = None,
+        **kwargs: object,
     ) -> int:
         if on_summary is not None:
             on_summary(

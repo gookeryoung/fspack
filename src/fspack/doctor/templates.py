@@ -58,6 +58,8 @@ _logger = logging.getLogger(__name__)
 
 # 运行验证超时（秒）：CLI 应用通常 <1s 退出，GUI/Web 进入事件循环不退出。
 # 5s 给慢启动足够余量，超时后视为「启动成功」（GUI 正常运行）并主动终止。
+# 注入 FSPACK_TIMING=1 后 GUI 模板由 wrapper 自终止钩子在进入界面后自然
+# 退出（duration_sec 为真实启动耗时），超时仅为钩子未覆盖框架的兜底。
 _RUN_TIMEOUT_SEC = 5.0
 
 # 终止进程后的等待时间（秒）：terminate 后给进程 2s 清理，仍不退出则 kill。
@@ -202,16 +204,26 @@ def _run_template(
 
     统一用超时策略处理 CLI/GUI/Web 应用，无需依赖 ``app_type`` 字段：
 
-    - 进程自行退出且退出码 ``0`` → 成功（CLI 正常执行完成）
-    - 进程自行退出且退出码非 ``0`` → 失败（启动崩溃，捕获 stderr 首行）
+    - 进程自行退出且退出码 ``0`` → 成功（CLI 正常执行完成，或 GUI 由
+      wrapper 自终止钩子在「进入界面」后自然退出——见下）
+    - 进程自行退出且退出码非 ``0`` → 失败（启动崩溃，捕获 stderr 首行，
+      跳过 ``[fspack`` 开头的打点行）
     - 超时未退出 → 视为成功（GUI/Web 进入事件循环不退出），
       主动 ``terminate`` + ``kill``，``exit_code=None``
 
+    注入 ``FSPACK_TIMING=1`` 激活 wrapper 的 GUI 事件循环自终止钩子
+    （Qt ``QApplication.exec``/tkinter ``Tk.mainloop`` 进入前打点并返回）：
+    GUI 模板「进入界面后自行终止」，``duration_sec`` 为真实启动耗时而非
+    超时阈值；钩子未覆盖的框架仍走超时兜底。CLI 应用不受该环境变量影响
+    （wrapper 仅输出打点行，退出行为不变）。
+
     :param cmd: 运行命令（debug 模式为 ``[python, wrapper]``，回退为 ``[exe]``/``[wine, exe]``）
-    :param env: 环境变量（debug 模式含 ``PYTHONHOME``/``PYTHONUNBUFFERED``），``None`` 继承当前环境
+    :param env: 环境变量（debug 模式含 ``PYTHONHOME``/``PYTHONUNBUFFERED``），
+        ``None`` 继承当前环境；无论来源均追加 ``FSPACK_TIMING=1``
     :param timeout: 超时秒数（默认 :data:`_RUN_TIMEOUT_SEC`）
     :return: 运行验证结果
     """
+    run_env = {**(env or os.environ), "FSPACK_TIMING": "1"}
     start = time.perf_counter()
     try:
         proc = subprocess.Popen(
@@ -219,7 +231,7 @@ def _run_template(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            env=env,
+            env=run_env,
         )
     except (OSError, ValueError) as exc:
         elapsed = time.perf_counter() - start
@@ -258,7 +270,12 @@ def _run_template(
             exit_code=0,
             duration_sec=elapsed,
         )
-    stderr_first = (stderr or "").splitlines()[0] if stderr else ""
+    # stderr 首个非打点行做错误信息（[fspack 开头的 loader/wrapper/timing
+    # 打点行是正常输出，不能当错误展示）；超 200 字符截断
+    stderr_first = next(
+        (ln for ln in (stderr or "").splitlines() if ln and not ln.startswith("[fspack")),
+        "",
+    )
     if len(stderr_first) > 200:
         stderr_first = stderr_first[:197] + "..."
     _logger.warning("模板运行失败 %s: 退出码 %s", " ".join(cmd), proc.returncode)

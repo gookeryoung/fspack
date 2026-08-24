@@ -23,6 +23,10 @@ fspack 在 dist 根目录为每个入口生成 ``_entry_<name>.py`` 包装器，
    首次属性访问时才执行 ``__init__.py``，降低启动时间。
 7. **启动耗时打点**：``FSPACK_TIMING=1``（由 ``fsp r --profile`` 注入）时输出
    各阶段累计时刻到 stderr，供 runner 侧汇总剖析；未启用时零开销。
+8. **GUI 事件循环自终止**：``FSPACK_TIMING=1`` 时经 ``builtins.__import__``
+   拦截 Qt 系（PySide2/6、PyQt5/6）与 tkinter 的首次导入，patch
+   ``QApplication.exec``/``Tk.mainloop``：处理首帧事件后打点 ``gui_ready``
+   并直接返回，GUI 应用"进入界面后自行终止"（退出码 0），剖析不挂起。
 
 包模式下 wrapper 将 ``pkg_root`` 加入 ``sys.path`` 使首层包可 import。对于
 src-layout 项目（包在 ``src/<pkg>/`` 下，``src/`` 是容器而非包），wrapper
@@ -201,6 +205,98 @@ def _close_splash():
             _kernel32.CloseHandle(_ev)
     except OSError:
         pass  # ctypes 异常等场景：画面由 loader C 侧 30s 超时兜底关闭
+
+# GUI 事件循环自终止钩子（FSPACK_TIMING=1 剖析模式）：GUI 应用进入事件循环后
+# 永不退出，剖析会永久挂起。经 builtins.__import__ 拦截主流 GUI 框架的首次
+# 导入，patch QApplication.exec/exec_ 与 Tk.mainloop：先处理 pending 事件使
+# 首帧上屏（"进入界面"），打点 gui_ready 后直接返回，程序自然退出（退出码
+# 0），启动耗时得到有效评估。patch 成功即卸载拦截器恢复原生 import；未命中
+# 框架零开销（每次 import 仅一次元组查询），未知框架由 runner 侧超时兜底。
+# 注：本块代码不用 dict/set 字面量与 f-string——wrapper 模板经 str.format
+# 填充，字面花括号会被误解析为占位符。
+_GUI_TOPS = ("PySide2", "PySide6", "PyQt5", "PyQt6", "tkinter")
+
+
+def _fspack_gui_ready():
+    """输出界面就绪打点行（首帧上屏后、事件循环进入前的时刻）."""
+    _fspack_tick("gui_ready")
+
+
+def _fspack_patch_qt(qt_pkg):
+    """patch QtWidgets.QApplication.exec/exec_：处理首帧后打点并返回 0."""
+    if qt_pkg == "PySide2":
+        from PySide2.QtWidgets import QApplication
+    elif qt_pkg == "PySide6":
+        from PySide6.QtWidgets import QApplication
+    elif qt_pkg == "PyQt5":
+        from PyQt5.QtWidgets import QApplication
+    else:
+        from PyQt6.QtWidgets import QApplication
+
+    def _fspack_exec(self, *args, **kwargs):
+        try:
+            self.processEvents()  # 处理 show/paint 队列，首帧上屏
+        except Exception:
+            pass
+        _fspack_gui_ready()
+        return 0
+
+    for _nm in ("exec", "exec_"):
+        if hasattr(QApplication, _nm):
+            setattr(QApplication, _nm, _fspack_exec)
+
+
+def _fspack_patch_tkinter():
+    """patch tkinter.Tk.mainloop：处理 pending 事件后打点并返回."""
+    import tkinter
+
+    def _fspack_mainloop(self, *args, **kwargs):
+        try:
+            self.update()  # 处理 pending 事件（含首帧重绘）
+        except Exception:
+            pass
+        _fspack_gui_ready()
+        return None
+
+    tkinter.Tk.mainloop = _fspack_mainloop
+
+
+def _fspack_try_install_gui_hook(top):
+    """import 完成回调：目标框架的事件循环入口已可 patch 时安装并卸载拦截.
+
+    Qt 项目常先 import QtCore（此时 QtWidgets 尚不可用），ImportError 向上
+    传播由调用方忽略，保持拦截器待命，待 QtWidgets 导入后重试。
+    """
+    try:
+        if top == "tkinter":
+            _fspack_patch_tkinter()
+        else:
+            _fspack_patch_qt(top)
+    except ImportError:
+        return
+    global _fspack_orig_import
+    if _fspack_orig_import is not None:
+        import builtins
+
+        builtins.__import__ = _fspack_orig_import
+        _fspack_orig_import = None
+
+
+_fspack_orig_import = None
+if _FSPACK_TIMING:
+    import builtins as _builtins
+
+    _fspack_orig_import = _builtins.__import__
+
+    def _fspack_import_hook(name, *args, **kwargs):
+        mod = _fspack_orig_import(name, *args, **kwargs)
+        top = name.split(".", 1)[0]
+        if top in _GUI_TOPS:
+            _fspack_try_install_gui_hook(top)
+        return mod
+
+    _builtins.__import__ = _fspack_import_hook
+
 
 # tkinter 环境变量（embed python 缺失 Tcl/Tk 脚本路径，需手动指定）。
 # Linux/macOS standalone 无需此块：Tcl/Tk 脚本库由 python-build-standalone
