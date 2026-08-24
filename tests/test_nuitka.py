@@ -85,8 +85,11 @@ def _patch_winlibs_hit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, nuitka_v
     返回 winlibs 缓存根目录（``<tmp>/cache/nuitka-winlibs-mingw``）。
     预置的 gcc.exe 路径与 Nuitka ``getCachedDownload`` 约定一致，
     使 :meth:`NuitkaCompiler.ensure_winlibs_mingw` 缓存命中不触发下载。
+    同时 mock ``msvc_available`` 为 False：装了 Visual Studio 的机器上
+    ensure_env 会跳过 winlibs 预填充（MSVC 优先），mock 保证测试环境无关。
     """
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setattr("fspack.packaging.nuitka.winlibs.msvc_available", lambda: False)
     winlibs_root = tmp_path / "cache" / "nuitka-winlibs-mingw"
     gcc_exe = NuitkaCompiler._winlibs_gcc_dir(nuitka_ver) / "mingw64" / "bin" / "gcc.exe"
     gcc_exe.parent.mkdir(parents=True, exist_ok=True)
@@ -1116,6 +1119,177 @@ def test_compile_src_unlink_failure_warns(
     assert st._items == 1
 
 
+# ---- compile_src 损坏自愈测试（编译缓存污染 → 清缓存重试一轮） ----
+
+
+def _setup_corrupt_retry_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, py_count: int) -> Path:
+    """搭 compile_src 自愈测试环境：runtime/python.exe + nuitka 缓存 + py 文件.
+
+    返回 src 目录。mock 保留真实 `_collect_py_files`/`_create_bootstrap_script`/
+    `_cleanup_build_dirs`（自愈轮重新收集依赖真实文件系统状态）。
+    """
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "python.exe").write_bytes(b"")
+    src = tmp_path / "src"
+    src.mkdir()
+    for i in range(py_count):
+        (src / f"f{i}.py").write_text("x = 1")
+    _make_nuitka_cache(tmp_path / "cache")
+    return src
+
+
+def test_compile_src_corrupt_majority_purges_cache_and_retries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """产物异常 ≥3 且过半时清 Nuitka 编译缓存并重试一轮（编译缓存污染自愈）."""
+    src = _setup_corrupt_retry_env(tmp_path, monkeypatch, py_count=4)
+
+    compile_rounds: list[list[Path]] = []
+    purge_calls: list[Path] = []
+
+    def fake_compile_files(
+        cls: Any, py_exe: Path, bootstrap: Path, py_files: list[Path], stage: Any, **kw: Any
+    ) -> tuple[set[Path], list[Path]]:
+        compile_rounds.append(list(py_files))
+        return (set(py_files), [])
+
+    # 首轮仅 1 个剥离（4 个中 3 个异常 → 3≥3 且 3*2>=4 触发自愈），
+    # 重试轮全部剥离（异常 0 → 循环终止）
+    strip_returns: list[int] = [1, 4]
+    strip_rounds: list[int] = []
+
+    def fake_strip(cls: Any, compiled_files: set[Path], stage: Any, **kw: Any) -> int:
+        n = strip_rounds[0] if strip_rounds else 0
+        strip_rounds.append(n)
+        return strip_returns[n] if n < len(strip_returns) else 0
+
+    monkeypatch.setattr(NuitkaCompiler, "_compile_files", classmethod(fake_compile_files))
+    monkeypatch.setattr(NuitkaCompiler, "_strip_compiled_sources", classmethod(fake_strip))
+    monkeypatch.setattr(
+        "fspack.packaging.nuitka.compile._purge_nuitka_compile_cache",
+        lambda: purge_calls.append(Path("purged")),
+    )
+
+    st = StageRecorder("Nuitka 编译")
+    with caplog.at_level("WARNING", logger="fspack.packaging.nuitka"):
+        NuitkaCompiler.compile_src(src, tmp_path / "runtime", "3.11.9", Platform.WINDOWS, tmp_path / "cache", stage=st)
+
+    # 编译两轮（首轮 + 清缓存重试轮），缓存清理恰一次
+    assert len(compile_rounds) == 2
+    assert len(purge_calls) == 1
+    # 首轮编译全部 4 个文件；重试轮重新收集仍 4 个（mock 不删 .py）
+    assert len(compile_rounds[0]) == 4
+    assert len(compile_rounds[1]) == 4
+    assert any("清理 Nuitka 编译缓存" in r.message or "疑为编译缓存污染" in r.message for r in caplog.records)
+
+
+def test_compile_src_low_corruption_no_retry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """产物异常数 <3（单文件边界问题）时不触发清缓存重试."""
+    src = _setup_corrupt_retry_env(tmp_path, monkeypatch, py_count=4)
+
+    compile_rounds: list[list[Path]] = []
+
+    def fake_compile_files(
+        cls: Any, py_exe: Path, bootstrap: Path, py_files: list[Path], stage: Any, **kw: Any
+    ) -> tuple[set[Path], list[Path]]:
+        compile_rounds.append(list(py_files))
+        return (set(py_files), [])
+
+    # 4 个中 2 个异常：2 < 3 不触发
+    monkeypatch.setattr(NuitkaCompiler, "_compile_files", classmethod(fake_compile_files))
+    monkeypatch.setattr(NuitkaCompiler, "_strip_compiled_sources", classmethod(lambda cls, cf, st, **kw: 2))
+    monkeypatch.setattr(
+        "fspack.packaging.nuitka.compile._purge_nuitka_compile_cache",
+        lambda: (_ for _ in ()).throw(AssertionError("低损坏率不应清缓存")),
+    )
+
+    st = StageRecorder("Nuitka 编译")
+    NuitkaCompiler.compile_src(src, tmp_path / "runtime", "3.11.9", Platform.WINDOWS, tmp_path / "cache", stage=st)
+    assert len(compile_rounds) == 1
+
+
+def test_compile_src_corrupt_minority_ratio_no_retry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """异常数 ≥3 但未过半（非缓存级系统性损坏）时不触发重试."""
+    src = _setup_corrupt_retry_env(tmp_path, monkeypatch, py_count=7)
+
+    compile_rounds: list[list[Path]] = []
+
+    def fake_compile_files(
+        cls: Any, py_exe: Path, bootstrap: Path, py_files: list[Path], stage: Any, **kw: Any
+    ) -> tuple[set[Path], list[Path]]:
+        compile_rounds.append(list(py_files))
+        return (set(py_files), [])
+
+    # 7 个中 3 个异常：3 ≥3 但 3*2=6 < 7 未过半，不触发
+    monkeypatch.setattr(NuitkaCompiler, "_compile_files", classmethod(fake_compile_files))
+    monkeypatch.setattr(NuitkaCompiler, "_strip_compiled_sources", classmethod(lambda cls, cf, st, **kw: 4))
+    monkeypatch.setattr(
+        "fspack.packaging.nuitka.compile._purge_nuitka_compile_cache",
+        lambda: (_ for _ in ()).throw(AssertionError("未过半不应清缓存")),
+    )
+
+    st = StageRecorder("Nuitka 编译")
+    NuitkaCompiler.compile_src(src, tmp_path / "runtime", "3.11.9", Platform.WINDOWS, tmp_path / "cache", stage=st)
+    assert len(compile_rounds) == 1
+
+
+def test_compile_src_corrupt_retry_only_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """重试轮仍高损坏率时不再清缓存重试（防死循环，仅重试一轮）."""
+    src = _setup_corrupt_retry_env(tmp_path, monkeypatch, py_count=4)
+
+    compile_rounds: list[list[Path]] = []
+    purge_calls: list[int] = []
+
+    def fake_compile_files(
+        cls: Any, py_exe: Path, bootstrap: Path, py_files: list[Path], stage: Any, **kw: Any
+    ) -> tuple[set[Path], list[Path]]:
+        compile_rounds.append(list(py_files))
+        return (set(py_files), [])
+
+    # 两轮均 0 剥离（异常 4/4 过半）：首轮触发自愈，重试轮不再触发
+    monkeypatch.setattr(NuitkaCompiler, "_compile_files", classmethod(fake_compile_files))
+    monkeypatch.setattr(NuitkaCompiler, "_strip_compiled_sources", classmethod(lambda cls, cf, st, **kw: 0))
+    monkeypatch.setattr(
+        "fspack.packaging.nuitka.compile._purge_nuitka_compile_cache",
+        lambda: purge_calls.append(1),
+    )
+
+    st = StageRecorder("Nuitka 编译")
+    NuitkaCompiler.compile_src(src, tmp_path / "runtime", "3.11.9", Platform.WINDOWS, tmp_path / "cache", stage=st)
+    # 恰两轮编译、恰一次清缓存（重试轮不再清）
+    assert len(compile_rounds) == 2
+    assert len(purge_calls) == 1
+
+
+def test_purge_nuitka_compile_cache_isolates_winlibs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_purge_nuitka_compile_cache 删 nuitka-work 但不动 winlibs 工具链目录."""
+    from fspack.packaging.nuitka.compile import _purge_nuitka_compile_cache
+
+    monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
+    work_dir = tmp_path / "cache" / "nuitka-work"
+    (work_dir / "clcache" / "sub").mkdir(parents=True)
+    (work_dir / "clcache" / "sub" / "entry.txt").write_text("stale")
+    winlibs_gcc = tmp_path / "cache" / "nuitka-winlibs-mingw" / "gcc" / "x86_64" / "rel" / "mingw64" / "bin"
+    winlibs_gcc.mkdir(parents=True)
+    (winlibs_gcc / "gcc.exe").write_bytes(b"")
+
+    _purge_nuitka_compile_cache()
+
+    assert not work_dir.exists(), "nuitka-work 编译缓存应被清空"
+    assert (winlibs_gcc / "gcc.exe").is_file(), "winlibs 工具链目录不应被清理（避免重下 200MB）"
+
+
+def test_purge_nuitka_compile_cache_missing_dir_noop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_purge_nuitka_compile_cache 在目录不存在时静默 no-op（不抛异常）."""
+    from fspack.packaging.nuitka.compile import _purge_nuitka_compile_cache
+
+    monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
+    # 不创建 nuitka-work 目录
+    _purge_nuitka_compile_cache()  # 不抛即通过
+    assert not (tmp_path / "cache" / "nuitka-work").exists()
+
+
 def test_strip_compiled_sources_preserves_py_when_pyd_missing(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """_strip_compiled_sources 验证 .pyd/.so 存在才删 .py：产物缺失时保留源码.
 
@@ -2013,6 +2187,93 @@ def test_uses_winlibs_version_split() -> None:
     assert uses_winlibs("3.14.0t") is False
 
 
+def test_msvc_available_vswhere_reports_install(monkeypatch: pytest.MonkeyPatch) -> None:
+    """vswhere 找到含 C++ 工具集的 VS 实例（stdout 非空）时返回 True."""
+    from fspack.packaging.nuitka.winlibs import msvc_available
+
+    class _VswhereOK:
+        returncode = 0
+        stdout = "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\n"
+
+    # 只放行 vswhere.exe 的 is_file（探测路径构造的 Path），其余文件不存在
+    monkeypatch.setattr(Path, "is_file", lambda self: self.name == "vswhere.exe", raising=False)
+    monkeypatch.setattr("fspack.packaging.nuitka.winlibs.subprocess.run", lambda cmd, **kw: _VswhereOK())
+    # 绕过 lru_cache 直测原函数（缓存结果会跨测试泄漏）
+    assert msvc_available.__wrapped__() is True
+
+
+def test_msvc_available_vswhere_empty_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    """vswhere 存在但无含 C++ 工具集的实例（stdout 空）时返回 False."""
+    from fspack.packaging.nuitka.winlibs import msvc_available
+
+    class _VswhereEmpty:
+        returncode = 0
+        stdout = ""
+
+    monkeypatch.setattr(Path, "is_file", lambda self: self.name == "vswhere.exe", raising=False)
+    monkeypatch.setattr("fspack.packaging.nuitka.winlibs.subprocess.run", lambda cmd, **kw: _VswhereEmpty())
+    assert msvc_available.__wrapped__() is False
+
+
+def test_msvc_available_vswhere_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """vswhere 探测超时/启动失败按无 MSVC 处理（False），不抛异常."""
+    import subprocess as _sp
+
+    from fspack.packaging.nuitka.winlibs import msvc_available
+
+    def _timeout(cmd: list[str], **kw: object) -> object:
+        raise _sp.TimeoutExpired(cmd, timeout=30)
+
+    monkeypatch.setattr(Path, "is_file", lambda self: self.name == "vswhere.exe", raising=False)
+    monkeypatch.setattr("fspack.packaging.nuitka.winlibs.subprocess.run", _timeout)
+    assert msvc_available.__wrapped__() is False
+
+
+def test_msvc_available_no_vswhere_no_cl(monkeypatch: pytest.MonkeyPatch) -> None:
+    """无 vswhere 且 cl.exe 不在 PATH 时返回 False（无 VS2017+ 的机器）."""
+    from fspack.packaging.nuitka.winlibs import msvc_available
+
+    monkeypatch.setattr(Path, "is_file", lambda self: False, raising=False)
+    monkeypatch.setattr("fspack.packaging.nuitka.winlibs.shutil.which", lambda name: None)
+    assert msvc_available.__wrapped__() is False
+
+
+def test_msvc_available_no_vswhere_cl_in_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """无 vswhere 但 cl.exe 在 PATH（开发者手动配 VS 环境）时返回 True."""
+    from fspack.packaging.nuitka.winlibs import msvc_available
+
+    monkeypatch.setattr(Path, "is_file", lambda self: False, raising=False)
+    monkeypatch.setattr("fspack.packaging.nuitka.winlibs.shutil.which", lambda name: "C:\\VS\\cl.exe")
+    assert msvc_available.__wrapped__() is True
+
+
+def test_needs_force_mingw64_matrix(monkeypatch: pytest.MonkeyPatch) -> None:
+    """needs_force_mingw64：仅 Windows + py>=3.13 + 无 MSVC 时才需要 force flag."""
+    from fspack.packaging.nuitka.winlibs import needs_force_mingw64
+
+    monkeypatch.setattr("fspack.packaging.nuitka.winlibs.msvc_available", lambda: False)
+    # 无 MSVC：Windows py>=3.13 需要（防 zig），py<3.13 默认 winlibs 不需要，
+    # Linux 不需要，空版本保持旧行为不加
+    assert needs_force_mingw64(Platform.WINDOWS, "3.13.1") is True
+    assert needs_force_mingw64(Platform.WINDOWS, "3.14.0t") is True
+    assert needs_force_mingw64(Platform.WINDOWS, "3.12.10") is False
+    assert needs_force_mingw64(Platform.LINUX, "3.13.1") is False
+    assert needs_force_mingw64(Platform.WINDOWS, "") is False
+
+    # 有 MSVC：scons 优先 MSVC，flag 反而把 MSVC 顶掉，一律不需要
+    monkeypatch.setattr("fspack.packaging.nuitka.winlibs.msvc_available", lambda: True)
+    assert needs_force_mingw64(Platform.WINDOWS, "3.13.1") is False
+    assert needs_force_mingw64(Platform.WINDOWS, "3.14.0t") is False
+
+
+def test_nuitka_work_cache_dir_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """nuitka_work_cache_dir 返回 <cache_root>/nuitka-work（NUITKA_CACHE_DIR 重定向目标）."""
+    from fspack.config.cache import nuitka_work_cache_dir
+
+    monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
+    assert nuitka_work_cache_dir() == tmp_path / "cache" / "nuitka-work"
+
+
 def test_ensure_winlibs_mingw_cache_hit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """缓存命中（gcc.exe 已存在）时返回缓存根并回写 hit_cache，不触发下载."""
     from fspack.packaging.nuitka import NuitkaCompiler
@@ -2319,6 +2580,29 @@ def test_ensure_env_windows_py313_prefills_winlibs(tmp_path: Path, monkeypatch: 
     nuitka_ver = NuitkaCompiler.ensure_env(cache_root, "3.13.1", Platform.WINDOWS, get_mirror("aliyun"), stage=st)
     assert nuitka_ver == "4.1.3"
     assert called == ["3.13.1"]
+
+
+def test_ensure_env_windows_msvc_skips_winlibs_prefill(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """ensure_env 在 Windows 检测到 MSVC 时跳过 winlibs 预填充（scons 优先 MSVC，200MB 下载纯浪费）."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+    from fspack.progress import StageRecorder
+
+    monkeypatch.setattr("fspack.packaging.loader.mingw_available", lambda: True)
+    monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setattr("fspack.packaging.nuitka.winlibs.msvc_available", lambda: True)
+    cache_root = tmp_path / "nuitka_cache"
+    _make_nuitka_cache(NuitkaCompiler._nuitka_cache_dir(cache_root, "3.13.1"))
+
+    # 预填充被调用即失败（MSVC 机器应跳过）
+    monkeypatch.setattr(
+        NuitkaCompiler,
+        "ensure_winlibs_mingw",
+        classmethod(lambda cls, *a, **kw: (_ for _ in ()).throw(AssertionError("MSVC 机器不应预填充 winlibs"))),
+    )
+
+    st = StageRecorder("Nuitka 环境")
+    nuitka_ver = NuitkaCompiler.ensure_env(cache_root, "3.13.1", Platform.WINDOWS, get_mirror("aliyun"), stage=st)
+    assert nuitka_ver == "4.1.3"
 
 
 def test_ensure_env_linux_skips_winlibs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -3951,7 +4235,7 @@ def test_compile_files_parallel_max_workers_capped(
 
 
 def test_compile_files_windows_py313_forces_mingw64(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Windows py>=3.13 编译命令追加 force-mingw64（zig 产物损坏，强制走 winlibs）."""
+    """Windows py>=3.13 且无 MSVC 时编译命令追加 force-mingw64（zig 产物损坏，强制走 winlibs）."""
     captured: list[list[str]] = []
 
     def fake_stream(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int, str, str]:
@@ -3960,6 +4244,8 @@ def test_compile_files_windows_py313_forces_mingw64(tmp_path: Path, monkeypatch:
 
     monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(fake_stream))
     monkeypatch.setattr(NuitkaCompiler, "_build_compile_env", classmethod(lambda cls, *a, **kw: {}))
+    # mock 无 MSVC：装了 VS 的机器上 scons 优先 MSVC，不加 force flag
+    monkeypatch.setattr("fspack.packaging.nuitka.winlibs.msvc_available", lambda: False)
 
     src = tmp_path / "src"
     src.mkdir()
@@ -3980,6 +4266,37 @@ def test_compile_files_windows_py313_forces_mingw64(tmp_path: Path, monkeypatch:
     assert "--experimental=force-mingw64" in captured[0]
     # py 文件保持末位（诊断日志与测试依赖 cmd[-1] 定位源文件）
     assert captured[0][-1] == str(f)
+
+
+def test_compile_files_windows_py313_msvc_no_force_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows py>=3.13 但有 MSVC 时不加 force-mingw64（scons 优先 MSVC，flag 反而顶掉 MSVC）."""
+    captured: list[list[str]] = []
+
+    def fake_stream(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int, str, str]:
+        captured.append(cmd)
+        return (0, "", "")
+
+    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(fake_stream))
+    monkeypatch.setattr(NuitkaCompiler, "_build_compile_env", classmethod(lambda cls, *a, **kw: {}))
+    monkeypatch.setattr("fspack.packaging.nuitka.winlibs.msvc_available", lambda: True)
+
+    src = tmp_path / "src"
+    src.mkdir()
+    f = src / "f0.py"
+    f.write_text("x = 1", encoding="utf-8")
+
+    st = StageRecorder("编译")
+    NuitkaCompiler._compile_files(
+        tmp_path / "python.exe",
+        tmp_path / "bootstrap.py",
+        [f],
+        st,
+        target=Platform.WINDOWS,
+        py_version="3.13.1",
+    )
+
+    assert captured, "应至少编译一个文件"
+    assert "--experimental=force-mingw64" not in captured[0]
 
 
 def test_compile_files_windows_py312_no_force_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -4304,11 +4621,13 @@ def test_build_compile_env_without_ccache_sets_cc_compiler(tmp_path: Path, monke
     monkeypatch.delenv("CC", raising=False)
     monkeypatch.delenv("CFLAGS", raising=False)
 
-    # Linux：CC=gcc
+    # Linux：CC=gcc；NUITKA_CACHE_DIR 重定向编译缓存到 fspack 干净目录
+    # （隔离 %LOCALAPPDATA%/~/.cache 的历史污染条目）
     env_linux = NuitkaCompiler._build_compile_env(Platform.LINUX, None)
     assert env_linux is not None
     assert env_linux["CC"] == "gcc"
     assert "CCACHE_DIR" not in env_linux
+    assert env_linux["NUITKA_CACHE_DIR"] == str(tmp_path / "cache" / "nuitka-work")
 
     # Windows：CC 被 scons 无条件拒绝，不设避免 "Non downloaded winlibs-gcc
     # ... ignored" 噪音提示；NUITKA_CACHE_DIR_DOWNLOADS 重定向到 fspack 缓存目录
@@ -4317,12 +4636,14 @@ def test_build_compile_env_without_ccache_sets_cc_compiler(tmp_path: Path, monke
     assert "CC" not in env_win
     assert "CCACHE_DIR" not in env_win
     assert env_win["NUITKA_CACHE_DIR_DOWNLOADS"] == str(tmp_path / "cache" / "nuitka-winlibs-mingw")
+    assert env_win["NUITKA_CACHE_DIR"] == str(tmp_path / "cache" / "nuitka-work")
 
 
-def test_build_compile_env_with_ccache_linux(tmp_path: Path) -> None:
+def test_build_compile_env_with_ccache_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Linux ccache 环境设置 CC='"ccache 路径" gcc'（路径引号包裹防空格截断）."""
     from fspack.packaging.nuitka import NuitkaCompiler
 
+    monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
     ccache_exe = tmp_path / "ccache"
     ccache_exe.write_bytes(b"")
     env = NuitkaCompiler._build_compile_env(Platform.LINUX, ccache_exe)
@@ -4373,10 +4694,11 @@ def test_build_compile_env_windows_no_cflags_injected(tmp_path: Path, monkeypatc
     assert "CFLAGS" not in env
 
 
-def test_build_compile_env_skips_win32_winnt_for_linux(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_build_compile_env_skips_win32_winnt_for_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Linux 目标不设置 _WIN32_WINNT（Linux 无此兼容性问题）."""
     from fspack.packaging.nuitka import NuitkaCompiler
 
+    monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.delenv("CFLAGS", raising=False)
     env = NuitkaCompiler._build_compile_env(Platform.LINUX, None)
     # Linux 不应添加 _WIN32_WINNT

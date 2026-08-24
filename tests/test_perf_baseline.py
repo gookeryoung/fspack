@@ -386,6 +386,9 @@ class TestNuitkaEnsureEnvBaseline:
 
         # mingw 可用让 _check_c_compiler 通过（Windows 目标）
         monkeypatch.setattr("fspack.packaging.loader.mingw_available", lambda: True)
+        # mock 有 MSVC：跳过 winlibs 预填充（真实探测含 vswhere subprocess 开销
+        # 会污染基线，且无 VS 机器上会真实访问 winlibs 缓存目录）
+        monkeypatch.setattr("fspack.packaging.nuitka.winlibs.msvc_available", lambda: True)
         cache_root = tmp_path / "nuitka_cache"
         # 预装 nuitka 到缓存目录，让 _is_nuitka_cached 返回 True 走缓存命中分支
         cache_dir = NuitkaCompiler._nuitka_cache_dir(cache_root, "3.11.9")

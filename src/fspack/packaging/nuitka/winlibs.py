@@ -43,7 +43,11 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
+import shutil
+import subprocess
 import zipfile
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -51,6 +55,7 @@ from fspack.config import is_offline, nuitka_version_for
 from fspack.config.cache import nuitka_winlibs_cache_dir
 from fspack.config.versions import _split_t_suffix
 from fspack.exceptions import NuitkaError
+from fspack.platform import Platform
 from fspack.progress import StageRecorder
 
 if TYPE_CHECKING:
@@ -94,6 +99,85 @@ def uses_winlibs(py_version: str) -> bool:
     base, _ = _split_t_suffix(py_version)
     major, minor = base.split(".")[:2]
     return (int(major), int(minor)) < (3, 13)
+
+
+# vswhere 探测超时（秒）：正常 <1s，留余量兜底冷启动/杀软扫描
+_VSWHERE_TIMEOUT = 30.0
+
+
+@lru_cache(maxsize=1)
+def msvc_available() -> bool:
+    """探测构建机是否装了 Visual Studio C++ 编译工具（MSVC）.
+
+    Nuitka scons 在 Windows 上的编译器选择优先级：MSVC（VS2022）> 自下载
+    winlibs gcc > zig fallback。装了 MSVC 时 scons 直接用 MSVC，winlibs
+    预填充与 ``--experimental=force-mingw64`` 均无必要（预填充 200MB 纯浪费，
+    force flag 反而把 MSVC 顶掉退回 winlibs）。
+
+    探测顺序：
+
+    1. ``vswhere.exe``（随 VS2017+ Installer 必装）：查最新含 C++ 工具集
+       （``Microsoft.VisualStudio.Component.VC.Tools.x86.x64``）的 VS 实例
+    2. vswhere 不存在（无 VS2017+ 的机器）：fallback 查 ``cl.exe`` 在 PATH
+       （罕见：仅开发者手动配置过 VS 环境时命中）
+
+    结果进程内缓存（:func:`functools.lru_cache`）：探测含 subprocess 开销
+    （~100ms），编译命令构造与 ensure_env 各调一次，无必要重复探测。
+
+    漏报安全（实际有 MSVC 但探测为无）：走 winlibs 预填充 + force flag，
+    产物有效仅多 200MB 下载；误报安全（实际无 MSVC 但探测为有）：scons
+    找不到 MSVC 会 fallback 到 winlibs/zig——py>=3.13 误报时有 zig 损坏
+    风险，但 vswhere 输出非空即真装了 VS，误报概率可忽略。
+    """
+    program_files_x86 = os.environ.get("PROGRAMFILES(X86)", "")
+    vswhere = Path(program_files_x86) / "Microsoft Visual Studio" / "Installer" / "vswhere.exe"
+    if vswhere.is_file():
+        try:
+            result = subprocess.run(
+                [
+                    str(vswhere),
+                    "-latest",
+                    "-products",
+                    "*",
+                    "-requires",
+                    "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+                    "-property",
+                    "installationPath",
+                ],
+                capture_output=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=_VSWHERE_TIMEOUT,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        return result.returncode == 0 and bool(result.stdout.strip())
+    return shutil.which("cl.exe") is not None
+
+
+def needs_force_mingw64(target: Platform, py_version: str) -> bool:
+    """判断编译命令是否需追加 ``--experimental=force-mingw64`` 强制 winlibs.
+
+    需要的条件（全部满足）：
+
+    - Windows 目标（Linux 用系统 gcc 无 zig 风险）
+    - py>=3.13（Nuitka 4.1 起该版本段默认 fallback 到 zig，产物可能损坏；
+      py<3.13 默认即 winlibs 无需 flag；空 ``py_version`` 未知版本不加
+      flag 保持旧行为）
+    - 无 MSVC（:func:`msvc_available` 为 False）：MSVC 优先级高于 fallback
+      链，scons 直接用 MSVC；此时加 flag 反而把 MSVC 顶掉退回 winlibs
+
+    与 :meth:`NuitkaEnv.ensure_env` 的 winlibs 预填充条件配套：预填充跳过
+    MSVC 机器（省 200MB），本函数同样跳过（编译器统一走 MSVC），两层判断
+    必须一致否则出现"预填充了却 force 走 MSVC"或"没预填充却 force 要
+    winlibs"的资源错配。
+    """
+    if target is not Platform.WINDOWS:
+        return False
+    if not py_version or uses_winlibs(py_version):
+        return False
+    return not msvc_available()
 
 
 class NuitkaWinlibs:

@@ -36,7 +36,7 @@ from concurrent.futures import as_completed
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, Any, TextIO
 
-from fspack.packaging.nuitka.winlibs import uses_winlibs
+from fspack.packaging.nuitka.winlibs import needs_force_mingw64
 from fspack.platform import Platform
 from fspack.progress import StageRecorder
 
@@ -256,12 +256,16 @@ class NuitkaProgress:
         - ``--no-pyi-file``：不生成 .pyi 类型存根（运行时不需要）
         - ``--remove-output``：编译后删除临时构建文件（.build/ 目录）
         - ``--jobs=N``：单进程内 C 编译并行度
-        - ``--experimental=force-mingw64``（仅 Windows py>=3.13）：强制 scons
-          fallback 到 winlibs gcc 而非 zig——zig 编译的 .pyd 可能损坏
-          （returncode==0、文件已生成，运行时访问违例 0xC0000005）。
-          py<3.13 默认即 winlibs 无需 flag；Linux 不涉及（用系统 gcc）。
+        - ``--experimental=force-mingw64``（仅 Windows py>=3.13 且无 MSVC）：
+          强制 scons fallback 到 winlibs gcc 而非 zig——zig 编译的 .pyd 可能
+          损坏（returncode==0、文件已生成，运行时访问违例 0xC0000005）。
+          py<3.13 默认即 winlibs 无需 flag；有 MSVC 时 scons 优先用 MSVC
+          （优先级高于 fallback 链），加 flag 反而把 MSVC 顶掉，故跳过；
+          Linux 不涉及（用系统 gcc）。判断逻辑集中见
+          :func:`fspack.packaging.nuitka.winlibs.needs_force_mingw64`，
           winlibs 工具链由 :meth:`NuitkaEnv.ensure_env` 预填充到
-          ``nuitka-winlibs-mingw`` 缓存，scons 缓存命中不下载
+          ``nuitka-winlibs-mingw`` 缓存（MSVC 机器同样跳过，两层一致），
+          scons 缓存命中不下载
 
         ``ccache_exe`` 非 None 时，设置 ``CC="ccache <compiler>"`` 环境变量注入子进程，
         scons 通过 ccache 调用 gcc，缓存 C 编译结果加速重复编译。
@@ -314,11 +318,12 @@ class NuitkaProgress:
                 "--assume-yes-for-downloads",
                 f"--jobs={jobs}",
             ]
-            # Windows py>=3.13：Nuitka 默认 fallback 到 zig 编译器，其产物可能
-            # 损坏（运行时访问违例）。强制走 winlibs gcc（ensure_env 已预填充
-            # 缓存），与 py<3.13 默认行为一致。空 py_version（未知版本）不加
-            # flag 保持旧行为
-            if target is Platform.WINDOWS and py_version and not uses_winlibs(py_version):
+            # Windows py>=3.13 且无 MSVC：Nuitka 默认 fallback 到 zig 编译器，
+            # 其产物可能损坏（运行时访问违例）。强制走 winlibs gcc（ensure_env
+            # 已预填充缓存）；有 MSVC 时 scons 优先用 MSVC（优先级高于 fallback
+            # 链），加 flag 反而把 MSVC 顶掉，故跳过。空 py_version（未知版本）
+            # 不加 flag 保持旧行为。判断逻辑集中见 needs_force_mingw64
+            if needs_force_mingw64(target, py_version):
                 cmd.append("--experimental=force-mingw64")
             cmd.append(str(py_file))
             try:

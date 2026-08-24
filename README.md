@@ -115,7 +115,8 @@ tkinter 补充包）只从本地缓存读取，缓存未命中时立即报清晰
 ├── standalone/     # Linux/macOS python-build-standalone tar.gz
 ├── wheels/         # 第三方 wheel + 依赖解析缓存
 ├── nuitka/         # Nuitka 包 + 编译用 standalone python
-├── nuitka-winlibs-mingw/  # Nuitka winlibs gcc 工具链（Windows 编译 .pyd，全版本强制 winlibs）
+├── nuitka-winlibs-mingw/  # Nuitka winlibs gcc 工具链（Windows 编译 .pyd；检测到 MSVC 时跳过预填充）
+├── nuitka-work/    # Nuitka 编译中间缓存（clcache/scons-config 等，隔离系统位置防污染）
 ├── loaders/        # C loader 编译缓存
 ├── ccache/         # ccache 二进制与编译缓存
 └── tkinter/        # tkinter 补充包缓存

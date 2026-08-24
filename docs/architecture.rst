@@ -44,13 +44,20 @@
     ``~/.fspack/cache/nuitka/``；Windows 优先复用构建机自身 python（major.minor
     与目标一致时免下载），否则用缓存于 ``~/.fspack/cache/python/`` 的 standalone
     python 运行编译（embed python 不完整会触发 reExecute fork bomb），tarball 与
-    tkinter 打包共享 ``standalone-windows/`` 缓存；Windows 编译器由 Nuitka 下载缓存
-    提供（注入 ``NUITKA_CACHE_DIR_DOWNLOADS`` 重定向到 ``nuitka-winlibs-mingw/``，
-    全版本预填充 winlibs gcc：py<3.13 scons 默认即 winlibs，py>=3.13 经
-    ``--experimental=force-mingw64`` 强制——zig 编译的 .pyd 可能损坏不再使用；
-    预填充时识别缓存目录下用户手动放置的 winlibs zip 解压替代下载，损坏归档
-    删除后回退下载；系统 mingw 会被 scons 拒绝不使用）；入口文件保留 ``.py``
-    不编译（``runpy.run_path()`` 兼容）；
+    tkinter 打包共享 ``standalone-windows/`` 缓存；Nuitka 编译中间缓存
+    （clcache/scons-config 等）经 ``NUITKA_CACHE_DIR`` 全量重定向到
+    ``nuitka-work/``，与系统默认位置隔离（历史污染的坏 clcache 条目
+    被反复命中会导致 .pyd 大量损坏）；Windows 编译器由 Nuitka 下载缓存
+    提供（注入 ``NUITKA_CACHE_DIR_DOWNLOADS`` 重定向到
+    ``nuitka-winlibs-mingw/``：检测到 MSVC（vswhere 探测 Visual Studio
+    C++ 工具链，优先级最高）时跳过 winlibs 预填充且不加 force flag，
+    否则预填充 winlibs gcc——py<3.13 scons 默认即 winlibs，py>=3.13 且
+    无 MSVC 时经 ``--experimental=force-mingw64`` 强制——zig 编译的 .pyd
+    可能损坏不再使用；预填充时识别缓存目录下用户手动放置的 winlibs zip
+    解压替代下载，损坏归档删除后回退下载；系统 mingw 会被 scons 拒绝
+    不使用）；编译产物验证异常数量 ≥3 且过半时自动清 ``nuitka-work/``
+    编译缓存重试一轮（自愈，winlibs 工具链不受影响）；入口文件保留
+    ``.py`` 不编译（``runpy.run_path()`` 兼容）；
     stamp 缓存键 = ``nuitka_version|py_version|src_fingerprint|entry_rels``，
     命中跳过整个阶段；交叉构建自动跳过
 11. **Win7 兼容 DLL 注入**（Windows，Python 3.9+）：注入 api-ms-win-core-path
@@ -140,16 +147,20 @@ fspack 支持通过环境变量或 CLI 标志启用的离线模式，适用于�
    ├── wheels/               # 第三方 wheel + 依赖解析缓存（.deps_cache.json）
    ├── python/               # Nuitka 编译用 standalone python（按 standalone 版本分目录）
    ├── nuitka/               # Nuitka 包（按 py_version 分目录）
-   ├── nuitka-winlibs-mingw/ # Nuitka winlibs gcc 工具链（Windows 编译 .pyd，全版本强制
-   │                         #   winlibs；内部按 Nuitka downloads 约定 gcc/x86_64/<specificity>/，
-   │                         #   根目录可放 winlibs zip 归档供识别解压）
+   ├── nuitka-winlibs-mingw/ # Nuitka winlibs gcc 工具链（Windows 编译 .pyd；内部按
+   │                         #   Nuitka downloads 约定 gcc/x86_64/<specificity>/，根目录
+   │                         #   可放 winlibs zip 归档供识别解压；检测到 MSVC 时跳过预填充）
+   ├── nuitka-work/          # Nuitka 编译中间缓存（NUITKA_CACHE_DIR 重定向，含 clcache/
+   │                         #   scons-config 等；与系统默认位置隔离防历史污染，损坏率
+   │                         #   过高时自动清空重试）
    ├── loaders/              # C loader 编译缓存（按 source hash 命名）
    ├── ccache/               # ccache 二进制与编译缓存
    └── tkinter/              # tkinter 补充包缓存（按 standalone 版本命名的 zip）
 
 子模块缓存目录通过 :mod:`fspack.config.cache` 的 ``embed_cache_dir()``/
 ``standalone_cache_dir()``/``wheel_cache_dir()``/``nuitka_cache_dir()``/
-``nuitka_winlibs_cache_dir()``/``loader_cache_dir()``/``ccache_cache_dir()``/
+``nuitka_winlibs_cache_dir()``/``nuitka_work_cache_dir()``/``loader_cache_dir()``/
+``ccache_cache_dir()``/
 ``tkinter_cache_dir()`` 派生，统一从 ``cache_root()`` 计算，确保
 ``FSPACK_CACHE_DIR`` 环境变量对所有子模块生效。
 

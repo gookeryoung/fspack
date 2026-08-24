@@ -115,3 +115,17 @@ def nuitka_winlibs_cache_dir() -> Path:
     ``gcc/x86_64/<specificity>/mingw64/bin/gcc.exe``。
     """
     return cache_root() / "nuitka-winlibs-mingw"
+
+
+def nuitka_work_cache_dir() -> Path:
+    """Nuitka 编译工作缓存目录（``<cache_root>/nuitka-work``）.
+
+    作为 ``NUITKA_CACHE_DIR`` 全量重定向目标（注入 Nuitka 子进程环境变量），
+    收纳 clcache/scons-config 等编译中间缓存，与系统默认位置
+    ``%LOCALAPPDATA%\\Nuitka\\Nuitka\\Cache``（Windows）/ ``~/.cache/Nuitka``
+    （Linux）隔离——历史污染条目（坏 clcache 缓存被反复命中导致 .pyd 大量
+    损坏）不再影响 fspack 构建。downloads 类缓存经专属变量
+    ``NUITKA_CACHE_DIR_DOWNLOADS`` 单独指向
+    :func:`nuitka_winlibs_cache_dir`，清本目录不影响 winlibs 工具链。
+    """
+    return cache_root() / "nuitka-work"

@@ -72,6 +72,33 @@ if TYPE_CHECKING:
 # 共享 logger 名：测试用 caplog.at_level(..., logger="fspack.packaging.nuitka") 锁定
 _logger = logging.getLogger("fspack.packaging.nuitka")
 
+# 损坏自愈阈值：编译产物异常数 ≥3 且 ≥50% 时判定编译缓存污染，清缓存重试一轮。
+# 阈值设计：≤2 个异常多为单文件边界问题（文件名特殊字符等），清缓存重编整轮
+# 代价（数分钟）不值；数量过半才具有"缓存级系统性损坏"特征（坏 clcache 条目
+# 被反复命中，历史教训：系统位置的 Nuitka 缓存污染导致 .pyd 大量损坏）
+_CORRUPT_RETRY_MIN = 3
+
+
+def _purge_nuitka_compile_cache() -> None:
+    """清空 Nuitka 编译工作缓存（``<cache_root>/nuitka-work``），损坏自愈用.
+
+    仅清编译中间缓存（clcache/scons-config 等，``NUITKA_CACHE_DIR`` 重定向
+    目标），不清下载缓存（winlibs 工具链在专用目录 ``nuitka-winlibs-mingw``，
+    经 ``NUITKA_CACHE_DIR_DOWNLOADS`` 指向，不受影响）。清理后下次编译全部
+    cache miss，用干净缓存重新产出——坏缓存条目（历史污染或磁盘故障）被
+    彻底驱逐。
+    """
+    from fspack.config.cache import nuitka_work_cache_dir
+
+    work_dir = nuitka_work_cache_dir()
+    if not work_dir.is_dir():
+        return
+    shutil.rmtree(work_dir, ignore_errors=True)
+    if work_dir.exists():
+        _logger.warning("清理 Nuitka 编译缓存不完整（文件被占用?）: %s", work_dir)
+    else:
+        _logger.warning("已清理 Nuitka 编译缓存（损坏自愈）: %s", work_dir)
+
 
 def _atomic_write_text(target: Path, content: str, *, encoding: str = "utf-8") -> None:
     """原子写入文本文件：先写临时文件再 rename，避免半写入文件被读取.
@@ -172,7 +199,9 @@ class NuitkaCompile:
         2. 创建临时 bootstrap 脚本注入 sys.path 调用 nuitka ``--module`` 逐个编译 ``.py``
            （跳过 ``__init__.py``：包标识文件通常为空或仅含 import，编译无收益）
         3. 删除成功编译的 ``.py`` 源码（``.pyd`` 已生成可替代）
-        4. 清理 Nuitka 临时构建文件（``.build/`` 目录）
+        4. 产物异常率过高（≥:data:`_CORRUPT_RETRY_MIN` 且过半）时清 Nuitka
+           编译缓存重试一轮（编译缓存污染自愈，仅一次防死循环）
+        5. 清理 Nuitka 临时构建文件（``.build/`` 目录）
 
         单文件编译失败仅告警不中断，已成功编译的 ``.pyd`` 仍可用。``__init__.py``
         不编译不删除，保留 ``.py`` 维持包标识（与 :func:`fspack.builder._strip_py_sources`
@@ -208,31 +237,61 @@ class NuitkaCompile:
 
         bootstrap_script = cls._create_bootstrap_script(nuitka_cache)
         try:
-            try:
-                compiled_files, failed_files = cls._compile_files(
-                    py_exe,
-                    bootstrap_script,
-                    py_files,
-                    stage,
-                    target=target,
-                    ccache_exe=ccache_exe,
-                    py_version=py_version,
-                )
-            finally:
-                shutil.rmtree(bootstrap_script.parent, ignore_errors=True)
+            # 损坏自愈循环：首轮编译后产物异常率过高（编译缓存污染特征）时，
+            # 清 Nuitka 编译缓存（_purge_nuitka_compile_cache）重试一轮（仅
+            # 一次防死循环）。重试轮重新收集 py_files——首轮成功剥离的 .py
+            # 已删除（对应 .pyd 已验证有效无需重编），仅重编仍存在 .py 的
+            # 异常文件
+            for attempt in range(2):
+                try:
+                    compiled_files, failed_files = cls._compile_files(
+                        py_exe,
+                        bootstrap_script,
+                        py_files,
+                        stage,
+                        target=target,
+                        ccache_exe=ccache_exe,
+                        py_version=py_version,
+                    )
+                finally:
+                    shutil.rmtree(bootstrap_script.parent, ignore_errors=True)
 
-            # 验证 .pyd 可加载才删除 .py：防御层（历史教训：Nuitka zig 编译器产物
-            # 曾大量损坏——returncode==0 但运行时访问违例，现已强制 winlibs 根治，
-            # 验证保留兜底编译器异常/静默失败）。用 runtime python（.pyd ABI 绑定
-            # runtime）批量 import 验证，损坏的 .pyd 删除产物保留 .py，回退到 .pyc 加载。
-            runtime_py_exe = cls._runtime_python(runtime_dir, py_version, target)  # NuitkaEnv mixin（MRO 派发）
-            verify_py_exe = runtime_py_exe if runtime_py_exe.is_file() else None
-            stripped = cls._strip_compiled_sources(
-                compiled_files,
-                stage,
-                verify_py_exe=verify_py_exe,
-                verify_search_root=src_dir if verify_py_exe is not None else None,
-            )
+                # 验证 .pyd 可加载才删除 .py：防御层（历史教训：Nuitka zig 编译器产物
+                # 曾大量损坏——returncode==0 但运行时访问违例，现已强制 winlibs 根治，
+                # 验证保留兜底编译器异常/静默失败）。用 runtime python（.pyd ABI 绑定
+                # runtime）批量 import 验证，损坏的 .pyd 删除产物保留 .py，回退到 .pyc 加载。
+                runtime_py_exe = cls._runtime_python(runtime_dir, py_version, target)  # NuitkaEnv mixin（MRO 派发）
+                verify_py_exe = runtime_py_exe if runtime_py_exe.is_file() else None
+                stripped = cls._strip_compiled_sources(
+                    compiled_files,
+                    stage,
+                    verify_py_exe=verify_py_exe,
+                    verify_search_root=src_dir if verify_py_exe is not None else None,
+                )
+
+                # 产物异常数 = 编译成功但未剥离 .py 的数量（verify 判损坏 +
+                # 产物缺失 + 删除失败），过半且 ≥3 时是编译缓存级系统性损坏，
+                # 清缓存重试；首轮损坏率低时直接结束
+                corrupted = len(compiled_files) - stripped
+                if (
+                    attempt == 0
+                    and compiled_files
+                    and corrupted >= _CORRUPT_RETRY_MIN
+                    and corrupted * 2 >= len(compiled_files)
+                ):
+                    _logger.warning(
+                        "编译产物异常 %d/%d 个（数量过半），疑为编译缓存污染，清理 Nuitka 编译缓存后重试",
+                        corrupted,
+                        len(compiled_files),
+                    )
+                    _purge_nuitka_compile_cache()
+                    py_files = cls._collect_py_files(src_dir, entry_rels, skip_files, data_dirs)
+                    if not py_files:
+                        break
+                    # 重试轮重建 bootstrap 临时脚本（上轮已随临时目录清理）
+                    bootstrap_script = cls._create_bootstrap_script(nuitka_cache)
+                    continue
+                break
         finally:
             # 清理 Nuitka 编译失败的 .build 残留目录（--remove-output 仅成功时清理）。
             # 放在 finally：_compile_files 抛异常时也清理，避免残留目录污染下次构建。

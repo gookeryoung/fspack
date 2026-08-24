@@ -120,32 +120,42 @@ class NuitkaEnv:
 
     @staticmethod
     def _build_compile_env(target: Platform, ccache_exe: Path | None) -> dict[str, str]:
-        """构建注入 Nuitka 子进程的环境变量：Linux 设 ``CC``，Windows 重定向下载缓存.
+        """构建注入 Nuitka 子进程的环境变量：重定向缓存、Linux 设 ``CC``.
 
-        **Windows**：不设 ``CC``/``CFLAGS``，仅设 ``NUITKA_CACHE_DIR_DOWNLOADS``
-        指向 fspack 缓存目录 ``<cache_root>/nuitka-winlibs-mingw``：
+        **全平台缓存重定向**（``NUITKA_CACHE_DIR`` → ``<cache_root>/nuitka-work``）：
+        Nuitka 默认把 clcache/scons-config 等编译中间缓存写到系统位置
+        （Windows ``%LOCALAPPDATA%\\Nuitka\\Nuitka\\Cache``、Linux
+        ``~/.cache/Nuitka``）。历史教训：系统位置可能沉淀其他工具/旧版本
+        Nuitka 留下的污染条目，坏 clcache 缓存被反复命中导致 .pyd 大量
+        损坏（returncode==0 但运行时访问违例）。全量重定向到 fspack 管理
+        的干净目录，与系统缓存彻底隔离。
+
+        **Windows**：不设 ``CC``/``CFLAGS``，仅重定向缓存：
 
         - ``CC``：Nuitka scons 在 Windows 上无条件拒绝外部 gcc（打印
           "Non downloaded winlibs-gcc ... is being ignored" 后忽略，仅信任
           自己下载缓存的 winlibs gcc），设置无效且产生噪音提示。清除宿主
           可能残留的 ``CC``/``CFLAGS``，让 scons 走下载缓存 fallback 到
-          winlibs gcc：py<3.13 默认即 winlibs；py>=3.13 由编译命令
-          ``--experimental=force-mingw64`` 强制（zig 产物可能损坏不再使用）。
-          winlibs 由 :meth:`NuitkaWinlibs.ensure_winlibs_mingw` 预填充，
-          scons 检测 gcc.exe 已存在即缓存命中不下载
+          winlibs gcc。编译器选择：有 MSVC 时 scons 直接用 MSVC（优先级
+          最高）；无 MSVC 时 py<3.13 默认即 winlibs，py>=3.13 由编译命令
+          ``--experimental=force-mingw64`` 强制（zig 产物可能损坏不再使用）
         - ``CFLAGS``：scons 自设 ``_WIN32_WINNT``（Nuitka 4.1.3 无条件
           ``0x0601`` 即 Win7，2.5.1 mingw 分支 ``0x0501`` 更保守），fspack
           再注入同宏触发 "Inherited CFLAGS" 提示且值被覆盖，纯冗余已删除
           （Win7 兼容不受影响，见上两版本自设值）
-        - ``NUITKA_CACHE_DIR_DOWNLOADS``：重定向 Nuitka 下载缓存（winlibs
-          gcc / zig）到 fspack 缓存目录，与 :meth:`ensure_winlibs_mingw`
-          预填充布局一致，scons 检测 gcc.exe 已存在即缓存命中不下载
+        - ``NUITKA_CACHE_DIR``：编译中间缓存（clcache/scons-config 等）
+          重定向到 ``<cache_root>/nuitka-work``，隔离系统位置的陈旧污染
+        - ``NUITKA_CACHE_DIR_DOWNLOADS``：下载缓存（winlibs gcc/zig）单独
+          指向 ``<cache_root>/nuitka-winlibs-mingw``（专属变量优先于
+          ``NUITKA_CACHE_DIR``），与 :meth:`ensure_winlibs_mingw` 预填充
+          布局一致，scons 检测 gcc.exe 已存在即缓存命中不下载
 
-        **Linux**：始终设置 ``CC`` 指定 C 编译器。Nuitka 4.x 内置 zig 作为
-        可选 C 编译器，默认交互式询问是否下载。即使用
-        ``--assume-yes-for-downloads`` 自动接受，离线时仍会等待下载超时。
-        显式设置 ``CC`` 让 scons 直接用指定编译器，Nuitka 不会选择 zig，
-        从根源上避免 zig 下载。:meth:`ensure_env` 已校验 gcc 可用。
+        **Linux**：重定向 ``NUITKA_CACHE_DIR``（同上）并始终设置 ``CC``
+        指定 C 编译器。Nuitka 4.x 内置 zig 作为可选 C 编译器，默认交互式
+        询问是否下载。即使用 ``--assume-yes-for-downloads`` 自动接受，
+        离线时仍会等待下载超时。显式设置 ``CC`` 让 scons 直接用指定编译器，
+        Nuitka 不会选择 zig，从根源上避免 zig 下载。:meth:`ensure_env`
+        已校验 gcc 可用。
 
         - ccache 启用：``CC="ccache gcc"``，ccache 透明缓存编译结果
           （源码未变时直接返回 .o 缓存），并设 ``CCACHE_DIR`` 指定缓存目录
@@ -158,12 +168,21 @@ class NuitkaEnv:
 
         env = os.environ.copy()
 
+        # 全平台：编译中间缓存重定向到 fspack 干净目录，隔离系统位置
+        # （%LOCALAPPDATA%/~/.cache）可能沉淀的历史污染条目
+        from fspack.config.cache import nuitka_work_cache_dir
+
+        work_dir = nuitka_work_cache_dir()
+        work_dir.mkdir(parents=True, exist_ok=True)
+        env["NUITKA_CACHE_DIR"] = str(work_dir)
+        _logger.info("Nuitka 编译缓存重定向到 %s", env["NUITKA_CACHE_DIR"])
+
         if target is Platform.WINDOWS:
             # Windows：CC 被 scons 无条件忽略（见 docstring），清除宿主可能残留的
             # CC/CFLAGS 避免噪音提示（"Non downloaded winlibs-gcc ... ignored" /
             # "Inherited CFLAGS ... variable"），编译器来源由 fspack 接管；
-            # 重定向 Nuitka 下载缓存到 fspack 缓存目录，与 ensure_winlibs_mingw
-            # 预填充布局一致，scons 检测 gcc.exe 存在即直接使用
+            # 下载缓存单独指向 winlibs 目录（专属变量优先于 NUITKA_CACHE_DIR），
+            # 与 ensure_winlibs_mingw 预填充布局一致，scons 检测 gcc.exe 存在即直接使用
             from fspack.config.cache import nuitka_winlibs_cache_dir
 
             env.pop("CC", None)
@@ -340,13 +359,22 @@ class NuitkaEnv:
         """
         cls._check_c_compiler(target)
 
-        # Windows 全版本预填充 winlibs gcc 到 fspack 缓存目录：py<3.13 时
+        # Windows 预填充 winlibs gcc 到 fspack 缓存目录：py<3.13 时
         # Nuitka scons 默认 fallback 到 winlibs（缓存命中不下载）；py>=3.13
         # 默认 fallback 到 zig（其编译的 .pyd 可能损坏），编译命令已追加
         # --experimental=force-mingw64 强制走 winlibs（见 progress 的
-        # _compile_files），此处预填充与编译命令两层须一致
+        # _compile_files），此处预填充与编译命令两层须一致。
+        # MSVC 机器跳过预填充：scons 编译器选择优先级 MSVC > winlibs > zig，
+        # 装了 Visual Studio C++ 工具链时直接用 MSVC，winlibs 预填充
+        # （~200MB 下载）纯浪费；force flag 判断（needs_force_mingw64）
+        # 同样跳过 MSVC 机器，两层条件保持一致
         if target is Platform.WINDOWS:
-            cls.ensure_winlibs_mingw(py_version, stage)
+            from fspack.packaging.nuitka.winlibs import msvc_available
+
+            if msvc_available():
+                _logger.info("检测到 MSVC（Visual Studio C++ 工具链），Nuitka 将优先使用 MSVC，跳过 winlibs 预填充")
+            else:
+                cls.ensure_winlibs_mingw(py_version, stage)
 
         nuitka_ver = nuitka_version_for(py_version)
         cache_dir = cls._nuitka_cache_dir(cache_root, py_version)
