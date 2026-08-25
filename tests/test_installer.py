@@ -14,11 +14,14 @@ from fspack.exceptions import InstallerError
 from fspack.packaging.installer import (
     ReleaseRequest,
     SignOptions,
+    _find_7z,
+    _make_7z,
     _make_zip,
     _resolve_formats,
     build_deb_release,
     build_installer,
     build_release,
+    build_sevenzip,
     build_tarball_release,
     build_zip,
     compile_installer,
@@ -349,18 +352,18 @@ def test_resolve_formats_auto_macos() -> None:
 
 
 def test_resolve_formats_all_windows() -> None:
-    """all + Windows → [nsis, zip]."""
-    assert _resolve_formats("all", Platform.WINDOWS) == ["nsis", "zip"]
+    """all + Windows → [nsis, zip, 7z]."""
+    assert _resolve_formats("all", Platform.WINDOWS) == ["nsis", "zip", "7z"]
 
 
 def test_resolve_formats_all_linux() -> None:
-    """all + Linux → [tar.gz, deb, zip]."""
-    assert _resolve_formats("all", Platform.LINUX) == ["tar.gz", "deb", "zip"]
+    """all + Linux → [tar.gz, deb, zip, 7z]."""
+    assert _resolve_formats("all", Platform.LINUX) == ["tar.gz", "deb", "zip", "7z"]
 
 
 def test_resolve_formats_all_macos() -> None:
-    """all + macOS → [pkg, dmg, zip]."""
-    assert _resolve_formats("all", Platform.MACOS) == ["pkg", "dmg", "zip"]
+    """all + macOS → [pkg, dmg, zip, 7z]."""
+    assert _resolve_formats("all", Platform.MACOS) == ["pkg", "dmg", "zip", "7z"]
 
 
 def test_resolve_formats_zip_cross_platform() -> None:
@@ -368,6 +371,13 @@ def test_resolve_formats_zip_cross_platform() -> None:
     assert _resolve_formats("zip", Platform.WINDOWS) == ["zip"]
     assert _resolve_formats("zip", Platform.LINUX) == ["zip"]
     assert _resolve_formats("zip", Platform.MACOS) == ["zip"]
+
+
+def test_resolve_formats_7z_cross_platform() -> None:
+    """7z 跨平台，Windows / Linux / macOS 均可."""
+    assert _resolve_formats("7z", Platform.WINDOWS) == ["7z"]
+    assert _resolve_formats("7z", Platform.LINUX) == ["7z"]
+    assert _resolve_formats("7z", Platform.MACOS) == ["7z"]
 
 
 def test_resolve_formats_nsis_only_windows() -> None:
@@ -547,7 +557,144 @@ def test_build_zip_with_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     assert result.name == "app-1.0-py3.11.9-windows-slim.zip"
 
 
-# ---- build_tarball_release 编排测试 ----
+# ---- 7z 便携包（_find_7z / _make_7z / build_sevenzip）测试 ----
+
+
+def test_find_7z_from_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PATH 命中 7z → 返回其路径."""
+    monkeypatch.setattr("shutil.which", lambda name: f"/usr/bin/{name}" if name == "7z" else None)
+    assert _find_7z() == "/usr/bin/7z"
+
+
+def test_find_7z_windows_default_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """PATH 未命中 + Windows → 探测 %ProgramFiles%\\7-Zip\\7z.exe（安装器默认不写 PATH）."""
+    program_files = tmp_path / "ProgramFiles"
+    exe = program_files / "7-Zip" / "7z.exe"
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b"")
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    monkeypatch.setattr("sys.platform", "win32")
+    monkeypatch.setenv("PROGRAMFILES", str(program_files))
+    assert _find_7z() == str(exe)
+
+
+def test_find_7z_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PATH 与默认安装目录均未命中 → 返回 None."""
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    monkeypatch.setattr("sys.platform", "linux")
+    assert _find_7z() is None
+
+
+def test_make_7z_invokes_system_tool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_make_7z 调用系统 7z：超高压缩 + 多线程参数齐备，顶层目录为 <base>."""
+    info = _make_info(tmp_path)
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "app.exe").write_bytes(b"")
+    release = dist / "release"
+    monkeypatch.setattr("fspack.packaging.installer.sevenzip._find_7z", lambda: "7z")
+
+    cmds: list[list[str]] = []
+    cwds: list[object] = []
+
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
+        cmds.append(cmd)
+        cwds.append(kw.get("cwd"))
+        archive = Path(cmd[-2])
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        archive.write_bytes(b"fake 7z")
+        return CompletedStub()
+
+    monkeypatch.setattr("fspack.packaging.installer.subprocess.run", fake_run)
+    result = _make_7z(dist, info, release, Platform.WINDOWS)
+
+    assert result.name == "app-1.0-py3.11.9-windows-slim.7z"
+    assert result.read_bytes() == b"fake 7z"
+    cmd = cmds[0]
+    assert cmd[0] == "7z"
+    # a=add -t7z 格式 -mx=9 超高压缩 -mmt=on 多线程 -y 免交互
+    assert cmd[1:6] == ["a", "-t7z", "-mx=9", "-mmt=on", "-y"]
+    # 顶层目录为 <base>（相对路径），cwd 为 release 目录（相对路径的基准）
+    assert cmd[-1] == "app-1.0-py3.11.9-windows-slim"
+    assert cwds[0] == release
+    # 打包后 staging 已清理
+    assert not (release / "app-1.0-py3.11.9-windows-slim").exists()
+
+
+def test_make_7z_missing_tool_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """系统未安装 7-Zip → InstallerError 含各平台安装建议."""
+    info = _make_info(tmp_path)
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "app.exe").write_bytes(b"")
+    monkeypatch.setattr("fspack.packaging.installer.sevenzip._find_7z", lambda: None)
+    with pytest.raises(InstallerError, match="7-Zip"):
+        _make_7z(dist, info, dist / "release", Platform.WINDOWS)
+
+
+def test_build_sevenzip_no_build_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """build_sevenzip 编排：no_build=True 且 dist 就绪 → 产出 .7z."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0"\n')
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "app.exe").write_bytes(b"")
+    monkeypatch.setattr("fspack.packaging.installer.sevenzip._find_7z", lambda: "7z")
+
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
+        archive = Path(cmd[-2])
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        archive.write_bytes(b"fake 7z")
+        return CompletedStub()
+
+    monkeypatch.setattr("fspack.packaging.installer.subprocess.run", fake_run)
+    result = build_sevenzip(ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True))
+    assert result.is_file()
+    assert result.name == "app-1.0-py3.11.9-windows-slim.7z"
+
+
+def test_build_sevenzip_linux_platform_suffix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """build_sevenzip + Linux 目标 → 文件名用 linux 平台后缀."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0"\n')
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "app").write_bytes(b"")
+    monkeypatch.setattr("fspack.packaging.installer.sevenzip._find_7z", lambda: "7z")
+
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
+        archive = Path(cmd[-2])
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        archive.write_bytes(b"fake 7z")
+        return CompletedStub()
+
+    monkeypatch.setattr("fspack.packaging.installer.subprocess.run", fake_run)
+    result = build_sevenzip(
+        ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True), target=Platform.LINUX
+    )
+    assert result.name == "app-1.0-py3.11.9-linux-slim.7z"
+
+
+def test_build_release_7z_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """fmt=7z → 仅生成 7z，不调用 NSIS 等其他格式."""
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0"\n')
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "app.exe").write_bytes(b"")
+    monkeypatch.setattr("fspack.packaging.installer.sevenzip._find_7z", lambda: "7z")
+
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
+        archive = Path(cmd[-2])
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        archive.write_bytes(b"fake 7z")
+        return CompletedStub()
+
+    monkeypatch.setattr("fspack.packaging.installer.subprocess.run", fake_run)
+    outputs = build_release(
+        ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True), target=Platform.WINDOWS, fmt="7z"
+    )
+    assert [p.name for p in outputs] == ["app-1.0-py3.11.9-windows-slim.7z"]
 
 
 def test_build_tarball_release_no_build_success(tmp_path: Path) -> None:
@@ -655,8 +802,8 @@ def test_build_release_zip_only(tmp_path: Path) -> None:
     assert outputs[0].name == "app-1.0-py3.11.9-windows-slim.zip"
 
 
-def test_build_release_all_windows_generates_two_formats(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """fmt=all + Windows → 生成 nsis + zip 两种格式，复用同一 dist."""
+def test_build_release_all_windows_generates_three_formats(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """fmt=all + Windows → 生成 nsis + zip + 7z 三种格式，复用同一 dist."""
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0"\n')
     (tmp_path / "app.py").write_text("def main():\n    pass\n")
     dist = tmp_path / "dist"
@@ -680,18 +827,31 @@ def test_build_release_all_windows_generates_two_formats(tmp_path: Path, monkeyp
         "fspack.packaging.installer.NsisInstaller.build_installer", classmethod(fake_nsis_build_installer)
     )
     monkeypatch.setattr("fspack.packaging.installer.build", fake_build)
+    monkeypatch.setattr("fspack.packaging.installer.sevenzip._find_7z", lambda: "7z")
+
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
+        # 7z a ... <archive> <base>：模拟产出 .7z（倒数第二个参数为归档路径）
+        archive = Path(cmd[-2])
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        archive.write_bytes(b"fake 7z")
+        return CompletedStub()
+
+    monkeypatch.setattr("fspack.packaging.installer.subprocess.run", fake_run)
     outputs = build_release(
         ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True), target=Platform.WINDOWS, fmt="all"
     )
-    assert len(outputs) == 2
+    assert len(outputs) == 3
     assert outputs[0].name == "app-1.0-py3.11.9-windows-slim-setup.exe"
     assert outputs[1].name == "app-1.0-py3.11.9-windows-slim.zip"
+    assert outputs[2].name == "app-1.0-py3.11.9-windows-slim.7z"
     # no_build=True 时不应触发 build()
     assert "build" not in build_calls
+    # zip 与 7z 共享 staging，全部格式完成后已清理
+    assert not (dist / "release" / "app-1.0-py3.11.9-windows-slim").exists()
 
 
 def test_build_release_all_linux_shares_tar_zip_staging(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """fmt=all + Linux → tar.gz 与 zip 共享同一 staging，zip 复用（copytree 仅 tar/deb 各一次）."""
+    """fmt=all + Linux → tar.gz/zip/7z 共享同一 staging（copytree 仅 tar/deb 各一次）."""
     import shutil as _shutil
 
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0"\n')
@@ -700,16 +860,24 @@ def test_build_release_all_linux_shares_tar_zip_staging(tmp_path: Path, monkeypa
     dist.mkdir()
     (dist / "app").write_bytes(b"#!/bin/sh\nexit 0\n")
 
+    monkeypatch.setattr("fspack.packaging.installer.sevenzip._find_7z", lambda: "7z")
+
     def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
-        # dpkg-deb --build <staging> <deb_path>：模拟产出 .deb
-        deb_path = Path(cmd[-1])
-        deb_path.parent.mkdir(parents=True, exist_ok=True)
-        deb_path.write_bytes(b"fake deb")
+        if cmd[0] == "dpkg-deb":
+            # dpkg-deb --build <staging> <deb_path>：模拟产出 .deb
+            deb_path = Path(cmd[-1])
+            deb_path.parent.mkdir(parents=True, exist_ok=True)
+            deb_path.write_bytes(b"fake deb")
+        else:
+            # 7z a ... <archive> <base>：模拟产出 .7z（倒数第二个参数为归档路径）
+            archive = Path(cmd[-2])
+            archive.parent.mkdir(parents=True, exist_ok=True)
+            archive.write_bytes(b"fake 7z")
         return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.installer.linux.subprocess.run", fake_run)
 
-    # 统计 base 模块内 copytree 调用次数（tar.gz 与 deb 各 1 次，zip 复用 staging 0 次）
+    # 统计 base 模块内 copytree 调用次数（tar.gz 与 deb 各 1 次，zip/7z 复用 staging 0 次）
     copy_calls: list[str] = []
     real_copytree = _shutil.copytree
 
@@ -729,6 +897,7 @@ def test_build_release_all_linux_shares_tar_zip_staging(tmp_path: Path, monkeypa
         "app-1.0-py3.11.10-linux-slim.tar.gz",
         "app_1.0-py3.11.10-slim_amd64.deb",
         "app-1.0-py3.11.10-linux-slim.zip",
+        "app-1.0-py3.11.10-linux-slim.7z",
     ]
     assert len(copy_calls) == 2, f"期望 copytree 仅 2 次（tar/deb 各一次），实际 {len(copy_calls)} 次"
     # 全部格式完成后共享 staging 已清理

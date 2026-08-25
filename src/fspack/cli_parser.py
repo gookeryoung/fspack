@@ -421,10 +421,10 @@ _PACKAGE_OPTS: tuple[_Opt, ...] = (
     _Opt(
         ("--format",),
         "发行包格式：auto=平台默认（Win=nsis，Linux=tar.gz+deb，macOS=pkg+dmg），"
-        "zip=跨平台便携包，nsis=Windows 安装包，tar.gz/deb=Linux，"
-        "pkg/dmg=macOS，all=平台全部",
+        "zip=跨平台便携包，7z=跨平台高压缩便携包（需系统 7-Zip），nsis=Windows 安装包，"
+        "tar.gz/deb=Linux，pkg/dmg=macOS，all=平台全部",
         default="auto",
-        choices=("auto", "zip", "nsis", "tar.gz", "deb", "pkg", "dmg", "all"),
+        choices=("auto", "zip", "7z", "nsis", "tar.gz", "deb", "pkg", "dmg", "all"),
     ),
     _Opt(
         ("--codesign",),

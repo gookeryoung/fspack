@@ -8,9 +8,10 @@
 - ``build_release``：按 ``--format`` 调度生成一种或多种格式产物
 
 ``build_release`` 支持的格式：
-``auto``（平台默认）/``zip``（跨平台便携包）/``nsis``（Windows 安装包）/
-``tar.gz``（Linux 便携包）/``deb``（Linux 安装包）/``pkg``（macOS 安装包）/
-``dmg``（macOS 磁盘镜像）/``all``（平台全部）。
+``auto``（平台默认）/``zip``（跨平台便携包）/``7z``（跨平台高压缩便携包，
+需系统 7-Zip）/``nsis``（Windows 安装包）/``tar.gz``（Linux 便携包）/
+``deb``（Linux 安装包）/``pkg``（macOS 安装包）/``dmg``（macOS 磁盘镜像）/
+``all``（平台全部）。
 """
 
 from __future__ import annotations
@@ -27,7 +28,10 @@ from fspack.progress import BuildTracker
 __all__ = ["_VALID_FORMATS", "_resolve_formats", "build_installer", "build_linux_installer", "build_release"]
 
 # 发行包格式取值校验
-_VALID_FORMATS = ("auto", "zip", "nsis", "tar.gz", "deb", "pkg", "dmg", "all")
+_VALID_FORMATS = ("auto", "zip", "7z", "nsis", "tar.gz", "deb", "pkg", "dmg", "all")
+
+# 归档类格式：staging 目录同名（<base>），多归档场景共享 staging 消除重复 copytree
+_ARCHIVE_FORMATS = frozenset({"tar.gz", "zip", "7z"})
 
 
 def build_installer(req: ReleaseRequest, *, sign: SignOptions = _NO_SIGN) -> Path:
@@ -44,17 +48,18 @@ def _resolve_formats(fmt: str, target: Platform) -> list[str]:
     """将 ``--format`` 取值解析为具体格式列表。
 
     - ``auto``：平台默认（Windows=nsis，Linux=tar.gz+deb，macOS=pkg+dmg），向后兼容
-    - ``all``：平台全部（Windows=nsis+zip，Linux=tar.gz+deb+zip，macOS=pkg+dmg+zip）
+    - ``all``：平台全部（Windows=nsis+zip+7z，Linux=tar.gz+deb+zip+7z，
+      macOS=pkg+dmg+zip+7z）
     - 单一格式：校验平台兼容性（nsis 仅 Windows，tar.gz/deb 仅 Linux，
-      pkg/dmg 仅 macOS，zip 跨平台）
+      pkg/dmg 仅 macOS，zip/7z 跨平台）
     """
     if fmt not in _VALID_FORMATS:
         raise InstallerError(f"未知 --format 取值: {fmt}，可选: {', '.join(_VALID_FORMATS)}")
     # auto / all 按平台查表
     platform_defaults: dict[Platform, tuple[list[str], list[str]]] = {
-        Platform.WINDOWS: (["nsis"], ["nsis", "zip"]),
-        Platform.MACOS: (["pkg", "dmg"], ["pkg", "dmg", "zip"]),
-        Platform.LINUX: (["tar.gz", "deb"], ["tar.gz", "deb", "zip"]),
+        Platform.WINDOWS: (["nsis"], ["nsis", "zip", "7z"]),
+        Platform.MACOS: (["pkg", "dmg"], ["pkg", "dmg", "zip", "7z"]),
+        Platform.LINUX: (["tar.gz", "deb"], ["tar.gz", "deb", "zip", "7z"]),
     }
     defaults, all_formats = platform_defaults[target]
     if fmt == "auto":
@@ -84,6 +89,11 @@ def build_release(
     内部触发 build，后续格式 ``no_build=True`` 跳过 build 直接打包）。返回的
     列表顺序与生成顺序一致。
 
+    归档类格式（tar.gz/zip/7z）的 staging 目录同名（``<base>``），多归档
+    场景共享：首个归档保留 staging、中间归档复用并保留、末个归档复用并清理，
+    消除中间的全量 copytree（如 Linux ``all`` 场景 tar.gz/zip/7z 仅首格式
+    copytree 一次）。
+
     所有格式共享同一 ``BuildTracker``（覆盖 ``req.tracker``），最终统一渲染
     「打包阶段汇总」表（与 ``build()`` 的「构建阶段汇总」对应）。单格式函数
     （``build_zip`` 等）单独调用时各自渲染汇总表。
@@ -91,15 +101,15 @@ def build_release(
     Args:
         req: 公共构建参数（project_dir/mirror/py_version/no_build/dist_dir/extras）
         target: 目标平台，``None`` 时用当前平台
-        fmt: ``--format`` 取值（auto/zip/nsis/tar.gz/deb/pkg/dmg/all）
+        fmt: ``--format`` 取值（auto/zip/7z/nsis/tar.gz/deb/pkg/dmg/all）
         sign: 签名选项（codesign 仅 pkg/dmg，sign_exe 仅 nsis，sign_deb 仅 deb）
     """
     resolved_target = target or detect_platform()
     formats = _resolve_formats(fmt, resolved_target)
     tracker = BuildTracker(title="打包阶段汇总")
-    # Linux all 场景 tar.gz 与 zip 的 staging/顶层目录同名（<base>）：tar.gz 打包后
-    # 保留 staging、zip 直接复用，消除一次 dist 全量 copytree（tar/zip 仍各自 make_archive）
-    share_staging = resolved_target is Platform.LINUX and "tar.gz" in formats and "zip" in formats
+    # 归档类格式共享 staging：<base> 同名（tar.gz/zip/7z），多归档场景复用消除重复 copytree
+    archive_formats = [f for f in formats if f in _ARCHIVE_FORMATS]
+    share_staging = len(archive_formats) >= 2
     outputs: list[Path] = []
     for index, f in enumerate(formats):
         # 首个格式负责 build（沿用 req.no_build），后续格式跳过 build 复用同一 dist；
@@ -107,12 +117,23 @@ def build_release(
         fmt_req = replace(
             req, no_build=req.no_build or index > 0, extras=req.extras if index == 0 else None, tracker=tracker
         )
+        # 归档类格式在共享 staging 场景的旗标：首个保留、中间复用并保留、末个复用并清理
+        # （单归档或非归档格式均走默认 False，行为与单格式直调一致）
+        if share_staging and f in _ARCHIVE_FORMATS:
+            keep = f != archive_formats[-1]
+            reuse = f != archive_formats[0]
+        else:
+            keep = reuse = False
         if f == "zip":
-            outputs.append(_facade.build_zip(fmt_req, target=resolved_target, reuse_staging=share_staging))
+            outputs.append(_facade.build_zip(fmt_req, target=resolved_target, keep_staging=keep, reuse_staging=reuse))
+        elif f == "7z":
+            outputs.append(
+                _facade.build_sevenzip(fmt_req, target=resolved_target, keep_staging=keep, reuse_staging=reuse)
+            )
         elif f == "nsis":
             outputs.append(NsisInstaller.build_installer(fmt_req, sign=sign))
         elif f == "tar.gz":
-            outputs.append(_facade.build_tarball_release(fmt_req, keep_staging=share_staging))
+            outputs.append(_facade.build_tarball_release(fmt_req, keep_staging=keep))
         elif f == "deb":
             outputs.append(_facade.build_deb_release(fmt_req, sign=sign))
         elif f == "pkg":

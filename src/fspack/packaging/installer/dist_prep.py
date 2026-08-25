@@ -30,6 +30,7 @@ __all__ = [
     "_exe_path",
     "_make_staged_archive",
     "_prepare_dist",
+    "_prepare_staging",
     "_py_tag",
     "_release_base",
 ]
@@ -144,6 +145,40 @@ _DIST_INTERMEDIATE_EXCLUDES: tuple[str, ...] = (
 _DIST_IGNORE = shutil.ignore_patterns("release", *_DIST_INTERMEDIATE_EXCLUDES)
 
 
+def _prepare_staging(
+    dist_dir: Path,
+    release_dir: Path,
+    base: str,
+    *,
+    reuse_staging: bool = False,
+) -> Path:
+    """准备 ``release_dir/<base>`` staging 目录（复制 dist 内容），返回 staging 路径.
+
+    tar.gz / zip / 7z 归档共用的 staging 准备：创建 release_dir → 清理旧
+    staging → ``copytree(ignore=_DIST_IGNORE)``。排除 ``release/`` 与构建
+    中间文件（见 :data:`_DIST_IGNORE`）避免递归打包自身。
+
+    ``reuse_staging=True`` 时复用已存在的 staging 目录（跳过 copytree）；
+    staging 不存在时回退到正常 copytree 流程（防御前序格式未产出的场景）。
+
+    Args:
+        dist_dir: 待打包的 dist 目录
+        release_dir: 归档输出目录（同时用作 staging 父目录）
+        base: staging 目录名（归档内顶层目录名）
+        reuse_staging: 复用已存在的 staging 目录
+
+    Returns:
+        staging 目录路径
+    """
+    staging = release_dir / base
+    if not (reuse_staging and staging.is_dir()):
+        release_dir.mkdir(parents=True, exist_ok=True)
+        if staging.exists():
+            shutil.rmtree(staging)
+        shutil.copytree(dist_dir, staging, ignore=_DIST_IGNORE)
+    return staging
+
+
 def _make_staged_archive(  # noqa: PLR0913
     dist_dir: Path,
     release_dir: Path,
@@ -156,9 +191,8 @@ def _make_staged_archive(  # noqa: PLR0913
     """将 dist 复制到 ``release_dir/<base>`` staging 目录后打包为归档，返回归档路径.
 
     汇聚 tar.gz（``linux.build_tarball``）与 zip（``zip._make_zip``）逐行相同的打包流程：
-    创建 release_dir → 清理旧 staging → ``copytree(ignore=_DIST_IGNORE)`` →
-    ``make_archive`` → 清理 staging。归档顶层目录为 ``<base>``，解压后即可运行；
-    排除 ``release/`` 与构建中间文件（见 :data:`_DIST_IGNORE`）避免递归打包自身。
+    准备 staging（:func:`_prepare_staging`）→ ``make_archive`` → 清理 staging。
+    归档顶层目录为 ``<base>``，解压后即可运行。
 
     Args:
         dist_dir: 待打包的 dist 目录
@@ -173,12 +207,7 @@ def _make_staged_archive(  # noqa: PLR0913
     Returns:
         生成的归档文件路径
     """
-    staging = release_dir / base
-    if not (reuse_staging and staging.is_dir()):
-        release_dir.mkdir(parents=True, exist_ok=True)
-        if staging.exists():
-            shutil.rmtree(staging)
-        shutil.copytree(dist_dir, staging, ignore=_DIST_IGNORE)
+    staging = _prepare_staging(dist_dir, release_dir, base, reuse_staging=reuse_staging)
     archive = shutil.make_archive(str(release_dir / base), fmt, root_dir=release_dir, base_dir=base)
     if not keep_staging:
         shutil.rmtree(staging)

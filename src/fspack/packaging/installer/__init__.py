@@ -14,6 +14,8 @@
 - :mod:`fspack.packaging.installer.linux`：tar.gz 便携包与 .deb 安装包（Linux）
 - :mod:`fspack.packaging.installer.macos`：.pkg 安装包与 .dmg 磁盘镜像（macOS）
 - :mod:`fspack.packaging.installer.zip`：跨平台 zip 便携包
+- :mod:`fspack.packaging.installer.sevenzip`：跨平台 7z 便携包（调用系统
+  7-Zip 命令行，LZMA2 超高压缩 + 多线程）
 
 显式 ``import subprocess`` 是为了兼容测试中的
 ``monkeypatch.setattr("fspack.packaging.installer.subprocess.run", ...)`` 等 patch 路径——
@@ -21,9 +23,10 @@ patch 设置的是模块对象的属性，因标准库模块为单例，全局�
 subprocess 调用同样有效。
 
 ``build_release`` 按 ``--format`` 调度生成一种或多种格式产物：
-``auto``（平台默认）/``zip``（跨平台便携包）/``nsis``（Windows 安装包）/
-``tar.gz``（Linux 便携包）/``deb``（Linux 安装包）/``pkg``（macOS 安装包）/
-``dmg``（macOS 磁盘镜像）/``all``（平台全部）。
+``auto``（平台默认）/``zip``（跨平台便携包）/``7z``（跨平台高压缩便携包，
+需系统 7-Zip）/``nsis``（Windows 安装包）/``tar.gz``（Linux 便携包）/
+``deb``（Linux 安装包）/``pkg``（macOS 安装包）/``dmg``（macOS 磁盘镜像）/
+``all``（平台全部）。
 """
 
 from __future__ import annotations
@@ -82,6 +85,11 @@ from fspack.packaging.installer.nsis import (  # noqa: F401
     sign_exe_files,
 )
 from fspack.packaging.installer.request import ReleaseRequest, SignOptions
+from fspack.packaging.installer.sevenzip import (  # noqa: F401
+    _find_7z,
+    _make_7z,
+    build_sevenzip,
+)
 from fspack.packaging.installer.zip import (  # noqa: F401
     _make_zip,
     build_zip,
@@ -104,6 +112,7 @@ __all__ = [
     "build_pkg",
     "build_pkg_release",
     "build_release",
+    "build_sevenzip",
     "build_tarball",
     "build_tarball_release",
     "build_zip",
