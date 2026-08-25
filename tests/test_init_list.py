@@ -6,8 +6,8 @@
 测试场景：
 
 - 非 TTY 环境（CI/管道）→ ``prompt_template_selection`` 返回 ``helloworld`` 默认值
-- TTY 环境 + 用户输入数字 → 返回对应模板 id
-- TTY 环境 + 用户 Ctrl+C → 抛 ``KeyboardInterrupt``
+- TTY 环境 + 向导导航（down/enter 按键序列）→ 返回对应模板 id
+- TTY 环境 + Esc 取消 → 抛 ``KeyboardInterrupt``
 - CLI ``--list`` → 打印模板列表后退出（不创建项目）
 - CLI 未指定 ``--template`` + 非 TTY → 用 helloworld 创建项目
 - CLI 显式 ``--template helloworld`` → 跳过交互，直接创建
@@ -35,35 +35,50 @@ def test_prompt_template_selection_non_tty_returns_helloworld() -> None:
     assert result == "helloworld"
 
 
-def test_prompt_template_selection_tty_returns_selected(monkeypatch: pytest.MonkeyPatch) -> None:
-    """TTY 环境 + 用户输入 helloworld 在列表中的编号 → 返回 helloworld.
+def _wizard_keys_to(template_id: str, templates: list[Any]) -> list[str]:
+    """构造向导两步选择指定模板的按键序列（down×N + enter，两步）.
 
-    list_templates 按 (category, id) 字母序排序，helloworld 并非第 1 个，
-    动态查询其位置避免硬编码（cli 分类按 args/click/helloworld/... 排序）。
-    prompt_template_selection 内部用 role="init" 过滤，此处索引查询须一致。
+    第一步选模板所在分类（分类按字母序），第二步选分类内模板（字母序），
+    位置动态推导避免硬编码（cli 分类按 args/click/helloworld/... 排序）。
+    """
+    target = next(t for t in templates if t.id == template_id)
+    categories = list(dict.fromkeys(t.category for t in templates))
+    cat_index = categories.index(target.category)
+    in_category = [t for t in templates if t.category == target.category]
+    tpl_index = next(i for i, t in enumerate(in_category) if t.id == template_id)
+    return ["down"] * cat_index + ["enter"] + ["down"] * tpl_index + ["enter"]
+
+
+def _patch_wizard_keys(monkeypatch: pytest.MonkeyPatch, keys: list[str]) -> None:
+    """将向导读键替换为按序弹出按键事件的桩（TTY 模拟）."""
+    from fspack import wizard
+
+    seq = iter(keys)
+    monkeypatch.setattr(wizard, "_read_key", lambda: next(seq))
+
+
+def test_prompt_template_selection_tty_returns_selected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """TTY 环境 + 向导导航到 helloworld → 返回 helloworld.
+
+    list_templates 按 (category, id) 字母序排序，按键序列动态推导：
+    第一步选中 helloworld 所在分类，第二步选中分类内的 helloworld。
     """
     from fspack.templates import list_templates
 
     templates = list_templates(role="init")
-    helloworld_index = next(i for i, t in enumerate(templates, 1) if t.id == "helloworld")
 
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
-
-    def fake_ask(prompt: str, *, choices: list[str], default: str, console: Any = None) -> int:
-        assert str(helloworld_index) in choices
-        return helloworld_index
-
-    monkeypatch.setattr("rich.prompt.IntPrompt.ask", staticmethod(fake_ask))
+    _patch_wizard_keys(monkeypatch, _wizard_keys_to("helloworld", list(templates)))
     result = prompt_template_selection()
     assert result == "helloworld"
 
 
 def test_prompt_template_selection_tty_returns_second_template(monkeypatch: pytest.MonkeyPatch) -> None:
-    """TTY 环境 + 用户输入注入模板在列表中的编号 → 返回注入的模板 id.
+    """TTY 环境 + 向导导航到注入模板 → 返回注入的模板 id.
 
     注入 id=``zzz-custom`` 的模板，按 (category, id) 字母序排在 cli 分类末尾。
-    动态查询其位置避免硬编码。注入模板的 roles 须含 ``"init"`` 才会被
-    ``prompt_template_selection`` 的 ``role="init"`` 过滤命中。
+    注入模板的 roles 须含 ``"init"`` 才会被 ``prompt_template_selection``
+    的 ``role="init"`` 过滤命中。
     """
     from fspack.templates import Template, TemplateFile, list_templates
     from fspack.templates import registry as registry_mod
@@ -79,12 +94,20 @@ def test_prompt_template_selection_tty_returns_second_template(monkeypatch: pyte
     )
     original_load_all = registry_mod._load_all
     monkeypatch.setattr(registry_mod, "_load_all", lambda: (*original_load_all(), extra_template))
-    templates = list_templates(role="init")
-    custom_index = next(i for i, t in enumerate(templates, 1) if t.id == "zzz-custom")
+    templates = list(list_templates(role="init"))
+
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
-    monkeypatch.setattr("rich.prompt.IntPrompt.ask", staticmethod(lambda *a, **kw: custom_index))
+    _patch_wizard_keys(monkeypatch, _wizard_keys_to("zzz-custom", templates))
     result = prompt_template_selection()
     assert result == "zzz-custom"
+
+
+def test_prompt_template_selection_tty_cancel_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """TTY 环境 + Esc 取消 → 抛 KeyboardInterrupt（CLI 层打印已取消）."""
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    _patch_wizard_keys(monkeypatch, ["esc"])
+    with pytest.raises(KeyboardInterrupt):
+        prompt_template_selection()
 
 
 def test_prompt_template_selection_empty_registry_returns_helloworld(

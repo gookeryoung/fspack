@@ -7,8 +7,10 @@
 - ``fsp init --python-version <X.Y>`` — 覆盖模板默认 ``requires-python`` 下限
 - ``fsp init --list`` — 列出所有可用模板
 
-交互式选择用 rich 渲染分类列表 + :class:`rich.prompt.IntPrompt` 接收数字选择，
-零依赖（rich 已是 fspack 依赖）。非 TTY 环境（CI/管道）自动跳过交互。
+交互式选择为两步向导（:mod:`fspack.wizard`，↑/↓ 移动 + Enter 确认，
+Esc/q 取消）：先选项目类型（分类），再选该类型下的具体模板，高亮项下方
+动态显示描述与依赖。零新增依赖（rich 已是 fspack 依赖）。非 TTY 环境
+（CI/管道）自动跳过交互。
 
 公共 API：
 
@@ -23,15 +25,18 @@ import logging
 import re
 import sys
 from pathlib import Path
+from typing import Final
 
 from fspack.console import console
 from fspack.templates import (
+    Template,
     TemplateRenderError,
     default_variables,
     get_template,
     list_templates,
     render_template,
 )
+from fspack.wizard import select_item
 
 __all__ = ["init_project", "print_template_list", "prompt_template_selection"]
 
@@ -44,6 +49,40 @@ _WIN7_UNSUPPORTED_TEMPLATES = frozenset({"fastapi"})
 
 # requires-python 行的正则：匹配 `requires-python = "..."` 形式（含可选空白）
 _REQUIRES_PYTHON_RE = re.compile(r'^requires-python = "[^"]*"$', re.MULTILINE)
+
+# 分类目录名 → 向导第一步显示的项目类型标签
+_CATEGORY_LABELS: Final[dict[str, str]] = {
+    "cli": "CLI 命令行工具",
+    "config": "工程配置范例",
+    "game": "游戏开发",
+    "gui": "桌面 GUI 应用",
+    "sci": "科学计算",
+    "web": "Web 服务",
+}
+
+
+def _category_label(category: str) -> str:
+    """返回分类的向导显示标签，未知分类回退分类名本身.
+
+    :param category: 分类目录名（cli/gui/game/sci/web/config）
+    :return: 中文标签（如 ``CLI 命令行工具``），未知分类返回原名，
+        空分类名返回 ``其他``
+    """
+    return _CATEGORY_LABELS.get(category, category or "其他")
+
+
+def _template_detail(tpl: Template) -> str:
+    """构造向导第二步高亮模板的详情文本（描述 + 依赖）.
+
+    :param tpl: 模板对象
+    :return: 详情文本（描述行 + 可选依赖行，两者皆空时返回空串）
+    """
+    lines: list[str] = []
+    if tpl.description:
+        lines.append(tpl.description)
+    if tpl.dependencies:
+        lines.append(f"依赖: {', '.join(tpl.dependencies)}")
+    return "\n".join(lines)
 
 
 def _insert_after_project_header(content: str, new_line: str) -> str:
@@ -236,25 +275,27 @@ def print_template_list() -> None:
 
 
 def prompt_template_selection() -> str:
-    """交互式选择模板，返回选中的模板 id.
+    """向导式选择模板：先选项目类型，再选该类型下的具体模板.
 
-    用 rich 渲染分类编号列表，用 :class:`rich.prompt.IntPrompt` 接收数字选择。
-    非 TTY 环境调用此函数会直接返回 ``helloworld`` 默认值（避免阻塞 CI）。
+    TTY 环境下两步向导（↑/↓ 移动 + Enter 确认，Esc/q 取消），非 TTY
+    环境直接返回 ``helloworld`` 默认值（避免阻塞 CI）。
 
     :return: 选中的模板 id
-    :raises KeyboardInterrupt: 用户按 Ctrl+C 中断选择
+    :raises KeyboardInterrupt: 用户按 Esc/q 或 Ctrl+C 中断选择
 
-    输出格式::
+    交互流程（两步，第二步高亮项下方动态显示描述与依赖）::
 
-        可用项目模板（共 N 个）：
+        ? [1/2] 选择项目类型
+        > CLI 命令行工具（6 个模板）
+          桌面 GUI 应用（6 个模板）
+          ...
 
-          [cli]
-            1. helloworld — Hello World
-            2. args — argparse 命令行参数
-          [gui]
-            7. pyside2 — PySide2 桌面 GUI
+        ? [2/2] 选择模板 · CLI 命令行工具
+        > helloworld — Hello World
+          args — argparse 命令行参数
+          ...
 
-        请选择模板 [1-N] (默认 1):
+          最小 Hello World 示例，验证基础流水线
     """
     templates = list_templates(role="init")
     if not templates:
@@ -266,28 +307,29 @@ def prompt_template_selection() -> str:
         _logger.info("非交互式环境，使用默认模板 helloworld")
         return "helloworld"
 
-    console.step(f"可用项目模板（共 {len(templates)} 个）")
-    console.rich.print()
-    current_category = ""
-    for index, tpl in enumerate(templates, 1):
-        if tpl.category != current_category:
-            current_category = tpl.category
-            console.rich.print(f"  [bold cyan][{tpl.category}][/]")
-        console.rich.print(f"    [bold]{index:>2}[/]. {tpl.id} — {tpl.name}")
-        console.rich.print(f"        [dim]{tpl.description}[/]")
-    console.rich.print()
+    # 第一步：按分类聚合。list_templates 已按 (category, id) 字母序排序，
+    # dict 按首次出现顺序插入，分类即保持字母序，无需重排
+    by_category: dict[str, list[Template]] = {}
+    for tpl in templates:
+        by_category.setdefault(tpl.category, []).append(tpl)
+    categories = list(by_category)
 
-    from rich.prompt import IntPrompt
-
-    total = len(templates)
-    choice = int(
-        IntPrompt.ask(
-            "[bold]请选择模板[/]",
-            choices=[str(i) for i in range(1, total + 1)],
-            default="1",
-            console=console.rich,
-        )
+    cat_idx = select_item(
+        "选择项目类型",
+        [f"{_category_label(cat)}（{len(by_category[cat])} 个模板）" for cat in categories],
+        step=(1, 2),
     )
-    selected = templates[choice - 1]
+    category = categories[cat_idx]
+
+    # 第二步：选中分类下的模板列表（保持字母序），高亮项动态显示详情
+    candidates = by_category[category]
+    tpl_idx = select_item(
+        f"选择模板 · {_category_label(category)}",
+        [f"{tpl.id} — {tpl.name}" for tpl in candidates],
+        detail=lambda i: _template_detail(candidates[i]),
+        step=(2, 2),
+    )
+    selected = candidates[tpl_idx]
     _logger.info("已选择模板: %s (%s)", selected.id, selected.name)
+    console.success(f"已选择模板: {selected.id}（{selected.name}）")
     return selected.id
