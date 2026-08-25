@@ -13,7 +13,6 @@ tar.gz 打包、.deb 构造（DEBIAN/control + /usr/lib + /usr/bin wrapper）、
 from __future__ import annotations
 
 import logging
-import platform
 import shutil
 import subprocess  # noqa: F401  # 保留 patch 路径 fspack.packaging.installer.linux.subprocess.run
 from pathlib import Path
@@ -48,18 +47,16 @@ _logger = logging.getLogger("fspack.packaging.installer")
 
 
 def _deb_arch() -> str:
-    """推导 .deb 包 Architecture 字段值（当前为主机构建，直接取本机架构）.
+    """返回 .deb 包 Architecture 字段值：固定 ``amd64``（与 Linux 目标 runtime 一致）.
 
-    用 :func:`platform.machine` 取当前机器架构并映射为 Debian 命名：
-    ``x86_64``/``amd64``/``x64`` → ``amd64``，``aarch64``/``arm64`` → ``arm64``，
-    其余原样小写返回（如 ``riscv64``，Debian 侧字段名一致）。
+    Linux 目标 runtime 固定下载 python-build-standalone 的
+    ``x86_64-unknown-linux-gnu`` tarball（见 :func:`standalone_tarball_name`），
+    .deb 架构须与 runtime 实际架构一致，**与构建机架构无关**——此前按
+    ``platform.machine()`` 取构建机架构，macOS arm64 runner 交叉构建 Linux
+    目标时 .deb 被误标 arm64 而装不进 amd64 系统。未来支持 Linux arm64
+    目标时在此参数化。
     """
-    machine = platform.machine().lower()
-    if machine in ("x86_64", "amd64", "x64"):
-        return "amd64"
-    if machine in ("aarch64", "arm64"):
-        return "arm64"
-    return machine
+    return "amd64"
 
 
 class LinuxInstaller(Installer):
