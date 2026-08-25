@@ -69,17 +69,22 @@ from fspack.templates.registry import Template
 
 
 @pytest.fixture(autouse=True)
-def _fixed_rich_width() -> Iterator[None]:
+def _fixed_rich_width(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """固定 Rich Console 宽度，避免窄终端环境下 word wrap 导致断言失败.
 
     多个测试渲染含 8 列的 Rich Table（bench 模式汇总表），窄终端（width<80）下
     Rich 会截断长文本（如 ``ModuleNotFoundError`` → ``ModuleNot…``）或丢弃列，
     导致断言偶发失败。固定 width=200 确保所有环境渲染一致。
+
+    必须直接 patch ``_width`` 而非走 ``width`` 属性往返：rich 的 ``width`` getter
+    在 ``_width``/``_height`` 均已设置时（shell 导出 ``COLUMNS``/``LINES`` 环境变量
+    即如此）返回 ``_width - legacy_windows``，而 setter 存原始值——往返一次宽度净
+    减 1（legacy Windows 控制台）。本文件数百个测试逐个缩水，跑完后宽度变负数，
+    rich 会把后续所有文本裁剪为空，殃及后续文件 27 个 capsys 断言。
+    ``monkeypatch`` 记录的是原始 ``_width`` 值，恢复无损。
     """
-    original = console.rich.width
-    console.rich.width = 200
+    monkeypatch.setattr(console.rich, "_width", 200)
     yield
-    console.rich.width = original
 
 
 # ---- 数据结构 ----

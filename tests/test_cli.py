@@ -1127,6 +1127,21 @@ def test_build_open_browser_flag_present_in_help() -> None:
     assert "--open-browser" in flag_names
 
 
+def test_all_subparser_help_render() -> None:
+    """全量渲染各子命令 help，拦截 help 文本中的 argparse 格式化错误.
+
+    argparse 以 ``help % params`` 展开 help 文本，裸 ``%``（如 ``>10%``）会让
+    ``-h`` 渲染直接抛 ``ValueError: badly formed help string``。Python 3.14 在
+    ``add_argument`` 时即校验（构建 parser 就崩），≤3.13 仅在渲染时抛——用户
+    执行 ``fsp b -h`` 才触发。逐个渲染所有子命令 help 可在全版本拦截此类问题。
+    """
+    parser = cli.build_parser()
+    parser.format_help()
+    sub_action = next(a for a in parser._actions if hasattr(a, "choices") and isinstance(a.choices, dict))
+    for sub in sub_action.choices.values():  # type: ignore[union-attr]
+        sub.format_help()
+
+
 def test_build_open_browser_flag_sets_build_options(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`fsp b <project> --open-browser` 解析为 BuildOptions.open_browser=True."""
     _make_minimal_project(tmp_path)
