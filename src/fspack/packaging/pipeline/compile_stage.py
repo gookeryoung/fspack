@@ -115,6 +115,9 @@ def _compile_user_sources(ctx: BuildContext, src_dst: Path) -> None:
                 # Win10/11 同样崩溃，与官方 _ctypes.pyd 混搭崩溃同源，实测 3.13 MSVC
                 # 产物在替换后 runtime 100% 复现）。编译是必然失败的无效功（verify
                 # 会全部判损坏回退 .pyc），前置跳过并提示用户可选 --no-win7-dll。
+                # 常规路径已由 _normalize_exclusive_options（executor.py）前置归一化
+                # + runtime 残留恢复（runtime_stage.py）处理，此守卫仅兜底异常残留
+                # （如手动放置标记、归一化未覆盖的调用方直入本函数）。
                 _logger.warning(
                     "Nuitka 编译跳过: runtime 已替换为 win7 重编译版组件，"
                     "官方工具链编译的 .pyd 与其 ABI 不兼容（加载即访问违例），回退到 .pyc 模式；"

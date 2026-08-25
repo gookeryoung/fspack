@@ -176,7 +176,9 @@ _BUILD_OPTS: tuple[_Opt, ...] = (
     _Opt(
         ("--nuitka",),
         "启用 Nuitka 编译模式：用户源码编译为 .pyd 本机执行（速度提升 30-50%%）。"
-        "Nuitka 自动装到本地缓存 ~/.fspack/cache/nuitka/，不污染 dist/runtime；交叉构建自动跳过；默认关闭",
+        "Nuitka 自动装到本地缓存 ~/.fspack/cache/nuitka/，不污染 dist/runtime；交叉构建自动跳过；"
+        "与 Win7 重编译版 runtime 互斥（py>=3.12 Windows 默认启用，ABI 不兼容），"
+        "启用本项时自动关闭 Win7 组件替换（产物仅支持 Win8+）；默认关闭",
         action="store_true",
     ),
     _Opt(

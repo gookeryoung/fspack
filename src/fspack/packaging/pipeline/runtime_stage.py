@@ -44,7 +44,7 @@ from fspack.packaging.runtime import (
 from fspack.packaging.runtime import (
     zip_stdlib as _default_zip_stdlib,
 )
-from fspack.packaging.win7.dll import ensure_win7_dll, needs_win7_dll
+from fspack.packaging.win7.dll import ensure_win7_dll, is_win7_runtime, needs_win7_dll
 from fspack.platform import Platform
 
 from .context import BuildContext
@@ -249,6 +249,14 @@ def _prepare_windows_runtime(ctx: BuildContext) -> Path:
     extract_embed = _S("extract_embed", _default_extract_embed)
     dll_marker = ctx.runtime_dir / f"{embed_dirname(ctx.info.py_version)}.dll"
     runtime_ready = dll_marker.is_file()
+    # win7 残留恢复：上次默认构建替换的 win7 重编译版 runtime（.win7_runtime
+    # 标记残留），本次 --no-win7-dll 构建（含 Nuitka 互斥归一化的自动关闭）
+    # 须重新解压官方 embed——官方工具链产物（Nuitka .pyd 等）在残留的
+    # 重编译版 runtime 内加载即访问违例，且标记不清会误触编译守卫跳过。
+    if runtime_ready and ctx.opts.no_win7_dll and is_win7_runtime(ctx.runtime_dir):
+        _logger.info("检测到 win7 重编译版 runtime 残留，重新解压官方 embed 恢复（--no-win7-dll 构建）")
+        shutil.rmtree(ctx.runtime_dir)
+        runtime_ready = False
     zip_path = None
     with ctx.tracker.stage("下载运行时") as st:
         if runtime_ready:

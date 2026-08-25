@@ -2736,6 +2736,127 @@ def test_compile_user_sources_skips_nuitka_on_win7_runtime(tmp_path: Path, monke
     assert nuitka_calls["n"] == 1
 
 
+def test_normalize_exclusive_options_matrix() -> None:
+    """互斥归一化矩阵：仅 nuitka + py>=3.12 标准版 Windows + 未显式关闭时翻转 no_win7_dll.
+
+    py3.11（shim 注入不替换 runtime，ABI 兼容）/ 非 Windows / t 版 /
+    显式 no_win7_dll / 非 nuitka 场景均不触发，二者可共存或原样保留。
+    """
+    from fspack.packaging.pipeline.executor import _normalize_exclusive_options
+
+    # 命中：nuitka + 3.13 + Windows → 自动关闭（显式意图 > 隐式默认）
+    opts = _normalize_exclusive_options(BuildOptions(nuitka=True), "3.13.14", Platform.WINDOWS)
+    assert opts.no_win7_dll is True
+    # py3.11：shim 注入路径与 Nuitka 产物 ABI 兼容，不互斥
+    opts = _normalize_exclusive_options(BuildOptions(nuitka=True), "3.11.9", Platform.WINDOWS)
+    assert opts.no_win7_dll is False
+    # 非 Windows 目标：win7 替换不适用
+    opts = _normalize_exclusive_options(BuildOptions(nuitka=True), "3.13.14", Platform.LINUX)
+    assert opts.no_win7_dll is False
+    # free-threaded（t）：needs_win7_dll 恒 False，不互斥
+    opts = _normalize_exclusive_options(BuildOptions(nuitka=True), "3.13.14t", Platform.WINDOWS)
+    assert opts.no_win7_dll is False
+    # 已显式关闭：原样保留
+    opts = _normalize_exclusive_options(BuildOptions(nuitka=True, no_win7_dll=True), "3.13.14", Platform.WINDOWS)
+    assert opts.no_win7_dll is True
+    # 非 nuitka：默认 win7 替换不受影响
+    opts = _normalize_exclusive_options(BuildOptions(), "3.13.14", Platform.WINDOWS)
+    assert opts.no_win7_dll is False
+
+
+def test_build_nuitka_disables_win7_dll_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """3.13 + Windows + --nuitka 构建自动关闭 win7 组件替换（互斥归一化）并告警.
+
+    无归一化时会先整套替换 runtime 再被编译守卫跳过——Win7 替换是无用功，
+    归一化后 ensure_win7_dll 不被调用、标记不存在、warning 提示产物仅支持 Win8+。
+    """
+    import logging
+
+    proj = tmp_path / "app"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (proj / "app.py").write_text("def main():\n    pass\n")
+
+    _setup_embed_mocks(tmp_path, monkeypatch, "3.13.14")
+    runtime = proj / "dist" / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    (runtime / "python.exe").write_bytes(b"")
+    monkeypatch.setattr("subprocess.run", lambda cmd, **kw: _CompileCompleted())
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.detect_platform", lambda: Platform.WINDOWS)
+    monkeypatch.setattr(
+        "fspack.packaging.nuitka.NuitkaCompiler.compile_with_stamp",
+        classmethod(lambda cls, *a, **k: None),
+    )
+    win7_calls = {"n": 0}
+    monkeypatch.setattr(
+        "fspack.packaging.pipeline.runtime_stage.ensure_win7_dll",
+        lambda *a, **k: win7_calls.__setitem__("n", win7_calls["n"] + 1),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="fspack.packaging.pipeline.executor"):
+        build(proj, get_mirror("huawei"), "3.13.14", target=Platform.WINDOWS, options=BuildOptions(nuitka=True))
+
+    assert win7_calls["n"] == 0
+    assert not (runtime / ".win7_runtime").exists()
+    assert "互斥" in caplog.text
+
+
+def test_prepare_windows_runtime_recovers_win7_residue(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """--no-win7-dll 构建遇 .win7_runtime 残留时清空 runtime 重解压官方 embed.
+
+    dist 复用场景：上次默认构建替换的 win7 重编译版 runtime 若不恢复，
+    官方工具链产物（Nuitka .pyd）在残留 runtime 内加载即崩溃，且标记
+    残留会误触编译守卫跳过。恢复后标记消失、旧残留文件被清。
+    """
+    from fspack.config import BuildConfig
+    from fspack.packaging.pipeline.runtime_stage import _prepare_windows_runtime
+    from fspack.progress import BuildTracker
+
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    runtime_dir = tmp_path / "dist" / "runtime"
+    runtime_dir.mkdir(parents=True)
+    # 构造 win7 残留：官方 dll 占位（runtime_ready 判定）+ 标记 + 残留文件
+    (runtime_dir / "python313.dll").write_bytes(b"")
+    (runtime_dir / ".win7_runtime").write_text("3.13.14", encoding="ascii")
+    (runtime_dir / "win7_only_residue.txt").write_text("stale", encoding="ascii")
+
+    info = ProjectInfo.from_dir(tmp_path, "3.13.14")
+    cfg = BuildConfig(
+        project_dir=tmp_path,
+        dist_dir=tmp_path / "dist",
+        embed_cache_dir=tmp_path / "cache",
+        mirror=get_mirror("huawei"),
+        target=Platform.WINDOWS,
+    )
+    ctx = BuildContext(
+        tracker=BuildTracker(),
+        info=info,
+        cfg=cfg,
+        opts=BuildOptions(no_win7_dll=True),
+        runtime_dir=runtime_dir,
+    )
+
+    extract_calls = {"n": 0}
+
+    def fake_extract(zip_path: Path, dest: Path) -> None:
+        extract_calls["n"] += 1
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / "python313.dll").write_bytes(b"official")
+
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.download_embed", lambda v, m, c, **kw: tmp_path / "embed.zip")
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.extract_embed", fake_extract)
+
+    _prepare_windows_runtime(ctx)
+
+    assert extract_calls["n"] == 1
+    assert not (runtime_dir / ".win7_runtime").exists()
+    assert not (runtime_dir / "win7_only_residue.txt").exists()
+    assert (runtime_dir / "python313.dll").read_bytes() == b"official"
+
+
 # --- clean_dist 测试（原 tests/test_commands.py 的 clean 测试） ---
 
 

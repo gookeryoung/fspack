@@ -316,6 +316,37 @@ def _save_and_compare_profile(
     compare_with_baseline(log_path, default_dir, opts.compare)
 
 
+def _normalize_exclusive_options(opts: BuildOptions, py_version: str, target: Platform) -> BuildOptions:
+    """互斥构建项归一化：显式 Nuitka 自动关闭 Win7 重编译版 runtime 替换.
+
+    互斥根因：py>=3.12 Windows 目标默认启用 ``ensure_win7_dll`` 整套替换
+    runtime（adang1345/PythonVista 重编译版），而官方工具链（构建机/standalone
+    python 调度的 MSVC/winlibs）编译的 ``.pyd`` 与重编译版 ``python3XX.dll``
+    ABI 不兼容（加载即访问违例 0xC0000005）。二者同时启用时 Win7 替换是
+    无用功（Nuitka 产物必被 verify 全判损坏回退 ``.pyc``）。
+
+    归一化规则（显式意图 > 隐式默认）：``nuitka=True`` 且未显式关闭
+    ``no_win7_dll`` 且 ``needs_win7_dll`` 命中（py>=3.12 标准版 Windows 目标）
+    时，自动置 ``no_win7_dll=True`` 并告警——用户显式要求 Nuitka 加速，
+    Win7 支持是隐式默认行为，显式者胜出，产物平台范围收窄为 Win8+。
+    非 Windows 目标 / py<3.12（shim 注入不替换 runtime，ABI 兼容）/ t 版
+    不触发，二者可共存。
+
+    Returns:
+        归一化后的 ``BuildOptions``（无冲突时原样返回）
+    """
+    if opts.nuitka and not opts.no_win7_dll and target is Platform.WINDOWS:
+        from fspack.packaging.win7.dll import needs_win7_dll
+
+        if needs_win7_dll(py_version):
+            _logger.warning(
+                "Nuitka 与 Win7 重编译版 runtime 互斥（ABI 不兼容），已自动关闭 Win7 组件替换："
+                "产物仅支持 Win8+；如需 Win7 支持请去掉 --nuitka"
+            )
+            return replace(opts, no_win7_dll=True)
+    return opts
+
+
 def _execute_build(  # noqa: PLR0912, PLR0913
     tracker: BuildTracker,
     project_dir: Path,
@@ -353,6 +384,7 @@ def _execute_build(  # noqa: PLR0912, PLR0913
         st.set_detail(detail)
 
     runtime_dir = cfg.dist_dir / "runtime"
+    opts = _normalize_exclusive_options(opts, info.py_version, target)
     ctx = BuildContext(tracker=tracker, info=info, cfg=cfg, opts=opts, runtime_dir=runtime_dir)
 
     # dry-run 模式：仅解析项目 + 分析依赖，打印计划后返回
