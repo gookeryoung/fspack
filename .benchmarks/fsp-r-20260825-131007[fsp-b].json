@@ -1,0 +1,130 @@
+{
+  "schema": "fspack/run-profile/1",
+  "created": "2026-08-25T13:10:07",
+  "project": {
+    "name": "fspack",
+    "version": "0.5.4"
+  },
+  "python": "3.13.13",
+  "platform": "windows",
+  "entry": "fsp",
+  "debug": false,
+  "wall_time": 0.0483,
+  "returncode": 0,
+  "stages": [
+    {
+      "name": "read_entry",
+      "elapsed": 0.0001
+    },
+    {
+      "name": "加载 runtime\\python313.dll",
+      "elapsed": 0.0013
+    },
+    {
+      "name": "loader 总",
+      "elapsed": 0.0014
+    },
+    {
+      "name": "C 层初始化(实测)",
+      "elapsed": 0.0105
+    },
+    {
+      "name": "环境准备",
+      "elapsed": 0.0001
+    },
+    {
+      "name": "解释器初始化(约)",
+      "elapsed": 0.0052
+    },
+    {
+      "name": "用户入口执行",
+      "elapsed": 0.0254
+    }
+  ],
+  "top_imports": [
+    {
+      "name": "runpy",
+      "elapsed": 0.0009
+    }
+  ],
+  "entry_imports": [
+    {
+      "name": "fspack",
+      "elapsed": 0.0004
+    },
+    {
+      "name": "argparse",
+      "elapsed": 0.0086
+    },
+    {
+      "name": "pathlib",
+      "elapsed": 0.0035
+    },
+    {
+      "name": "typing",
+      "elapsed": 0.0025
+    },
+    {
+      "name": "fspack.cli_parser",
+      "elapsed": 0.001
+    },
+    {
+      "name": "fspack.exceptions",
+      "elapsed": 0.0002
+    },
+    {
+      "name": "locale",
+      "elapsed": 0.0011
+    },
+    {
+      "name": "shutil",
+      "elapsed": 0.0026
+    },
+    {
+      "name": "textwrap",
+      "elapsed": 0.0007
+    }
+  ],
+  "top_self": [
+    {
+      "name": "typing",
+      "elapsed": 0.0025
+    },
+    {
+      "name": "encodings",
+      "elapsed": 0.0018
+    },
+    {
+      "name": "argparse",
+      "elapsed": 0.0015
+    },
+    {
+      "name": "enum",
+      "elapsed": 0.0015
+    },
+    {
+      "name": "locale",
+      "elapsed": 0.0011
+    },
+    {
+      "name": "fspack.cli_parser",
+      "elapsed": 0.001
+    },
+    {
+      "name": "functools",
+      "elapsed": 0.0009
+    },
+    {
+      "name": "collections",
+      "elapsed": 0.0009
+    },
+    {
+      "name": "shutil",
+      "elapsed": 0.0009
+    },
+    {
+      "name": "textwrap",
+      "elapsed": 0.0007
+    }
+  ]
+}

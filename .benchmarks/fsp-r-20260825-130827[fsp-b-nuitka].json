@@ -1,0 +1,130 @@
+{
+  "schema": "fspack/run-profile/1",
+  "created": "2026-08-25T13:08:27",
+  "project": {
+    "name": "fspack",
+    "version": "0.5.4"
+  },
+  "python": "3.13.13",
+  "platform": "windows",
+  "entry": "fsp",
+  "debug": false,
+  "wall_time": 0.0564,
+  "returncode": 0,
+  "stages": [
+    {
+      "name": "read_entry",
+      "elapsed": 0.0001
+    },
+    {
+      "name": "加载 runtime\\python313.dll",
+      "elapsed": 0.001
+    },
+    {
+      "name": "loader 总",
+      "elapsed": 0.0011
+    },
+    {
+      "name": "C 层初始化(实测)",
+      "elapsed": 0.0106
+    },
+    {
+      "name": "环境准备",
+      "elapsed": 0.0001
+    },
+    {
+      "name": "解释器初始化(约)",
+      "elapsed": 0.0053
+    },
+    {
+      "name": "用户入口执行",
+      "elapsed": 0.0328
+    }
+  ],
+  "top_imports": [
+    {
+      "name": "runpy",
+      "elapsed": 0.0008
+    }
+  ],
+  "entry_imports": [
+    {
+      "name": "fspack",
+      "elapsed": 0.0004
+    },
+    {
+      "name": "argparse",
+      "elapsed": 0.0085
+    },
+    {
+      "name": "pathlib",
+      "elapsed": 0.0035
+    },
+    {
+      "name": "typing",
+      "elapsed": 0.0024
+    },
+    {
+      "name": "fspack.cli_parser",
+      "elapsed": 0.0089
+    },
+    {
+      "name": "fspack.exceptions",
+      "elapsed": 0.0006
+    },
+    {
+      "name": "locale",
+      "elapsed": 0.0012
+    },
+    {
+      "name": "shutil",
+      "elapsed": 0.0021
+    },
+    {
+      "name": "textwrap",
+      "elapsed": 0.0006
+    }
+  ],
+  "top_self": [
+    {
+      "name": "typing",
+      "elapsed": 0.0023
+    },
+    {
+      "name": "inspect",
+      "elapsed": 0.0022
+    },
+    {
+      "name": "encodings",
+      "elapsed": 0.0018
+    },
+    {
+      "name": "ast",
+      "elapsed": 0.0016
+    },
+    {
+      "name": "argparse",
+      "elapsed": 0.0014
+    },
+    {
+      "name": "enum",
+      "elapsed": 0.0014
+    },
+    {
+      "name": "fspack.cli_parser",
+      "elapsed": 0.0014
+    },
+    {
+      "name": "locale",
+      "elapsed": 0.0012
+    },
+    {
+      "name": "collections",
+      "elapsed": 0.0009
+    },
+    {
+      "name": "dis",
+      "elapsed": 0.0009
+    }
+  ]
+}
