@@ -2,7 +2,7 @@
 ==============
 
 本文档介绍 fspack 的构建流水线、模块结构与技术实现细节。面向开发者与贡献者，
-普通用户请参考 `README <https://github.com/gookeryoung/fspack#readme>`_ 的使用指南。
+普通用户请参考 :doc:`cli` 命令参考与 :doc:`configuration` 配置说明。
 
 构建流水线
 ----------

@@ -1,11 +1,67 @@
 更新日志
 =========
 
-v0.4.16（未发布）
+v0.5.6（未发布）
 ------------------
 
+- docs: README 精简为快速上手与核心用法，命令参考/配置参考/离线打包/分发指南拆分至 ``docs/``（cli/configuration/offline/distribution），回填 v0.5.0 至 v0.5.5 更新日志
+- fix: 修复 make tox 多版本测试两类失败：help 串裸 ``%`` 转义（py314 构建 parser 即崩、全版本 ``fsp b -h`` 崩）与 doctor 测试固定宽度 fixture 往返缩水（COLUMNS/LINES 环境下宽度逐测试 -1 变负导致 rich 输出全空）
+- fix: runner_profile 集成测试打点值放大 20 倍，免疫真实子进程收尾耗时波动（py39 在 tox 并行负载下收尾实测 157ms 使 gap 占比超 30% 触发未细分行导致断言 flaky）
+
+v0.5.5
+------
+
+- feat: ``fsp b``/``fsp r`` ``--profile`` 增加性能日志落盘与历史对比；剖析支持多次运行统计（``-PR N`` 取 wall_ms 中位数实际样本）与 GUI 界面就绪自终止（Qt/tkinter 主循环首帧上屏即打点）
+- feat: 启动耗时剖析细分"未细分"段——实测进程创建/收尾/盲区与 C 层初始化，未细分行增加快程序高占比通道
+- feat: profile 选项统一 ``-P``/``-PO``/``-PC`` 短别名，``-PC`` 默认输出历次趋势表与中位数统计基准；交叉构建守卫扩展至 Linux 目标
+- feat: macOS 目标交叉构建守卫（非 macOS 构建机明确报错拦截），CI 测试矩阵增加 macOS runner
+- feat: 新增 Windows embed 标准库 zip 重写精简，默认保守档删纯文档数据，aggressive 档可选剥离大块模块
+- feat: 移除 ``[tool.fspack.entries]`` 配置支持（迁移至 ``[project.scripts]``），新增 ``-O`` 单次离线与 Nuitka winlibs 工具链缓存
+- feat: Nuitka 编译跳过 data-dirs 数据资源目录，模板示例项目不再逐一编译；winlibs 缓存识别本地 zip 归档解压替代下载
+- fix: 根治 Nuitka 编译 pyd 大量损坏——编译中间缓存全量重定向隔离系统位置污染，检测到 MSVC 时跳过 winlibs 预填充，产物损坏过半自动清缓存重试一轮
+- fix: Nuitka 编译检测 Win7 重编译版 runtime 并跳过无效编译；Nuitka 与 Win7 重编译版 runtime 互斥配置在构建入口归一化
+- fix: ``.deb`` 架构固定 amd64 与 Linux 目标 runtime 一致，修复 macOS arm64 CI 误标 arm64
+- refactor: 参数过多的函数用 dataclass 收敛，profile 链路引入 options 对象
+
+v0.5.4
+------
+
+- feat: loader 错误提示完善、启动提速与可选 splash 启动画面
+- perf: 新增 Linux/macOS 标准库 zip 化，构建期打包 stdlib 加快发行版冷启动
+- fix: 修复多处标准库 zip 路径格式与 WSL 包管理器/挂载路径检测问题、跨平台 tkinter 加载与 runtime 精简问题
+- build: 简化 sdist 打包排除规则；pyside2 模板 Python 版本约束调整至 <3.11 并固定 ``.python-version``
+- refactor: 整理代码格式与补充测试用例
+
+v0.5.3
+------
+
+- feat: ``fsp r`` 新增 ``--profile`` 启动耗时剖析汇总（loader/环境准备/import 各阶段对齐表格）
+- feat: 剖析汇总表增加占比条形图并细分用户入口执行段
+- perf: 结合启动剖析优化自身启动，glob/logging 延迟导入并修复剖析锚点
+
+v0.5.2
+------
+
+- feat: 新增 ``--no-win7-dll`` 选项跳过 Win7 兼容 DLL 注入
+- refactor: 入口声明默认使用 ``[project.scripts]``，已声明时无需再定义 ``[tool.fspack.entries]``
+
+v0.5.1
+------
+
+- fix: 修复 Python 3.12+ tar 解压跳过安全预检导致恶意条目漏拒
+
+v0.5.0
+------
+
+- feat: 支持 Python 3.13t/3.14t 自由线程版本打包（ABI 标签 ``cp3XYt``、运行时目录 ``python3XYt``、Win7 目标明确报错）
+- fix: 修复自由线程版本运行时找不到 encodings、依赖下载 ``--python-version`` 带 t 后缀报错、解析出无 cp3XXt wheel 版本、embed+tkinter 误判 standalone 布局
+- perf: SBOM 与体积报告逐包并行化，SHA256 哈希与 stat I/O 释放 GIL 真并行
+- refactor: 移除无引用死代码 ``_merge_excludes`` 与废弃别名 ``_templates_root``
+- fix: doctor 模板复制过滤本地残留（修复 webview_app 构建超时）；Win7 运行时改整套组件同源替换（修复 numpy 导入崩溃）；修复增量同步类型互换崩溃与依赖误报归一化并补齐子进程超时防护；导入名与 PyPI 包名不一致时 missing 依赖误报；多入口安装器 exe 名与构建产物对齐
+- test: 新增 init 模板冒烟矩阵，全部模板生成后执行 build dry-run 全链路验证
 - chore: 移除覆盖度低的简单示例模板（``cli_helloworld``/``cli_office``/``pygame_cli``），测试改用 ``tk_app``（无依赖）与 ``web_app``（flask 依赖）等现存模板，同步更新 README 示例清单与集成文档中的模板路径
 - fix: 前端构建命令（``pnpm install``/``run build``）改为流式透传输出并增加 600s 超时保护。原实现静默捕获输出且无超时，vite/vue-tsc 构建数分钟无任何显示被误认为卡死，真卡死时无限阻塞；超时后 Windows 用 ``taskkill /T /F`` 递归终止 ``pnpm.CMD → node → vite`` 整棵进程树（仅杀直接子进程时孙进程持有管道写端，drain 线程等不到 EOF 永久阻塞），失败与超时均抛含输出尾部的明确错误
+- docs: 回填 v0.3.0 至 v0.4.15 更新日志
 
 v0.4.15
 -------

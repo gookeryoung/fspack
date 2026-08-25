@@ -20,12 +20,16 @@ fspack
    :caption: 指南
 
    integration
+   offline
+   distribution
    performance
 
 .. toctree::
    :maxdepth: 2
    :caption: 参考
 
+   cli
+   configuration
    architecture
    api
    changelog
@@ -73,7 +77,7 @@ fspack
 
    fsp b /path/to/project --mirror aliyun --py-version 3.11.9 --target windows
 
-完整命令参考、配置项与示例见 `README <https://github.com/gookeryoung/fspack#readme>`_。
+完整命令参考见 :doc:`cli`，配置项说明见 :doc:`configuration`。
 
 开发
 ====
