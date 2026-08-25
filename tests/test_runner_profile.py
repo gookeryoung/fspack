@@ -124,16 +124,21 @@ def test_parse_import_lines_nested_not_root() -> None:
 # UTF-8（WideCharToMultiByte CP_UTF8），若用 sys.stderr.write 会按子进程
 # 本地编码（中文 Windows 为 GBK）写出，父进程 UTF-8 解码后中文成替换符，
 # 含"耗时"字样的 loader 正则失配、标记行不被收集。
+# 打点毫秒值刻意放大到远超任何真实 wall time（单跑 ~70ms、tox -p auto
+# 并行负载下实测 ~205ms）：gap = wall - 已归因阶段，打点值放大后 gap 恒为
+# 负，"未细分"行（gap 占比超 30% 或超 100ms 且占 5% 时显示）永不触发——
+# 否则旧解释器（py38/39 finalization 慢）在并行负载下子进程收尾曾实测
+# 157ms，gap 占比 76.7% 触发显示导致断言 flaky。
 _CHILD_CODE = (
     "import sys\n"
     "def _w(s):\n"
     "    sys.stderr.buffer.write(s.encode('utf-8'))\n"
-    "_w('[fspack loader] read_entry 耗时 1.5ms\\n')\n"
-    "_w('[fspack loader] 加载 python313.dll 耗时 16.4ms\\n')\n"
-    "_w('[fspack loader] loader 总耗时 18.9ms（进入 Python）\\n')\n"
-    "_w('[fspack timing] env_ready @2.0ms\\n')\n"
-    "_w('[fspack timing] entry_start @3.0ms\\n')\n"
-    "_w('[fspack timing] entry_done @5.5ms\\n')\n"
+    "_w('[fspack loader] read_entry 耗时 30.0ms\\n')\n"
+    "_w('[fspack loader] 加载 python313.dll 耗时 328.0ms\\n')\n"
+    "_w('[fspack loader] loader 总耗时 378.0ms（进入 Python）\\n')\n"
+    "_w('[fspack timing] env_ready @40.0ms\\n')\n"
+    "_w('[fspack timing] entry_start @60.0ms\\n')\n"
+    "_w('[fspack timing] entry_done @110.0ms\\n')\n"
     "_w('user-stderr-line\\n')\n"
     "sys.stderr.buffer.flush()\n"
     "print('user-stdout-line')\n"
@@ -155,17 +160,17 @@ def test_run_with_profile_collect_and_summarize(capsys: pytest.CaptureFixture[st
     # loader 段：结构化展示（阶段名 + "耗时"词并入列展示，"loader 总"重组为
     # "loader 总（进入 Python）"）
     assert "read_entry" in captured.out
-    assert "1.5ms" in captured.out
+    assert "30.0ms" in captured.out
     assert "加载 python313.dll" in captured.out
-    assert "16.4ms" in captured.out
+    assert "328.0ms" in captured.out
     assert "loader 总（进入 Python）" in captured.out
-    assert "18.9ms" in captured.out
+    assert "378.0ms" in captured.out
     # wrapper 段：环境准备 = env_ready 累计值；用户入口执行 = done - start；
     # 无 entry_start 后 importtime 行 → 入口执行细分只剩"其余执行"行
     assert "环境准备" in captured.out
-    assert "2.0ms" in captured.out
+    assert "40.0ms" in captured.out
     assert "用户入口执行" in captured.out
-    assert "2.5ms" in captured.out
+    assert "50.0ms" in captured.out
     assert "其余执行" in captured.out
     # import 段：真实解释器受 PYTHONPROFILEIMPORTTIME 激活输出 importtime
     assert "解释器初始化(约)" in captured.out
