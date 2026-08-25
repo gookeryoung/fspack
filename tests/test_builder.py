@@ -2679,6 +2679,63 @@ def test_build_nuitka_skipped_on_cross_compile(tmp_path: Path, monkeypatch: pyte
     assert nuitka_called["n"] == 0
 
 
+def test_compile_user_sources_skips_nuitka_on_win7_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """win7 重编译版 runtime（.win7_runtime 标记存在）时跳过 Nuitka 编译.
+
+    官方工具链编译的 .pyd 与重编译版 python3XX.dll ABI 不兼容（加载即
+    访问违例），编译必败（verify 全判损坏回退 .pyc），前置跳过。同一
+    上下文无标记时正常调用（对照组）。
+    """
+    from fspack.config import BuildConfig
+    from fspack.packaging.pipeline.compile_stage import _compile_user_sources
+    from fspack.progress import BuildTracker
+
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    src_dst = tmp_path / "dist" / "src"
+    src_dst.mkdir(parents=True)
+    (src_dst / "app.py").write_text("def main():\n    pass\n")
+    runtime_dir = tmp_path / "dist" / "runtime"
+    runtime_dir.mkdir(parents=True)
+
+    def _make_ctx() -> BuildContext:
+        info = ProjectInfo.from_dir(tmp_path, "3.13.14")
+        cfg = BuildConfig(
+            project_dir=tmp_path,
+            dist_dir=tmp_path / "dist",
+            embed_cache_dir=tmp_path / "cache",
+            mirror=get_mirror("huawei"),
+            target=Platform.WINDOWS,
+        )
+        return BuildContext(
+            tracker=BuildTracker(),
+            info=info,
+            cfg=cfg,
+            opts=BuildOptions(nuitka=True, no_pyc=True),
+            runtime_dir=runtime_dir,
+        )
+
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.detect_platform", lambda: Platform.WINDOWS)
+    nuitka_calls = {"n": 0}
+
+    def fake_compile_with_stamp(*args: object, **kwargs: object) -> None:
+        nuitka_calls["n"] += 1
+
+    monkeypatch.setattr(
+        "fspack.packaging.nuitka.NuitkaCompiler.compile_with_stamp",
+        classmethod(fake_compile_with_stamp),
+    )
+
+    # 对照组：官方 runtime（无标记）→ Nuitka 正常调用
+    _compile_user_sources(_make_ctx(), src_dst)
+    assert nuitka_calls["n"] == 1
+
+    # win7 重编译版标记存在 → 跳过 Nuitka（回退 .pyc）
+    (runtime_dir / ".win7_runtime").write_text("3.13.14", encoding="ascii")
+    _compile_user_sources(_make_ctx(), src_dst)
+    assert nuitka_calls["n"] == 1
+
+
 # --- clean_dist 测试（原 tests/test_commands.py 的 clean 测试） ---
 
 

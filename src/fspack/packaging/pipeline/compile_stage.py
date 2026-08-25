@@ -73,6 +73,9 @@ def _compile_user_sources(ctx: BuildContext, src_dst: Path) -> None:
     用户源码以 .pyd 形式本机执行，速度提升 30-50%（参考 RimSort Nuitka 打包方案）。
     仅编译用户源码（src/），第三方依赖（site-packages/）保持 wheel 解压 + .pyc。
     交叉构建跳过（Nuitka 无法生成目标平台 .pyd）。
+    win7 重编译版 runtime 跳过（``runtime_dir/.win7_runtime`` 标记存在，py>=3.12
+    Windows 默认启用）：官方工具链编译的 .pyd 与重编译版 python3XX.dll ABI 不兼容
+    （加载即访问违例），编译必败回退 .pyc，见 :func:`is_win7_runtime`。
     nuitka 装到本地缓存 ~/.fspack/cache/nuitka/<py_version>/，不污染 dist/runtime；
     编译时用 -c 注入 sys.path 绕过 _pth 对 PYTHONPATH 的限制。
     stamp 命中跳过整个阶段（含 ensure_env 与 compile_src）。
@@ -103,23 +106,39 @@ def _compile_user_sources(ctx: BuildContext, src_dst: Path) -> None:
     )
     if ctx.opts.nuitka and target is build_host_platform:
         with ctx.tracker.stage("Nuitka 编译") as st:
-            from fspack.packaging.nuitka import NuitkaCompiler
+            from fspack.packaging.win7.dll import is_win7_runtime
 
-            nuitka_cache_root = nuitka_cache_dir()
-            NuitkaCompiler.compile_with_stamp(
-                src_dst,
-                ctx.cfg.dist_dir,
-                ctx.runtime_dir,
-                ctx.info.py_version,
-                target,
-                ctx.cfg.mirror,
-                nuitka_cache_root,
-                stage=st,
-                entry_rels=entry_rels,
-                ccache=ctx.opts.ccache,
-                nuitka_packages=ctx.opts.nuitka_packages,
-                data_dirs=(*resolved_data_dirs, *resolved_web_static_dirs),
-            )
+            if is_win7_runtime(ctx.runtime_dir):
+                # win7 重编译版 runtime（adang1345/PythonVista 组件整套替换）与官方
+                # embed 构建工具链不同：官方工具链（构建机/standalone python）编译的
+                # .pyd 在重编译版 python3XX.dll 进程内加载即访问违例（0xC0000005，
+                # Win10/11 同样崩溃，与官方 _ctypes.pyd 混搭崩溃同源，实测 3.13 MSVC
+                # 产物在替换后 runtime 100% 复现）。编译是必然失败的无效功（verify
+                # 会全部判损坏回退 .pyc），前置跳过并提示用户可选 --no-win7-dll。
+                _logger.warning(
+                    "Nuitka 编译跳过: runtime 已替换为 win7 重编译版组件，"
+                    "官方工具链编译的 .pyd 与其 ABI 不兼容（加载即访问违例），回退到 .pyc 模式；"
+                    "如需 Nuitka 本机编译请加 --no-win7-dll（产物将不支持 Win7）"
+                )
+                st.set_detail("win7 重编译版 runtime，跳过（回退到 .pyc 模式）")
+            else:
+                from fspack.packaging.nuitka import NuitkaCompiler
+
+                nuitka_cache_root = nuitka_cache_dir()
+                NuitkaCompiler.compile_with_stamp(
+                    src_dst,
+                    ctx.cfg.dist_dir,
+                    ctx.runtime_dir,
+                    ctx.info.py_version,
+                    target,
+                    ctx.cfg.mirror,
+                    nuitka_cache_root,
+                    stage=st,
+                    entry_rels=entry_rels,
+                    ccache=ctx.opts.ccache,
+                    nuitka_packages=ctx.opts.nuitka_packages,
+                    data_dirs=(*resolved_data_dirs, *resolved_web_static_dirs),
+                )
 
     # 预编译字节码：用 runtime 自身 python 编译 src + site-packages 为 .pyc，加速首次启动。
     # pyc_strip=True 时额外剥离非 __init__.py 源码（源码保护，保留包标识避免命名空间包问题）。

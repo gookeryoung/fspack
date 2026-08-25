@@ -48,6 +48,7 @@ __all__ = [
     "download_win7_embed",
     "ensure_win7_dll",
     "extract_win7_dll",
+    "is_win7_runtime",
     "needs_win7_dll",
     "win7_dll_name",
     "win7_zip_cache_name",
@@ -264,3 +265,17 @@ def ensure_win7_dll(
     marker.write_text(version, encoding="ascii")
     _logger.info("win7 组件全量替换完成并校验通过: %s（需 shim: %s）", dll, ", ".join(result.shim_dlls) or "无")
     return dll
+
+
+def is_win7_runtime(runtime_dir: Path) -> bool:
+    """判断 runtime 目录是否已被 win7 重编译版组件整套替换（标记文件存在）.
+
+    以 ``.win7_runtime`` 标记文件为准——它是 runtime 实际状态的 ground truth，
+    不依赖当前构建的 ``--no-win7-dll`` 选项（dist 复用时替换状态可能残留）。
+
+    用途：Nuitka 等本机编译的前置守卫。重编译版与官方 embed 构建工具链不同，
+    官方工具链编译的 ``.pyd`` 在重编译版 ``python3XX.dll`` 进程内加载即访问
+    违例（0xC0000005，Win10/11 同样崩溃，与官方 ``_ctypes.pyd`` 混搭崩溃同源，
+    实测 3.13 MSVC 产物复现），须跳过编译回退 ``.pyc``。
+    """
+    return (runtime_dir / _WIN7_RUNTIME_MARKER).is_file()

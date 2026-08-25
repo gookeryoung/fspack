@@ -22,6 +22,7 @@ from fspack.packaging.win7.dll import (
     download_win7_embed,
     ensure_win7_dll,
     extract_win7_dll,
+    is_win7_runtime,
     needs_win7_dll,
     win7_dll_name,
     win7_zip_cache_name,
@@ -82,6 +83,19 @@ def test_needs_win7_dll_freethreaded_returns_false() -> None:
     """
     assert not needs_win7_dll("3.13.14t")
     assert not needs_win7_dll("3.14.6t")
+
+
+def test_is_win7_runtime_marker(tmp_path: Path) -> None:
+    """is_win7_runtime 以 .win7_runtime 标记文件判定替换状态（runtime 实际状态的 ground truth）.
+
+    Nuitka 编译前置守卫：官方工具链编译的 .pyd 在重编译版 python3XX.dll
+    进程内加载即访问违例，标记存在时须跳过本机编译回退 .pyc。
+    """
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    assert not is_win7_runtime(runtime)
+    (runtime / ".win7_runtime").write_text("3.13.14", encoding="ascii")
+    assert is_win7_runtime(runtime)
 
 
 def test_download_win7_embed_freethreaded_rejected(tmp_path: Path) -> None:
