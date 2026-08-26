@@ -653,9 +653,6 @@ dependencies = [
     { name = "certifi" },
     { name = "rich", version = "14.3.4", source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }, marker = "python_full_version < '3.9'" },
     { name = "rich", version = "15.0.0", source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }, marker = "python_full_version >= '3.9'" },
-    { name = "tenacity", version = "9.0.0", source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }, marker = "python_full_version < '3.9'" },
-    { name = "tenacity", version = "9.1.2", source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }, marker = "python_full_version == '3.9.*'" },
-    { name = "tenacity", version = "9.1.4", source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }, marker = "python_full_version >= '3.10'" },
     { name = "tomli", marker = "python_full_version < '3.11'" },
 ]
 
@@ -742,7 +739,6 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'lint'", specifier = ">=0.8.0" },
     { name = "sphinx", marker = "extra == 'docs'", specifier = ">=7.0" },
     { name = "sphinx-rtd-theme", marker = "extra == 'docs'", specifier = ">=2.0" },
-    { name = "tenacity", specifier = ">=8.0" },
     { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=1.2" },
     { name = "tox", marker = "extra == 'dev'", specifier = ">=4.25.0" },
     { name = "tox-uv", marker = "extra == 'dev'", specifier = ">=1.13.1" },
@@ -2502,44 +2498,6 @@ resolution-markers = [
 sdist = { url = "https://mirrors.aliyun.com/pypi/packages/3b/44/6716b257b0aa6bfd51a1b31665d1c205fb12cb5ad56de752dfa15657de2f/sphinxcontrib_serializinghtml-2.0.0.tar.gz", hash = "sha256:e9d912827f872c029017a53f0ef2180b327c3f7fd23c87229f7a8e8b70031d4d" }
 wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/52/a7/d2782e4e3f77c8450f727ba74a8f12756d5ba823d81b941f1b04da9d033a/sphinxcontrib_serializinghtml-2.0.0-py3-none-any.whl", hash = "sha256:6e2cb0eef194e10c27ec0023bfeb25badbbb5868244cf5bc5bdc04e4464bf331" },
-]
-
-[[package]]
-name = "tenacity"
-version = "9.0.0"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }
-resolution-markers = [
-    "python_full_version < '3.9'",
-]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/cd/94/91fccdb4b8110642462e653d5dcb27e7b674742ad68efd146367da7bdb10/tenacity-9.0.0.tar.gz", hash = "sha256:807f37ca97d62aa361264d497b0e31e92b8027044942bfa756160d908320d73b" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/b6/cb/b86984bed139586d01532a587464b5805f12e397594f19f931c4c2fbfa61/tenacity-9.0.0-py3-none-any.whl", hash = "sha256:93de0c98785b27fcf659856aa9f54bfbd399e29969b0621bc7f762bd441b4539" },
-]
-
-[[package]]
-name = "tenacity"
-version = "9.1.2"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }
-resolution-markers = [
-    "python_full_version == '3.9.*'",
-]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/0a/d4/2b0cd0fe285e14b36db076e78c93766ff1d529d70408bd1d2a5a84f1d929/tenacity-9.1.2.tar.gz", hash = "sha256:1169d376c297e7de388d18b4481760d478b0e99a777cad3a9c86e556f4b697cb" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/e5/30/643397144bfbfec6f6ef821f36f33e57d35946c44a2352d3c9f0ae847619/tenacity-9.1.2-py3-none-any.whl", hash = "sha256:f77bf36710d8b73a50b2dd155c97b870017ad21afe6ab300326b0371b3b05138" },
-]
-
-[[package]]
-name = "tenacity"
-version = "9.1.4"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }
-resolution-markers = [
-    "python_full_version >= '3.12'",
-    "python_full_version == '3.11.*'",
-    "python_full_version == '3.10.*'",
-]
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/47/c6/ee486fd809e357697ee8a44d3d69222b344920433d3b6666ccd9b374630c/tenacity-9.1.4.tar.gz", hash = "sha256:adb31d4c263f2bd041081ab33b498309a57c77f9acf2db65aadf0898179cf93a" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/d7/c1/eb8f9debc45d3b7918a32ab756658a0904732f75e555402972246b0b8e71/tenacity-9.1.4-py3-none-any.whl", hash = "sha256:6095a360c919085f28c6527de529e76a06ad89b23659fa881ae0649b867a9d55" },
 ]
 
 [[package]]

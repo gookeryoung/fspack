@@ -14,9 +14,10 @@ req-49 驱动的 20 轮迭代分 4 个阶段交付：阶段 1 健壮性基础（
 
 #### 网络与下载可靠性
 
-- **iter-126 下载重试与完整性校验**：`Downloader.download` 引入 tenacity 指数退避
+- **iter-126 下载重试与完整性校验**：`Downloader.download` 引入指数退避
   重试（3 次，1s/2s/4s），区分可重试错误（连接超时、503）与不可重试（404）；
-  `--require-hashes` 模式下校验下载归档 sha256
+  `--require-hashes` 模式下校验下载归档 sha256（重试最初基于 tenacity，
+  后以标准库手写循环替换以精简第三方依赖）
 - **iter-132 wheel 下载 uv 加速**：`_download_online` 在 uv 可用时改用
   `uv pip download`（比 pip 快 2-5x），保留 pip 回退；uv 路径检测在解析与
   下载阶段共享

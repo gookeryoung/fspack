@@ -2,9 +2,9 @@
 
 :class:`Downloader` 整合 ``create_ssl_context`` 与 HTTP 下载两个职责：
 
-- SSL 上下文创建（``SSL_CERT_FILE`` 环境变量 → certifi CA bundle → 系统默认 CA）
+- SSL 上下文创建（``SSL_CERT_FILE`` 环境变量 → certifi CA bundle，certifi 为硬依赖缺失即安装损坏）
 - HTTP 下载（``urllib.request`` + ``rich.progress`` 实时进度条）
-- 指数退避重试（``tenacity``，首次 + 2 次重试，退避约 1s/2s + 抖动，仅对可重试错误）
+- 指数退避重试（标准库实现，首次 + 2 次重试，退避约 1s/2s + 抖动，仅对可重试错误）
 
 供 :class:`fspack.packaging.runtime.RuntimeDownloader` 使用。
 
@@ -18,10 +18,10 @@
 from __future__ import annotations
 
 import logging
+import random
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
-
-import tenacity
 
 if TYPE_CHECKING:
     # SSLContext / StageRecorder 仅用于类型注解（``from __future__ import
@@ -74,22 +74,15 @@ def _is_retryable_network_error(exc: BaseException) -> bool:
     return isinstance(exc, socket.timeout)
 
 
-def _build_download_retryer() -> tenacity.Retrying:
-    """构造下载重试器：首次 + 2 次重试，退避约 1s/2s + 抖动，仅对可重试错误.
+def _retry_wait_seconds(failed_attempts: int) -> float:
+    """计算第 ``failed_attempts`` 次失败后的重试等待时间（指数退避 + 全抖动）.
 
-    返回 :class:`tenacity.Retrying` 实例，调用方用 ``for attempt in retryer: with attempt:``
-    模式包装可能失败的网络操作。``reraise=True`` 确保最终失败时抛出原始异常（而非
-    :class:`tenacity.RetryError`），便于调用方按异常类型处理。
-
-    ``before_sleep`` 在每次重试前记录 WARNING 日志（含异常与下次等待时间），便于诊断。
+    等待上限 ``min(_RETRY_INITIAL_WAIT * 2 ** (failed_attempts - 1), _RETRY_MAX_WAIT)``，
+    在 ``[0, 上限)`` 均匀取值（全抖动）：首次失败退避上限约 1s、第二次约 2s，
+    抖动避免多个客户端同步重试风暴。标准库实现替代 tenacity，减少第三方依赖。
     """
-    return tenacity.Retrying(
-        stop=tenacity.stop_after_attempt(_MAX_ATTEMPTS),
-        wait=tenacity.wait_exponential_jitter(initial=_RETRY_INITIAL_WAIT, max=_RETRY_MAX_WAIT),
-        retry=tenacity.retry_if_exception(_is_retryable_network_error),
-        reraise=True,
-        before_sleep=tenacity.before_sleep_log(_logger, logging.WARNING),  # type: ignore[arg-type]
-    )
+    upper = min(_RETRY_INITIAL_WAIT * 2 ** (failed_attempts - 1), _RETRY_MAX_WAIT)
+    return random.uniform(0, upper)
 
 
 class Downloader:
@@ -125,8 +118,7 @@ class Downloader:
 
         优先级：
         1. ``SSL_CERT_FILE`` 环境变量（用户显式指定，如 FastGithub 代理环境）
-        2. certifi CA bundle + 系统默认 CA（certifi 更新更及时）
-        3. 系统默认 CA
+        2. certifi CA bundle + 系统默认 CA（certifi 为硬依赖，缺失即报安装损坏错误）
         """
         import os
         import ssl
@@ -138,10 +130,12 @@ class Downloader:
             import certifi
 
             ctx = ssl.create_default_context(cafile=certifi.where())
-            ctx.load_default_certs()
-            return ctx
-        except ImportError:  # pragma: no cover
-            return ssl.create_default_context()
+        except ImportError as e:  # pragma: no cover
+            # certifi 为声明硬依赖：导入失败说明安装损坏（如被 slim 误剥离），
+            # 明确报错而非静默回退系统 CA（弱 CA 环境会导致隐晦的 SSL 校验失败）
+            raise RuntimeError("CA 证书包 certifi 缺失，fspack 安装损坏，请重新安装 fspack") from e
+        ctx.load_default_certs()
+        return ctx
 
     def download(
         self,
@@ -178,7 +172,7 @@ class Downloader:
         ``urllib.request.urlopen``，方法内 ``import urllib.request`` 拿到的就是
         被 patch 后的同一模块对象。
 
-        重试等待时间测试通过 ``monkeypatch.setattr("tenacity.nap.sleep", ...)`` 跳过
+        重试等待时间测试通过 ``monkeypatch.setattr("time.sleep", ...)`` 跳过
         实际 sleep，避免测试耗时。
         """
         # 延迟导入：urllib.request + rich.progress 多 column 类 + console 单例。
@@ -204,15 +198,17 @@ class Downloader:
         part = dest.with_name(dest.name + ".part")
         req = urllib.request.Request(url, headers={"User-Agent": "fspack"})
 
-        retryer = _build_download_retryer()
         written = 0
-        # tenacity Retrying 用 ``for attempt in retryer: with attempt:`` 模式：
-        # 可重试异常触发下次循环，不可重试异常或达上限后 reraise 抛出原始异常。
-        # progress 在循环内创建：每次重试新建 Progress（transient=True 退出时清除显示），
-        # 避免重复进入 with 块的状态复用问题。
+        attempt = 0
+        # 手写重试循环（标准库实现替代 tenacity，减少第三方依赖）：可重试异常
+        # （分类见 _is_retryable_network_error）按指数退避等待后重试，不可重试
+        # 异常或达到 _MAX_ATTEMPTS 上限时抛出原始异常（等价 tenacity reraise=True）。
+        # progress 每次重试新建（transient=True 退出时清除显示），避免重复进入
+        # with 块的状态复用问题。
         try:
-            for attempt in retryer:
-                with attempt:
+            while True:
+                attempt += 1
+                try:
                     progress = Progress(
                         SpinnerColumn(),
                         TextColumn("[bold blue]{task.description}"),
@@ -246,6 +242,21 @@ class Downloader:
                             # 分类，重试耗尽后进入 except 清理 .part。
                             # partial 须为 bytes（http.client 用 len() 取其长度）。
                             raise http.client.IncompleteRead(b"", total - written)
+                except Exception as exc:
+                    if attempt >= _MAX_ATTEMPTS or not _is_retryable_network_error(exc):
+                        raise
+                    wait = _retry_wait_seconds(attempt)
+                    _logger.warning(
+                        "下载失败（第 %d/%d 次尝试: %s），%.1fs 后重试: %s",
+                        attempt,
+                        _MAX_ATTEMPTS,
+                        exc,
+                        wait,
+                        url,
+                    )
+                    time.sleep(wait)
+                else:
+                    break
             part.replace(dest)
         except Exception:
             # 下载失败（重试耗尽或不可重试异常 reraise）：best-effort 清理半成品

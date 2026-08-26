@@ -15,7 +15,6 @@ classifiers = [
 dependencies    = [
     "certifi>=2023.7.22",
     "rich>=13.0",
-    "tenacity>=8.0",
     "tomli>=1.2; python_version < '3.11'",
 ]
 description     = "极速 Python 项目打包器。"

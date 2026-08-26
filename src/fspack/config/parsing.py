@@ -37,6 +37,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, cast
 
+from fspack._compat import tomllib
 from fspack.config.app_type import (  # noqa: F401
     _GUI_HINTS,
     _WEB_HINTS,
@@ -71,14 +72,6 @@ _logger = logging.getLogger(__name__)
 # 缓存上限：64 个不同 (project_dir, py_version, mtime) 组合，覆盖多数项目场景；
 # LRU 淘汰最久未用，避免长期运行内存膨胀。
 _PROJECT_CACHE_MAXSIZE = 64
-
-try:
-    import tomllib
-except ModuleNotFoundError:  # pragma: no cover
-    try:
-        import tomli as tomllib  # type: ignore[import-not-found]
-    except ImportError as e:  # pragma: no cover
-        raise ProjectError("解析 pyproject.toml 需要 tomli（Python<3.11），请安装 tomli") from e
 
 
 # [tool.fspack] 构建默认值键名与 BuildDefaults 字段的映射
@@ -539,4 +532,5 @@ def _resolve_icon(project_dir: Path, icon_rel: object) -> Path | None:
     icon_path = (project_dir / icon_rel.strip()).resolve()
     if not icon_path.is_file():
         raise ProjectError(f"[tool.fspack] icon 文件不存在: {icon_rel}")
+    return icon_path
     return icon_path

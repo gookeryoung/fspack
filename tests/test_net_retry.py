@@ -14,8 +14,9 @@
   - 缓存命中且 hash 匹配直接复用
   - 下载失败清理半成品归档再抛 :class:`EmbedError`
 - :func:`fspack.packaging.net._is_retryable_network_error` 错误分类单元测试
+- :func:`fspack.packaging.net._retry_wait_seconds` 指数退避等待时间单元测试
 
-测试通过 ``monkeypatch.setattr("tenacity.nap.sleep", ...)`` 跳过实际 sleep，
+测试通过 ``monkeypatch.setattr("time.sleep", ...)`` 跳过实际 sleep，
 避免指数退避等待（约 1s/2s）导致测试耗时。
 """
 
@@ -35,9 +36,13 @@ import pytest
 from fspack.config import MirrorConfig
 from fspack.exceptions import EmbedError
 from fspack.packaging.net import (
+    _MAX_ATTEMPTS,
+    _RETRY_INITIAL_WAIT,
+    _RETRY_MAX_WAIT,
     _RETRYABLE_HTTP_STATUS,
     Downloader,
     _is_retryable_network_error,
+    _retry_wait_seconds,
 )
 from fspack.packaging.runtime import (
     EmbedRuntime,
@@ -65,11 +70,9 @@ def _make_http_error(code: int, msg: str = "Error") -> urllib.error.HTTPError:
 
 
 @pytest.fixture(autouse=True)
-def _patch_tenacity_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
-    """跳过 tenacity 重试等待，避免测试耗时（首次 + 2 次重试退避约 1s/2s）."""
-    import tenacity.nap
-
-    monkeypatch.setattr(tenacity.nap, "sleep", lambda _: None)
+def _patch_retry_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
+    """跳过重试等待，避免测试耗时（首次 + 2 次重试退避约 1s/2s）."""
+    monkeypatch.setattr("time.sleep", lambda _: None)
 
 
 # ---- 错误分类单元测试 ----
@@ -130,6 +133,41 @@ class TestIsRetryableNetworkError:
     def test_retryable_http_status_constant(self) -> None:
         """``_RETRYABLE_HTTP_STATUS`` 仅含 502/503/504."""
         assert frozenset({502, 503, 504}) == _RETRYABLE_HTTP_STATUS
+
+
+# ---- 指数退避等待时间单元测试 ----
+
+
+class TestRetryWaitSeconds:
+    """``_retry_wait_seconds`` 指数退避 + 全抖动等待时间."""
+
+    @pytest.mark.parametrize(
+        ("failed_attempts", "upper"),
+        [
+            (1, _RETRY_INITIAL_WAIT),
+            (2, _RETRY_INITIAL_WAIT * 2),
+            (3, _RETRY_INITIAL_WAIT * 4),
+        ],
+    )
+    def test_wait_within_exponential_upper_bound(self, failed_attempts: int, upper: float) -> None:
+        """等待时间在 [0, min(initial * 2**(n-1), max)) 区间内（全抖动）."""
+        wait = _retry_wait_seconds(failed_attempts)
+        assert 0 <= wait < upper
+
+    def test_wait_capped_at_max(self) -> None:
+        """失败次数很多时等待上限被封顶为 _RETRY_MAX_WAIT."""
+        wait = _retry_wait_seconds(100)
+        assert 0 <= wait < _RETRY_MAX_WAIT + 1e-9
+        assert wait <= _RETRY_MAX_WAIT
+
+    def test_wait_is_randomized(self) -> None:
+        """多次采样值不全相同（全抖动生效）."""
+        samples = {_retry_wait_seconds(1) for _ in range(20)}
+        assert len(samples) > 1
+
+    def test_max_attempts_constant(self) -> None:
+        """``_MAX_ATTEMPTS`` 为 3（首次 + 2 次重试）."""
+        assert _MAX_ATTEMPTS == 3
 
 
 # ---- Downloader 重试集成测试 ----
