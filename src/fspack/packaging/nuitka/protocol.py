@@ -58,6 +58,11 @@ class NuitkaCompilerProtocol(Protocol):  # pragma: no cover - 纯类型契约，
         ...
 
     @staticmethod
+    def _find_local_nuitka_sdist(nuitka_ver: str) -> Path | None:
+        """在 wheel 缓存目录递归查找锁定版本的 nuitka sdist 归档（tar.gz）."""
+        ...
+
+    @staticmethod
     def _runtime_python(runtime_dir: Path, py_version: str, target: Platform) -> Path:
         """解析 runtime python 可执行文件路径."""
         ...
@@ -311,6 +316,23 @@ class NuitkaCompilerProtocol(Protocol):  # pragma: no cover - 纯类型契约，
     @classmethod
     def _ensure_pip_available(cls, python_exe: str) -> None:
         """确保构建机 python 有 pip 模块，缺失则两轮自救，仍失败则抛异常."""
+        ...
+
+    @staticmethod
+    def _pip_install_nuitka(
+        build_python: str,
+        cache_dir: Path,
+        mirror: MirrorConfig,
+        requirement: str,
+        *,
+        from_local_sdist: bool = False,
+    ) -> None:
+        """用构建机 ``pip install --target`` 安装 nuitka（索引解析或本地 sdist 归档）."""
+        ...
+
+    @classmethod
+    def _verify_nuitka_installed(cls, cache_dir: Path) -> None:
+        """验证安装后缓存目录有 nuitka 包，缺失抛 NuitkaError."""
         ...
 
     # ==== NuitkaStandalone 提供的辅助（缓存目录推导 + 下载/解压）====

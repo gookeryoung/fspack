@@ -9,7 +9,10 @@ facade，所有 ``cls.`` 调用经 MRO 自动派发到对应 mixin。
 - C 编译器检查（Windows mingw / Linux gcc）
 - Windows winlibs-mingw 预填充编排（经 :mod:`fspack.packaging.nuitka.winlibs`
   的 :meth:`NuitkaWinlibs.ensure_winlibs_mingw`，全版本强制 winlibs 避免 zig 产物损坏）
-- nuitka 锁定版本安装到本地缓存（``pip install --target`` 从 sdist 构建）
+- nuitka 锁定版本安装到本地缓存（``pip install --target`` 从 sdist 构建），
+  优先复用 wheel 缓存目录（``<cache_root>/wheels``）下用户放置的
+  ``Nuitka-<ver>.tar.gz`` 本地 sdist 归档（纯本地操作，离线模式同样适用，
+  构建/运行依赖经 ``--find-links`` 从同目录解析）
 - 构建机 pip 模块可用性检查与两轮自助安装（ensurepip / uv pip install pip）
 - 构建机编译环境变量构建（``_build_compile_env``：Linux 设 ``CC``，
   Windows 重定向 ``NUITKA_CACHE_DIR_DOWNLOADS`` 到 fspack 缓存目录）
@@ -31,7 +34,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from fspack.config import MirrorConfig, is_offline, nuitka_version_for
+from fspack.config import MirrorConfig, is_offline, nuitka_version_for, wheel_cache_dir
 from fspack.config.versions import _split_t_suffix
 from fspack.exceptions import NuitkaError
 from fspack.platform import Platform
@@ -77,6 +80,27 @@ class NuitkaEnv:
     def _is_nuitka_cached(cache_dir: Path) -> bool:
         """检查缓存目录是否有 nuitka 包（文件系统检查，无 subprocess 开销）."""
         return (cache_dir / "nuitka" / "__init__.py").is_file()
+
+    @staticmethod
+    def _find_local_nuitka_sdist(nuitka_ver: str) -> Path | None:
+        """在 wheel 缓存目录（``<cache_root>/wheels``）递归查找锁定版本的 nuitka sdist 归档.
+
+        精确匹配文件名 ``nuitka-<ver>.tar.gz``（大小写不敏感：PyPI 官方 sdist 为
+        ``Nuitka-<ver>.tar.gz``，部分镜像规范化为小写），版本不匹配的归档不识别
+        （避免装错版本破坏版本锁定约束）。缓存根与任意子目录均扫描，与
+        :meth:`NuitkaWinlibs._find_local_winlibs_zip` 的本地归档识别模式一致：
+        用户手动放置（离线准备）或 ``pip download --no-binary`` 的产物均可命中。
+
+        纯本地文件系统操作，离线模式同样适用。
+        """
+        wheels_dir = wheel_cache_dir()
+        if not wheels_dir.is_dir():
+            return None
+        expected = f"nuitka-{nuitka_ver.lower()}.tar.gz"
+        for sdist in sorted(wheels_dir.rglob("*.tar.gz")):
+            if sdist.is_file() and sdist.name.lower() == expected:
+                return sdist
+        return None
 
     @staticmethod
     def _runtime_python(runtime_dir: Path, py_version: str, target: Platform) -> Path:
@@ -312,6 +336,91 @@ class NuitkaEnv:
             "请检查 uv 是否在 PATH、网络是否可用，或手动安装 pip"
         )
 
+    @staticmethod
+    def _pip_install_nuitka(
+        build_python: str,
+        cache_dir: Path,
+        mirror: MirrorConfig,
+        requirement: str,
+        *,
+        from_local_sdist: bool = False,
+    ) -> None:
+        """用构建机 ``pip install --target`` 安装 nuitka 到 cache_dir.
+
+        ``requirement`` 两种形态：
+
+        - ``nuitka==<ver>``：从镜像索引在线解析（nuitka 4.x 在 PyPI 只发布
+          sdist，pip 自动下载 sdist 构建 wheel 再解压到 ``--target``）
+        - 本地 sdist 归档路径（``<cache_root>/wheels`` 下识别的
+          ``Nuitka-<ver>.tar.gz``，``from_local_sdist=True``）：pip 从本地归档
+          构建，追加 ``--find-links <wheels>`` 使构建依赖（setuptools/wheel）与
+          运行依赖（ordered-set/zstandard）优先从 wheel 缓存目录解析；离线
+          模式换 ``--no-index`` 纯本地解析（pip 的构建隔离环境同样支持从
+          find-links 取构建依赖）
+
+        其余参数与原内联实现一致：``--no-compile`` 不编译 .pyc（缓存跨版本
+        复用）、``--no-cache-dir`` 不污染 pip 缓存、超时防网络半开永久挂起。
+
+        Raises:
+            NuitkaError: pip 超时（网络半开挂起）或非零退出码。
+        """
+        # --no-compile: 不编译 .pyc（缓存可能跨 Python 版本复用）
+        # --no-cache-dir: 不用 pip 缓存，避免污染
+        cmd = [
+            build_python,
+            "-m",
+            "pip",
+            "install",
+            "--target",
+            str(cache_dir),
+            "--no-compile",
+            "--no-cache-dir",
+        ]
+        if from_local_sdist:
+            if is_offline():
+                # 离线：禁用索引，构建/运行依赖全部经 --find-links 从本地取
+                cmd.append("--no-index")
+            else:
+                cmd.extend(["-i", mirror.pypi_index])
+            cmd.extend(["--find-links", str(wheel_cache_dir())])
+        else:
+            # -i mirror.pypi_index: 用 fspack 镜像源
+            cmd.extend(["-i", mirror.pypi_index])
+        cmd.append(requirement)
+
+        _logger.info("用构建机 pip 装 nuitka 到缓存 %s: %s", cache_dir, requirement)
+        # stderr=None: pip 进度（Collecting/Downloading/Building wheel/Installing）实时
+        # 输出到终端，避免 sdist 构建数分钟无输出被误认为卡死。stdout 捕获但 pip install
+        # 的 stdout 通常为空（成功信息走 stderr），保留以备诊断。
+        # timeout: 网络半开/挂起时 pip 可能既不报错也不退出，无超时会使构建永久挂起
+        try:
+            result = subprocess.run(
+                cmd,
+                check=False,
+                encoding="utf-8",
+                errors="replace",
+                stdout=subprocess.PIPE,
+                stderr=None,
+                timeout=_NUITKA_INSTALL_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            raise NuitkaError(
+                f"pip install {requirement} 超时（{int(_NUITKA_INSTALL_TIMEOUT)}s），"
+                "请检查网络后重试，或手动执行上述命令确认可完成"
+            ) from None
+        if result.returncode != 0:
+            raise NuitkaError(f"pip install {requirement} 失败（退出码 {result.returncode}），详见上方 pip 输出")
+
+    @classmethod
+    def _verify_nuitka_installed(cls: type[NuitkaCompilerProtocol], cache_dir: Path) -> None:
+        """验证安装后缓存目录有 nuitka 包，缺失 raise :class:`NuitkaError`.
+
+        经 ``cls`` 调用 ``_is_nuitka_cached``（保持测试可经
+        ``NuitkaCompiler._is_nuitka_cached`` monkeypatch 拦截）。
+        """
+        if not cls._is_nuitka_cached(cache_dir):
+            raise NuitkaError(f"nuitka 安装后缓存目录仍无 nuitka 包: {cache_dir}")
+
     @classmethod
     def ensure_env(
         cls: type[NuitkaCompilerProtocol],
@@ -336,8 +445,15 @@ class NuitkaEnv:
            scons 编译时缓存命中不下载
         3. 按 :func:`nuitka_version_for` 取锁定版本号
         4. :meth:`_is_nuitka_cached` 检查缓存目录是否已有 nuitka
-        5. 无则用构建机 ``pip install --target`` 从 sdist 构建并解压到缓存目录
-        6. :meth:`_is_nuitka_cached` 再次验证安装成功
+        5. 无则 :meth:`_find_local_nuitka_sdist` 识别 wheel 缓存目录
+           （``<cache_root>/wheels``）下的本地 sdist 归档（``Nuitka-<ver>.tar.gz``），
+           命中则 ``pip install --target`` 从本地归档安装（``--find-links`` 解析
+           构建/运行依赖，离线模式 ``--no-index`` 纯本地）；安装失败时在线模式
+           回退索引安装（归档保留不删——用户显式放置的资产，与 winlibs 下载
+           中断残留的处置不同），离线模式直接抛出
+        6. 本地归档未命中时用构建机 ``pip install --target`` 从索引下载 sdist
+           构建并解压到缓存目录
+        7. :meth:`_verify_nuitka_installed` 再次验证安装成功
 
         nuitka 4.x 在 PyPI 只发布 sdist（无预构建 wheel），:func:`download_wheels` 的
         ``--only-binary=:all:`` 无法处理。改用 ``pip install --target <cache>`` 让 pip
@@ -386,11 +502,18 @@ class NuitkaEnv:
             stage.set_detail(f"nuitka {nuitka_ver} 已就绪")
             return nuitka_ver
 
-        # 离线模式 fail-fast：nuitka 在 PyPI 只发布 sdist，缓存未命中时无法离线构建
-        if is_offline():
+        # 本地 sdist 归档识别：wheel 缓存目录下用户放置（离线准备）或
+        # pip download 产物的 Nuitka-<ver>.tar.gz，纯本地安装优先于网络下载
+        local_sdist = cls._find_local_nuitka_sdist(nuitka_ver)
+
+        # 离线模式 fail-fast：nuitka 在 PyPI 只发布 sdist，缓存未命中且无本地
+        # 归档时无法离线构建（有本地归档时继续走本地安装，纯本地操作离线可用）
+        if local_sdist is None and is_offline():
             raise NuitkaError(
                 f"离线模式下 nuitka 缓存未命中: nuitka=={nuitka_ver}，"
                 f"请预先 `pip install --target {cache_dir} nuitka=={nuitka_ver}` 安装到缓存目录，"
+                f"或将 Nuitka-{nuitka_ver}.tar.gz 及其依赖 wheel（setuptools/wheel/ordered-set 等）"
+                f"放入 {wheel_cache_dir()}，"
                 f"或取消 FSPACK_OFFLINE 环境变量"
             )
 
@@ -401,47 +524,23 @@ class NuitkaEnv:
 
         cache_dir.mkdir(parents=True, exist_ok=True)
 
-        # --no-compile: 不编译 .pyc（缓存可能跨 Python 版本复用）
-        # --no-cache-dir: 不用 pip 缓存，避免污染
-        # -i mirror.pypi_index: 用 fspack 镜像源
-        cmd = [
-            build_python,
-            "-m",
-            "pip",
-            "install",
-            "--target",
-            str(cache_dir),
-            "--no-compile",
-            "--no-cache-dir",
-            "-i",
-            mirror.pypi_index,
-            f"nuitka=={nuitka_ver}",
-        ]
-        _logger.info("用构建机 pip 装 nuitka %s 到缓存 %s", nuitka_ver, cache_dir)
-        # stderr=None: pip 进度（Collecting/Downloading/Building wheel/Installing）实时
-        # 输出到终端，避免 sdist 构建数分钟无输出被误认为卡死。stdout 捕获但 pip install
-        # 的 stdout 通常为空（成功信息走 stderr），保留以备诊断。
-        # timeout: 网络半开/挂起时 pip 可能既不报错也不退出，无超时会使构建永久挂起
-        try:
-            result = subprocess.run(
-                cmd,
-                check=False,
-                encoding="utf-8",
-                errors="replace",
-                stdout=subprocess.PIPE,
-                stderr=None,
-                timeout=_NUITKA_INSTALL_TIMEOUT,
-            )
-        except subprocess.TimeoutExpired:
-            raise NuitkaError(
-                f"pip install nuitka=={nuitka_ver} 超时（{int(_NUITKA_INSTALL_TIMEOUT)}s），"
-                "请检查网络后重试，或手动执行上述命令确认可完成"
-            ) from None
-        if result.returncode != 0:
-            raise NuitkaError(f"pip install nuitka=={nuitka_ver} 失败（退出码 {result.returncode}），详见上方 pip 输出")
+        if local_sdist is not None:
+            try:
+                cls._pip_install_nuitka(build_python, cache_dir, mirror, str(local_sdist), from_local_sdist=True)
+            except NuitkaError:
+                # 本地归档安装失败（归档损坏/依赖缺失等）：归档保留不删（用户显式
+                # 放置的资产），在线模式回退索引安装，离线模式无法回退直接抛出
+                if is_offline():
+                    raise
+                _logger.warning("从本地 sdist 安装 nuitka 失败，回退索引安装: %s", local_sdist)
+            else:
+                cls._verify_nuitka_installed(cache_dir)
+                stage.set_detail(f"nuitka {nuitka_ver} 从本地 sdist 安装完成")
+                return nuitka_ver
+
+        cls._pip_install_nuitka(build_python, cache_dir, mirror, f"nuitka=={nuitka_ver}")
 
         # 验证安装：检查缓存目录有 nuitka 包
-        if not cls._is_nuitka_cached(cache_dir):
-            raise NuitkaError(f"nuitka 安装后缓存目录仍无 nuitka 包: {cache_dir}")
+        cls._verify_nuitka_installed(cache_dir)
         stage.set_detail(f"nuitka {nuitka_ver} 安装完成")
         return nuitka_ver

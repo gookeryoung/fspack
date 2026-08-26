@@ -378,6 +378,97 @@ def test_nuitka_ensure_env_offline_cache_hit(
     assert version  # 返回非空版本号
 
 
+def test_nuitka_ensure_env_offline_local_sdist_installs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mirror: MirrorConfig
+) -> None:
+    """离线模式下 wheels 缓存有锁定版本 sdist 归档时从本地安装（--no-index + --find-links 纯本地）."""
+    monkeypatch.setenv("FSPACK_OFFLINE", "1")
+    monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
+    wheels_dir = tmp_path / "cache" / "wheels"
+    wheels_dir.mkdir(parents=True)
+    sdist = wheels_dir / "Nuitka-4.1.3.tar.gz"
+    sdist.write_bytes(b"")
+    cache_root = tmp_path / "nuitka"
+    stage = StageRecorder("test")
+    expected_cache_dir = cache_root / "3.11.9" / "site-packages"
+
+    monkeypatch.setattr("fspack.packaging.loader.gcc_available", lambda: True)
+    monkeypatch.setattr("fspack.packaging.loader.mingw_available", lambda: True)
+
+    captured_cmd: list[list[str]] = []
+    calls = {"n": 0}
+
+    def stateful_run(cmd: list[str], **kw: Any) -> object:
+        captured_cmd.append(cmd)
+        calls["n"] += 1
+        return CompletedStub()  # _has_pip 与 pip install 均成功
+
+    monkeypatch.setattr("fspack.packaging.nuitka.env.subprocess.run", stateful_run)
+
+    def fake_is_cached(cache_dir: Path) -> bool:
+        # 第 1 次 _has_pip、第 2 次 pip install 之后即视为已安装
+        return calls["n"] >= 2
+
+    monkeypatch.setattr(NuitkaCompiler, "_is_nuitka_cached", staticmethod(fake_is_cached))
+
+    version = NuitkaCompiler.ensure_env(cache_root, "3.11.9", Platform.LINUX, mirror, stage=stage)
+    assert version == "4.1.3"
+
+    pip_cmds = [c for c in captured_cmd if "install" in c and "--target" in c]
+    assert len(pip_cmds) == 1
+    cmd = pip_cmds[0]
+    assert cmd[-1] == str(sdist)
+    # 离线：禁用索引，构建/运行依赖全部经 --find-links 从 wheels 缓存解析
+    assert "--no-index" in cmd
+    assert "-i" not in cmd
+    assert cmd[cmd.index("--find-links") + 1] == str(wheels_dir)
+    assert cmd[cmd.index("--target") + 1] == str(expected_cache_dir)
+    # 归档保留不删（用户显式放置的资产）
+    assert sdist.is_file()
+    assert "本地 sdist" in stage._detail
+
+
+def test_nuitka_ensure_env_offline_local_sdist_failure_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mirror: MirrorConfig
+) -> None:
+    """离线模式本地 sdist 安装失败 → raise NuitkaError（无法回退在线），归档保留."""
+    monkeypatch.setenv("FSPACK_OFFLINE", "1")
+    monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
+    wheels_dir = tmp_path / "cache" / "wheels"
+    wheels_dir.mkdir(parents=True)
+    sdist = wheels_dir / "Nuitka-4.1.3.tar.gz"
+    sdist.write_bytes(b"")
+    cache_root = tmp_path / "nuitka"
+    stage = StageRecorder("test")
+
+    monkeypatch.setattr("fspack.packaging.loader.gcc_available", lambda: True)
+    monkeypatch.setattr("fspack.packaging.loader.mingw_available", lambda: True)
+
+    captured_cmd: list[list[str]] = []
+    state = {"n": 0}
+
+    def stateful_run(cmd: list[str], **kw: Any) -> object:
+        captured_cmd.append(cmd)
+        state["n"] += 1
+        if state["n"] == 2:  # 第 2 次：pip install 本地归档 → 失败
+            fail = CompletedStub()
+            fail.returncode = 1
+            fail.stderr = "corrupt archive"
+            return fail
+        return CompletedStub()  # 第 1 次 _has_pip → 成功
+
+    monkeypatch.setattr("fspack.packaging.nuitka.env.subprocess.run", stateful_run)
+    monkeypatch.setattr(NuitkaCompiler, "_is_nuitka_cached", staticmethod(lambda cache_dir: False))
+
+    with pytest.raises(NuitkaError, match=r"pip install .*失败"):
+        NuitkaCompiler.ensure_env(cache_root, "3.11.9", Platform.LINUX, mirror, stage=stage)
+
+    # 离线无法回退在线：仅一次 install，且归档保留不删
+    pip_cmds = [c for c in captured_cmd if "install" in c and "--target" in c]
+    assert len(pip_cmds) == 1
+    assert sdist.is_file()
+
+
 # ---- builtin.py：tkinter 补充包离线模式 ----
 
 

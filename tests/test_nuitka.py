@@ -79,6 +79,18 @@ def _make_nuitka_cache(cache_dir: Path) -> Path:
     return cache_dir
 
 
+def _make_local_sdist(wheels_dir: Path, name: str = "Nuitka-4.1.3.tar.gz") -> Path:
+    """在 wheel 缓存目录放置 nuitka sdist 归档，返回归档路径.
+
+    识别只看文件名（``_find_local_nuitka_sdist`` 纯文件系统扫描），
+    空文件即可；``ensure_env`` 的 pip install 在测试中均被 mock。
+    """
+    wheels_dir.mkdir(parents=True, exist_ok=True)
+    sdist = wheels_dir / name
+    sdist.write_bytes(b"")
+    return sdist
+
+
 def _patch_winlibs_hit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, nuitka_ver: str = "4.1.3") -> Path:
     """FSPACK_CACHE_DIR 指向 tmp 并预置 winlibs gcc.exe（模拟缓存命中）.
 
@@ -122,6 +134,50 @@ def test_is_nuitka_cached_false_when_init_missing(tmp_path: Path) -> None:
     """缓存目录有 nuitka/ 但无 __init__.py 时返回 False（PEP 420 命名空间包不算）."""
     (tmp_path / "nuitka").mkdir()
     assert NuitkaCompiler._is_nuitka_cached(tmp_path) is False
+
+
+# ---- _find_local_nuitka_sdist 本地 sdist 归档识别测试 ----
+
+
+def test_find_local_nuitka_sdist_official_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """wheels 目录下有官方命名 Nuitka-<ver>.tar.gz 时识别命中（大小写不敏感）."""
+    monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
+    sdist = _make_local_sdist(tmp_path / "cache" / "wheels", "Nuitka-4.1.3.tar.gz")
+    assert NuitkaCompiler._find_local_nuitka_sdist("4.1.3") == sdist
+
+
+def test_find_local_nuitka_sdist_lowercase_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """小写规范化命名 nuitka-<ver>.tar.gz（部分镜像重命名）同样命中."""
+    monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
+    sdist = _make_local_sdist(tmp_path / "cache" / "wheels", "nuitka-4.1.3.tar.gz")
+    assert NuitkaCompiler._find_local_nuitka_sdist("4.1.3") == sdist
+
+
+def test_find_local_nuitka_sdist_nested_subdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """递归扫描子目录命中（用户按包名归档到 wheels 下的子目录存放）."""
+    monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
+    sdist = _make_local_sdist(tmp_path / "cache" / "wheels" / "nuitka", "Nuitka-4.1.3.tar.gz")
+    assert NuitkaCompiler._find_local_nuitka_sdist("4.1.3") == sdist
+
+
+def test_find_local_nuitka_sdist_version_mismatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """版本不匹配的归档不识别（避免装错版本破坏版本锁定约束）."""
+    monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
+    _make_local_sdist(tmp_path / "cache" / "wheels", "Nuitka-2.5.1.tar.gz")
+    assert NuitkaCompiler._find_local_nuitka_sdist("4.1.3") is None
+
+
+def test_find_local_nuitka_sdist_ignores_other_tarballs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """其他包的 tar.gz 归档不误识别（仅精确匹配 nuitka-<ver>.tar.gz 文件名）."""
+    monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
+    _make_local_sdist(tmp_path / "cache" / "wheels", "odfpy-1.4.1.tar.gz")
+    assert NuitkaCompiler._find_local_nuitka_sdist("4.1.3") is None
+
+
+def test_find_local_nuitka_sdist_missing_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """wheels 目录不存在时返回 None（缓存未初始化的首次构建）."""
+    monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
+    assert NuitkaCompiler._find_local_nuitka_sdist("4.1.3") is None
 
 
 # ---- _runtime_python 路径解析测试 ----
@@ -2955,6 +3011,131 @@ def test_ensure_env_install_fails_cache_still_empty_raises(tmp_path: Path, monke
     st = StageRecorder("Nuitka 环境")
     with pytest.raises(NuitkaError, match="安装后缓存目录仍无 nuitka 包"):
         NuitkaCompiler.ensure_env(cache_root, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), stage=st)
+
+
+# ---- ensure_env 本地 sdist 归档安装测试 ----
+
+
+def test_ensure_env_local_sdist_online_prefers_local_archive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """wheels 目录有锁定版本 tar.gz 时优先本地安装：cmd 含 --find-links 与归档路径，仅一次 install."""
+    monkeypatch.setattr("fspack.packaging.loader.mingw_available", lambda: True)
+    _patch_winlibs_hit(tmp_path, monkeypatch)
+    wheels_dir = tmp_path / "cache" / "wheels"
+    sdist = _make_local_sdist(wheels_dir, "Nuitka-4.1.3.tar.gz")
+    cache_root = tmp_path / "nuitka_cache"
+    expected_cache_dir = NuitkaCompiler._nuitka_cache_dir(cache_root, "3.11.9")
+
+    fake_build_python = "C:/fake/python.exe"
+    monkeypatch.setattr("fspack.packaging.nuitka.sys.executable", fake_build_python)
+
+    captured_cmd: list[list[str]] = []
+
+    def stateful_run(cmd: list[str], **kw: Any) -> object:
+        captured_cmd.append(cmd)
+        return _CompileOK()
+
+    monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", stateful_run)
+
+    def fake_is_cached(cache_dir: Path) -> bool:
+        return cache_dir == expected_cache_dir and any("install" in c and "--target" in c for c in captured_cmd)
+
+    monkeypatch.setattr(NuitkaCompiler, "_is_nuitka_cached", staticmethod(fake_is_cached))
+
+    st = StageRecorder("Nuitka 环境")
+    nuitka_ver = NuitkaCompiler.ensure_env(cache_root, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), stage=st)
+
+    assert nuitka_ver == "4.1.3"
+    pip_cmds = [c for c in captured_cmd if "install" in c and "--target" in c]
+    assert len(pip_cmds) == 1, f"本地归档命中时应仅一次 pip install，实际 {len(pip_cmds)}"
+    cmd = pip_cmds[0]
+    # requirement 为本地归档路径，依赖经 --find-links 从 wheels 缓存解析
+    assert cmd[-1] == str(sdist)
+    assert cmd[cmd.index("--find-links") + 1] == str(wheels_dir)
+    assert "-i" in cmd  # 在线模式仍带镜像源（构建依赖 setuptools 等从索引取）
+    assert "--no-index" not in cmd
+    assert cmd[cmd.index("--target") + 1] == str(expected_cache_dir)
+    assert "本地 sdist" in st._detail
+    # 归档保留不删（用户显式放置的资产）
+    assert sdist.is_file()
+
+
+def test_ensure_env_local_sdist_failure_falls_back_online(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """本地 sdist 安装失败时在线模式回退索引安装（归档保留不删）."""
+    monkeypatch.setattr("fspack.packaging.loader.mingw_available", lambda: True)
+    _patch_winlibs_hit(tmp_path, monkeypatch)
+    wheels_dir = tmp_path / "cache" / "wheels"
+    sdist = _make_local_sdist(wheels_dir, "Nuitka-4.1.3.tar.gz")
+    cache_root = tmp_path / "nuitka_cache"
+
+    fake_build_python = "C:/fake/python.exe"
+    monkeypatch.setattr("fspack.packaging.nuitka.sys.executable", fake_build_python)
+
+    captured_cmd: list[list[str]] = []
+    state = {"n": 0}
+
+    def stateful_run(cmd: list[str], **kw: Any) -> object:
+        captured_cmd.append(cmd)
+        state["n"] += 1
+        # 第 1 次 _has_pip → 成功；第 2 次本地 sdist pip install → 失败；
+        # 第 3 次在线 pip install → 成功
+        if state["n"] == 2:
+            return _CompileFail()
+        return _CompileOK()
+
+    monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", stateful_run)
+
+    def fake_is_cached(cache_dir: Path) -> bool:
+        return any("install" in c and "--target" in c for c in captured_cmd)
+
+    monkeypatch.setattr(NuitkaCompiler, "_is_nuitka_cached", staticmethod(fake_is_cached))
+
+    st = StageRecorder("Nuitka 环境")
+    nuitka_ver = NuitkaCompiler.ensure_env(cache_root, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), stage=st)
+
+    assert nuitka_ver == "4.1.3"
+    pip_cmds = [c for c in captured_cmd if "install" in c and "--target" in c]
+    assert len(pip_cmds) == 2, f"本地失败后应回退一次在线安装，实际 {len(pip_cmds)}"
+    assert pip_cmds[0][-1] == str(sdist)  # 第一次：本地归档
+    assert pip_cmds[1][-1] == "nuitka==4.1.3"  # 第二次：索引解析
+    assert "安装完成" in st._detail
+    # 归档保留（失败原因可能是依赖缺失而非归档损坏，不自动删用户资产）
+    assert sdist.is_file()
+
+
+def test_ensure_env_wheels_dir_without_sdist_uses_index_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """wheels 目录存在但无匹配 tar.gz 时走原在线安装：cmd 不含 --find-links."""
+    monkeypatch.setattr("fspack.packaging.loader.mingw_available", lambda: True)
+    _patch_winlibs_hit(tmp_path, monkeypatch)
+    wheels_dir = tmp_path / "cache" / "wheels"
+    wheels_dir.mkdir(parents=True)
+    (wheels_dir / "somepkg-1.0-py3-none-any.whl").write_bytes(b"")
+    cache_root = tmp_path / "nuitka_cache"
+    expected_cache_dir = NuitkaCompiler._nuitka_cache_dir(cache_root, "3.11.9")
+
+    fake_build_python = "C:/fake/python.exe"
+    monkeypatch.setattr("fspack.packaging.nuitka.sys.executable", fake_build_python)
+
+    captured_cmd: list[list[str]] = []
+
+    def stateful_run(cmd: list[str], **kw: Any) -> object:
+        captured_cmd.append(cmd)
+        return _CompileOK()
+
+    monkeypatch.setattr("fspack.packaging.nuitka.subprocess.run", stateful_run)
+
+    def fake_is_cached(cache_dir: Path) -> bool:
+        return cache_dir == expected_cache_dir and any("install" in c and "--target" in c for c in captured_cmd)
+
+    monkeypatch.setattr(NuitkaCompiler, "_is_nuitka_cached", staticmethod(fake_is_cached))
+
+    st = StageRecorder("Nuitka 环境")
+    nuitka_ver = NuitkaCompiler.ensure_env(cache_root, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), stage=st)
+
+    assert nuitka_ver == "4.1.3"
+    pip_cmds = [c for c in captured_cmd if "install" in c and "--target" in c]
+    assert len(pip_cmds) == 1
+    assert pip_cmds[0][-1] == "nuitka==4.1.3"
+    assert "--find-links" not in pip_cmds[0]
 
 
 # ---- compile_with_stamp stamp 缓存测试 ----
