@@ -339,6 +339,10 @@ def test_nuitka_ensure_env_offline_cache_miss(
 ) -> None:
     """离线模式下 nuitka 包缓存未命中 → 抛 NuitkaError，不调 pip install."""
     monkeypatch.setenv("FSPACK_OFFLINE", "1")
+    # 隔离 wheel 缓存目录：避免真实缓存里残留的 Nuitka sdist 被
+    # _find_local_nuitka_sdist 命中而跳过离线 fail-fast 抛错（走到 _has_pip
+    # 的 subprocess.run 触发守卫，误判为代码缺陷）
+    monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
     cache_root = tmp_path / "nuitka"
     stage = StageRecorder("test")
 
