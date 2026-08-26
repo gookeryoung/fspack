@@ -220,6 +220,19 @@ def test_check_winlibs_contents_local_zip(tmp_path: Path) -> None:
     assert "本地归档 1 个待解压" in result.detail
 
 
+def test_check_winlibs_contents_local_7z_matched(tmp_path: Path) -> None:
+    """与锁定版本精确匹配的本地 winlibs .7z（构建侧经系统 7-Zip 解压）：OK 待解压."""
+    from fspack.packaging.nuitka.winlibs import WINLIBS_URLS
+
+    wl = tmp_path / "nuitka-winlibs-mingw"
+    wl.mkdir()
+    zip_name = WINLIBS_URLS["4.1.3"].rsplit("/", 1)[1]
+    (wl / (zip_name[: -len(".zip")] + ".7z")).write_bytes(b"x")
+    result = _check_winlibs_contents()
+    assert result.status is CheckStatus.OK
+    assert "本地归档 1 个待解压" in result.detail
+
+
 def test_check_winlibs_contents_mismatched_zip_not_pending(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """版本不匹配的本地 zip（不在 WINLIBS_URLS 锁定清单）：不算待解压，落入未缓存分支并提示."""
     wl = tmp_path / "nuitka-winlibs-mingw"

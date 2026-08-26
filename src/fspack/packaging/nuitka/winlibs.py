@@ -11,6 +11,13 @@ mingw gcc 会被打印 "Non downloaded winlibs-gcc ... ignored" 后忽略），
 （``<cache_root>/nuitka-winlibs-mingw``），使 Nuitka 缓存命中直接使用，
 不重复下载、不打印拒绝提示。
 
+归档格式：winlibs release 对同一内容同时提供 ``.zip`` 与 ``.7z`` 两种格式
+（文件名仅扩展名不同），``.7z`` 体积约为 ``.zip`` 一半。本地归档识别与
+下载均支持两种格式——``.zip`` 走标准库 :mod:`zipfile` 解压，``.7z`` 调用
+系统 7-Zip（:func:`_find_7z`，复用
+:mod:`fspack.packaging.installer.sevenzip` 的探测逻辑）。下载时装有
+7-Zip 的机器优先取 ``.7z``（省一半流量），未装则回退 ``.zip``。
+
 另：Nuitka 4.1 起 py>=3.13 默认 fallback 到 zig 编译器，其编译的 .pyd 可能
 损坏（returncode==0 但运行时访问违例 0xC0000005）。fspack 在 Windows 上
 全版本强制 winlibs：py>=3.13 时编译命令追加 ``--experimental=force-mingw64``
@@ -19,7 +26,7 @@ mingw gcc 会被打印 "Non downloaded winlibs-gcc ... ignored" 后忽略），
 缓存目录结构（与 Nuitka ``getCachedDownload`` 约定一致）::
 
     <cache_root>/nuitka-winlibs-mingw/
-    ├── winlibs-*.zip                # 用户手动放置的归档（识别后解压，不删除）
+    ├── winlibs-*.zip / *.7z      # 用户手动放置的归档（识别后解压，不删除）
     └── gcc/                          # basename(binary)="gcc.exe" 去扩展名
         └── x86_64/                   # is_arch_specific（target_arch）
             └── <specificity>/        # winlibs release URL 倒数第二段
@@ -66,6 +73,16 @@ _logger = logging.getLogger("fspack.packaging.nuitka")
 
 # winlibs zip 下载超时（秒）：归档 ~200MB，慢网络需数分钟
 _WINLIBS_DOWNLOAD_TIMEOUT = 1800
+
+# 7z 解压超时（秒）：~200MB 归档解压需数十秒，杀软逐文件扫描下留足余量
+_WINLIBS_7Z_TIMEOUT = 600.0
+
+# 需要 7-Zip 却未安装时的安装建议（与 installer.sevenzip 的提示口径一致）
+_SEVENZIP_REQUIRED_MSG = (
+    "winlibs .7z 归档需系统 7-Zip 解压：Windows 从 https://www.7-zip.org/ 安装"
+    "（默认目录无需加 PATH 即可探测）；Linux 安装 p7zip-full 或 7zip；"
+    "macOS 安装 sevenzip（brew install sevenzip）"
+)
 
 # Nuitka 版本 → winlibs x86_64 zip URL。
 # 与 Nuitka 源码 nuitka/utils/Download.py 的 getCachedDownloadedMinGW64 同步维护：
@@ -156,6 +173,52 @@ def msvc_available() -> bool:
     return shutil.which("cl.exe") is not None
 
 
+def _find_7z() -> str | None:
+    """定位系统 7-Zip 可执行文件，未安装返回 ``None``.
+
+    延迟导入复用 :func:`fspack.packaging.installer.sevenzip._find_7z` 的
+    探测逻辑（PATH ``7z``/``7za``/``7zr``/``7zz`` → Windows 默认安装目录）；
+    包装为本模块函数提供稳定的测试 patch 落点（不经 facade 命名空间）。
+    """
+    from fspack.packaging.installer.sevenzip import _find_7z as _sevenzip_find
+
+    return _sevenzip_find()
+
+
+def _winlibs_7z_url(zip_url: str) -> str:
+    """由 ``.zip`` 下载地址派生同 release 的 ``.7z`` 地址.
+
+    winlibs release 对同一归档同时提供两种格式，文件名仅扩展名不同。
+    """
+    return zip_url[: -len(".zip")] + ".7z"
+
+
+def _extract_7z(archive: Path, dest: Path) -> None:
+    """调用系统 7-Zip 解压 ``.7z`` 归档到 ``dest`` 目录.
+
+    :raises NuitkaError: 7-Zip 未安装、命令执行失败/超时、或归档损坏
+        （非零退出码，含尾部错误输出便于定位）。
+    """
+    exe = _find_7z()
+    if exe is None:
+        raise NuitkaError(f"系统未安装 7-Zip，无法解压 {archive}: {_SEVENZIP_REQUIRED_MSG}")
+    try:
+        result = subprocess.run(
+            [exe, "x", "-y", f"-o{dest}", str(archive)],
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=_WINLIBS_7Z_TIMEOUT,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise NuitkaError(f"winlibs-mingw 7z 解压失败 {archive}: {e}") from e
+    if result.returncode != 0:
+        # 尾部输出截断到 300 字符（7z 错误详情在末尾，避免刷屏）
+        tail = (result.stderr or result.stdout or "").strip()[-300:]
+        raise NuitkaError(f"winlibs-mingw 7z 解压失败 {archive}（退出码 {result.returncode}）: {tail}")
+
+
 def needs_force_mingw64(target: Platform, py_version: str) -> bool:
     """判断编译命令是否需追加 ``--experimental=force-mingw64`` 强制 winlibs.
 
@@ -218,13 +281,16 @@ class NuitkaWinlibs:
 
         1. fspack 缓存 ``gcc/x86_64/<specificity>/mingw64/bin/gcc.exe`` 已存在
            → 缓存命中
-        2. 缓存目录下存在对应版本的 winlibs zip 归档（用户手动放置，或上次
-           下载中断的残留）→ 解压到约定目录替代下载（**不删除归档**：用户
-           资产须保留；纯本地操作，离线模式同样适用）。归档损坏时删除该
-           归档回退下载，离线模式直接 raise
+        2. 缓存目录下存在对应版本的 winlibs 归档（``.zip`` 或 ``.7z``，用户
+           手动放置或上次下载中断的残留）→ 解压到约定目录替代下载
+           （**不删除归档**：用户资产须保留；纯本地操作，离线模式同样
+           适用）。``.zip`` 走标准库解压；``.7z`` 需系统 7-Zip（未装时
+           在线回退下载 ``.zip``，离线 raise）。归档损坏时删除该归档
+           回退下载，离线模式直接 raise
         3. 离线模式 → raise :class:`NuitkaError`（与其他下载层 fail-fast 一致）
-        4. 在线模式 → 下载 winlibs zip 解压（zip 解压后删除，Nuitka 按
-           gcc.exe 存在判定命中）
+        4. 在线模式 → 下载 winlibs 归档解压（装有 7-Zip 优先 ``.7z``，
+           体积约为 ``.zip`` 一半；解压后归档删除，Nuitka 按 gcc.exe
+           存在判定命中）
 
         调用方（:meth:`NuitkaEnv.ensure_env`）在 Windows 目标时调用；
         返回的缓存根目录经 ``_build_compile_env`` 注入
@@ -239,7 +305,8 @@ class NuitkaWinlibs:
             winlibs 下载缓存根目录（``<cache_root>/nuitka-winlibs-mingw``）。
 
         Raises:
-            NuitkaError: Nuitka 版本未收录、离线缓存未命中、或下载解压失败。
+            NuitkaError: Nuitka 版本未收录、离线缓存未命中、本地 ``.7z``
+                离线且未装 7-Zip、或下载解压失败。
         """
         nuitka_ver = nuitka_version_for(py_version)
         gcc_dir = cls._winlibs_gcc_dir(nuitka_ver)
@@ -252,24 +319,30 @@ class NuitkaWinlibs:
             stage.set_detail(f"winlibs-mingw {nuitka_ver} 已就绪")
             return nuitka_winlibs_cache_dir()
 
-        # 本地归档解压：识别缓存目录下用户手动放置（或下载中断残留）的 zip，
-        # 解压替代下载；纯本地操作，离线模式同样适用
-        local_zip = cls._find_local_winlibs_zip(nuitka_ver)
-        if local_zip is not None:
-            _logger.info("从本地归档解压 winlibs-mingw: %s", local_zip)
-            try:
-                cls._extract_winlibs(local_zip, gcc_dir, gcc_exe)
-            except NuitkaError:
-                # 归档损坏（如下载中断的半成品）：删除后回退下载；
-                # 离线模式无法下载，重抛原异常
-                _logger.warning("本地 winlibs 归档损坏，删除后回退下载: %s", local_zip)
-                with contextlib.suppress(OSError):
-                    local_zip.unlink()
+        # 本地归档解压：识别缓存目录下用户手动放置（或下载中断残留）的
+        # .zip/.7z 归档，解压替代下载；纯本地操作，离线模式同样适用
+        local_archive = cls._find_local_winlibs_archive(nuitka_ver)
+        if local_archive is not None:
+            if local_archive.suffix == ".7z" and _find_7z() is None:
+                # .7z 需系统 7-Zip：在线回退下载 .zip，离线无路可走
                 if is_offline():
-                    raise
+                    raise NuitkaError(f"{_SEVENZIP_REQUIRED_MSG}（本地归档: {local_archive}）")
+                _logger.warning("未安装 7-Zip，本地 .7z 归档无法解压，回退下载: %s", local_archive)
             else:
-                stage.set_detail(f"winlibs-mingw {nuitka_ver} 从本地归档解压完成")
-                return nuitka_winlibs_cache_dir()
+                _logger.info("从本地归档解压 winlibs-mingw: %s", local_archive)
+                try:
+                    cls._extract_winlibs(local_archive, gcc_dir, gcc_exe)
+                except NuitkaError:
+                    # 归档损坏（如下载中断的半成品）：删除后回退下载；
+                    # 离线模式无法下载，重抛原异常
+                    _logger.warning("本地 winlibs 归档损坏，删除后回退下载: %s", local_archive)
+                    with contextlib.suppress(OSError):
+                        local_archive.unlink()
+                    if is_offline():
+                        raise
+                else:
+                    stage.set_detail(f"winlibs-mingw {nuitka_ver} 从本地归档解压完成")
+                    return nuitka_winlibs_cache_dir()
 
         # 离线模式 fail-fast：无法下载 winlibs
         if is_offline():
@@ -286,12 +359,14 @@ class NuitkaWinlibs:
         return nuitka_winlibs_cache_dir()
 
     @staticmethod
-    def _find_local_winlibs_zip(nuitka_ver: str) -> Path | None:
-        """在 winlibs 缓存目录递归查找当前 Nuitka 版本对应的 zip 归档.
+    def _find_local_winlibs_archive(nuitka_ver: str) -> Path | None:
+        """在 winlibs 缓存目录递归查找当前 Nuitka 版本对应的归档（.zip/.7z）.
 
-        精确匹配 :data:`WINLIBS_URLS` 的归档文件名（版本不匹配的 winlibs
-        工具链不识别，避免 ABI 不兼容的 gcc 被误用）。缓存根目录与任意
-        子目录（含 specificity 目录下下载中断的残留）均扫描。
+        精确匹配 :data:`WINLIBS_URLS` 的归档文件名（``.zip`` 及同内容的
+        ``.7z`` 变体，优先返回 ``.zip``——标准库解压无外部依赖）；版本
+        不匹配的 winlibs 工具链不识别，避免 ABI 不兼容的 gcc 被误用。
+        缓存根目录与任意子目录（含 specificity 目录下下载中断的残留）
+        均扫描。
 
         前置条件：``nuitka_ver`` 已收录（调用方 :meth:`ensure_winlibs_mingw`
         先经 :meth:`_winlibs_gcc_dir` 校验 raise）。
@@ -300,27 +375,34 @@ class NuitkaWinlibs:
         cache_dir = nuitka_winlibs_cache_dir()
         if not cache_dir.is_dir():
             return None
-        for zip_path in sorted(cache_dir.rglob(zip_name)):
-            if zip_path.is_file():
-                return zip_path
+        for name in (zip_name, zip_name[: -len(".zip")] + ".7z"):
+            for archive_path in sorted(cache_dir.rglob(name)):
+                if archive_path.is_file():
+                    return archive_path
         return None
 
     @staticmethod
     def _extract_winlibs(archive: Path, gcc_dir: Path, gcc_exe: Path) -> None:
-        """解压 winlibs zip 归档到 ``gcc_dir``，验证 gcc.exe 就位.
+        """解压 winlibs 归档（.zip/.7z）到 ``gcc_dir``，验证 gcc.exe 就位.
 
-        zip 顶层即 ``mingw64/`` 目录树，解压到 ``gcc_dir`` 得到
+        归档顶层即 ``mingw64/`` 目录树，解压到 ``gcc_dir`` 得到
         ``gcc_dir/mingw64/bin/gcc.exe``，与 Nuitka 自行下载解压的布局一致。
-        不删除归档（删除时机由调用方决定：本地资产保留、下载临时文件清理）。
+        ``.zip`` 走标准库 :mod:`zipfile`；``.7z`` 调用系统 7-Zip
+        （:func:`_extract_7z`）。不删除归档（删除时机由调用方决定：本地
+        资产保留、下载临时文件清理）。
 
-        :raises NuitkaError: 解压失败（I/O 错误、归档损坏）或 gcc.exe 缺失。
+        :raises NuitkaError: 解压失败（I/O 错误、归档损坏、7-Zip 未安装）
+            或 gcc.exe 缺失。
         """
         gcc_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            with zipfile.ZipFile(archive) as zf:
-                zf.extractall(gcc_dir)
-        except (OSError, zipfile.BadZipFile) as e:
-            raise NuitkaError(f"winlibs-mingw 解压失败 {archive}: {e}") from e
+        if archive.suffix == ".7z":
+            _extract_7z(archive, gcc_dir)
+        else:
+            try:
+                with zipfile.ZipFile(archive) as zf:
+                    zf.extractall(gcc_dir)
+            except (OSError, zipfile.BadZipFile) as e:
+                raise NuitkaError(f"winlibs-mingw 解压失败 {archive}: {e}") from e
         if not gcc_exe.is_file():
             raise NuitkaError(f"winlibs-mingw 解压后未找到 gcc: {gcc_exe}")
 
@@ -331,9 +413,11 @@ class NuitkaWinlibs:
         gcc_dir: Path,
         gcc_exe: Path,
     ) -> None:
-        """下载 winlibs zip 并解压到 ``gcc_dir``，验证 gcc.exe 就位.
+        """下载 winlibs 归档并解压到 ``gcc_dir``，验证 gcc.exe 就位.
 
-        下载的 zip 解压完成后删除（成功与失败路径均清理，避免半成品占
+        装有系统 7-Zip 时优先下载 ``.7z`` 变体（体积约为 ``.zip`` 一半，
+        同 release 两格式内容一致），否则回退 ``.zip``（标准库解压）。
+        下载的归档解压完成后删除（成功与失败路径均清理，避免半成品占
         ~200MB；Nuitka 按 gcc.exe 存在判定缓存命中，无需保留归档）。
 
         :raises NuitkaError: 下载或解压失败、解压后 gcc.exe 缺失。
@@ -341,6 +425,8 @@ class NuitkaWinlibs:
         from fspack.packaging.net import Downloader
 
         url = WINLIBS_URLS[nuitka_ver]
+        if _find_7z() is not None:
+            url = _winlibs_7z_url(url)
         archive = gcc_dir / url.rsplit("/", 1)[1]
         gcc_dir.mkdir(parents=True, exist_ok=True)
         try:

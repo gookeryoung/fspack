@@ -88,7 +88,7 @@ class NuitkaEnv:
         精确匹配文件名 ``nuitka-<ver>.tar.gz``（大小写不敏感：PyPI 官方 sdist 为
         ``Nuitka-<ver>.tar.gz``，部分镜像规范化为小写），版本不匹配的归档不识别
         （避免装错版本破坏版本锁定约束）。缓存根与任意子目录均扫描，与
-        :meth:`NuitkaWinlibs._find_local_winlibs_zip` 的本地归档识别模式一致：
+        :meth:`NuitkaWinlibs._find_local_winlibs_archive` 的本地归档识别模式一致：
         用户手动放置（离线准备）或 ``pip download --no-binary`` 的产物均可命中。
 
         纯本地文件系统操作，离线模式同样适用。

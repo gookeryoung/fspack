@@ -116,18 +116,18 @@ class NuitkaCompilerProtocol(Protocol):  # pragma: no cover - 纯类型契约，
         ...
 
     @staticmethod
-    def _find_local_winlibs_zip(nuitka_ver: str) -> Path | None:
-        """在 winlibs 缓存目录递归查找对应版本的 zip 归档."""
+    def _find_local_winlibs_archive(nuitka_ver: str) -> Path | None:
+        """在 winlibs 缓存目录递归查找对应版本的归档（.zip/.7z）."""
         ...
 
     @staticmethod
     def _extract_winlibs(archive: Path, gcc_dir: Path, gcc_exe: Path) -> None:
-        """解压 winlibs zip 归档到 gcc_dir，验证 gcc.exe 就位."""
+        """解压 winlibs 归档（.zip/.7z）到 gcc_dir，验证 gcc.exe 就位."""
         ...
 
     @classmethod
     def _download_and_extract_winlibs(cls, nuitka_ver: str, gcc_dir: Path, gcc_exe: Path) -> None:
-        """下载 winlibs zip 并解压到 gcc_dir，验证 gcc.exe 就位."""
+        """下载 winlibs 归档（装有 7-Zip 优先 .7z）并解压到 gcc_dir，验证 gcc.exe 就位."""
         ...
 
     # ==== NuitkaCcache 提供（ccache 管理）====
