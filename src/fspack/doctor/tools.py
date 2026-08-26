@@ -126,22 +126,14 @@ def _check_clang() -> CheckResult:
 def _check_nsis() -> CheckResult:
     """检查 NSIS 安装包编译器（Windows .exe 安装包必备）.
 
-    优先探测 fspack 缓存的 makensis（``<cache_root>/nsis``，见
-    :mod:`fspack.packaging.installer.nsis_tool`；只读探测不触发下载），
-    未缓存时回退 PATH 中的 makensis。
+    仅检查 PATH 中的 makensis（不做下载与缓存管理），缺失时提示用户
+    自行安装。
     """
-    from fspack.packaging.installer.nsis_tool import find_cached_makensis
-
-    cached = find_cached_makensis()
-    cmd = [str(cached), "-VERSION"] if cached is not None else ["makensis", "-VERSION"]
     return _check_tool_version(
         "NSIS",
-        cmd,
+        ["makensis", "-VERSION"],
         error_suggestion=(
-            "生成 Windows 安装包需要 NSIS。安装：choco install nsis 或 "
-            "https://nsis.sourceforge.io/Download；也可将 NSIS 归档"
-            "（nsis-3.11.zip 或 portable 变体）放入 fspack 缓存的 nsis 目录，"
-            "或留空由首次打安装包时自动下载"
+            "生成 Windows 安装包需要 NSIS，请自行安装：choco install nsis 或 https://nsis.sourceforge.io/Download"
         ),
     )
 

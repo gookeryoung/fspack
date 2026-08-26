@@ -10,9 +10,8 @@
   exe 校验、发行包命名、staging 归档
 - :mod:`fspack.packaging.installer.facade`：函数式入口与 ``--format`` 调度
   （``build_installer``/``build_linux_installer``/``build_release``）
-- :mod:`fspack.packaging.installer.nsis`：NSIS 脚本生成与编译（Windows）
-- :mod:`fspack.packaging.installer.nsis_tool`：NSIS 工具链管理（缓存识别、
-  本地归档解压与按需下载，``<cache_root>/nsis``）
+- :mod:`fspack.packaging.installer.nsis`：NSIS 脚本生成与编译（Windows，
+  makensis 须用户自行安装到 PATH，不做下载与缓存管理）
 - :mod:`fspack.packaging.installer.linux`：tar.gz 便携包与 .deb 安装包（Linux）
 - :mod:`fspack.packaging.installer.macos`：.pkg 安装包与 .dmg 磁盘镜像（macOS）
 - :mod:`fspack.packaging.installer.zip`：跨平台 zip 便携包

@@ -4,6 +4,7 @@
 v0.5.6（未发布）
 ------------------
 
+- refactor: 移除 NSIS 下载与缓存管理（``nsis_tool`` 模块及 ``nsis`` 缓存目录、doctor 对应盘点项），makensis 仅做 PATH 检查并在缺失时提示用户自行安装
 - docs: README 精简为快速上手与核心用法，命令参考/配置参考/离线打包/分发指南拆分至 ``docs/``（cli/configuration/offline/distribution），回填 v0.5.0 至 v0.5.5 更新日志
 - fix: 修复 make tox 多版本测试两类失败：help 串裸 ``%`` 转义（py314 构建 parser 即崩、全版本 ``fsp b -h`` 崩）与 doctor 测试固定宽度 fixture 往返缩水（COLUMNS/LINES 环境下宽度逐测试 -1 变负导致 rich 输出全空）
 - fix: runner_profile 集成测试打点值放大 20 倍，免疫真实子进程收尾耗时波动（py39 在 tox 并行负载下收尾实测 157ms 使 gap 占比超 30% 触发未细分行导致断言 flaky）

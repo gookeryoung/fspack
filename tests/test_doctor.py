@@ -2443,7 +2443,6 @@ def test_run_doctor_windows(monkeypatch: pytest.MonkeyPatch) -> None:
         "_check_standalone_windows_contents": "standalone-windows 缓存",
         "_check_tkinter_contents": "tkinter 缓存",
         "_check_winlibs_contents": "winlibs 工具链",
-        "_check_nsis_contents": "NSIS 工具链",
     }
     for fn_name, label in _cache_items.items():
         monkeypatch.setattr(
@@ -2452,8 +2451,8 @@ def test_run_doctor_windows(monkeypatch: pytest.MonkeyPatch) -> None:
 
     report = run_doctor()
 
-    # 环境信息应有 12 项（Win7 兼容自检 + 6 项压缩包缓存内容盘点）
-    assert len(report.env_info) == 12
+    # 环境信息应有 11 项（Win7 兼容自检 + 5 项压缩包缓存内容盘点）
+    assert len(report.env_info) == 11
     env_names = {r.name for r in report.env_info}
     assert env_names == {
         "Python",
@@ -2467,7 +2466,6 @@ def test_run_doctor_windows(monkeypatch: pytest.MonkeyPatch) -> None:
         "standalone-windows 缓存",
         "tkinter 缓存",
         "winlibs 工具链",
-        "NSIS 工具链",
     }
 
     # Windows 工具检查应含 mingw + NSIS，不含 gcc/wine
