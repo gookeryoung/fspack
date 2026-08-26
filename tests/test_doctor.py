@@ -2410,6 +2410,14 @@ def test_dir_size_ignores_unreadable(tmp_path: Path, monkeypatch: pytest.MonkeyP
 # ---- run_doctor ----
 
 
+def _mock_cache_content_fns(monkeypatch: pytest.MonkeyPatch) -> None:
+    """整体替换缓存内容盘点分发入口，避免 run_doctor 测试真实扫描缓存目录."""
+    monkeypatch.setattr(
+        "fspack.doctor.runner._cache_content_fns",
+        lambda platform: [lambda: CheckResult("缓存内容", CheckStatus.OK, "mocked")],
+    )
+
+
 def test_run_doctor_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     """run_doctor 在 Windows 平台检查 mingw/NSIS，不查 gcc/wine."""
     monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.WINDOWS)
@@ -2427,13 +2435,38 @@ def test_run_doctor_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "fspack.doctor.runner._check_win7_compat", lambda: CheckResult("Win7 兼容", CheckStatus.OK, "mocked")
     )
+    # 缓存内容盘点经 cache_contents 模块全局名字解析分发，逐项 mock 避免
+    # 真实扫描缓存目录与 MSVC 探测
+    _cache_items = {
+        "_check_nuitka_contents": "nuitka 缓存",
+        "_check_embed_contents": "embed 缓存",
+        "_check_standalone_windows_contents": "standalone-windows 缓存",
+        "_check_tkinter_contents": "tkinter 缓存",
+        "_check_winlibs_contents": "winlibs 工具链",
+    }
+    for fn_name, label in _cache_items.items():
+        monkeypatch.setattr(
+            f"fspack.doctor.cache_contents.{fn_name}", lambda label=label: CheckResult(label, CheckStatus.OK, "mocked")
+        )
 
     report = run_doctor()
 
-    # 环境信息应有 6 项（Windows 平台额外含 Win7 兼容自检）
-    assert len(report.env_info) == 6
+    # 环境信息应有 11 项（Win7 兼容自检 + 5 项压缩包缓存内容盘点）
+    assert len(report.env_info) == 11
     env_names = {r.name for r in report.env_info}
-    assert env_names == {"Python", "平台", "fspack", "镜像源", "缓存目录", "Win7 兼容"}
+    assert env_names == {
+        "Python",
+        "平台",
+        "fspack",
+        "镜像源",
+        "缓存目录",
+        "Win7 兼容",
+        "nuitka 缓存",
+        "embed 缓存",
+        "standalone-windows 缓存",
+        "tkinter 缓存",
+        "winlibs 工具链",
+    }
 
     # Windows 工具检查应含 mingw + NSIS，不含 gcc/wine
     tool_names = {r.name for r in report.tool_checks}
@@ -2456,6 +2489,7 @@ def test_run_doctor_linux(monkeypatch: pytest.MonkeyPatch) -> None:
         "fspack.doctor.runner._check_makensis_on_linux",
         lambda: CheckResult("NSIS (交叉打包)", CheckStatus.WARN, "未安装"),
     )
+    _mock_cache_content_fns(monkeypatch)
 
     report = run_doctor()
 
@@ -2478,6 +2512,7 @@ def test_run_doctor_macos(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("fspack.doctor.runner._check_pip", lambda: CheckResult("pip", CheckStatus.OK, "24.0"))
     monkeypatch.setattr("fspack.doctor.runner._check_uv", lambda: CheckResult("uv", CheckStatus.OK, "0.4"))
     monkeypatch.setattr("fspack.doctor.runner._check_clang", lambda: CheckResult("clang", CheckStatus.OK, "15.0"))
+    _mock_cache_content_fns(monkeypatch)
 
     report = run_doctor()
 
@@ -2494,6 +2529,7 @@ def test_run_doctor_has_error_when_tool_missing(monkeypatch: pytest.MonkeyPatch)
     """run_doctor 必备工具缺失时 has_error=True."""
     monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
 
+    _mock_cache_content_fns(monkeypatch)
     monkeypatch.setattr("fspack.doctor.runner._check_pillow", lambda: CheckResult("Pillow", CheckStatus.OK, "10.0"))
     monkeypatch.setattr(
         "fspack.doctor.runner._check_pip",

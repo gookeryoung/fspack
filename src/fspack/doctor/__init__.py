@@ -4,7 +4,8 @@ facade 子包：编排 :mod:`fspack.doctor.envs`（环境信息检查）、
 :mod:`fspack.doctor.tools`（工具版本检查）、:mod:`fspack.doctor.report`
 （报告渲染）、:mod:`fspack.doctor.templates`（模板构建测试与基准）、
 :mod:`fspack.doctor.bench`（基准历史持久化与对比）、:mod:`fspack.doctor.cache`
-（wheel 缓存健康扫描与清理）、:mod:`fspack.doctor.runner`（诊断编排入口）
+（wheel 缓存健康扫描与清理）、:mod:`fspack.doctor.cache_contents`（压缩包
+缓存内容盘点）、:mod:`fspack.doctor.runner`（诊断编排入口）
 完成环境诊断。
 
 检查 fspack 打包所需工具的可用性与版本，显示 Python 版本、平台、镜像源
@@ -56,6 +57,15 @@ from fspack.doctor.cache import (
     _preview_names,
     run_cache_clean,
     run_cache_status,
+)
+from fspack.doctor.cache_contents import (
+    _cache_content_fns,
+    _check_embed_contents,
+    _check_nuitka_contents,
+    _check_standalone_contents,
+    _check_standalone_windows_contents,
+    _check_tkinter_contents,
+    _check_winlibs_contents,
 )
 from fspack.doctor.cache_health import (
     _clean_all_caches,
@@ -154,23 +164,30 @@ __all__ = [
     "_build_run_cmd",
     "_build_single_template",
     "_build_table",
+    "_cache_content_fns",
     "_check_cache_dir",
     "_check_cache_integrity",
     "_check_clang",
+    "_check_embed_contents",
     "_check_fspack_version",
     "_check_gcc",
     "_check_makensis_on_linux",
     "_check_mingw",
     "_check_mirror_config",
     "_check_nsis",
+    "_check_nuitka_contents",
     "_check_pillow",
     "_check_pip",
     "_check_platform_info",
     "_check_python",
+    "_check_standalone_contents",
+    "_check_standalone_windows_contents",
+    "_check_tkinter_contents",
     "_check_tool_version",
     "_check_uv",
     "_check_win7_compat",
     "_check_wine",
+    "_check_winlibs_contents",
     "_clean_all_caches",
     "_clean_cache_by_type",
     "_clean_cache_issues",

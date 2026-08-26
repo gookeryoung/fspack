@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from typing import Callable
 
+from fspack.doctor.cache_contents import _cache_content_fns
 from fspack.doctor.envs import (
     _check_cache_dir,
     _check_cache_integrity,
@@ -67,13 +68,18 @@ def run_doctor() -> DoctorReport:
         _check_mirror_config(DEFAULT_MIRROR, MIRRORS),
     ]
 
-    # 慢速检查并行：缓存目录扫描 + Win7 兼容自检（仅 Windows）+ 全部工具检查。
-    # 函数对象在函数体内经模块全局名字解析取得，monkeypatch ``fspack.doctor.runner._check_*``
-    # 语义与串行版一致。
+    # 慢速检查并行：缓存目录扫描 + Win7 兼容自检（仅 Windows）+ 压缩包缓存
+    # 内容盘点 + 全部工具检查。函数对象在函数体内经模块全局名字解析，
+    # monkeypatch ``fspack.doctor.runner._check_*`` 语义与串行版一致；
+    # 缓存内容盘点项定义在 :mod:`fspack.doctor.cache_contents`，patch 对应
+    # 函数需落在该定义模块。
     slow_env_fns: list[Callable[[], CheckResult]] = [lambda: _check_cache_dir(cache_root())]
     if platform is Platform.WINDOWS:
         # Win7 兼容自检（清单对齐/shim 资产/缓存 zip 抽检）仅 Windows 目标相关
         slow_env_fns.append(_check_win7_compat)
+    # 压缩包缓存内容盘点（embed/standalone/nuitka/tkinter/winlibs 版本清单，
+    # 离线排查缓存缺失）
+    slow_env_fns.extend(_cache_content_fns(platform))
 
     # 通用工具：pip/uv/Pillow（两平台都需要）
     tool_fns: list[Callable[[], CheckResult]] = [_check_pip, _check_uv, _check_pillow]
