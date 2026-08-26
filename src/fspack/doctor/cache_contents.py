@@ -21,7 +21,9 @@
 状态规则：有内容即 OK（详情列版本清单）；空缓存在线为 OK（首次打包自动
 下载），离线为 WARN（无法下载，建议预填充）；目录扫描异常为 WARN。
 winlibs 额外区分：检测到 MSVC 时未缓存亦为 OK（scons 优先用 MSVC，
-无需 winlibs）。
+无需 winlibs）；本地归档仅与锁定 Nuitka 版本精确匹配的 ``.zip`` 才算
+"待解压"，不匹配的归档（版本不符或 ``.7z`` 格式）在详情中单独提示，
+避免"放了归档却显示未缓存"的困惑。
 """
 
 from __future__ import annotations
@@ -47,6 +49,7 @@ from fspack.doctor.cache_health import (
 )
 from fspack.doctor.envs import _format_size
 from fspack.doctor.models import CheckResult, CheckStatus
+from fspack.packaging.nuitka.winlibs import WINLIBS_URLS
 from fspack.platform import Platform
 
 __all__ = [
@@ -210,8 +213,17 @@ def _check_winlibs_contents() -> CheckResult:
 
     目录结构（与 Nuitka ``getCachedDownload`` 约定一致）：
     ``gcc/x86_64/<specificity>/mingw64/bin/gcc.exe`` 为缓存命中标志；缓存根
-    或子目录下用户手动放置的 ``winlibs-*.zip`` 可被构建流程识别解压
-    （纯本地操作，离线同样适用）。
+    或子目录下与锁定 Nuitka 版本精确匹配的 ``winlibs-*.zip`` 归档可被构建
+    流程识别解压（纯本地操作，离线同样适用）。
+
+    本地归档区分两类：
+
+    - **匹配**：文件名与 :data:`WINLIBS_URLS` 锁定版本精确一致（构建侧
+      ``_find_local_winlibs_zip`` 按完整文件名匹配，防 ABI 不兼容的 gcc
+      被误用）→ "待解压" OK
+    - **不匹配**：版本不符（如更新的 r7/r1 release）或 ``.7z`` 格式
+      （构建侧仅识别 ``.zip``）→ 不算可用缓存，在详情中单独提示所需
+      的确切归档名，避免"放了归档却显示未缓存"的困惑
 
     未缓存时结合 :func:`fspack.packaging.nuitka.winlibs.msvc_available` 判定：
     装了 MSVC 的机器 scons 优先用 MSVC，无需 winlibs（OK）；否则在线 OK
@@ -221,7 +233,7 @@ def _check_winlibs_contents() -> CheckResult:
     name = "winlibs 工具链"
     try:
         specificities = _winlibs_gcc_specificities(cache_dir)
-        local_zips = _winlibs_local_zips(cache_dir)
+        archives = _winlibs_local_archives(cache_dir)
     except OSError as exc:
         return _scan_error_result(name, cache_dir, exc)
 
@@ -231,26 +243,50 @@ def _check_winlibs_contents() -> CheckResult:
             status=CheckStatus.OK,
             detail=f"gcc 已就绪（{_preview_versions(specificities)}）",
         )
-    if local_zips:
+
+    expected = _winlibs_expected_zip_names()
+    matched = [a for a in archives if a in expected]
+    if matched:
         # 本地归档待解压：下次构建自动识别解压，离线模式同样可用
         return CheckResult(
             name=name,
             status=CheckStatus.OK,
-            detail=f"本地归档 {len(local_zips)} 个待解压（首次构建自动解压）",
+            detail=f"本地归档 {len(matched)} 个待解压（首次构建自动解压）",
         )
+
+    # 未缓存：不匹配的本地归档（版本不符或 .7z 格式）追加提示
+    mismatched = [a for a in archives if a not in expected]
+    suffix = f"；另有 {len(mismatched)} 个本地归档不被识别" if mismatched else ""
+    suggestion = (
+        f"本地归档 {_preview_versions(mismatched)} 不会被构建使用："
+        f"需放置与锁定 Nuitka 版本精确匹配的 .zip 归档（{('、'.join(expected))}）"
+        if mismatched
+        else ""
+    )
     if _msvc_available():
-        return CheckResult(name=name, status=CheckStatus.OK, detail="未缓存（检测到 MSVC，编译器优先用 MSVC）")
+        return CheckResult(
+            name=name,
+            status=CheckStatus.OK,
+            detail=f"未缓存（检测到 MSVC，编译器优先用 MSVC）{suffix}",
+            suggestion=suggestion,
+        )
     if is_offline():
         return CheckResult(
             name=name,
             status=CheckStatus.WARN,
-            detail="未缓存",
+            detail=f"未缓存{suffix}",
             suggestion=(
                 f"离线模式无法下载 winlibs gcc：请在联网机器执行一次 Nuitka 构建填充缓存后拷贝，"
                 f"或将 winlibs zip 归档放入 {cache_dir}（构建时自动识别解压）"
+                + (f"。{suggestion}" if suggestion else "")
             ),
         )
-    return CheckResult(name=name, status=CheckStatus.OK, detail="未缓存（首次 Nuitka 构建自动下载，约 200 MiB）")
+    return CheckResult(
+        name=name,
+        status=CheckStatus.OK,
+        detail=f"未缓存（首次 Nuitka 构建自动下载，约 200 MiB）{suffix}",
+        suggestion=suggestion,
+    )
 
 
 def _winlibs_gcc_specificities(cache_dir: Path) -> list[str]:
@@ -268,19 +304,31 @@ def _winlibs_gcc_specificities(cache_dir: Path) -> list[str]:
     )
 
 
-def _winlibs_local_zips(cache_dir: Path) -> list[str]:
-    """递归列出缓存目录下用户手动放置的 winlibs zip 归档文件名.
+def _winlibs_local_archives(cache_dir: Path) -> list[str]:
+    """递归列出缓存目录下用户手动放置的 winlibs 归档文件名（.zip/.7z）.
 
-    与 ``NuitkaWinlibs._find_local_winlibs_zip`` 的识别范围一致（缓存根与
-    任意子目录），此处仅盘点不校验版本匹配。
+    扫描范围与 ``NuitkaWinlibs._find_local_winlibs_zip`` 一致（缓存根与
+    任意子目录），但识别扩大到 ``.7z`` 且不校验版本匹配——winlibs 官方
+    release 同时提供两种格式，用户常放置更新的 release 归档或 ``.7z``
+    变体，盘点须全部可见；是否可用（匹配判定）由调用方结合
+    :func:`_winlibs_expected_zip_names` 区分。
 
     :raises OSError: 目录遍历失败。
     """
     if not cache_dir.is_dir():
         return []
     return sorted(
-        path.name for path in cache_dir.rglob("winlibs-*.zip") if path.is_file() and path.name == path.stem + ".zip"
+        path.name for path in cache_dir.rglob("winlibs-*") if path.is_file() and path.suffix.lower() in {".zip", ".7z"}
     )
+
+
+def _winlibs_expected_zip_names() -> list[str]:
+    """返回 :data:`WINLIBS_URLS` 各锁定 Nuitka 版本对应的归档文件名（去重排序）.
+
+    构建侧按完整文件名精确匹配本地归档（防 ABI 不兼容的 gcc 被误用），
+    该清单即"哪些归档会被自动识别解压"的判定依据。
+    """
+    return sorted({url.rsplit("/", 1)[1] for url in WINLIBS_URLS.values()})
 
 
 def _msvc_available() -> bool:

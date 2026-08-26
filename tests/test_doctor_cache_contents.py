@@ -207,13 +207,67 @@ def test_check_winlibs_contents_gcc_ready(tmp_path: Path) -> None:
 
 
 def test_check_winlibs_contents_local_zip(tmp_path: Path) -> None:
-    """本地 winlibs zip 归档待解压：OK（首次构建自动解压，离线可用）."""
+    """与锁定版本精确匹配的本地 winlibs zip：OK（首次构建自动解压，离线可用）."""
+    from fspack.packaging.nuitka.winlibs import WINLIBS_URLS
+
     wl = tmp_path / "nuitka-winlibs-mingw"
     wl.mkdir()
-    (wl / "winlibs-x86_64-posix-seh-gcc-13.2.0-mingw-w64ucrt-11.0.1-r2.zip").write_bytes(b"x")
+    # 取锁定清单中的真实归档名（构建侧按完整文件名精确匹配）
+    zip_name = WINLIBS_URLS["4.1.3"].rsplit("/", 1)[1]
+    (wl / zip_name).write_bytes(b"x")
     result = _check_winlibs_contents()
     assert result.status is CheckStatus.OK
     assert "本地归档 1 个待解压" in result.detail
+
+
+def test_check_winlibs_contents_mismatched_zip_not_pending(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """版本不匹配的本地 zip（不在 WINLIBS_URLS 锁定清单）：不算待解压，落入未缓存分支并提示."""
+    wl = tmp_path / "nuitka-winlibs-mingw"
+    wl.mkdir()
+    (wl / "winlibs-x86_64-posix-seh-gcc-13.2.0-mingw-w64ucrt-11.0.1-r2.zip").write_bytes(b"x")
+    monkeypatch.setattr("fspack.doctor.cache_contents._msvc_available", lambda: False)
+    result = _check_winlibs_contents()
+    assert "待解压" not in result.detail
+    assert "1 个本地归档不被识别" in result.detail
+    assert "不会被构建使用" in result.suggestion
+    assert "13.2.0" in result.suggestion
+
+
+def test_check_winlibs_contents_7z_archive_reported_as_mismatched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """.7z 格式归档（即使版本号接近）不算可用缓存：未缓存分支提示不被识别.
+
+    复现用户场景：缓存目录放置更新的 winlibs release ``.7z`` 归档，
+    构建侧仅识别与锁定版本精确匹配的 ``.zip``，doctor 须明确指出
+    归档存在但不会被使用。
+    """
+    wl = tmp_path / "nuitka-winlibs-mingw"
+    wl.mkdir()
+    (wl / "winlibs-x86_64-posix-seh-gcc-15.2.0-mingw-w64msvcrt-14.0.0-r7.7z").write_bytes(b"x")
+    (wl / "winlibs-x86_64-posix-seh-gcc-16.2.0-mingw-w64msvcrt-14.0.0-r1.7z").write_bytes(b"x")
+    monkeypatch.setattr("fspack.doctor.cache_contents._msvc_available", lambda: True)
+    result = _check_winlibs_contents()
+    assert result.status is CheckStatus.OK
+    assert "未缓存" in result.detail
+    assert "2 个本地归档不被识别" in result.detail
+    assert ".7z" in result.suggestion or "7z" in result.suggestion
+    # suggestion 须给出所需的确切归档名（用户可对照下载正确版本）
+    assert "winlibs-x86_64-posix-seh-gcc-15.2.0-mingw-w64msvcrt-13.0.0-r6.zip" in result.suggestion
+
+
+def test_check_winlibs_contents_offline_mismatched_archive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """离线 + 仅不匹配归档：WARN，suggestion 同时含离线提示与所需确切归档名."""
+    monkeypatch.setenv("FSPACK_OFFLINE", "1")
+    monkeypatch.setattr("fspack.doctor.cache_contents._msvc_available", lambda: False)
+    wl = tmp_path / "nuitka-winlibs-mingw"
+    wl.mkdir()
+    (wl / "winlibs-x86_64-posix-seh-gcc-15.2.0-mingw-w64msvcrt-14.0.0-r7.7z").write_bytes(b"x")
+    result = _check_winlibs_contents()
+    assert result.status is CheckStatus.WARN
+    assert "1 个本地归档不被识别" in result.detail
+    assert "离线模式无法下载" in result.suggestion
+    assert "不会被构建使用" in result.suggestion
 
 
 def test_check_winlibs_contents_gcc_dir_without_exe(tmp_path: Path) -> None:
