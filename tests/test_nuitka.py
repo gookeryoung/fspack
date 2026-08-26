@@ -4814,9 +4814,84 @@ def test_compile_files_windows_py313_forces_mingw64(tmp_path: Path, monkeypatch:
     )
 
     assert captured, "应至少编译一个文件"
+    # --mingw64 实际选择 winlibs；experimental 仅为 py>=3.13 解锁 --mingw64
+    assert "--mingw64" in captured[0]
     assert "--experimental=force-mingw64" in captured[0]
     # py 文件保持末位（诊断日志与测试依赖 cmd[-1] 定位源文件）
     assert captured[0][-1] == str(f)
+
+
+def test_compile_files_mingw_mode_with_msvc_appends_mingw64(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """compiler=mingw 且有 MSVC 时须传 --mingw64 顶掉 MSVC（回归：仅传 experimental 顶不掉）.
+
+    Nuitka 语义（4.1.3 scons 源码确认）：``--mingw64`` 才实际选择 winlibs
+    （scons ``tools=["mingw"]`` 并禁用 MSVC 工具）；``--experimental=
+    force-mingw64`` 仅为 py>=3.13 解锁 ``--mingw64`` 的许可，**单独传不选择
+    mingw**——装了 VS 的机器 scons 默认 MSVC 优先，产物仍是 cl.exe 编译。
+    """
+    captured: list[list[str]] = []
+
+    def fake_stream(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int, str, str]:
+        captured.append(cmd)
+        return (0, "", "")
+
+    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(fake_stream))
+    monkeypatch.setattr(NuitkaCompiler, "_build_compile_env", classmethod(lambda cls, *a, **kw: {}))
+    # mock 有 MSVC：装了 VS2022 的机器（用户实测场景，scons 默认走 cl 14.3）
+    monkeypatch.setattr("fspack.packaging.nuitka.winlibs.msvc_available", lambda: True)
+
+    src = tmp_path / "src"
+    src.mkdir()
+    f = src / "f0.py"
+    f.write_text("x = 1", encoding="utf-8")
+
+    st = StageRecorder("编译")
+    NuitkaCompiler._compile_files(
+        tmp_path / "python.exe",
+        tmp_path / "bootstrap.py",
+        [f],
+        st,
+        target=Platform.WINDOWS,
+        py_version="3.11.9",
+        compiler="mingw",
+    )
+
+    assert captured, "应至少编译一个文件"
+    assert "--mingw64" in captured[0], "compiler=mingw + MSVC 须用 --mingw64 顶掉 MSVC"
+    assert "--experimental=force-mingw64" in captured[0]
+
+
+def test_compile_files_msvc_mode_never_appends_mingw_flags(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """compiler=msvc 恒不加 mingw 强制 flag（与 MSVC 选择互斥）."""
+    captured: list[list[str]] = []
+
+    def fake_stream(cmd: list[str], *, env: dict[str, str] | None = None) -> tuple[int, str, str]:
+        captured.append(cmd)
+        return (0, "", "")
+
+    monkeypatch.setattr(NuitkaCompiler, "_stream_compile", staticmethod(fake_stream))
+    monkeypatch.setattr(NuitkaCompiler, "_build_compile_env", classmethod(lambda cls, *a, **kw: {}))
+    monkeypatch.setattr("fspack.packaging.nuitka.winlibs.msvc_available", lambda: True)
+
+    src = tmp_path / "src"
+    src.mkdir()
+    f = src / "f0.py"
+    f.write_text("x = 1", encoding="utf-8")
+
+    st = StageRecorder("编译")
+    NuitkaCompiler._compile_files(
+        tmp_path / "python.exe",
+        tmp_path / "bootstrap.py",
+        [f],
+        st,
+        target=Platform.WINDOWS,
+        py_version="3.13.1",
+        compiler="msvc",
+    )
+
+    assert captured, "应至少编译一个文件"
+    assert "--mingw64" not in captured[0]
+    assert "--experimental=force-mingw64" not in captured[0]
 
 
 def test_compile_files_windows_py313_msvc_no_force_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -4847,6 +4922,7 @@ def test_compile_files_windows_py313_msvc_no_force_flag(tmp_path: Path, monkeypa
     )
 
     assert captured, "应至少编译一个文件"
+    assert "--mingw64" not in captured[0]
     assert "--experimental=force-mingw64" not in captured[0]
 
 
@@ -4877,6 +4953,7 @@ def test_compile_files_windows_py312_no_force_flag(tmp_path: Path, monkeypatch: 
     )
 
     assert captured, "应至少编译一个文件"
+    assert "--mingw64" not in captured[0]
     assert "--experimental=force-mingw64" not in captured[0]
 
 
@@ -4907,6 +4984,7 @@ def test_compile_files_linux_no_force_flag(tmp_path: Path, monkeypatch: pytest.M
     )
 
     assert captured, "应至少编译一个文件"
+    assert "--mingw64" not in captured[0]
     assert "--experimental=force-mingw64" not in captured[0]
 
 

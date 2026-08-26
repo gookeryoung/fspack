@@ -162,7 +162,8 @@ class NuitkaEnv:
           可能残留的 ``CC``/``CFLAGS``，让 scons 走下载缓存 fallback 到
           winlibs gcc。编译器选择：有 MSVC 时 scons 直接用 MSVC（优先级
           最高）；无 MSVC 时 py<3.13 默认即 winlibs，py>=3.13 由编译命令
-          ``--experimental=force-mingw64`` 强制（zig 产物可能损坏不再使用）
+          ``--mingw64 --experimental=force-mingw64`` 强制（zig 产物可能损坏
+          不再使用）
         - ``CFLAGS``：scons 自设 ``_WIN32_WINNT``（Nuitka 4.1.3 无条件
           ``0x0601`` 即 Win7，2.5.1 mingw 分支 ``0x0501`` 更保守），fspack
           再注入同宏触发 "Inherited CFLAGS" 提示且值被覆盖，纯冗余已删除
@@ -442,9 +443,9 @@ class NuitkaEnv:
         1. :meth:`_check_c_compiler` 检查 C 编译器，缺失 raise :class:`NuitkaError`
         2. Windows：:meth:`NuitkaWinlibs.ensure_winlibs_mingw` 预填充 winlibs gcc
            到 ``<cache_root>/nuitka-winlibs-mingw``（全版本：py<3.13 scons 默认
-           走 winlibs，py>=3.13 由编译命令 force-mingw64 强制走 winlibs），
+           走 winlibs，py>=3.13 由编译命令 ``--mingw64`` 强制走 winlibs），
            scons 编译时缓存命中不下载。``compiler="mingw"`` 时无视 MSVC
-           恒预填充（编译命令 force flag 顶掉 MSVC，scons 需 winlibs 缓存）；
+           恒预填充（编译命令 ``--mingw64`` 顶掉 MSVC，scons 需 winlibs 缓存）；
            ``compiler="msvc"`` 时跳过预填充（MSVC 缺失由构建入口
            ``_normalize_exclusive_options`` fail-fast）
         3. 按 :func:`nuitka_version_for` 取锁定版本号
@@ -489,9 +490,9 @@ class NuitkaEnv:
         # Windows 预填充 winlibs gcc 到 fspack 缓存目录：py<3.13 时
         # Nuitka scons 默认 fallback 到 winlibs（缓存命中不下载）；py>=3.13
         # 默认 fallback 到 zig（其编译的 .pyd 可能损坏），编译命令已追加
-        # --experimental=force-mingw64 强制走 winlibs（见 progress 的
-        # _compile_files），此处预填充与编译命令两层须一致。
-        # compiler="mingw"：无视 MSVC 恒预填充（编译命令 force flag 顶掉
+        # --mingw64 --experimental=force-mingw64 强制走 winlibs（见 progress
+        # 的 _compile_files），此处预填充与编译命令两层须一致。
+        # compiler="mingw"：无视 MSVC 恒预填充（编译命令 --mingw64 顶掉
         #   MSVC，scons 需 winlibs 缓存命中）；
         # compiler="msvc"：跳过预填充（MSVC 缺失由构建入口
         #   _normalize_exclusive_options fail-fast，此处不再重复报错）；
@@ -504,7 +505,7 @@ class NuitkaEnv:
 
             if compiler == "mingw":
                 if msvc_available():
-                    _logger.info("compiler=mingw：强制 winlibs gcc（force-mingw64 顶掉 MSVC），预填充工具链")
+                    _logger.info("compiler=mingw：强制 winlibs gcc（--mingw64 顶掉 MSVC），预填充工具链")
                 cls.ensure_winlibs_mingw(py_version, stage)
             elif compiler == "msvc":
                 _logger.info("compiler=msvc：强制使用 MSVC，跳过 winlibs 预填充")

@@ -578,7 +578,7 @@ class NuitkaCompile:
         :meth:`compile_src` 排除其下 ``.py``，并纳入 :meth:`_stamp_key`。
 
         ``compiler``（``auto``/``msvc``/``mingw``）透传给 :meth:`ensure_env`
-        （winlibs 预填充决策）与 :meth:`compile_src`（force-mingw64 flag），
+        （winlibs 预填充决策）与 :meth:`compile_src`（``--mingw64`` 强制 flag），
         并纳入 :meth:`_stamp_key`（非 auto 时拼接，切换编译器强制重编）。
 
         **回退机制**：Nuitka 是可选优化（默认关闭），环境就绪失败时不应中断构建。

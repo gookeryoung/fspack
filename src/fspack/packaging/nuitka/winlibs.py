@@ -20,8 +20,10 @@ mingw gcc 会被打印 "Non downloaded winlibs-gcc ... ignored" 后忽略），
 
 另：Nuitka 4.1 起 py>=3.13 默认 fallback 到 zig 编译器，其编译的 .pyd 可能
 损坏（returncode==0 但运行时访问违例 0xC0000005）。fspack 在 Windows 上
-全版本强制 winlibs：py>=3.13 时编译命令追加 ``--experimental=force-mingw64``
-（见 :mod:`fspack.packaging.nuitka.progress` 的 ``_compile_files``）。
+全版本强制 winlibs：需强制时编译命令追加 ``--mingw64``（实际选择 winlibs）
+与 ``--experimental=force-mingw64``（py>=3.13 解锁 ``--mingw64`` 的许可，
+单独传不选择 mingw）（见 :mod:`fspack.packaging.nuitka.progress` 的
+``_compile_files``）。
 
 缓存目录结构（与 Nuitka ``getCachedDownload`` 约定一致）::
 
@@ -220,7 +222,13 @@ def _extract_7z(archive: Path, dest: Path) -> None:
 
 
 def needs_force_mingw64(target: Platform, py_version: str, compiler: str = "auto") -> bool:
-    """判断编译命令是否需追加 ``--experimental=force-mingw64`` 强制 winlibs.
+    """判断编译命令是否需追加 ``--mingw64 --experimental=force-mingw64`` 强制 winlibs.
+
+    返回 ``True`` 时调用方（progress 的 ``_compile_files``）须传**两个** flag：
+    ``--mingw64`` 实际选择 winlibs（scons ``tools=["mingw"]`` 并禁用 MSVC 工具，
+    装了 VS 的机器也被顶掉）；``--experimental=force-mingw64`` 仅为 py>=3.13
+    解锁 ``--mingw64``（Nuitka 4.1.3 硬限制）。**单独传 experimental 不选择
+    mingw**——装了 MSVC 的机器 scons 默认 MSVC 优先，仍走 cl.exe。
 
     ``compiler`` 选择（``[tool.fspack] compiler`` / CLI ``--compiler``）：
 
@@ -233,9 +241,9 @@ def needs_force_mingw64(target: Platform, py_version: str, compiler: str = "auto
       * 无 MSVC（:func:`msvc_available` 为 False）：MSVC 优先级高于 fallback
         链，scons 直接用 MSVC；此时加 flag 反而把 MSVC 顶掉退回 winlibs
 
-    - ``"mingw"``：强制 winlibs 无视 MSVC——MSVC 存在时须用 flag 顶掉；
-      无 MSVC 时仅 py>=3.13 需要（zig 防护），py<3.13 scons 默认即 winlibs
-      flag 冗余且旧版 Nuitka（2.5.1）未必识别该 experimental 选项，跳过。
+    - ``"mingw"``：强制 winlibs 无视 MSVC——MSVC 存在时须用 ``--mingw64``
+      顶掉；无 MSVC 时仅 py>=3.13 需要（zig 防护），py<3.13 scons 默认即
+      winlibs flag 冗余且旧版 Nuitka（2.5.1）不认识 experimental 值，跳过。
       空 ``py_version`` 未知版本仅在有 MSVC 时加 flag（无 MSVC 时 scons
       fallback 链行为未知，保持不加）
 

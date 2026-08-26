@@ -257,10 +257,12 @@ class NuitkaProgress:
         - ``--no-pyi-file``：不生成 .pyi 类型存根（运行时不需要）
         - ``--remove-output``：编译后删除临时构建文件（.build/ 目录）
         - ``--jobs=N``：单进程内 C 编译并行度
-        - ``--experimental=force-mingw64``（Windows：``compiler=mingw`` 强制
-          winlibs 无视 MSVC；``compiler=auto`` 时仅 py>=3.13 且无 MSVC）：
+        - ``--mingw64 --experimental=force-mingw64``（Windows：``compiler=mingw``
+          强制 winlibs 无视 MSVC；``compiler=auto`` 时仅 py>=3.13 且无 MSVC）：
           强制 scons 走 winlibs gcc 而非 zig/MSVC——zig 编译的 .pyd 可能
           损坏（returncode==0、文件已生成，运行时访问违例 0xC0000005）。
+          ``--mingw64`` 实际选择 winlibs（单独的 experimental flag 只是
+          py>=3.13 使用 ``--mingw64`` 的解锁许可，不选择 mingw）；
           py<3.13 默认即 winlibs 无需 flag（compiler=mingw 且有 MSVC 时除外）；
           ``compiler=msvc`` 恒不加。Linux 不涉及（用系统 gcc）。判断逻辑集中见
           :func:`fspack.packaging.nuitka.winlibs.needs_force_mingw64`，
@@ -318,13 +320,19 @@ class NuitkaProgress:
                 "--assume-yes-for-downloads",
                 f"--jobs={jobs}",
             ]
-            # Windows py>=3.13 且无 MSVC：Nuitka 默认 fallback 到 zig 编译器，
-            # 其产物可能损坏（运行时访问违例）。强制走 winlibs gcc（ensure_env
-            # 已预填充缓存）；有 MSVC 时 scons 优先用 MSVC（优先级高于 fallback
-            # 链），加 flag 反而把 MSVC 顶掉，故跳过。空 py_version（未知版本）
-            # 不加 flag 保持旧行为。判断逻辑集中见 needs_force_mingw64
-            # （compiler=mingw 时强制 winlibs 无视 MSVC）
+            # 强制 winlibs gcc 的两个 Nuitka flag（判断逻辑集中见
+            # needs_force_mingw64，触发条件：compiler=mingw 强制无视 MSVC；
+            # compiler=auto 时仅 py>=3.13 且无 MSVC——该版本段 Nuitka 默认
+            # fallback 到 zig，产物可能损坏（运行时访问违例）；有 MSVC 时
+            # auto 不加 flag：scons 优先 MSVC，加了反而顶掉）：
+            # - ``--mingw64``：实际选择 winlibs（scons tools=["mingw"] 并禁用
+            #   MSVC 工具，装了 VS 的机器也被顶掉）。**单独传 experimental
+            #   不选择 mingw**，装了 MSVC 的机器仍走 cl.exe
+            # - ``--experimental=force-mingw64``：仅为 py>=3.13 解锁 ``--mingw64``
+            #   （Nuitka 4.1.3 对该组合有硬限制）；py<3.13 冗余但无害（旧版
+            #   Nuitka 2.5.1 不认识该 experimental 值，静默忽略）
             if needs_force_mingw64(target, py_version, compiler):
+                cmd.append("--mingw64")
                 cmd.append("--experimental=force-mingw64")
             cmd.append(str(py_file))
             try:
