@@ -405,6 +405,12 @@ def _parse_build_defaults(fspack_cfg: dict[str, Any]) -> BuildDefaults:  # noqa:
         if not isinstance(raw_slim, str) or raw_slim.strip() not in ("default", "aggressive"):
             raise ProjectError(f"[tool.fspack] slim-stdlib 必须是 default 或 aggressive，得到 {raw_slim!r}")
         kwargs["slim_stdlib"] = raw_slim.strip()
+    # compiler 为枚举字符串：Windows Nuitka 编译器选择（auto/msvc/mingw）
+    raw_compiler = fspack_cfg.get("compiler")
+    if raw_compiler is not None:
+        if not isinstance(raw_compiler, str) or raw_compiler.strip() not in ("auto", "msvc", "mingw"):
+            raise ProjectError(f"[tool.fspack] compiler 必须是 auto、msvc 或 mingw，得到 {raw_compiler!r}")
+        kwargs["compiler"] = raw_compiler.strip()
     # extras 为字符串列表：默认启用的 optional-dependencies 分组名
     kwargs["extras"] = _parse_string_list_cfg(fspack_cfg.get("extras"), "extras", reject_empty=True)
     # lazy_imports 为字符串列表：延迟导入的顶层模块名

@@ -332,9 +332,15 @@ def _normalize_exclusive_options(opts: BuildOptions, py_version: str, target: Pl
     非 Windows 目标 / py<3.12（shim 注入不替换 runtime，ABI 兼容）/ t 版
     不触发，二者可共存。
 
+    ``compiler="msvc"`` 校验：Windows 目标 + Nuitka 编译时探测 MSVC
+    （vswhere），缺失直接 raise :class:`ProjectError` fail-fast——显式
+    指定编译器是强意图，静默回退 .pyc 会掩盖环境问题。其余场景
+    （非 Windows / 非 Nuitka / mingw）不校验，由 Nuitka 阶段自行处理。
+
     Returns:
         归一化后的 ``BuildOptions``（无冲突时原样返回）
     """
+    result = opts
     if opts.nuitka and not opts.no_win7_dll and target is Platform.WINDOWS:
         from fspack.packaging.win7.dll import needs_win7_dll
 
@@ -343,8 +349,18 @@ def _normalize_exclusive_options(opts: BuildOptions, py_version: str, target: Pl
                 "Nuitka 与 Win7 重编译版 runtime 互斥（ABI 不兼容），已自动关闭 Win7 组件替换："
                 "产物仅支持 Win8+；如需 Win7 支持请去掉 --nuitka"
             )
-            return replace(opts, no_win7_dll=True)
-    return opts
+            result = replace(opts, no_win7_dll=True)
+
+    if opts.nuitka and opts.compiler == "msvc" and target is Platform.WINDOWS:
+        from fspack.packaging.nuitka.winlibs import msvc_available
+
+        if not msvc_available():
+            raise ProjectError(
+                "compiler=msvc 指定强制使用 MSVC，但未检测到 Visual Studio C++ 工具链"
+                "（vswhere 未发现含 VC.Tools 组件的 VS 实例且 PATH 无 cl.exe）。"
+                "请安装 Visual Studio C++ 生成工具，或改用 compiler=auto/mingw"
+            )
+    return result
 
 
 def _execute_build(  # noqa: PLR0912, PLR0913

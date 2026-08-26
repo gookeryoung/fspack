@@ -254,6 +254,10 @@ class BuildDefaults:
     # WEB 应用启动后自动打开浏览器（webbrowser.open）。WEB 类型默认启用，
     # 配置层 true 对非 WEB 类型也可启用（如 GUI 内嵌 WebView 场景）
     open_browser: bool | None = None
+    # Windows Nuitka 编译器选择：auto（默认，scons 优先级 MSVC > winlibs > zig）/
+    # msvc（强制 MSVC，缺失时构建入口 fail-fast）/ mingw（强制 winlibs，
+    # 无视 MSVC 存在）。仅 Windows Nuitka 编译生效，其余场景忽略
+    compiler: str | None = None
 
 
 @dataclass(frozen=True)
@@ -596,6 +600,11 @@ class BuildOptions:
     # WEB 应用启动后自动打开浏览器：WEB 类型在 stages 层默认启用
     # （app_type is WEB），配置/CLI 可显式覆盖（如 GUI 内嵌 WebView 也启用）
     open_browser: bool = False
+    # Windows Nuitka 编译器选择：auto=跟随 Nuitka scons 默认优先级
+    # （MSVC > winlibs > zig）；msvc=强制 MSVC（构建入口校验，缺失报错）；
+    # mingw=强制 winlibs gcc（无视 MSVC）。仅 Windows 目标 + Nuitka 编译
+    # 生效，其余场景忽略
+    compiler: str = "auto"
 
 
 def build_options_from_defaults(defaults: BuildDefaults) -> BuildOptions:
@@ -641,6 +650,7 @@ def build_options_from_defaults(defaults: BuildDefaults) -> BuildOptions:
         else base.sign_exe_password,
         sign_deb_key=defaults.sign_deb_key if defaults.sign_deb_key is not None else base.sign_deb_key,
         open_browser=defaults.open_browser if defaults.open_browser is not None else base.open_browser,
+        compiler=defaults.compiler if defaults.compiler is not None else base.compiler,
     )
 
 

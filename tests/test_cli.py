@@ -315,6 +315,35 @@ def test_build_new_options_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert called["options"].nuitka is True
 
 
+def test_build_compiler_flag_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`--compiler mingw` 解析并封装到 BuildOptions；未指定默认 auto；非法值 argparse 报错."""
+    _make_minimal_project(tmp_path)
+    called, fake_build = _capture_build()
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    cli.main(["b", str(tmp_path), "--compiler", "mingw"])
+    assert called["options"].compiler == "mingw"
+
+    cli.main(["b", str(tmp_path)])
+    assert called["options"].compiler == "auto"
+
+    monkeypatch.setattr("fspack.builder.build", lambda *a, **kw: None)
+    with pytest.raises(SystemExit):
+        cli.main(["b", str(tmp_path), "--compiler", "gcc"])
+
+
+def test_build_compiler_config_default_and_cli_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """[tool.fspack] compiler 作为回退默认，CLI --compiler 显式指定优先覆盖."""
+    _make_project_with_fspack_config(tmp_path, '[tool.fspack]\ncompiler = "msvc"\n')
+    called, fake_build = _capture_build()
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    # CLI 未指定：配置默认生效
+    cli.main(["b", str(tmp_path)])
+    assert called["options"].compiler == "msvc"
+    # CLI 显式指定：覆盖配置
+    cli.main(["b", str(tmp_path), "--compiler", "mingw"])
+    assert called["options"].compiler == "mingw"
+
+
 def test_build_pyc_optimize_invalid_choice(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`--pyc-optimize` 仅接受 0/1/2，非法值 argparse 报错."""
     _make_minimal_project(tmp_path)

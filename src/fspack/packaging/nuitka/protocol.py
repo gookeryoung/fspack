@@ -73,7 +73,7 @@ class NuitkaCompilerProtocol(Protocol):  # pragma: no cover - 纯类型契约，
         ...
 
     @classmethod
-    def ensure_env(
+    def ensure_env(  # noqa: PLR0913
         cls,
         cache_root: Path,
         py_version: str,
@@ -81,6 +81,7 @@ class NuitkaCompilerProtocol(Protocol):  # pragma: no cover - 纯类型契约，
         mirror: MirrorConfig,
         *,
         stage: StageRecorder,
+        compiler: str = "auto",
     ) -> str:
         """检查 C 编译器并安装锁定版 nuitka 到本地缓存."""
         ...
@@ -190,6 +191,7 @@ class NuitkaCompilerProtocol(Protocol):  # pragma: no cover - 纯类型契约，
         cache_root: Path | None = None,
         skip_files: frozenset[str] | None = None,
         data_dirs: tuple[Path, ...] = (),
+        compiler: str = "auto",
     ) -> list[str]:
         """编译 src_dir 下所有 .py 为 .pyd/.so，返回失败文件相对 POSIX 路径列表."""
         ...
@@ -208,6 +210,7 @@ class NuitkaCompilerProtocol(Protocol):  # pragma: no cover - 纯类型契约，
         build_python_exe: Path | None = None,
         ccache: bool = False,
         cache_root: Path | None = None,
+        compiler: str = "auto",
     ) -> None:
         """编译 site-packages 中指定的第三方包."""
         ...
@@ -250,6 +253,7 @@ class NuitkaCompilerProtocol(Protocol):  # pragma: no cover - 纯类型契约，
         target: Platform,
         ccache_exe: Path | None = None,
         py_version: str = "",
+        compiler: str = "auto",
     ) -> tuple[set[Path], list[Path]]:
         """逐个编译 .py 文件，返回 (成功编译的文件集合, 失败文件路径列表)."""
         ...
@@ -267,6 +271,7 @@ class NuitkaCompilerProtocol(Protocol):  # pragma: no cover - 纯类型契约，
         entry_rels: frozenset[str] | None = None,
         nuitka_packages: tuple[str, ...] = (),
         data_dirs: tuple[Path, ...] = (),
+        compiler: str = "auto",
     ) -> str:
         """计算 Nuitka 编译 stamp 键."""
         ...
@@ -287,6 +292,7 @@ class NuitkaCompilerProtocol(Protocol):  # pragma: no cover - 纯类型契约，
         ccache: bool = False,
         nuitka_packages: tuple[str, ...] = (),
         data_dirs: tuple[Path, ...] = (),
+        compiler: str = "auto",
     ) -> None:
         """整合 ensure_env + standalone python + stamp 缓存 + compile_src 的入口."""
         ...

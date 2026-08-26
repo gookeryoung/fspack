@@ -141,6 +141,7 @@ def _compile_user_sources(ctx: BuildContext, src_dst: Path) -> None:
                     ccache=ctx.opts.ccache,
                     nuitka_packages=ctx.opts.nuitka_packages,
                     data_dirs=(*resolved_data_dirs, *resolved_web_static_dirs),
+                    compiler=ctx.opts.compiler,
                 )
 
     # 预编译字节码：用 runtime 自身 python 编译 src + site-packages 为 .pyc，加速首次启动。

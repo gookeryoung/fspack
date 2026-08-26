@@ -2322,6 +2322,33 @@ def test_needs_force_mingw64_matrix(monkeypatch: pytest.MonkeyPatch) -> None:
     assert needs_force_mingw64(Platform.WINDOWS, "3.14.0t") is False
 
 
+def test_needs_force_mingw64_mingw_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """compiler=mingw：强制 winlibs 无视 MSVC——有 MSVC 须 flag 顶掉，无 MSVC 仅 py>=3.13 需要."""
+    from fspack.packaging.nuitka.winlibs import needs_force_mingw64
+
+    # 有 MSVC：任何版本都须 flag 顶掉 MSVC（scons 默认优先 MSVC）
+    monkeypatch.setattr("fspack.packaging.nuitka.winlibs.msvc_available", lambda: True)
+    assert needs_force_mingw64(Platform.WINDOWS, "3.13.1", "mingw") is True
+    assert needs_force_mingw64(Platform.WINDOWS, "3.11.9", "mingw") is True
+    assert needs_force_mingw64(Platform.WINDOWS, "", "mingw") is True
+    assert needs_force_mingw64(Platform.LINUX, "3.13.1", "mingw") is False
+
+    # 无 MSVC：py>=3.13 需要（zig 防护），py<3.13 scons 默认即 winlibs 不加
+    monkeypatch.setattr("fspack.packaging.nuitka.winlibs.msvc_available", lambda: False)
+    assert needs_force_mingw64(Platform.WINDOWS, "3.13.1", "mingw") is True
+    assert needs_force_mingw64(Platform.WINDOWS, "3.11.9", "mingw") is False
+    assert needs_force_mingw64(Platform.WINDOWS, "", "mingw") is False
+
+
+def test_needs_force_mingw64_msvc_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """compiler=msvc：恒不需要 force flag（force 与 MSVC 选择互斥，缺失由入口 fail-fast）."""
+    from fspack.packaging.nuitka.winlibs import needs_force_mingw64
+
+    monkeypatch.setattr("fspack.packaging.nuitka.winlibs.msvc_available", lambda: False)
+    assert needs_force_mingw64(Platform.WINDOWS, "3.13.1", "msvc") is False
+    assert needs_force_mingw64(Platform.WINDOWS, "3.11.9", "msvc") is False
+
+
 def test_nuitka_work_cache_dir_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """nuitka_work_cache_dir 返回 <cache_root>/nuitka-work（NUITKA_CACHE_DIR 重定向目标）."""
     from fspack.config.cache import nuitka_work_cache_dir
@@ -2902,6 +2929,86 @@ def test_ensure_env_windows_msvc_skips_winlibs_prefill(tmp_path: Path, monkeypat
     st = StageRecorder("Nuitka 环境")
     nuitka_ver = NuitkaCompiler.ensure_env(cache_root, "3.13.1", Platform.WINDOWS, get_mirror("aliyun"), stage=st)
     assert nuitka_ver == "4.1.3"
+
+
+def test_ensure_env_compiler_mingw_prefills_with_msvc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """compiler=mingw 时无视 MSVC 存在恒预填充 winlibs（force flag 顶掉 MSVC，scons 需缓存）."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+    from fspack.progress import StageRecorder
+
+    monkeypatch.setattr("fspack.packaging.loader.mingw_available", lambda: True)
+    monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setattr("fspack.packaging.nuitka.winlibs.msvc_available", lambda: True)
+    cache_root = tmp_path / "nuitka_cache"
+    _make_nuitka_cache(NuitkaCompiler._nuitka_cache_dir(cache_root, "3.13.1"))
+
+    called: list[str] = []
+    monkeypatch.setattr(
+        NuitkaCompiler,
+        "ensure_winlibs_mingw",
+        classmethod(lambda cls, py_version, stage: called.append(py_version) or tmp_path),
+    )
+
+    st = StageRecorder("Nuitka 环境")
+    nuitka_ver = NuitkaCompiler.ensure_env(
+        cache_root, "3.13.1", Platform.WINDOWS, get_mirror("aliyun"), stage=st, compiler="mingw"
+    )
+    assert nuitka_ver == "4.1.3"
+    assert called == ["3.13.1"]
+
+
+def test_ensure_env_compiler_msvc_skips_prefill(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """compiler=msvc 时跳过 winlibs 预填充（MSVC 缺失由构建入口 fail-fast 校验）."""
+    from fspack.packaging.nuitka import NuitkaCompiler
+    from fspack.progress import StageRecorder
+
+    monkeypatch.setattr("fspack.packaging.loader.mingw_available", lambda: True)
+    monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
+    # msvc_available=False 模拟无 MSVC 机器：compiler=msvc 也不应触发预填充
+    # （入口校验缺失时报错，此处验证 ensure_env 层不再重复处理）
+    monkeypatch.setattr("fspack.packaging.nuitka.winlibs.msvc_available", lambda: False)
+    cache_root = tmp_path / "nuitka_cache"
+    _make_nuitka_cache(NuitkaCompiler._nuitka_cache_dir(cache_root, "3.13.1"))
+
+    monkeypatch.setattr(
+        NuitkaCompiler,
+        "ensure_winlibs_mingw",
+        classmethod(lambda cls, *a, **kw: (_ for _ in ()).throw(AssertionError("compiler=msvc 不应预填充"))),
+    )
+
+    st = StageRecorder("Nuitka 环境")
+    nuitka_ver = NuitkaCompiler.ensure_env(
+        cache_root, "3.13.1", Platform.WINDOWS, get_mirror("aliyun"), stage=st, compiler="msvc"
+    )
+    assert nuitka_ver == "4.1.3"
+
+
+def test_ensure_env_compiler_non_windows_warns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """非 Windows 目标显式指定 compiler 时告警忽略（Linux/macOS 用系统 gcc/clang）."""
+    import logging
+
+    from fspack.packaging.nuitka import NuitkaCompiler
+    from fspack.progress import StageRecorder
+
+    monkeypatch.setattr("fspack.packaging.loader.gcc_available", lambda: True)
+    monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
+    cache_root = tmp_path / "nuitka_cache"
+    _make_nuitka_cache(NuitkaCompiler._nuitka_cache_dir(cache_root, "3.11.9"))
+
+    monkeypatch.setattr(
+        NuitkaCompiler,
+        "ensure_winlibs_mingw",
+        classmethod(lambda cls, *a, **kw: (_ for _ in ()).throw(AssertionError("Linux 不应预填充"))),
+    )
+
+    st = StageRecorder("Nuitka 环境")
+    with caplog.at_level(logging.WARNING, logger="fspack.packaging.nuitka.env"):
+        NuitkaCompiler.ensure_env(
+            cache_root, "3.11.9", Platform.LINUX, get_mirror("aliyun"), stage=st, compiler="mingw"
+        )
+    assert any("仅对 Windows" in r.message for r in caplog.records)
 
 
 def test_ensure_env_linux_skips_winlibs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -3608,6 +3715,26 @@ def test_stamp_key_includes_nuitka_version_py_version_src_fingerprint(
     assert key.count("|") == 5
     # 末尾三段为空（entry_rels=None + nuitka_packages=() + data_dirs=()）
     assert key.endswith("|||")
+
+
+def test_stamp_key_compiler_suffix(tmp_path: Path) -> None:
+    """compiler 非 auto 时拼入 stamp key：切换编译器强制重编；auto 不拼接保持兼容."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "app.py").write_text("print('hi')")
+
+    key_auto = NuitkaCompiler._stamp_key(src, "4.1.3", "3.11.9")
+    key_auto_default = NuitkaCompiler._stamp_key(src, "4.1.3", "3.11.9", compiler="auto")
+    key_mingw = NuitkaCompiler._stamp_key(src, "4.1.3", "3.11.9", compiler="mingw")
+    key_msvc = NuitkaCompiler._stamp_key(src, "4.1.3", "3.11.9", compiler="msvc")
+
+    # auto 不拼接：与既有六段式格式一致，存量 stamp 不失效
+    assert key_auto == key_auto_default
+    assert key_auto.count("|") == 5
+    # 非 auto 拼接第七段，且 mingw/msvc 互异
+    assert key_mingw == f"{key_auto}|mingw"
+    assert key_msvc == f"{key_auto}|msvc"
+    assert key_mingw != key_msvc
 
 
 def test_stamp_key_includes_entry_rels(tmp_path: Path) -> None:

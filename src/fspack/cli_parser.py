@@ -188,6 +188,15 @@ _BUILD_OPTS: tuple[_Opt, ...] = (
         action="store_true",
     ),
     _Opt(
+        ("--compiler",),
+        "Windows Nuitka 编译器选择：auto=跟随默认优先级（MSVC > winlibs > zig）；"
+        "msvc=强制 MSVC（未检测到 Visual Studio C++ 工具链时报错）；"
+        "mingw=强制 winlibs gcc（无视 MSVC，预填充下载约 200 MiB）。"
+        "仅 Windows 目标 + --nuitka 生效；默认 auto（覆盖 [tool.fspack] compiler 配置）",
+        default=None,
+        choices=("auto", "msvc", "mingw"),
+    ),
+    _Opt(
         ("--nuitka-pkg",),
         "指定第三方依赖包名用 Nuitka 编译为 .pyd（可多次指定）。"
         "需配合 --nuitka 使用；编译 site-packages/<package>/ 下 .py 为 .pyd，"

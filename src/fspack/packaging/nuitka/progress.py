@@ -233,6 +233,7 @@ class NuitkaProgress:
         target: Platform,
         ccache_exe: Path | None = None,
         py_version: str = "",
+        compiler: str = "auto",
     ) -> tuple[set[Path], list[Path]]:
         """并行编译 .py 文件，返回 (成功编译的文件集合, 失败文件路径列表).
 
@@ -256,16 +257,15 @@ class NuitkaProgress:
         - ``--no-pyi-file``：不生成 .pyi 类型存根（运行时不需要）
         - ``--remove-output``：编译后删除临时构建文件（.build/ 目录）
         - ``--jobs=N``：单进程内 C 编译并行度
-        - ``--experimental=force-mingw64``（仅 Windows py>=3.13 且无 MSVC）：
-          强制 scons fallback 到 winlibs gcc 而非 zig——zig 编译的 .pyd 可能
+        - ``--experimental=force-mingw64``（Windows：``compiler=mingw`` 强制
+          winlibs 无视 MSVC；``compiler=auto`` 时仅 py>=3.13 且无 MSVC）：
+          强制 scons 走 winlibs gcc 而非 zig/MSVC——zig 编译的 .pyd 可能
           损坏（returncode==0、文件已生成，运行时访问违例 0xC0000005）。
-          py<3.13 默认即 winlibs 无需 flag；有 MSVC 时 scons 优先用 MSVC
-          （优先级高于 fallback 链），加 flag 反而把 MSVC 顶掉，故跳过；
-          Linux 不涉及（用系统 gcc）。判断逻辑集中见
+          py<3.13 默认即 winlibs 无需 flag（compiler=mingw 且有 MSVC 时除外）；
+          ``compiler=msvc`` 恒不加。Linux 不涉及（用系统 gcc）。判断逻辑集中见
           :func:`fspack.packaging.nuitka.winlibs.needs_force_mingw64`，
           winlibs 工具链由 :meth:`NuitkaEnv.ensure_env` 预填充到
-          ``nuitka-winlibs-mingw`` 缓存（MSVC 机器同样跳过，两层一致），
-          scons 缓存命中不下载
+          ``nuitka-winlibs-mingw`` 缓存（两层判断一致），scons 缓存命中不下载
 
         ``ccache_exe`` 非 None 时，设置 ``CC="ccache <compiler>"`` 环境变量注入子进程，
         scons 通过 ccache 调用 gcc，缓存 C 编译结果加速重复编译。
@@ -323,7 +323,8 @@ class NuitkaProgress:
             # 已预填充缓存）；有 MSVC 时 scons 优先用 MSVC（优先级高于 fallback
             # 链），加 flag 反而把 MSVC 顶掉，故跳过。空 py_version（未知版本）
             # 不加 flag 保持旧行为。判断逻辑集中见 needs_force_mingw64
-            if needs_force_mingw64(target, py_version):
+            # （compiler=mingw 时强制 winlibs 无视 MSVC）
+            if needs_force_mingw64(target, py_version, compiler):
                 cmd.append("--experimental=force-mingw64")
             cmd.append(str(py_file))
             try:

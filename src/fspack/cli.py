@@ -224,6 +224,7 @@ def _run_build(project: Path, ns: argparse.Namespace) -> None:
         no_win7_scan=getattr(ns, "no_win7_scan", False) or base.no_win7_scan,
         no_win7_dll=getattr(ns, "no_win7_dll", False) or base.no_win7_dll,
         open_browser=ns.open_browser or base.open_browser,
+        compiler=ns.compiler if getattr(ns, "compiler", None) is not None else base.compiler,
     )
     log_file = Path(ns.log_file).resolve() if ns.log_file else None
     log_format = LogFormat.parse(ns.log_format)

@@ -167,6 +167,7 @@ class NuitkaCompile:
         cache_root: Path | None = None,
         skip_files: frozenset[str] | None = None,
         data_dirs: tuple[Path, ...] = (),
+        compiler: str = "auto",
     ) -> list[str]:
         """编译 ``src_dir`` 下所有 ``.py`` 为 ``.pyd``/``.so``，编译后删除 ``.py`` 源码.
 
@@ -252,6 +253,7 @@ class NuitkaCompile:
                         target=target,
                         ccache_exe=ccache_exe,
                         py_version=py_version,
+                        compiler=compiler,
                     )
                 finally:
                     shutil.rmtree(bootstrap_script.parent, ignore_errors=True)
@@ -317,6 +319,7 @@ class NuitkaCompile:
         build_python_exe: Path | None = None,
         ccache: bool = False,
         cache_root: Path | None = None,
+        compiler: str = "auto",
     ) -> None:
         """编译 ``site-packages`` 中指定的第三方包为 ``.pyd``/``.so``.
 
@@ -373,7 +376,14 @@ class NuitkaCompile:
         bootstrap_script = cls._create_bootstrap_script(nuitka_cache)
         try:
             compiled_files, failed_files = cls._compile_files(
-                py_exe, bootstrap_script, py_files, stage, target=target, ccache_exe=ccache_exe, py_version=py_version
+                py_exe,
+                bootstrap_script,
+                py_files,
+                stage,
+                target=target,
+                ccache_exe=ccache_exe,
+                py_version=py_version,
+                compiler=compiler,
             )
         finally:
             shutil.rmtree(bootstrap_script.parent, ignore_errors=True)
@@ -492,10 +502,11 @@ class NuitkaCompile:
         entry_rels: frozenset[str] | None = None,
         nuitka_packages: tuple[str, ...] = (),
         data_dirs: tuple[Path, ...] = (),
+        compiler: str = "auto",
     ) -> str:
         """计算 Nuitka 编译 stamp 键.
 
-        六要素：
+        要素：
 
         - ``nuitka_version``：切换 Nuitka 版本时强制重编（如 3.10 从 4.1.3 升级到 4.2）
         - ``py_version``：切换 Python 版本时强制重编（.pyd ABI 绑定）
@@ -507,6 +518,9 @@ class NuitkaCompile:
         - ``nuitka_packages``：第三方包编译列表变化时强制重编（影响 site-packages 编译范围）
         - ``data_dirs``：数据资源目录树变化时强制重编（影响哪些文件被跳过编译，
           data-dirs 增删改变编译范围，stamp 仍命中会导致新纳入编译的文件永不编译）
+        - ``compiler``：编译器选择变化时强制重编（仅非 ``auto`` 时拼接——
+          不同编译器产物虽都有效，但显式指定是强意图，切换后须重编落实；
+          ``auto`` 不拼接保持既有 stamp 键格式兼容，存量缓存不失效）
 
         ``pyc_optimize`` 不纳入：Nuitka 编译不受 .pyc 优化级别影响，
         site-packages 的 .pyc 由 :func:`_precompile_pyc` 单独缓存。
@@ -522,7 +536,10 @@ class NuitkaCompile:
         entry_part = ",".join(sorted(entry_rels)) if entry_rels else ""
         pkg_part = ",".join(nuitka_packages) if nuitka_packages else ""
         data_part = ",".join(data_rels)
-        return f"{nuitka_version}|{py_version}|{src_fp}|{entry_part}|{pkg_part}|{data_part}"
+        key = f"{nuitka_version}|{py_version}|{src_fp}|{entry_part}|{pkg_part}|{data_part}"
+        if compiler != "auto":
+            key += f"|{compiler}"
+        return key
 
     @classmethod
     def compile_with_stamp(  # noqa: PLR0913
@@ -540,6 +557,7 @@ class NuitkaCompile:
         ccache: bool = False,
         nuitka_packages: tuple[str, ...] = (),
         data_dirs: tuple[Path, ...] = (),
+        compiler: str = "auto",
     ) -> None:
         """整合 ensure_env + standalone python + stamp 缓存 + compile_src 的入口.
 
@@ -559,6 +577,10 @@ class NuitkaCompile:
         ``web-static-dirs`` 解析到 ``src_dir`` 下的绝对路径元组），透传给
         :meth:`compile_src` 排除其下 ``.py``，并纳入 :meth:`_stamp_key`。
 
+        ``compiler``（``auto``/``msvc``/``mingw``）透传给 :meth:`ensure_env`
+        （winlibs 预填充决策）与 :meth:`compile_src`（force-mingw64 flag），
+        并纳入 :meth:`_stamp_key`（非 auto 时拼接，切换编译器强制重编）。
+
         **回退机制**：Nuitka 是可选优化（默认关闭），环境就绪失败时不应中断构建。
         :meth:`ensure_env`（nuitka 安装、C 编译器检查）与 :meth:`_ensure_build_python`
         （standalone python 下载）任一抛 :class:`NuitkaError` 时，warning 并 return，
@@ -567,7 +589,7 @@ class NuitkaCompile:
         """
         nuitka_ver = nuitka_version_for(py_version)
         stamp = cls._stamp_path(dist_dir)
-        stamp_key = cls._stamp_key(src_dir, nuitka_ver, py_version, entry_rels, nuitka_packages, data_dirs)
+        stamp_key = cls._stamp_key(src_dir, nuitka_ver, py_version, entry_rels, nuitka_packages, data_dirs, compiler)
 
         # stamp 命中：跳过整个 Nuitka 阶段
         try:
@@ -597,7 +619,9 @@ class NuitkaCompile:
         # Nuitka 是可选优化，网络不可用/C 编译器缺失/下载失败不应中断构建。
         # compile_src 不在捕获范围（单文件编译失败已有 warning 继续，非环境问题）。
         try:
-            cls.ensure_env(cache_root, py_version, target, mirror, stage=stage)  # NuitkaEnv mixin（MRO 派发）
+            cls.ensure_env(
+                cache_root, py_version, target, mirror, stage=stage, compiler=compiler
+            )  # NuitkaEnv mixin（MRO 派发）
             nuitka_cache = cls._nuitka_cache_dir(cache_root, py_version)  # NuitkaEnv mixin（MRO 派发）
 
             # Windows 编译环境：下载 python-build-standalone 完整发行版运行 nuitka
@@ -633,6 +657,7 @@ class NuitkaCompile:
             ccache=ccache,
             cache_root=cache_root,
             data_dirs=data_dirs,
+            compiler=compiler,
         )
 
         # 编译用户指定的第三方包（site-packages 中的纯 Python 包）
@@ -650,6 +675,7 @@ class NuitkaCompile:
                     build_python_exe=build_python_exe,
                     ccache=ccache,
                     cache_root=cache_root,
+                    compiler=compiler,
                 )
             else:
                 _logger.warning("site-packages 不存在，跳过包编译: %s", site_packages)

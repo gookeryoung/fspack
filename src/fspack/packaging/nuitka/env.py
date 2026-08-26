@@ -422,7 +422,7 @@ class NuitkaEnv:
             raise NuitkaError(f"nuitka 安装后缓存目录仍无 nuitka 包: {cache_dir}")
 
     @classmethod
-    def ensure_env(
+    def ensure_env(  # noqa: PLR0912, PLR0913
         cls: type[NuitkaCompilerProtocol],
         cache_root: Path,
         py_version: str,
@@ -430,6 +430,7 @@ class NuitkaEnv:
         mirror: MirrorConfig,
         *,
         stage: StageRecorder,
+        compiler: str = "auto",
     ) -> str:
         """确保本地缓存已装锁定版 nuitka，返回 nuitka 版本号.
 
@@ -442,7 +443,10 @@ class NuitkaEnv:
         2. Windows：:meth:`NuitkaWinlibs.ensure_winlibs_mingw` 预填充 winlibs gcc
            到 ``<cache_root>/nuitka-winlibs-mingw``（全版本：py<3.13 scons 默认
            走 winlibs，py>=3.13 由编译命令 force-mingw64 强制走 winlibs），
-           scons 编译时缓存命中不下载
+           scons 编译时缓存命中不下载。``compiler="mingw"`` 时无视 MSVC
+           恒预填充（编译命令 force flag 顶掉 MSVC，scons 需 winlibs 缓存）；
+           ``compiler="msvc"`` 时跳过预填充（MSVC 缺失由构建入口
+           ``_normalize_exclusive_options`` fail-fast）
         3. 按 :func:`nuitka_version_for` 取锁定版本号
         4. :meth:`_is_nuitka_cached` 检查缓存目录是否已有 nuitka
         5. 无则 :meth:`_find_local_nuitka_sdist` 识别 wheel 缓存目录
@@ -466,6 +470,8 @@ class NuitkaEnv:
             target: 目标平台（决定 C 编译器检查）。
             mirror: 镜像配置（提供 ``pypi_index``）。
             stage: 阶段记录器，回写缓存命中数与下载字节数。
+            compiler: Windows Nuitka 编译器选择（``auto``/``msvc``/``mingw``，
+                仅 Windows 目标生效；非 Windows 目标显式指定非 auto 值时告警忽略）。
 
         Returns:
             锁定的 Nuitka 版本号（如 ``4.1.3``）。
@@ -475,19 +481,34 @@ class NuitkaEnv:
         """
         cls._check_c_compiler(target)
 
+        if compiler != "auto" and target is not Platform.WINDOWS:
+            # compiler 仅影响 Windows scons 编译器选择；Linux/macOS 用系统
+            # gcc/clang，显式指定时告警（不中断，Nuitka 阶段照常）
+            _logger.warning("compiler=%s 仅对 Windows Nuitka 编译生效，当前目标平台忽略", compiler)
+
         # Windows 预填充 winlibs gcc 到 fspack 缓存目录：py<3.13 时
         # Nuitka scons 默认 fallback 到 winlibs（缓存命中不下载）；py>=3.13
         # 默认 fallback 到 zig（其编译的 .pyd 可能损坏），编译命令已追加
         # --experimental=force-mingw64 强制走 winlibs（见 progress 的
         # _compile_files），此处预填充与编译命令两层须一致。
-        # MSVC 机器跳过预填充：scons 编译器选择优先级 MSVC > winlibs > zig，
-        # 装了 Visual Studio C++ 工具链时直接用 MSVC，winlibs 预填充
-        # （~200MB 下载）纯浪费；force flag 判断（needs_force_mingw64）
-        # 同样跳过 MSVC 机器，两层条件保持一致
+        # compiler="mingw"：无视 MSVC 恒预填充（编译命令 force flag 顶掉
+        #   MSVC，scons 需 winlibs 缓存命中）；
+        # compiler="msvc"：跳过预填充（MSVC 缺失由构建入口
+        #   _normalize_exclusive_options fail-fast，此处不再重复报错）；
+        # compiler="auto"：MSVC 机器跳过预填充——scons 编译器选择优先级
+        #   MSVC > winlibs > zig，装了 Visual Studio C++ 工具链时直接用
+        #   MSVC，winlibs 预填充（~200MB 下载）纯浪费；force flag 判断
+        #   （needs_force_mingw64）同样跳过 MSVC 机器，两层条件保持一致
         if target is Platform.WINDOWS:
             from fspack.packaging.nuitka.winlibs import msvc_available
 
-            if msvc_available():
+            if compiler == "mingw":
+                if msvc_available():
+                    _logger.info("compiler=mingw：强制 winlibs gcc（force-mingw64 顶掉 MSVC），预填充工具链")
+                cls.ensure_winlibs_mingw(py_version, stage)
+            elif compiler == "msvc":
+                _logger.info("compiler=msvc：强制使用 MSVC，跳过 winlibs 预填充")
+            elif msvc_available():
                 _logger.info("检测到 MSVC（Visual Studio C++ 工具链），Nuitka 将优先使用 MSVC，跳过 winlibs 预填充")
             else:
                 cls.ensure_winlibs_mingw(py_version, stage)

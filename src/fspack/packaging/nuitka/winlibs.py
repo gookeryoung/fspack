@@ -219,25 +219,44 @@ def _extract_7z(archive: Path, dest: Path) -> None:
         raise NuitkaError(f"winlibs-mingw 7z 解压失败 {archive}（退出码 {result.returncode}）: {tail}")
 
 
-def needs_force_mingw64(target: Platform, py_version: str) -> bool:
+def needs_force_mingw64(target: Platform, py_version: str, compiler: str = "auto") -> bool:
     """判断编译命令是否需追加 ``--experimental=force-mingw64`` 强制 winlibs.
 
-    需要的条件（全部满足）：
+    ``compiler`` 选择（``[tool.fspack] compiler`` / CLI ``--compiler``）：
 
-    - Windows 目标（Linux 用系统 gcc 无 zig 风险）
-    - py>=3.13（Nuitka 4.1 起该版本段默认 fallback 到 zig，产物可能损坏；
-      py<3.13 默认即 winlibs 无需 flag；空 ``py_version`` 未知版本不加
-      flag 保持旧行为）
-    - 无 MSVC（:func:`msvc_available` 为 False）：MSVC 优先级高于 fallback
-      链，scons 直接用 MSVC；此时加 flag 反而把 MSVC 顶掉退回 winlibs
+    - ``"auto"``（默认）：需要的条件（全部满足）——
 
-    与 :meth:`NuitkaEnv.ensure_env` 的 winlibs 预填充条件配套：预填充跳过
-    MSVC 机器（省 200MB），本函数同样跳过（编译器统一走 MSVC），两层判断
-    必须一致否则出现"预填充了却 force 走 MSVC"或"没预填充却 force 要
-    winlibs"的资源错配。
+      * Windows 目标（Linux 用系统 gcc 无 zig 风险）
+      * py>=3.13（Nuitka 4.1 起该版本段默认 fallback 到 zig，产物可能损坏；
+        py<3.13 默认即 winlibs 无需 flag；空 ``py_version`` 未知版本不加
+        flag 保持旧行为）
+      * 无 MSVC（:func:`msvc_available` 为 False）：MSVC 优先级高于 fallback
+        链，scons 直接用 MSVC；此时加 flag 反而把 MSVC 顶掉退回 winlibs
+
+    - ``"mingw"``：强制 winlibs 无视 MSVC——MSVC 存在时须用 flag 顶掉；
+      无 MSVC 时仅 py>=3.13 需要（zig 防护），py<3.13 scons 默认即 winlibs
+      flag 冗余且旧版 Nuitka（2.5.1）未必识别该 experimental 选项，跳过。
+      空 ``py_version`` 未知版本仅在有 MSVC 时加 flag（无 MSVC 时 scons
+      fallback 链行为未知，保持不加）
+
+    - ``"msvc"``：恒 False（force flag 与 MSVC 选择互斥；MSVC 缺失由构建
+      入口 ``_normalize_exclusive_options`` fail-fast，不会走到编译）
+
+    与 :meth:`NuitkaEnv.ensure_env` 的 winlibs 预填充条件配套：``"mingw"``
+    时 ensure_env 无视 MSVC 恒预填充（scons 需 winlibs 缓存命中），``"msvc"``
+    时跳过预填充，``"auto"`` 时按 MSVC 探测跳过/预填充——两层判断必须一致
+    否则出现"预填充了却 force 走 MSVC"或"没预填充却 force 要 winlibs"的
+    资源错配。
     """
     if target is not Platform.WINDOWS:
         return False
+    if compiler == "msvc":
+        return False
+    if compiler == "mingw":
+        # 强制 mingw：MSVC 存在时须顶掉；无 MSVC 时仅 py>=3.13（zig 防护）需要
+        if not py_version or uses_winlibs(py_version):
+            return msvc_available()
+        return True
     if not py_version or uses_winlibs(py_version):
         return False
     return not msvc_available()

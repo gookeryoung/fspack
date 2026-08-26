@@ -2606,6 +2606,40 @@ def test_build_options_open_browser() -> None:
     assert build_options_from_defaults(defaults_true).open_browser is True
 
 
+def test_build_defaults_compiler(tmp_path: Path) -> None:
+    """[tool.fspack] compiler 解析到 BuildDefaults.compiler，非法值报错."""
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\ncompiler = "mingw"\n'
+    )
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    info = parse_project(tmp_path)
+    assert info.build_defaults.compiler == "mingw"
+
+    # 非法枚举值报错
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\ncompiler = "gcc"\n'
+    )
+    with pytest.raises(ProjectError, match="compiler 必须是 auto、msvc 或 mingw"):
+        parse_project(tmp_path)
+
+    # 非字符串类型报错
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\ncompiler = 1\n'
+    )
+    with pytest.raises(ProjectError, match="compiler 必须是 auto、msvc 或 mingw"):
+        parse_project(tmp_path)
+
+
+def test_build_options_compiler() -> None:
+    """BuildOptions.compiler 默认 auto，build_options_from_defaults 透传非 None 值."""
+    assert BuildOptions().compiler == "auto"
+    # None 回退默认
+    assert build_options_from_defaults(BuildDefaults()).compiler == "auto"
+    # 非 None 覆盖
+    assert build_options_from_defaults(BuildDefaults(compiler="msvc")).compiler == "msvc"
+    assert build_options_from_defaults(BuildDefaults(compiler="mingw")).compiler == "mingw"
+
+
 def test_default_entry_web_priority_over_cli() -> None:
     """多入口项目默认入口：WEB 优先于 CLI（GUI > WEB > CLI）."""
     ep_cli = EntryPoint(name="cli", module="cli", file=Path("cli.py"), app_type=AppType.CLI)

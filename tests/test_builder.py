@@ -2614,6 +2614,7 @@ def test_build_with_nuitka_invokes_compiler(tmp_path: Path, monkeypatch: pytest.
         ccache: bool = False,
         nuitka_packages: tuple[str, ...] = (),
         data_dirs: tuple[Path, ...] = (),
+        compiler: str = "auto",
     ) -> None:
         nuitka_called["src_dir"] = src_dir
         nuitka_called["dist_dir"] = dist_dir
@@ -2624,6 +2625,7 @@ def test_build_with_nuitka_invokes_compiler(tmp_path: Path, monkeypatch: pytest.
         nuitka_called["ccache"] = ccache
         nuitka_called["nuitka_packages"] = nuitka_packages
         nuitka_called["data_dirs"] = data_dirs
+        nuitka_called["compiler"] = compiler
         stage.processed()
         stage.set_detail("mock 编译")
 
@@ -2762,6 +2764,36 @@ def test_normalize_exclusive_options_matrix() -> None:
     # 非 nuitka：默认 win7 替换不受影响
     opts = _normalize_exclusive_options(BuildOptions(), "3.13.14", Platform.WINDOWS)
     assert opts.no_win7_dll is False
+
+
+def test_normalize_exclusive_options_compiler_msvc_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """compiler=msvc 校验矩阵：Windows + nuitka + 无 MSVC 时 fail-fast，其余场景放行."""
+    from fspack.exceptions import ProjectError
+    from fspack.packaging.pipeline.executor import _normalize_exclusive_options
+
+    # Windows + nuitka + compiler=msvc + 无 MSVC：raise ProjectError
+    monkeypatch.setattr("fspack.packaging.nuitka.winlibs.msvc_available", lambda: False)
+    with pytest.raises(ProjectError, match="compiler=msvc"):
+        _normalize_exclusive_options(BuildOptions(nuitka=True, compiler="msvc"), "3.13.14", Platform.WINDOWS)
+
+    # win7 归一化命中后仍执行 compiler 校验（控制流不提前 return）
+    with pytest.raises(ProjectError, match="compiler=msvc"):
+        _normalize_exclusive_options(BuildOptions(nuitka=True, compiler="msvc"), "3.12.10", Platform.WINDOWS)
+
+    # 有 MSVC：通过，且 win7 归一化仍生效
+    monkeypatch.setattr("fspack.packaging.nuitka.winlibs.msvc_available", lambda: True)
+    opts = _normalize_exclusive_options(BuildOptions(nuitka=True, compiler="msvc"), "3.13.14", Platform.WINDOWS)
+    assert opts.compiler == "msvc"
+    assert opts.no_win7_dll is True
+
+    # 非 Windows 目标 / 非 nuitka / 非 msvc：不校验（无 MSVC 也放行）
+    monkeypatch.setattr("fspack.packaging.nuitka.winlibs.msvc_available", lambda: False)
+    opts = _normalize_exclusive_options(BuildOptions(nuitka=True, compiler="msvc"), "3.13.14", Platform.LINUX)
+    assert opts.compiler == "msvc"
+    opts = _normalize_exclusive_options(BuildOptions(compiler="msvc"), "3.13.14", Platform.WINDOWS)
+    assert opts.compiler == "msvc"
+    opts = _normalize_exclusive_options(BuildOptions(nuitka=True, compiler="mingw"), "3.13.14", Platform.WINDOWS)
+    assert opts.compiler == "mingw"
 
 
 def test_build_nuitka_disables_win7_dll_replacement(
