@@ -455,10 +455,10 @@ def _run_generate(ns: argparse.Namespace) -> None:
     """执行 manifest generate：扫描 dist 重新生成 manifest."""
     import json
 
-    from fspack._util.fsutil import atomic_write_text
     from fspack.config import ProjectInfo
     from fspack.console import console
     from fspack.exceptions import ProjectError
+    from fspack.fsutil import atomic_write_text
     from fspack.packaging.manifest import _format_size, _logger, collect_manifest
 
     project = Path(ns.project).resolve()

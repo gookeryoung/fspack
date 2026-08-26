@@ -18,13 +18,13 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Sequence
 
-from fspack._util.fsutil import atomic_write_text
 from fspack.config import (
     DEFAULT_SLIM_RULES,
     DependencyReport,
     SlimRules,
     cache_root,
 )
+from fspack.fsutil import atomic_write_text
 from fspack.packaging.builtin import TkinterBundler as _DefaultTkinterBundler
 from fspack.packaging.site_packages import normalize_pkg_name as _normalize_pkg_name
 from fspack.packaging.wheels import download_wheels as _default_download_wheels

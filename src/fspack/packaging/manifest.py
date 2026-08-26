@@ -39,8 +39,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fspack._util.fsutil import atomic_write_text, scandir_tree
 from fspack.config import ProjectInfo
+from fspack.fsutil import atomic_write_text, scandir_tree
 
 __all__ = [
     "ManifestDiff",

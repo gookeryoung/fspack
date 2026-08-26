@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import logging
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -822,3 +823,312 @@ def test_parse_parallel_timeout_shutdowns_without_waiting(monkeypatch: pytest.Mo
     assert "os" in imports_ord
     # 超时分支 shutdown(wait=False)，timed_out 标志使 finally 跳过重复 shutdown
     assert stub.shutdown_waits == [False]
+
+
+# ---- _parse_parallel 超时防护测试（iter-127） ----
+
+
+def test_parse_parallel_timeout_warns_on_slow_worker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """``_parse_parallel`` 整体超时后 warning 提示，未完成 future 被 cancel（iter-138 改 submit+as_completed）.
+
+    用 fake ``as_completed`` 抛 ``TimeoutError`` 模拟超时。验证 warning 日志输出
+    与未完成 future 的 cancel 调用（fake future 的 ``done()`` 返回 False 触发 cancel）。
+    """
+    from concurrent.futures import TimeoutError as FuturesTimeoutError
+
+    from fspack.analyzer import analysis
+    from fspack.analyzer.analysis import _parse_parallel
+
+    # 构造 5 个 .py 文件
+    for i in range(5):
+        (tmp_path / f"mod_{i}.py").write_text(f"x = {i}\n", encoding="utf-8")
+    py_files = sorted(tmp_path.glob("*.py"))
+
+    cancel_calls: list[bool] = []
+    shutdown_calls: list[bool] = []
+
+    class _FakeFuture:
+        def done(self) -> bool:
+            return False
+
+        def cancel(self) -> bool:
+            cancel_calls.append(True)
+            return True
+
+        def result(self) -> tuple[list[str], list[str], dict[str, frozenset[str]], list[tuple[str, str]]]:
+            return [], [], {}, []
+
+    class _FakePool:
+        def __init__(self, *args: object, **kw: object) -> None:
+            pass
+
+        def __enter__(self) -> _FakePool:
+            return self
+
+        def __exit__(self, *args: object) -> bool:
+            return False
+
+        def submit(self, fn: object, *args: object) -> _FakeFuture:
+            return _FakeFuture()
+
+        def shutdown(self, wait: bool = True) -> None:
+            shutdown_calls.append(wait)
+
+    monkeypatch.setattr(analysis, "ProcessPoolExecutor", _FakePool)
+
+    def fake_as_completed(futures: object, timeout: float | None = None) -> object:
+        raise FuturesTimeoutError("simulated timeout")
+
+    monkeypatch.setattr(analysis, "as_completed", fake_as_completed)
+
+    all_imports_ord: dict[str, None] = {}
+    all_stdlib_ord: dict[str, None] = {}
+    all_submodules: dict[str, list[str]] = {}
+    all_errors: list[tuple[str, str]] = []
+
+    with caplog.at_level(logging.WARNING, logger="fspack.analyzer"):
+        _parse_parallel(py_files, all_imports_ord, all_stdlib_ord, all_submodules, all_errors)
+
+    # 超时 warning
+    timeout_logs = [r for r in caplog.records if "超时" in r.message]
+    assert len(timeout_logs) == 1
+    assert "AST 并行解析" in timeout_logs[0].message
+    # 5 个 future 都被 cancel（done() 返回 False）
+    assert len(cancel_calls) == 5
+    # 超时后 imports/submodules/errors 为空（fake as_completed 抛异常未返回结果）
+    assert all_imports_ord == {}
+    assert all_stdlib_ord == {}
+    assert all_submodules == {}
+    assert all_errors == []
+
+
+def test_parse_parallel_normal_completes_without_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """正常完成的并行解析不触发超时，结果完整."""
+    from fspack.analyzer import analysis
+    from fspack.analyzer.analysis import _parse_parallel
+
+    for i in range(5):
+        (tmp_path / f"mod_{i}.py").write_text(f"import os\nx = {i}\n", encoding="utf-8")
+    py_files = sorted(tmp_path.glob("*.py"))
+
+    # 设较长 timeout 确保正常完成
+    monkeypatch.setattr(analysis, "_PARSE_TOTAL_TIMEOUT", 60.0)
+
+    all_imports_ord: dict[str, None] = {}
+    all_stdlib_ord: dict[str, None] = {}
+    all_submodules: dict[str, list[str]] = {}
+    all_errors: list[tuple[str, str]] = []
+
+    _parse_parallel(py_files, all_imports_ord, all_stdlib_ord, all_submodules, all_errors)
+
+    # 5 个文件都 import os（dict 去重保序，"os" 只出现一次）
+    assert "os" in all_stdlib_ord
+    assert all_imports_ord == {}
+    assert all_errors == []
+
+
+def test_parse_parallel_timeout_constant_default() -> None:
+    """``_PARSE_TOTAL_TIMEOUT`` 默认 300s."""
+    from fspack.analyzer import _PARSE_TOTAL_TIMEOUT
+
+    assert _PARSE_TOTAL_TIMEOUT == 300.0
+
+
+def test_parse_parallel_uses_initializer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``_parse_parallel`` 用 ``initializer`` 预加载 ``_STDLIB`` 传给 worker（iter-134）."""
+    from fspack.analyzer import analysis
+    from fspack.analyzer.analysis import _init_parse_worker, _parse_parallel
+    from fspack.analyzer.ast_scan import _STDLIB
+
+    for i in range(5):
+        (tmp_path / f"mod_{i}.py").write_text("x = 0\n", encoding="utf-8")
+    py_files = sorted(tmp_path.glob("*.py"))
+
+    captured: dict[str, object] = {}
+
+    class _FakeFuture:
+        def done(self) -> bool:
+            return True
+
+        def cancel(self) -> bool:
+            return False
+
+        def result(self) -> tuple[list[str], list[str], dict[str, frozenset[str]], list[tuple[str, str]]]:
+            return [], [], {}, []
+
+    class _Pool:
+        def __init__(self, *args: object, **kw: object) -> None:
+            captured.update(kw)
+
+        def __enter__(self) -> _Pool:
+            return self
+
+        def __exit__(self, *args: object) -> bool:
+            return False
+
+        def submit(self, fn: object, *args: object) -> _FakeFuture:
+            return _FakeFuture()
+
+        def shutdown(self, wait: bool = True) -> None:
+            pass
+
+    monkeypatch.setattr(analysis, "ProcessPoolExecutor", _Pool)
+    monkeypatch.setattr(analysis, "as_completed", lambda futures, timeout=None: iter(futures))
+    _parse_parallel(py_files, {}, {}, {}, [])
+
+    assert captured.get("initializer") is _init_parse_worker
+    assert captured.get("initargs") == (_STDLIB,)
+
+
+def test_parse_parallel_interleave_and_submit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``_parse_parallel`` 对每个文件 submit 一个 future（iter-138 改 submit 逐文件提交）.
+
+    旧 ``_interleave_by_size`` 为 ``map(chunksize=)`` 连续分块设计，submit 模式下
+    进程池 FIFO 队列天然负载均衡，已删除——本测试验证 submit 调用次数等于文件数。
+    """
+    from fspack.analyzer import analysis
+    from fspack.analyzer.analysis import _parse_parallel
+
+    for i in range(20):
+        (tmp_path / f"mod_{i}.py").write_text("x = 0\n", encoding="utf-8")
+    py_files = sorted(tmp_path.glob("*.py"))
+
+    submit_calls: list[str] = []
+
+    class _FakeFuture:
+        def done(self) -> bool:
+            return True
+
+        def cancel(self) -> bool:
+            return False
+
+        def result(self) -> tuple[list[str], list[str], dict[str, frozenset[str]], list[tuple[str, str]]]:
+            return [], [], {}, []
+
+    class _Pool:
+        def __init__(self, *args: object, **kw: object) -> None:
+            pass
+
+        def __enter__(self) -> _Pool:
+            return self
+
+        def __exit__(self, *args: object) -> bool:
+            return False
+
+        def submit(self, fn: object, *args: object) -> _FakeFuture:
+            # args[0] 是文件路径 str
+            submit_calls.append(str(args[0]) if args else "")
+            return _FakeFuture()
+
+        def shutdown(self, wait: bool = True) -> None:
+            pass
+
+    monkeypatch.setattr(analysis, "ProcessPoolExecutor", _Pool)
+    monkeypatch.setattr(analysis, "as_completed", lambda futures, timeout=None: iter(futures))
+    _parse_parallel(py_files, {}, {}, {}, [])
+
+    # 20 个文件每个 submit 一次（submit 替代 map+chunksize，无需 interleave 重排）
+    assert len(submit_calls) == 20
+
+
+def test_parse_parallel_partial_timeout_aggregates_completed_results(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``_parse_parallel`` 部分 worker 超时时，已完成 worker 的结果仍被聚合（iter-138）.
+
+    ``map(timeout=)`` 在首个 future 卡死时丢弃后续已完成结果；``submit`` + ``as_completed``
+    按完成顺序 yield，超时前已完成的 future 结果被聚合，未完成的被 cancel。
+    """
+    from concurrent.futures import TimeoutError as FuturesTimeoutError
+
+    from fspack.analyzer import analysis
+    from fspack.analyzer.analysis import _parse_parallel
+
+    for i in range(5):
+        (tmp_path / f"mod_{i}.py").write_text(f"x = {i}\n", encoding="utf-8")
+    py_files = sorted(tmp_path.glob("*.py"))
+
+    completed_results: list[tuple[list[str], list[str], dict[str, frozenset[str]], list[tuple[str, str]]]] = [
+        (["numpy"], ["os"], {}, []),
+        (["requests"], ["sys"], {}, []),
+        (["flask"], [], {}, []),
+    ]
+
+    class _DoneFuture:
+        def __init__(self, result: object) -> None:
+            self._result = result
+
+        def done(self) -> bool:
+            return True
+
+        def cancel(self) -> bool:
+            return False
+
+        def result(self) -> object:
+            return self._result
+
+    class _PendingFuture:
+        def done(self) -> bool:
+            return False
+
+        def cancel(self) -> bool:
+            return True
+
+    futures_chain: list[object] = [
+        _DoneFuture(completed_results[0]),
+        _DoneFuture(completed_results[1]),
+        _DoneFuture(completed_results[2]),
+        _PendingFuture(),
+        _PendingFuture(),
+    ]
+
+    class _FakePool:
+        def __init__(self, *args: object, **kw: object) -> None:
+            pass
+
+        def __enter__(self) -> _FakePool:
+            return self
+
+        def __exit__(self, *args: object) -> bool:
+            return False
+
+        def submit(self, fn: object, *args: object) -> object:
+            return futures_chain.pop(0)
+
+        def shutdown(self, wait: bool = True) -> None:
+            pass
+
+    monkeypatch.setattr(analysis, "ProcessPoolExecutor", _FakePool)
+
+    def fake_as_completed(futures: object, timeout: float | None = None) -> Iterator[object]:
+        # 前 3 个已完成的 yield，然后抛 TimeoutError 模拟后 2 个超时
+        futures_list = list(futures)  # type: ignore[arg-type]
+        yield from futures_list[:3]
+        raise FuturesTimeoutError("partial timeout")
+
+    monkeypatch.setattr(analysis, "as_completed", fake_as_completed)
+
+    all_imports_ord: dict[str, None] = {}
+    all_stdlib_ord: dict[str, None] = {}
+    all_submodules: dict[str, list[str]] = {}
+    all_errors: list[tuple[str, str]] = []
+
+    _parse_parallel(py_files, all_imports_ord, all_stdlib_ord, all_submodules, all_errors)
+
+    # 已完成的 3 个 future 结果被聚合（关键改进：map(timeout=) 会丢失这些结果）
+    assert "numpy" in all_imports_ord
+    assert "requests" in all_imports_ord
+    assert "flask" in all_imports_ord
+    assert "os" in all_stdlib_ord
+    assert "sys" in all_stdlib_ord

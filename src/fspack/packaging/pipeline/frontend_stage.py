@@ -40,8 +40,8 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import IO, Any
 
-from fspack._util.jsoncache import load_json_dict
 from fspack.exceptions import FspackError
+from fspack.jsoncache import load_json_dict
 
 __all__ = [
     "FrontendProject",

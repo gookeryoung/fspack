@@ -21,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from fspack._util.fsutil import atomic_write_text
+from fspack.fsutil import atomic_write_text
 from fspack.platform import Platform
 
 from .source_strip import _strip_compiled_py

@@ -77,7 +77,7 @@ def _log_download_event(req: str, stdout: str, stderr: str, elapsed: float, cach
 
     并行模式下多线程并发调用，``logging.info`` 单次调用线程安全，事件不会交错。
     """
-    from fspack._util.format import format_bytes_dec
+    from fspack.format import format_bytes_dec
 
     wheel_path: Path | None = None
     for line in stdout.splitlines():

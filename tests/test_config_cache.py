@@ -109,3 +109,11 @@ class TestIsOffline:
         """未设置环境变量时默认关闭离线模式."""
         monkeypatch.delenv("FSPACK_OFFLINE", raising=False)
         assert is_offline() is False
+
+
+def test_nuitka_work_cache_dir_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """nuitka_work_cache_dir 返回 <cache_root>/nuitka-work（NUITKA_CACHE_DIR 重定向目标）."""
+    from fspack.config.cache import nuitka_work_cache_dir
+
+    monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
+    assert nuitka_work_cache_dir() == tmp_path / "cache" / "nuitka-work"

@@ -10,8 +10,10 @@ import pytest
 
 from fspack.config import (
     DEFAULT_MIRROR,
+    DEFAULT_NUITKA_VERSION,
     DEFAULT_PY_VERSION,
     MIRRORS,
+    NUITKA_VERSIONS,
     AppType,
     BuildConfig,
     BuildDefaults,
@@ -2667,3 +2669,51 @@ def test_default_entry_web_priority_over_cli() -> None:
         entries=(ep_cli, ep_web),
     )
     assert info.default_entry is ep_web
+
+
+# ---- nuitka_version_for 字典查询测试 ----
+
+
+def test_nuitka_version_for_311_returns_413() -> None:
+    """Python 3.11.x 锁定 nuitka 4.1.3."""
+    assert nuitka_version_for("3.11.9") == "4.1.3"
+    assert nuitka_version_for("3.11.15") == "4.1.3"
+
+
+def test_nuitka_version_for_38_returns_251() -> None:
+    """Python 3.8.x 锁定 nuitka 2.5.1（4.x 不再维护 EOL 3.8）."""
+    assert nuitka_version_for("3.8.10") == "2.5.1"
+    assert nuitka_version_for("3.9.18") == "2.5.1"
+
+
+def test_nuitka_version_for_unknown_returns_default() -> None:
+    """未知 Python 版本（如 3.15）回退 DEFAULT_NUITKA_VERSION."""
+    assert nuitka_version_for("3.15.0") == DEFAULT_NUITKA_VERSION
+
+
+def test_nuitka_version_for_uses_major_minor_only() -> None:
+    """版本查询按 major.minor 匹配，补丁版本不影响结果."""
+    # 所有 3.10.x 都映射到同一个 nuitka 版本
+    ver_a = nuitka_version_for("3.10.0")
+    ver_b = nuitka_version_for("3.10.14")
+    assert ver_a == ver_b == NUITKA_VERSIONS["3.10"]
+
+
+def test_build_options_from_defaults_translates_ccache() -> None:
+    """build_options_from_defaults 透传 ccache 字段."""
+    from fspack.config import BuildDefaults, build_options_from_defaults
+
+    # ccache=True
+    defaults = BuildDefaults(ccache=True)
+    opts = build_options_from_defaults(defaults)
+    assert opts.ccache is True
+
+    # ccache=False
+    defaults = BuildDefaults(ccache=False)
+    opts = build_options_from_defaults(defaults)
+    assert opts.ccache is False
+
+    # ccache=None → 默认值 False
+    defaults = BuildDefaults()
+    opts = build_options_from_defaults(defaults)
+    assert opts.ccache is False

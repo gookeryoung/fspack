@@ -23,7 +23,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from fspack._util.fsutil import atomic_write_text, safe_unlink
+from fspack.fsutil import atomic_write_text, safe_unlink
 
 # 共享 logger 名：测试用 caplog.at_level(..., logger="fspack.packaging.nuitka") 锁定
 _logger = logging.getLogger("fspack.packaging.nuitka")
@@ -49,7 +49,7 @@ def _dispatch(fn_name: str, fallback_fn: Callable[..., Any]) -> Callable[..., An
       （此时 compile 已完成顶层初始化，re-export 名字就绪）
     - 每次调用 ``getattr(mod, fn_name, None)`` 动态拿属性，保证
       monkeypatch 后属性变化能被感知（缓存的是模块对象，不是函数引用）
-    - 获取不到 fallback 到 :mod:`fspack._util.fsutil` 的原始实现
+    - 获取不到 fallback 到 :mod:`fspack.fsutil` 的原始实现
     """
     mod = _compile_mod_holder[0]
     if mod is None:

@@ -36,9 +36,9 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from fspack._util.fsutil import walk_dir_size
 from fspack.doctor.integrity import _file_size, _is_pe_file, _is_tar_intact, _is_zip_intact, _try_unlink
 from fspack.doctor.models import CacheHealthReport
+from fspack.fsutil import walk_dir_size
 
 _logger = logging.getLogger(__name__)
 

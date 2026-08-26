@@ -16,8 +16,8 @@ import logging
 from pathlib import Path
 from typing import Sequence
 
-from fspack._util.fsutil import atomic_write_text
-from fspack._util.jsoncache import load_json_dict
+from fspack.fsutil import atomic_write_text
+from fspack.jsoncache import load_json_dict
 
 __all__ = [
     "_deps_cache_key",
@@ -59,7 +59,7 @@ def _load_deps_cache(cache_dir: Path, key: str) -> list[Path] | None:
     删除反而误伤可恢复的缓存。iter-128 引入。
 
     读取 → 解析 → 根 dict 校验 → 损坏删除的公共骨架委托
-    :func:`fspack._util.jsoncache.load_json_dict`；``wheels`` 字段类型校验与
+    :func:`fspack.jsoncache.load_json_dict`；``wheels`` 字段类型校验与
     wheel 文件存在性校验为本函数专属外壳，故保留在此。
     """
     cache_file = cache_dir / f".deps-{key}.json"

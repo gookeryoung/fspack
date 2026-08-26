@@ -44,8 +44,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fspack._util.fsutil import atomic_write_text
 from fspack.config import ProjectInfo
+from fspack.fsutil import atomic_write_text
 from fspack.packaging.site_packages import find_site_packages
 
 __all__ = [
