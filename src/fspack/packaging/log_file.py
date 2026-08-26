@@ -145,6 +145,7 @@ class LogFileHandler:
 
     handler: logging.FileHandler
     path: Path
+    previous_root_level: int
 
 
 def setup_log_file(path: Path, fmt: LogFormat = LogFormat.TEXT) -> LogFileHandler:
@@ -165,15 +166,23 @@ def setup_log_file(path: Path, fmt: LogFormat = LogFormat.TEXT) -> LogFileHandle
     handler.setLevel(logging.DEBUG)  # 文件记录全部级别，由 root logger 级别过滤
     handler.setFormatter(JsonFormatter() if fmt is LogFormat.JSON else TextFormatter())
     root = logging.getLogger()
+    # root 级别高于 INFO（默认 WARNING）时 INFO 级构建日志在 logger 层就被丢弃，
+    # 文件恒空——作为 API 调用 build(log_file=...)（未经 CLI setup_logging）时
+    # 即如此。降为 INFO 保证日志文件可用，teardown 恢复原级别（CLI 路径已是
+    # INFO，此操作无变化）。
+    previous_level = root.level
+    if previous_level > logging.INFO:
+        root.setLevel(logging.INFO)
     root.addHandler(handler)
     _logger.info("日志文件已启用: %s（格式: %s）", path, fmt.value)
-    return LogFileHandler(handler=handler, path=path)
+    return LogFileHandler(handler=handler, path=path, previous_root_level=previous_level)
 
 
 def teardown_log_file(wrapper: LogFileHandler | None) -> None:
     """从 root logger 移除并关闭日志文件 handler.
 
     ``wrapper`` 为 ``None`` 时无操作，便于 ``try/finally`` 中无需 None 检查。
+    恢复 :func:`setup_log_file` 降级前的 root logger 级别。
 
     :param wrapper: :func:`setup_log_file` 返回的包装，``None`` 时无操作
     """
@@ -182,3 +191,4 @@ def teardown_log_file(wrapper: LogFileHandler | None) -> None:
     root = logging.getLogger()
     root.removeHandler(wrapper.handler)
     wrapper.handler.close()
+    root.setLevel(wrapper.previous_root_level)

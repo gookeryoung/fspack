@@ -383,11 +383,51 @@ def test_setup_teardown_round_trip_handler_count(tmp_path: Path) -> None:
 
 
 def test_log_file_handler_dataclass() -> None:
-    """LogFileHandler 是 frozen dataclass，含 handler 与 path 字段."""
+    """LogFileHandler 是 frozen dataclass，含 handler/path/previous_root_level 字段."""
     from dataclasses import fields
 
     field_names = {f.name for f in fields(LogFileHandler)}
-    assert field_names == {"handler", "path"}
+    assert field_names == {"handler", "path", "previous_root_level"}
+
+
+def test_setup_log_file_lowers_warning_root_level(tmp_path: Path) -> None:
+    """root 级别高于 INFO（默认 WARNING）时降为 INFO，保证构建日志落盘.
+
+    API 调用 build(log_file=...)（未经 CLI setup_logging）时 root 为默认
+    WARNING，INFO 级日志在 logger 层就被丢弃、文件恒空。
+    """
+    root = logging.getLogger()
+    original_level = root.level
+    root.setLevel(logging.WARNING)
+    try:
+        wrapper = setup_log_file(tmp_path / "build.log")
+        try:
+            assert root.level == logging.INFO
+            logging.getLogger("test.level.lower").info("降级测试")
+            wrapper.handler.flush()
+        finally:
+            teardown_log_file(wrapper)
+        assert root.level == logging.WARNING
+        content = (tmp_path / "build.log").read_text(encoding="utf-8")
+        assert "降级测试" in content
+    finally:
+        root.setLevel(original_level)
+
+
+def test_setup_log_file_keeps_verbose_root_level(tmp_path: Path) -> None:
+    """root 级本就低于等于 INFO（如 DEBUG）时不改动、teardown 原样恢复."""
+    root = logging.getLogger()
+    original_level = root.level
+    root.setLevel(logging.DEBUG)
+    try:
+        wrapper = setup_log_file(tmp_path / "build.log")
+        try:
+            assert root.level == logging.DEBUG
+        finally:
+            teardown_log_file(wrapper)
+        assert root.level == logging.DEBUG
+    finally:
+        root.setLevel(original_level)
 
 
 # ---- CLI 层 --log-file/--log-format 透传 ----
