@@ -10,7 +10,8 @@
 - ``standalone-windows``：Windows standalone tarball（Nuitka 构建 python 与
   tkinter 提取的共享源，见 :mod:`fspack.packaging.builtin`）
 - ``nuitka``：Nuitka 解压后的构建用 python（按 py_version 分目录，含 ``t``
-  后缀 free-threaded 版本）
+  后缀 free-threaded 版本）；wheels 目录下的 nuitka sdist 归档
+  （``nuitka-<ver>.tar.gz``，构建安装 nuitka 包时免下载）一并盘点
 - ``tkinter``：tkinter 组件 zip（``tkinter-<version>.zip``）
 - ``winlibs``：Nuitka winlibs-mingw gcc 工具链（Windows，按 specificity 分目录）
 
@@ -41,6 +42,7 @@ from fspack.config.cache import (
     nuitka_winlibs_cache_dir,
     standalone_cache_dir,
     tkinter_cache_dir,
+    wheel_cache_dir,
 )
 from fspack.doctor.cache_health import (
     _EMBED_ZIP_RE,
@@ -66,6 +68,11 @@ __all__ = [
 # ``3.13.14t``，free-threaded 版本号带 t 后缀，见
 # NuitkaStandalone._build_python_cache_dir）
 _NUITKA_DIR_RE = re.compile(r"^\d+\.\d+\.\d+t?$")
+
+# nuitka sdist 归档名：``nuitka-<ver>.tar.gz``（PyPI 官方大写 ``Nuitka-``，
+# 部分镜像规范化为小写，大小写不敏感；与 env.py `_find_local_nuitka_sdist`
+# 的识别口径一致）
+_NUITKA_SDIST_RE = re.compile(r"^nuitka-(\d+(?:\.\d+)+)\.tar\.gz$", re.IGNORECASE)
 
 # 版本清单预览上限（超出追加"等 N 个"，表格详情列不至于过长）
 _VERSION_PREVIEW_LIMIT = 5
@@ -167,23 +174,52 @@ def _check_tkinter_contents() -> CheckResult:
 
 
 def _check_nuitka_contents() -> CheckResult:
-    """盘点 Nuitka 构建用 python 缓存（按 py_version 解压的目录树）.
+    """盘点 Nuitka 构建用 python 缓存（按 py_version 解压的目录树）与 wheels 下 sdist.
 
-    解压目录含数千文件，walk 统计体积成本高（Windows 杀软逐文件扫描），
-    仅列版本不统计体积；残留 tarball（上次解压中断）单独计数提示。
+    两处缓存均影响"首次构建是否需要下载"：
+
+    - ``<cache_root>/nuitka`` 解压目录树：解压含数千文件，walk 统计体积成本高
+      （Windows 杀软逐文件扫描），仅列版本不统计体积；残留 tarball（上次
+      解压中断）单独计数提示
+    - ``<cache_root>/wheels`` 下 nuitka sdist 归档（``nuitka-<ver>.tar.gz``，
+      大小写不敏感、递归子目录）：构建安装 nuitka 包时经
+      ``NuitkaEnv._find_local_nuitka_sdist`` 识别本地安装免下载，离线同样
+      可用——盘点不可见会造成"放了 sdist 却显示未缓存"的困惑
     """
     cache_dir = nuitka_cache_dir()
     try:
         versions = _nuitka_versions(cache_dir)
         residual = _nuitka_residual_tarballs(cache_dir)
+        sdists = _nuitka_sdist_versions(wheel_cache_dir())
     except OSError as exc:
         return _scan_error_result("nuitka 缓存", cache_dir, exc)
-    if not versions and not residual:
+    if not versions and not residual and not sdists:
         return _empty_cache_result("nuitka 缓存", cache_dir)
     detail = f"已解压 {len(versions)} 个版本：{_preview_versions(versions)}" if versions else "无已解压版本"
+    if sdists:
+        detail += f"；sdist 已缓存 {len(sdists)} 个（{_preview_versions(sdists)}，构建安装免下载）"
     if residual:
         detail += f"；残留 tarball {len(residual)} 个（上次解压中断，`fsp cache clean --target nuitka` 可清理）"
     return CheckResult(name="nuitka 缓存", status=CheckStatus.OK, detail=detail)
+
+
+def _nuitka_sdist_versions(wheels_dir: Path) -> list[str]:
+    """递归列出 wheels 缓存下的 nuitka sdist 归档版本（大小写不敏感）.
+
+    与 ``NuitkaEnv._find_local_nuitka_sdist`` 的识别范围一致（缓存根与任意
+    子目录）；此处盘点全部版本（按版本去重），是否命中锁定版本由构建侧
+    精确匹配文件名决定。
+
+    :raises OSError: 目录遍历失败。
+    """
+    if not wheels_dir.is_dir():
+        return []
+    found: set[str] = set()
+    for path in wheels_dir.rglob("*.tar.gz"):
+        m = _NUITKA_SDIST_RE.match(path.name)
+        if m is not None and path.is_file():
+            found.add(m.group(1))
+    return sorted(found, key=_ver_key)
 
 
 def _nuitka_versions(cache_dir: Path) -> list[str]:
@@ -250,7 +286,7 @@ def _check_winlibs_contents() -> CheckResult:
         return CheckResult(
             name=name,
             status=CheckStatus.OK,
-            detail=f"本地归档 {len(matched)} 个待解压（首次构建自动解压）",
+            detail=f"本地归档 {len(matched)} 个待解压（首次构建自动解压）({cache_dir})",
         )
 
     # 未缓存：不匹配的本地归档（版本不符）追加提示

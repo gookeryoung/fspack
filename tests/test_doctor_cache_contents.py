@@ -192,6 +192,64 @@ def test_check_nuitka_contents_only_residual(tmp_path: Path) -> None:
     assert "残留 tarball 1 个" in result.detail
 
 
+def test_check_nuitka_contents_sdist_only(tmp_path: Path) -> None:
+    """wheels 下存在 nuitka sdist 归档：不算空缓存（构建安装 nuitka 包免下载）.
+
+    复现用户场景：``<cache_root>/wheels/nuitka-4.1.3.tar.gz`` 存在，
+    构建侧 ``_find_local_nuitka_sdist`` 识别本地安装，doctor 须可见。
+    """
+    wheels = tmp_path / "wheels"
+    wheels.mkdir()
+    (wheels / "nuitka-4.1.3.tar.gz").write_bytes(b"x")
+    result = _check_nuitka_contents()
+    assert result.status is CheckStatus.OK
+    assert "sdist 已缓存 1 个" in result.detail
+    assert "4.1.3" in result.detail
+    assert "免下载" in result.detail
+
+
+def test_check_nuitka_contents_sdist_case_insensitive_subdir(tmp_path: Path) -> None:
+    """PyPI 官方大写 Nuitka-<ver>.tar.gz 与子目录放置均识别（与构建侧口径一致）."""
+    sub = tmp_path / "wheels" / "pypi"
+    sub.mkdir(parents=True)
+    (sub / "Nuitka-2.5.1.tar.gz").write_bytes(b"x")
+    result = _check_nuitka_contents()
+    assert "sdist 已缓存 1 个" in result.detail
+    assert "2.5.1" in result.detail
+
+
+def test_check_nuitka_contents_sdist_offline_ok(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """离线 + 仅 sdist：OK（sdist 本地安装离线可用，不算空缓存 WARN）."""
+    monkeypatch.setenv("FSPACK_OFFLINE", "1")
+    wheels = tmp_path / "wheels"
+    wheels.mkdir()
+    (wheels / "nuitka-4.1.3.tar.gz").write_bytes(b"x")
+    result = _check_nuitka_contents()
+    assert result.status is CheckStatus.OK
+    assert "未缓存" not in result.detail
+
+
+def test_check_nuitka_contents_versions_and_sdist(tmp_path: Path) -> None:
+    """已解压版本与 sdist 并存：两段清单都展示."""
+    (tmp_path / "nuitka" / "3.11.9").mkdir(parents=True)
+    (tmp_path / "wheels").mkdir()
+    (tmp_path / "wheels" / "nuitka-4.1.3.tar.gz").write_bytes(b"x")
+    result = _check_nuitka_contents()
+    assert result.status is CheckStatus.OK
+    assert "已解压 1 个版本" in result.detail
+    assert "sdist 已缓存 1 个" in result.detail
+
+
+def test_check_nuitka_contents_sdist_wrong_name_ignored(tmp_path: Path) -> None:
+    """非 nuitka 命名的 tar.gz（如 cpython standalone 源）不计入 sdist 清单."""
+    wheels = tmp_path / "wheels"
+    wheels.mkdir()
+    (wheels / "somepkg-1.0.0.tar.gz").write_bytes(b"x")
+    result = _check_nuitka_contents()
+    assert "sdist" not in result.detail
+    assert "未缓存" in result.detail
+
+
 # ---- winlibs 工具链盘点 ----
 
 
