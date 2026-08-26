@@ -286,7 +286,7 @@ def _check_winlibs_contents() -> CheckResult:
         return CheckResult(
             name=name,
             status=CheckStatus.OK,
-            detail=f"本地归档 {len(matched)} 个待解压（首次构建自动解压）({cache_dir})",
+            detail=f"本地归档 {len(matched)} 个待解压（首次构建自动解压）",
         )
 
     # 未缓存：不匹配的本地归档（版本不符）追加提示
