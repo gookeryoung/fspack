@@ -11,6 +11,11 @@ JSON 日志（默认 ``<项目>/.benchmarks/fsp-b-<时间戳>.json``，``--profi
 ``fspack/run-profile/1``，由 :func:`save_profile_log` 写入完整 dict），
 与构建日志同目录共存、按前缀区分，对比渲染共用同一张差异表。
 
+``fsp d --bench -P`` 基准剖析把一次 doctor 基准运行聚合为单个日志
+（``fsp-d-<时间戳>.json``，schema ``fspack/doctor-bench-profile/1``，
+``stages`` 为各模板构建耗时），与前两类日志同目录共存，``-PC`` 对比
+同样走 :func:`compare_with_baseline`（日志类别 :data:`DOCTOR_LOG_KIND`）。
+
 构建日志 JSON 结构（schema ``fspack/build-profile/1``）::
 
     {
@@ -65,6 +70,10 @@ if TYPE_CHECKING:
 __all__ = [
     "BUILD_LOG_KIND",
     "DEFAULT_LOG_DIR",
+    "DOCTOR_LOG_GLOB",
+    "DOCTOR_LOG_KIND",
+    "DOCTOR_LOG_PREFIX",
+    "DOCTOR_PROFILE_LOG_SCHEMA",
     "PROFILE_LOG_SCHEMA",
     "RUN_LOG_GLOB",
     "RUN_LOG_KIND",
@@ -88,15 +97,19 @@ _logger = logging.getLogger(__name__)
 # 日志 schema 版本：结构变更时递增，加载侧按版本校验兼容性
 PROFILE_LOG_SCHEMA = "fspack/build-profile/1"
 RUN_PROFILE_LOG_SCHEMA = "fspack/run-profile/1"
+DOCTOR_PROFILE_LOG_SCHEMA = "fspack/doctor-bench-profile/1"
 # 加载侧接受的 schema 集合（对比前另行校验双方 schema 一致，防跨类型对比）
-_KNOWN_SCHEMAS = frozenset({PROFILE_LOG_SCHEMA, RUN_PROFILE_LOG_SCHEMA})
+_KNOWN_SCHEMAS = frozenset({PROFILE_LOG_SCHEMA, RUN_PROFILE_LOG_SCHEMA, DOCTOR_PROFILE_LOG_SCHEMA})
 # 默认日志目录名（项目根下，与 pytest-benchmark 共存，文件名前缀区分）
 DEFAULT_LOG_DIR = ".benchmarks"
-# 日志文件名前缀与通配（fsp-b-/fsp-r-YYYYMMDD-HHMMSS.json，构建与启动剖析共存）
+# 日志文件名前缀与通配（fsp-b-/fsp-r-/fsp-d-YYYYMMDD-HHMMSS.json，构建/
+# 启动剖析/doctor 基准剖析共存）
 _LOG_PREFIX = "fsp-b-"
 _LOG_GLOB = "fsp-b-*.json"
 RUN_LOG_PREFIX = "fsp-r-"
 RUN_LOG_GLOB = "fsp-r-*.json"
+DOCTOR_LOG_PREFIX = "fsp-d-"
+DOCTOR_LOG_GLOB = "fsp-d-*.json"
 # 阶段差异显著阈值：绝对差超 50ms 且相对差超 10% 才列入对比表，
 # 其余折叠为计数行，避免噪声淹没真实回归
 _STAGE_MIN_DELTA = 0.05
@@ -274,6 +287,9 @@ _DEFAULT_PROFILE = ProfileOptions()
 BUILD_LOG_KIND = LogKind(pattern=_LOG_GLOB, stage_min_delta=_STAGE_MIN_DELTA, label="性能")
 # 启动剖析日志类别（fsp-r-*.json，阶段显著阈值 5ms）
 RUN_LOG_KIND = LogKind(pattern=RUN_LOG_GLOB, stage_min_delta=_RUN_STAGE_MIN_DELTA, label="启动剖析")
+# doctor 基准剖析日志类别（fsp-d-*.json，阶段=各模板构建耗时，秒级，
+# 显著阈值与构建侧一致 50ms）
+DOCTOR_LOG_KIND = LogKind(pattern=DOCTOR_LOG_GLOB, stage_min_delta=_STAGE_MIN_DELTA, label="基准剖析")
 
 
 def compare_with_baseline(

@@ -532,6 +532,31 @@ _DOCTOR_OPTS: tuple[_Opt, ...] = (
         action="store_true",
     ),
     _Opt(
+        ("-P", "--profile"),
+        "基准剖析日志（需 --bench）：将本次所有模板构建聚合为单个剖析日志 JSON"
+        "（默认 <当前目录>/.benchmarks/fsp-d-<时间戳>.json），"
+        "stages 为各模板构建耗时，供历史对比",
+        action="store_true",
+    ),
+    _Opt(
+        ("-PO", "--profile-out"),
+        "基准剖析日志输出路径（需 --bench --profile）：目录则自动命名写入，.json 文件则直写；"
+        "默认 <当前目录>/.benchmarks/",
+        default=None,
+        metavar="PATH",
+    ),
+    _Opt(
+        ("-PC", "--profile-compare"),
+        "与历史基准剖析日志对比（需 --bench --profile）：不带值输出历次趋势表"
+        "（近 15 次历史+本次，统计基准为环境一致历史的中位数，抗单次抖动），"
+        "last=与最近一次对比，正整数=近 N 次趋势，也可指定基准 JSON 文件路径。"
+        "阶段（各模板构建耗时）仅列差异显著项（>50ms 且 >10%%）",
+        nargs="?",
+        const="trend",
+        default=None,
+        metavar="REF",
+    ),
+    _Opt(
         ("--check-cache",),
         "扫描 wheel 缓存目录的依赖解析缓存文件，删除损坏文件，报告 stale/orphan",
         action="store_true",
@@ -618,8 +643,10 @@ def _add_doctor_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParse
     无参数时仅执行环境诊断（检查工具可用性与配置）。``--test`` 运行
     ``assets/templates/`` 下所有项目模板的构建，打印汇总结果。``--bench``
     在 ``--test`` 基础上收集性能数据（各阶段耗时、下载量、缓存命中），
-    输出性能分析报告，作为后续优化的基准。``--check-cache`` 扫描 wheel
-    缓存目录的依赖解析缓存文件，删除损坏文件。
+    输出性能分析报告，作为后续优化的基准。``-P``/``-PO``/``-PC`` 与
+    ``fsp b``/``fsp r`` 的剖析日志体系对齐：聚合落盘单个基准剖析日志
+    并与历史对比。``--check-cache`` 扫描 wheel 缓存目录的依赖解析缓存
+    文件，删除损坏文件。
     """
     p = sub.add_parser("doctor", aliases=["d"], help="环境诊断：检查打包工具可用性与配置")
     _add_options(p, _DOCTOR_OPTS)

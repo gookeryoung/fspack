@@ -1,45 +1,51 @@
-"""``fsp doctor --bench`` 基准历史持久化与横向对比.
+"""``fsp doctor --bench`` 基准剖析日志：聚合落盘与历史对比.
 
-将 :class:`fspack.doctor.models.TemplateBuildResult` 列表序列化为 JSON
-保存到 ``.benchmarks/doctor/{group}/{timestamp}.json``，按机器 + Python 版本
-分组（``{System}-CPython-{major}.{minor}-{bits}bit-doctor``）。下次运行
-``--bench`` 时自动加载上一次历史并打印横向对比表（构建耗时/启动耗时/产物
-大小变化），变慢/变大红色、变快/变小绿色、持平灰色。
+与 ``fsp b -P`` / ``fsp r -P`` 对齐：``fsp d --bench -P`` 将一次基准运行
+聚合为单个剖析日志（schema ``fspack/doctor-bench-profile/1``）写入
+``<当前目录>/.benchmarks/fsp-d-<时间戳>.json``——``stages`` 为各模板构建
+耗时（附产物大小/入口数/启动耗时扩展字段，对比渲染只读 ``elapsed``，
+扩展字段供事后分析），``wall_time`` 为本次基准总墙钟；失败构建单列
+``failures`` 字段（中断样本不是有效性能数据，不混入阶段统计）。
 
-机器代号用 ``platform.node()`` 的 MD5 前 8 位，匿名化不可逆推真实机器名。
+``-PC`` 复用 :func:`fspack.packaging.profile_log.compare_with_baseline`
+与历史 ``fsp-d-*`` 日志对比（不带值趋势表 / ``last`` / 近 N 次 / 基准
+路径），趋势表按模板阶段中位数定位异常模板。
+
+匿名机器信息（``platform.node()`` 的 MD5 前 8 位）写入日志 ``machine``
+字段：多台机器的历史落在同一目录时可事后区分，且不可逆推真实机器名。
 """
 
 from __future__ import annotations
 
 import hashlib
-import json
+import logging
 import os
 import platform
 import struct
 import sys
 import uuid
-from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from fspack._util.fsutil import atomic_write_text
+from fspack import __version__
 from fspack.console import console
-from fspack.doctor.envs import _format_size
-from fspack.doctor.models import TemplateBuildResult, TemplateRunResult
+from fspack.doctor.models import TemplateBuildResult
+from fspack.packaging.profile_log import (
+    DOCTOR_LOG_KIND,
+    DOCTOR_LOG_PREFIX,
+    DOCTOR_PROFILE_LOG_SCHEMA,
+    ProfileOptions,
+)
 
 __all__ = [
-    "_bench_history_group_dir",
+    "_bench_profile_log_data",
     "_collect_machine_info",
-    "_deserialize_bench_results",
-    "_format_bench_delta",
-    "_load_previous_bench_history",
     "_machine_id",
-    "_print_bench_comparison",
     "_save_and_compare_bench",
-    "_save_bench_history",
-    "_serialize_bench_results",
 ]
+
+_logger = logging.getLogger(__name__)
 
 
 def _machine_id() -> str:
@@ -72,237 +78,67 @@ def _collect_machine_info() -> dict[str, Any]:
     }
 
 
-def _bench_history_group_dir(base: Path) -> Path:
-    """返回当前机器与 Python 版本对应的基准历史分组目录.
+def _bench_profile_log_data(results: list[TemplateBuildResult], wall_time: float) -> dict[str, Any]:
+    """将一次基准运行聚合为剖析日志 dict（schema ``fspack/doctor-bench-profile/1``）.
 
-    按 ``{System}-CPython-{major}.{minor}-{bits}bit-doctor`` 分组，与
-    pytest-benchmark 的 ``{System}-CPython-{ver}-{bits}bit`` 目录区分
-    （``-doctor`` 后缀），避免互相干扰。
+    ``stages`` 仅含构建成功的模板（失败构建的耗时是中断样本，混入会污染
+    趋势中位数；单列 ``failures`` 字段记录模板与错误）。环境字段沿用
+    ``profile_log`` 体系约定：``project.version`` 为 fspack 版本——跨版本
+    历史在对比时会被标注环境不一致且不参与统计基准。
 
-    :param base: 基准根目录（如 ``<project>/.benchmarks``）
-    :return: 分组目录路径（如 ``<base>/Windows-CPython-3.11-64bit-doctor``）
+    :param results: 本次基准全部模板构建结果
+    :param wall_time: 本次基准总墙钟耗时（秒，含运行验证）
+    :return: 可 JSON 持久化的日志 dict
     """
-    py_ver = f"{sys.version_info.major}.{sys.version_info.minor}"
-    bits = struct.calcsize("P") * 8
-    return base / f"{platform.system()}-CPython-{py_ver}-{bits}bit-doctor"
-
-
-def _serialize_bench_results(results: list[TemplateBuildResult]) -> dict[str, Any]:
-    """序列化构建结果为可 JSON 持久化的字典.
-
-    :return: 含 ``timestamp``/``machine``/``results`` 三段的字典，
-        ``results`` 每项含 ``template_id``/``success``/``duration_sec``/
-        ``dist_size``/``entry_count``/``error``/``run_success``/``run_exit_code``/
-        ``run_duration_sec``（应用调用响应速度）。
-    """
-    return {
-        "timestamp": datetime.now().isoformat(timespec="seconds"),
-        "machine": _collect_machine_info(),
-        "results": [
+    stages: list[dict[str, Any]] = []
+    failures: list[dict[str, str]] = []
+    for r in results:
+        if not r.success:
+            failures.append({"template_id": r.template_id, "error": r.error})
+            continue
+        stages.append(
             {
-                "template_id": r.template_id,
-                "success": r.success,
-                "duration_sec": r.duration_sec,
+                "name": r.template_id,
+                "elapsed": round(r.duration_sec, 4),
                 "dist_size": r.dist_size,
                 "entry_count": r.entry_count,
-                "error": r.error,
-                "run_success": r.run_result.success if r.run_result else None,
-                "run_exit_code": r.run_result.exit_code if r.run_result else None,
-                "run_duration_sec": r.run_result.duration_sec if r.run_result else None,
+                "run_duration_sec": round(r.run_result.duration_sec, 4) if r.run_result else None,
             }
-            for r in results
-        ],
+        )
+    log: dict[str, Any] = {
+        "schema": DOCTOR_PROFILE_LOG_SCHEMA,
+        "created": datetime.now().isoformat(timespec="seconds"),
+        "project": {"name": "doctor-bench", "version": __version__},
+        "python": sys.version.split()[0],
+        "platform": platform.system().lower(),
+        "machine": _collect_machine_info(),
+        "wall_time": round(wall_time, 4),
+        "stages": stages,
     }
+    if failures:
+        log["failures"] = failures
+    return log
 
 
-def _deserialize_bench_results(data: dict[str, Any]) -> tuple[list[TemplateBuildResult], str]:
-    """从 JSON 字典反序列化构建结果.
+def _save_and_compare_bench(results: list[TemplateBuildResult], wall_time: float, opts: ProfileOptions) -> None:
+    """落盘聚合基准剖析日志并按需渲染历史对比（``-P``/``-PO``/``-PC``）.
 
-    :param data: :func:`_serialize_bench_results` 产出的字典
-    :return: ``(results, timestamp)``，``timestamp`` 为 ISO 格式时间字符串
+    与构建侧 ``_save_and_compare_profile``、运行侧 ``_save_and_compare_run_profile``
+    对称：落盘默认目录 ``<当前目录>/.benchmarks/``（前缀 ``fsp-d-`` 与构建
+    ``fsp-b-``、启动剖析 ``fsp-r-`` 区分）；对比逻辑复用
+    :func:`fspack.packaging.profile_log.compare_with_baseline`（日志类别
+    :data:`DOCTOR_LOG_KIND`：前缀过滤 + 50ms 阶段显著阈值 + 中文文案标签）。
+
+    :param results: 本次基准全部模板构建结果
+    :param wall_time: 本次基准总墙钟耗时（秒）
+    :param opts: 剖析选项（``out`` 输出路径 / ``compare`` 对比目标）
     """
-    results: list[TemplateBuildResult] = []
-    for item in data.get("results", []):
-        run_result: TemplateRunResult | None = None
-        if item.get("run_success") is not None:
-            run_result = TemplateRunResult(
-                success=item["run_success"],
-                timed_out=False,
-                exit_code=item.get("run_exit_code", -1),
-                duration_sec=item.get("run_duration_sec", 0.0) or 0.0,
-            )
-        results.append(
-            TemplateBuildResult(
-                template_id=item["template_id"],
-                success=item["success"],
-                duration_sec=item["duration_sec"],
-                dist_size=item.get("dist_size", 0),
-                entry_count=item.get("entry_count", 0),
-                error=item.get("error", ""),
-                run_result=run_result,
-            )
-        )
-    return results, data.get("timestamp", "")
+    # 延迟导入：profile_log 的对比渲染链触发 rich 加载，仅在 -P 基准时执行
+    from fspack.packaging.profile_log import DEFAULT_LOG_DIR, compare_with_baseline, save_profile_log
 
-
-def _save_bench_history(results: list[TemplateBuildResult], dir: Path) -> Path:
-    """保存基准结果到历史目录，返回保存的文件路径.
-
-    文件名 ``{YYYYMMDDTHHMMSS}.json``，按时间戳排序。``dir`` 不存在时自动创建。
-    """
-    dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%dT%H%M%S")
-    data = _serialize_bench_results(results)
-    path = dir / f"{timestamp}.json"
-    atomic_write_text(path, json.dumps(data, ensure_ascii=False, indent=2))
-    return path
-
-
-def _load_previous_bench_history(
-    dir: Path, *, exclude: Path | None = None
-) -> tuple[list[TemplateBuildResult], str] | None:
-    """加载上一次基准结果.
-
-    按文件名降序扫描 ``dir`` 下 ``*.json``，返回第一个有效的历史文件。
-    ``exclude`` 指定的文件跳过（用于排除刚保存的当前结果）。
-
-    :return: ``(results, timestamp)`` 或 ``None``（无历史或全部损坏）
-    """
-    if not dir.is_dir():
-        return None
-    for f in sorted(dir.glob("*.json"), reverse=True):
-        if exclude and f.samefile(exclude):
-            continue
-        try:
-            data = json.loads(f.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
-            continue  # pragma: no cover - 跳过损坏/非 UTF-8 文件
-        try:
-            return _deserialize_bench_results(data)
-        except (KeyError, TypeError, ValueError):
-            continue  # pragma: no cover - 跳过格式错误文件
-    return None
-
-
-def _format_bench_delta(
-    current: float,
-    previous: float,
-    fmt_abs: Callable[[float], str],
-) -> str:
-    """格式化基准变化值为 rich 标记字符串.
-
-    :param current: 当前值
-    :param previous: 上次值
-    :param fmt_abs: 绝对值格式化函数（如 ``lambda v: f"{v:.1f}s"`` 或 ``_format_size``）
-    :return: rich 标记字符串——变慢红色、变快绿色、持平灰色、无历史灰色 ``--``
-
-    持平阈值：耗时 ``0.05s`` 以内、大小 ``10B`` 以内视为 ``=``（由调用方确保
-    ``fmt_abs`` 的精度隐含的阈值合理，本函数统一用 ``abs(delta) < 0.01`` 数值阈值
-    避免浮点噪声，大小类调用方传入字节值时 ``0.01`` 远小于 10B 仍有效）。
-    """
-    if previous <= 0:
-        return "[dim]--[/dim]"
-    delta = current - previous
-    if abs(delta) < 0.01:
-        return "[dim]=[/dim]"
-    pct = delta / previous * 100
-    sign = "+" if delta > 0 else "-"
-    color = "red" if delta > 0 else "green"
-    return f"[{color}]{sign}{fmt_abs(abs(delta))} ({sign}{abs(pct):.1f}%)[/{color}]"
-
-
-def _print_bench_comparison(
-    current: list[TemplateBuildResult],
-    previous: list[TemplateBuildResult],
-    prev_label: str,
-) -> None:
-    """打印当前基准与历史基准的横向对比表.
-
-    仅对比构建成功的模板，按 ``template_id`` 匹配。构建耗时变化、启动耗时变化
-    （应用调用响应速度）与产物大小变化以 rich 标记着色：变慢/变大红色、
-    变快/变小绿色、持平灰色、无历史灰色 ``--``。
-
-    :param current: 当前基准结果
-    :param previous: 上次基准结果
-    :param prev_label: 上次基准的时间标签（用于标题显示）
-    """
-    from rich.table import Table
-
-    prev_by_id = {r.template_id: r for r in previous if r.success}
-    ok_current = [r for r in current if r.success]
-    if not ok_current:
-        return
-
-    console.rich.print()
-    console.step(f"性能对比（与 {prev_label} 基准）")
-
-    table = Table(title="横向对比", show_lines=False)
-    table.add_column("#", justify="right", style="dim")
-    table.add_column("模板", style="cyan")
-    table.add_column("本次构建", justify="right")
-    table.add_column("上次构建", justify="right")
-    table.add_column("构建变化", justify="right")
-    table.add_column("本次启动", justify="right")
-    table.add_column("上次启动", justify="right")
-    table.add_column("启动变化", justify="right")
-    table.add_column("本次大小", justify="right")
-    table.add_column("大小变化", justify="right")
-
-    for i, r in enumerate(ok_current, 1):
-        prev = prev_by_id.get(r.template_id)
-        cur_run = r.run_result.duration_sec if r.run_result else 0.0
-        if prev:
-            prev_time_str = f"{prev.duration_sec:.1f}s"
-            time_delta = _format_bench_delta(r.duration_sec, prev.duration_sec, lambda v: f"{v:.1f}s")
-            prev_run = prev.run_result.duration_sec if prev.run_result else 0.0
-            prev_run_str = f"{prev_run:.2f}s" if prev_run > 0 else "-"
-            run_delta = _format_bench_delta(cur_run, prev_run, lambda v: f"{v:.2f}s")
-            size_delta = _format_bench_delta(r.dist_size, prev.dist_size, lambda v: _format_size(int(v)))
-        else:
-            prev_time_str = "-"
-            time_delta = "[dim]--[/dim]"
-            prev_run_str = "-"
-            run_delta = "[dim]--[/dim]"
-            size_delta = "[dim]--[/dim]"
-
-        table.add_row(
-            str(i),
-            r.template_id,
-            f"{r.duration_sec:.1f}s",
-            prev_time_str,
-            time_delta,
-            f"{cur_run:.2f}s" if cur_run > 0 else "-",
-            prev_run_str,
-            run_delta,
-            _format_size(r.dist_size) if r.dist_size else "-",
-            size_delta,
-        )
-
-    console.rich.print(table)
-
-
-def _save_and_compare_bench(results: list[TemplateBuildResult]) -> None:
-    """保存当前基准并与历史横向对比.
-
-    1. 加载上一次历史基准（保存当前结果之前加载，避免把当前当作历史）。
-    2. 保存当前结果到 ``.benchmarks/doctor/{group}/{timestamp}.json``。
-    3. 如有历史，打印横向对比表；无历史则提示本次为首次基准。
-
-    :param results: 本次基准构建结果
-    """
-    base = Path.cwd() / ".benchmarks"
-    group_dir = _bench_history_group_dir(base)
-
-    # 先加载历史（保存当前结果之前），避免把当前结果当作历史
-    previous = _load_previous_bench_history(group_dir)
-
-    # 保存当前结果
-    saved_path = _save_bench_history(results, group_dir)
-    console.rich.print(f"\n[dim]基准已保存: {saved_path.name}[/dim]")
-
-    # 打印对比
-    if previous:
-        prev_results, prev_ts = previous
-        _print_bench_comparison(results, prev_results, prev_ts)
-    else:
-        console.rich.print("\n[dim]无历史基准，本次结果将作为首次基准[/dim]")
+    default_dir = Path.cwd() / DEFAULT_LOG_DIR
+    data = _bench_profile_log_data(results, wall_time)
+    log_path = save_profile_log(data, opts.out or default_dir, prefix=DOCTOR_LOG_PREFIX)
+    _logger.info("基准剖析日志已写入: %s", log_path)
+    console.rich.print(f"[dim]基准剖析日志已保存: {log_path.name}[/dim]")
+    compare_with_baseline(log_path, default_dir, opts.compare, kind=DOCTOR_LOG_KIND)

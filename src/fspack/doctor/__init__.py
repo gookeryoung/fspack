@@ -3,7 +3,7 @@
 facade 子包：编排 :mod:`fspack.doctor.envs`（环境信息检查）、
 :mod:`fspack.doctor.tools`（工具版本检查）、:mod:`fspack.doctor.report`
 （报告渲染）、:mod:`fspack.doctor.templates`（模板构建测试与基准）、
-:mod:`fspack.doctor.bench`（基准历史持久化与对比）、:mod:`fspack.doctor.cache`
+:mod:`fspack.doctor.bench`（基准剖析日志聚合落盘与历史对比）、:mod:`fspack.doctor.cache`
 （wheel 缓存健康扫描与清理）、:mod:`fspack.doctor.cache_contents`（压缩包
 缓存内容盘点）、:mod:`fspack.doctor.runner`（诊断编排入口）
 完成环境诊断。
@@ -41,16 +41,10 @@ import shutil  # noqa: F401 - 测试 patch `fspack.doctor.shutil.which` 需要�
 import subprocess  # noqa: F401 - 测试 patch `fspack.doctor.subprocess.run/Popen` 需要本模块属性
 
 from fspack.doctor.bench import (
-    _bench_history_group_dir,
+    _bench_profile_log_data,
     _collect_machine_info,
-    _deserialize_bench_results,
-    _format_bench_delta,
-    _load_previous_bench_history,
     _machine_id,
-    _print_bench_comparison,
     _save_and_compare_bench,
-    _save_bench_history,
-    _serialize_bench_results,
 )
 from fspack.doctor.cache import (
     CACHE_TYPES,
@@ -159,7 +153,7 @@ __all__ = [
     "TemplateRunResult",
     # 各私有名（绑定到 facade 命名空间供直接引用与单元测试导入，
     # 拦截 run_doctor 内部调用请 patch `fspack.doctor.runner._xxx`）
-    "_bench_history_group_dir",
+    "_bench_profile_log_data",
     "_build_debug_cmd",
     "_build_run_cmd",
     "_build_single_template",
@@ -192,32 +186,27 @@ __all__ = [
     "_clean_cache_by_type",
     "_clean_cache_issues",
     "_collect_machine_info",
-    "_deserialize_bench_results",
     "_dir_size",
     "_file_size",
     "_filter_platform_supported",
     "_find_debug_python",
     "_find_dist_exe",
     "_find_wrapper",
-    "_format_bench_delta",
     "_format_run_status",
     "_format_size",
     "_format_status",
     "_is_pe_file",
     "_is_tar_intact",
     "_is_zip_intact",
-    "_load_previous_bench_history",
     "_machine_id",
     "_platform_skip_reason",
     "_preview_names",
-    "_print_bench_comparison",
     "_print_performance_analysis",
     "_print_run_summary",
     "_print_summary",
     "_print_template_build_summary",
     "_run_template",
     "_save_and_compare_bench",
-    "_save_bench_history",
     "_scan_all_caches",
     "_scan_cache_by_type",
     "_scan_cache_health",
@@ -227,7 +216,6 @@ __all__ = [
     "_scan_nuitka_health",
     "_scan_standalone_health",
     "_scan_tkinter_health",
-    "_serialize_bench_results",
     "_try_unlink",
     "print_doctor_report",
     "run_cache_clean",

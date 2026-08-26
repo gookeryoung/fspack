@@ -2,8 +2,10 @@
 
 从 ``assets/templates/`` 加载所有项目模板，逐个复制到临时目录并执行
 :func:`fspack.builder.build`，收集成功/失败/耗时/产物大小/运行验证结果，
-输出汇总表格。``--bench`` 额外启用 ``profile=True`` 输出各阶段耗时报告，
-并通过 :mod:`fspack.doctor.bench` 保存基准并与历史横向对比。
+输出汇总表格。``--bench`` 额外启用 ``profile=True`` 输出各阶段耗时报告；
+``--bench -P`` 将一次基准运行聚合为单个剖析日志落盘并与历史对比
+（见 :mod:`fspack.doctor.bench`），与 ``fsp b -P/-PC``/``fsp r -P/-PC``
+的剖析日志体系对齐。
 
 运行验证统一用超时策略处理 CLI/GUI/Web 应用，无需依赖 ``app_type``：
 
@@ -35,6 +37,7 @@ from fspack.doctor.bench import _save_and_compare_bench
 from fspack.doctor.envs import _dir_size, _format_size
 from fspack.doctor.models import TemplateBuildResult, TemplateRunResult
 from fspack.doctor.template_report import _print_template_build_summary
+from fspack.packaging.profile_log import ProfileOptions
 from fspack.templates.registry import _TEMPLATE_SKIP_DIRS, _TEMPLATE_SKIP_SUFFIXES
 
 if TYPE_CHECKING:
@@ -55,6 +58,9 @@ __all__ = [
 ]
 
 _logger = logging.getLogger(__name__)
+
+# frozen 不可变单例，作为 run_doctor_bench profile 参数的默认值安全共享
+_DEFAULT_PROFILE = ProfileOptions()
 
 # 运行验证超时（秒）：CLI 应用通常 <1s 退出，GUI/Web 进入事件循环不退出。
 # 5s 给慢启动足够余量，超时后视为「启动成功」（GUI 正常运行）并主动终止。
@@ -333,7 +339,6 @@ def _build_single_template(  # pragma: no cover
     """
     from fspack.builder import build
     from fspack.config import BuildOptions, ProjectInfo, get_mirror
-    from fspack.packaging.profile_log import ProfileOptions
     from fspack.platform import detect_platform
 
     proj_dir = work_dir / template.id
@@ -450,14 +455,22 @@ def run_doctor_test() -> None:  # pragma: no cover
     _print_template_build_summary(results, bench=False)
 
 
-def run_doctor_bench() -> None:  # pragma: no cover
+def run_doctor_bench(profile: ProfileOptions = _DEFAULT_PROFILE) -> None:  # pragma: no cover
     """运行所有项目模板构建，收集性能数据，输出性能分析报告.
 
     与 :func:`run_doctor_test` 相同的构建流程，但每个模板启用
     ``profile=True``，输出详细的各阶段耗时报告。最后打印汇总表格与
     性能分析（耗时排名、产物大小排名、总时间）。
 
+    ``profile.enabled=True``（``--bench -P``）时，将一次基准运行聚合为
+    单个剖析日志落盘（默认 ``<当前目录>/.benchmarks/fsp-d-<时间戳>.json``），
+    ``profile.compare`` 指定时与历史 ``fsp-d-*`` 日志对比（趋势表/``last``/
+    近 N 次/基准路径），与 ``fsp b -P/-PC``、``fsp r -P/-PC`` 的剖析日志
+    体系对齐（见 :func:`fspack.doctor.bench._save_and_compare_bench`）。
+
     用于建立性能基准，后续优化措施可与此基准对比评估效果。
+
+    :param profile: 基准剖析日志选项（``-P``/``-PO``/``-PC``）
     """
     from fspack.templates.project_template import ProjectTemplate
 
@@ -472,6 +485,7 @@ def run_doctor_bench() -> None:  # pragma: no cover
         console.rich.print(f"  [yellow]-[/yellow] 跳过 {tpl.id}: {reason}")
 
     results: list[TemplateBuildResult] = []
+    bench_start = time.perf_counter()
 
     with tempfile.TemporaryDirectory(prefix="fsp-doctor-bench-") as tmp:
         work_dir = Path(tmp)
@@ -486,5 +500,7 @@ def run_doctor_bench() -> None:  # pragma: no cover
             else:
                 console.rich.print(f"  [red]×[/red] 失败: {result.error}")
 
+    wall_time = time.perf_counter() - bench_start
     _print_template_build_summary(results, bench=True)
-    _save_and_compare_bench(results)
+    if profile.enabled:
+        _save_and_compare_bench(results, wall_time, profile)

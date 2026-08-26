@@ -33,7 +33,7 @@ from fspack.doctor import (
     DoctorReport,
     TemplateBuildResult,
     TemplateRunResult,
-    _bench_history_group_dir,
+    _bench_profile_log_data,
     _build_debug_cmd,
     _build_run_cmd,
     _check_cache_dir,
@@ -41,29 +41,24 @@ from fspack.doctor import (
     _check_pip,
     _check_tool_version,
     _collect_machine_info,
-    _deserialize_bench_results,
     _dir_size,
     _filter_platform_supported,
     _find_debug_python,
     _find_dist_exe,
     _find_wrapper,
-    _format_bench_delta,
     _format_run_status,
     _format_size,
     _format_status,
-    _load_previous_bench_history,
     _machine_id,
     _platform_skip_reason,
-    _print_bench_comparison,
     _print_performance_analysis,
     _print_template_build_summary,
     _run_template,
     _save_and_compare_bench,
-    _save_bench_history,
-    _serialize_bench_results,
     print_doctor_report,
     run_doctor,
 )
+from fspack.packaging.profile_log import DOCTOR_PROFILE_LOG_SCHEMA, ProfileOptions
 from fspack.platform import Platform
 from fspack.templates.registry import Template
 
@@ -2664,6 +2659,46 @@ def test_cli_doctor_in_help() -> None:
     assert "环境诊断" in help_text
 
 
+def test_cli_doctor_profile_requires_bench() -> None:
+    """``fsp d -P`` 未指定 --bench 时报错（校验前置，不跑诊断）。"""
+    from fspack.cli import main
+
+    with patch("fspack.doctor.run_doctor") as mock_run, pytest.raises(SystemExit) as exc_info:
+        main(["doctor", "--profile"])
+    # 校验前置：诊断未执行；FspackError 转退出码 2
+    mock_run.assert_not_called()
+    assert exc_info.value.code == 2
+
+
+def test_cli_doctor_profile_compare_requires_profile() -> None:
+    """``fsp d --bench -PC last`` 未指定 -P 时报错。"""
+    from fspack.cli import main
+
+    with patch("fspack.doctor.run_doctor") as mock_run, pytest.raises(SystemExit) as exc_info:
+        main(["doctor", "--bench", "--profile-compare", "last"])
+    mock_run.assert_not_called()
+    assert exc_info.value.code == 2
+
+
+def test_cli_doctor_bench_passes_profile_options() -> None:
+    """``fsp d --bench -P -PC`` 构造 ProfileOptions 传给 run_doctor_bench。"""
+    from fspack.cli import main
+
+    fake_report = DoctorReport(
+        env_info=(CheckResult("Python", CheckStatus.OK, "3.11.9"),),
+        tool_checks=(CheckResult("pip", CheckStatus.OK, "24.0"),),
+    )
+    with patch("fspack.doctor.run_doctor", return_value=fake_report), patch("fspack.doctor.print_doctor_report"), patch(
+        "fspack.doctor.run_doctor_bench"
+    ) as mock_bench:
+        main(["doctor", "--bench", "--profile", "--profile-compare", "last"])
+    mock_bench.assert_called_once()
+    opts = mock_bench.call_args[0][0]
+    assert isinstance(opts, ProfileOptions)
+    assert opts.enabled is True
+    assert opts.compare == "last"
+
+
 # ---- 平台兼容性过滤（doctor --test/--bench 跳过无兼容 Python 的模板）----
 
 
@@ -3369,23 +3404,11 @@ def test_print_summary_bench_shows_run_error(capsys: pytest.CaptureFixture[str])
     assert "1 失败" in out
 
 
-# ---- 基准历史持久化与横向对比 ----
+# ---- 基准剖析日志聚合落盘与历史对比 ----
 
 
-def test_bench_history_group_dir_format(tmp_path: Path) -> None:
-    """分组目录格式：{base}/{System}-CPython-{major}.{minor}-{bits}bit-doctor."""
-    result = _bench_history_group_dir(tmp_path)
-    # 直接在 base 下，无 doctor/ 子目录层级
-    assert result.parent == tmp_path
-    # 目录名含 CPython、bit 和 -doctor 后缀
-    group_name = result.name
-    assert "CPython" in group_name
-    assert "bit" in group_name
-    assert group_name.endswith("-doctor")
-
-
-def test_serialize_deserialize_roundtrip() -> None:
-    """序列化/反序列化往返测试：数据完整保留（含启动耗时）."""
+def test_bench_profile_log_data_structure() -> None:
+    """聚合日志结构：成功模板进 stages（含扩展字段），失败模板单列 failures."""
     rr = TemplateRunResult(success=True, timed_out=False, exit_code=0, duration_sec=0.5)
     results = [
         TemplateBuildResult(
@@ -3396,56 +3419,34 @@ def test_serialize_deserialize_roundtrip() -> None:
             entry_count=1,
             run_result=rr,
         ),
-        TemplateBuildResult(
-            template_id="tpl_b",
-            success=False,
-            duration_sec=0.1,
-            error="构建失败",
-        ),
+        TemplateBuildResult(template_id="tpl_b", success=False, duration_sec=0.1, error="构建失败"),
+        TemplateBuildResult(template_id="tpl_c", success=True, duration_sec=3.0, dist_size=2048),
     ]
-    data = _serialize_bench_results(results)
-    # 验证 run_duration_sec 被序列化
-    assert data["results"][0]["run_duration_sec"] == 0.5
-    assert data["results"][1]["run_duration_sec"] is None
+    data = _bench_profile_log_data(results, wall_time=16.0)
 
-    restored, ts = _deserialize_bench_results(data)
-
-    assert isinstance(ts, str)
-    assert len(restored) == 2
-    assert restored[0].template_id == "tpl_a"
-    assert restored[0].success is True
-    assert restored[0].duration_sec == 12.5
-    assert restored[0].dist_size == 102400
-    assert restored[0].entry_count == 1
-    assert restored[0].run_result is not None
-    assert restored[0].run_result.success is True
-    assert restored[0].run_result.exit_code == 0
-    assert restored[0].run_result.duration_sec == 0.5  # 启动耗时保留
-
-    assert restored[1].template_id == "tpl_b"
-    assert restored[1].success is False
-    assert restored[1].error == "构建失败"
-    assert restored[1].run_result is None
+    assert data["schema"] == DOCTOR_PROFILE_LOG_SCHEMA
+    assert data["wall_time"] == 16.0
+    assert data["project"]["name"] == "doctor-bench"
+    assert data["python"] == sys.version.split()[0]
+    # stages 仅含成功模板；扩展字段保留（对比渲染只读 elapsed，扩展供事后分析）
+    assert [s["name"] for s in data["stages"]] == ["tpl_a", "tpl_c"]
+    assert data["stages"][0]["elapsed"] == 12.5
+    assert data["stages"][0]["dist_size"] == 102400
+    assert data["stages"][0]["run_duration_sec"] == 0.5
+    assert data["stages"][1]["run_duration_sec"] is None  # 无运行验证
+    # 失败模板单列 failures（中断样本不混入阶段统计）
+    assert data["failures"] == [{"template_id": "tpl_b", "error": "构建失败"}]
+    # 匿名机器信息
+    assert len(data["machine"]["node_id"]) == 8
+    # JSON 可序列化
+    json.dumps(data, ensure_ascii=False)
 
 
-def test_serialize_includes_machine_info() -> None:
-    """序列化结果含匿名化 machine 信息（node_id/system/python_version/cpu）."""
+def test_bench_profile_log_data_no_failures_omits_field() -> None:
+    """全部成功时省略 failures 字段."""
     results = [TemplateBuildResult(template_id="x", success=True, duration_sec=1.0, dist_size=100)]
-    data = _serialize_bench_results(results)
-    assert "machine" in data
-    machine = data["machine"]
-    # node_id 是匿名编码（8 位 hex），不含真实机器名
-    assert "node_id" in machine
-    assert len(machine["node_id"]) == 8
-    assert "node" not in machine  # 不含真实机器名（隐私）
-    assert "system" in machine
-    assert "python_version" in machine
-    # cpu 性能配置
-    assert "cpu" in machine
-    assert "brand" in machine["cpu"]
-    assert "count" in machine["cpu"]
-    assert "arch" in machine["cpu"]
-    assert "bits" in machine["cpu"]
+    data = _bench_profile_log_data(results, wall_time=1.0)
+    assert "failures" not in data
 
 
 def test_machine_id_is_deterministic_and_anonymous() -> None:
@@ -3480,207 +3481,97 @@ def test_collect_machine_info_no_privacy() -> None:
     assert info["cpu"]["bits"] in (32, 64)
 
 
-def test_save_bench_history_creates_file(tmp_path: Path) -> None:
-    """保存基准结果创建 JSON 文件到分组目录."""
-    results = [TemplateBuildResult(template_id="x", success=True, duration_sec=1.0, dist_size=100)]
-    group_dir = tmp_path / "doctor" / "Test-CPython-3.11-64bit"
-    path = _save_bench_history(results, group_dir)
-
-    assert path.is_file()
-    assert path.suffix == ".json"
-    assert path.parent == group_dir
-    # 文件名含时间戳（YYYYMMDDTHHMMSS 格式）
-    import re
-
-    assert re.match(r"\d{8}T\d{6}\.json", path.name)
-
-
-def test_save_bench_history_creates_dir(tmp_path: Path) -> None:
-    """保存时目录不存在则自动创建."""
-    group_dir = tmp_path / "deeply" / "nested" / "group"
-    results = [TemplateBuildResult(template_id="x", success=True, duration_sec=1.0, dist_size=100)]
-    path = _save_bench_history(results, group_dir)
-    assert path.is_file()
-    assert group_dir.is_dir()
-
-
-def test_load_previous_bench_history_no_dir_returns_none(tmp_path: Path) -> None:
-    """目录不存在时返回 None."""
-    assert _load_previous_bench_history(tmp_path / "nonexistent") is None
-
-
-def test_load_previous_bench_history_empty_dir_returns_none(tmp_path: Path) -> None:
-    """空目录返回 None."""
-    assert _load_previous_bench_history(tmp_path) is None
-
-
-def test_load_previous_bench_history_returns_latest(tmp_path: Path) -> None:
-    """加载最近一次历史（按文件名降序第一个有效文件）."""
-    results1 = [TemplateBuildResult(template_id="old", success=True, duration_sec=1.0, dist_size=100)]
-    results2 = [TemplateBuildResult(template_id="new", success=True, duration_sec=2.0, dist_size=200)]
-
-    # 手动创建两个不同时间戳的文件
-    (tmp_path / "20260101T000000.json").write_text(
-        json.dumps(_serialize_bench_results(results1), ensure_ascii=False), encoding="utf-8"
-    )
-    (tmp_path / "20260201T000000.json").write_text(
-        json.dumps(_serialize_bench_results(results2), ensure_ascii=False), encoding="utf-8"
-    )
-
-    previous = _load_previous_bench_history(tmp_path)
-    assert previous is not None
-    prev_results, _ts = previous
-    assert prev_results[0].template_id == "new"  # 返回最新的
-
-
-def test_load_previous_bench_history_exclude_current(tmp_path: Path) -> None:
-    """exclude 参数跳过指定文件，返回上一个历史."""
-    results1 = [TemplateBuildResult(template_id="old", success=True, duration_sec=1.0, dist_size=100)]
-    results2 = [TemplateBuildResult(template_id="new", success=True, duration_sec=2.0, dist_size=200)]
-
-    old_path = tmp_path / "20260101T000000.json"
-    new_path = tmp_path / "20260201T000000.json"
-    old_path.write_text(json.dumps(_serialize_bench_results(results1), ensure_ascii=False), encoding="utf-8")
-    new_path.write_text(json.dumps(_serialize_bench_results(results2), ensure_ascii=False), encoding="utf-8")
-
-    # 排除 new_path，应返回 old
-    previous = _load_previous_bench_history(tmp_path, exclude=new_path)
-    assert previous is not None
-    prev_results, _ = previous
-    assert prev_results[0].template_id == "old"
-
-
-def test_load_previous_bench_history_skips_corrupt(tmp_path: Path) -> None:
-    """损坏的 JSON 文件被跳过，返回下一个有效文件."""
-    results = [TemplateBuildResult(template_id="ok", success=True, duration_sec=1.0, dist_size=100)]
-    (tmp_path / "20260101T000000.json").write_text("not valid json", encoding="utf-8")
-    (tmp_path / "20260201T000000.json").write_text(
-        json.dumps(_serialize_bench_results(results), ensure_ascii=False), encoding="utf-8"
-    )
-
-    previous = _load_previous_bench_history(tmp_path)
-    assert previous is not None
-    prev_results, _ = previous
-    assert prev_results[0].template_id == "ok"
-
-
-def test_format_bench_delta_slower() -> None:
-    """变慢（current > previous）返回红色标记."""
-    result = _format_bench_delta(12.0, 10.0, lambda v: f"{v:.1f}s")
-    assert "[red]" in result
-    assert "+2.0s" in result
-    assert "+20.0%" in result
-
-
-def test_format_bench_delta_faster() -> None:
-    """变快（current < previous）返回绿色标记."""
-    result = _format_bench_delta(8.0, 10.0, lambda v: f"{v:.1f}s")
-    assert "[green]" in result
-    assert "-2.0s" in result
-    assert "-20.0%" in result
-    assert "+20.0%" not in result  # 确保不是 +- 混合
-
-
-def test_format_bench_delta_equal() -> None:
-    """持平（delta < 0.01）返回灰色 =."""
-    result = _format_bench_delta(10.001, 10.0, lambda v: f"{v:.1f}s")
-    assert result == "[dim]=[/dim]"
-
-
-def test_format_bench_delta_no_history() -> None:
-    """previous <= 0 返回灰色 --."""
-    result = _format_bench_delta(10.0, 0.0, lambda v: f"{v:.1f}s")
-    assert result == "[dim]--[/dim]"
-
-
-def test_format_bench_delta_size_uses_format_size() -> None:
-    """大小变化用 _format_size 格式化."""
-    result = _format_bench_delta(2048, 1024, lambda v: _format_size(int(v)))
-    assert "[red]" in result
-    assert "1.0 KiB" in result  # delta=1024 → 1.0 KiB（_format_size 用 1024 进制）
-    assert "+100.0%" in result
-
-
-def test_print_bench_comparison_renders_table(capsys: pytest.CaptureFixture[str]) -> None:
-    """对比表渲染含模板名、构建变化、启动变化、大小变化."""
-    cur_rr_a = TemplateRunResult(success=True, timed_out=False, exit_code=0, duration_sec=0.8)
-    cur_rr_b = TemplateRunResult(success=True, timed_out=False, exit_code=0, duration_sec=0.3)
-    prev_rr_a = TemplateRunResult(success=True, timed_out=False, exit_code=0, duration_sec=0.5)
-    prev_rr_b = TemplateRunResult(success=True, timed_out=False, exit_code=0, duration_sec=0.5)
-    current = [
-        TemplateBuildResult(template_id="a", success=True, duration_sec=12.0, dist_size=102400, run_result=cur_rr_a),
-        TemplateBuildResult(template_id="b", success=True, duration_sec=8.0, dist_size=51200, run_result=cur_rr_b),
-    ]
-    previous = [
-        TemplateBuildResult(template_id="a", success=True, duration_sec=10.0, dist_size=102400, run_result=prev_rr_a),
-        TemplateBuildResult(template_id="b", success=True, duration_sec=10.0, dist_size=51200, run_result=prev_rr_b),
-    ]
-    _print_bench_comparison(current, previous, "2026-07-28T14:30")
-    out = capsys.readouterr().out
-    assert "性能对比" in out
-    assert "横向对比" in out
-    assert "a" in out
-    assert "b" in out
-    # 构建耗时变化：a 变慢（12 vs 10），b 变快（8 vs 10）
-    assert "+2.0s" in out
-    assert "-2.0s" in out
-    # 启动耗时变化：a 变慢（0.8 vs 0.5），b 变快（0.3 vs 0.5）
-    assert "+0.30s" in out
-    assert "-0.20s" in out
-    # 列标题
-    assert "本次启动" in out
-    assert "上次启动" in out
-    assert "启动变化" in out
-
-
-def test_print_bench_comparison_skips_failed_current(capsys: pytest.CaptureFixture[str]) -> None:
-    """对比表跳过构建失败的当前模板."""
-    current = [
-        TemplateBuildResult(template_id="ok", success=True, duration_sec=10.0, dist_size=100),
-        TemplateBuildResult(template_id="fail", success=False, duration_sec=0.1, error="err"),
-    ]
-    previous: list[TemplateBuildResult] = []
-    _print_bench_comparison(current, previous, "2026-07-28T14:30")
-    out = capsys.readouterr().out
-    assert "ok" in out
-    assert "fail" not in out
-
-
-def test_print_bench_comparison_no_match_shows_dash(capsys: pytest.CaptureFixture[str]) -> None:
-    """当前模板在上次历史中不存在时显示 --."""
-    current = [TemplateBuildResult(template_id="new_tpl", success=True, duration_sec=10.0, dist_size=100)]
-    previous = [TemplateBuildResult(template_id="old_tpl", success=True, duration_sec=10.0, dist_size=100)]
-    _print_bench_comparison(current, previous, "2026-07-28T14:30")
-    out = capsys.readouterr().out
-    assert "new_tpl" in out
-    assert "--" in out  # 无历史对比
-
-
-def test_print_bench_comparison_empty_current_no_output(capsys: pytest.CaptureFixture[str]) -> None:
-    """当前结果全部失败时不输出对比表."""
-    current = [TemplateBuildResult(template_id="x", success=False, duration_sec=0.1, error="err")]
-    previous = [TemplateBuildResult(template_id="x", success=True, duration_sec=10.0, dist_size=100)]
-    _print_bench_comparison(current, previous, "2026-07-28T14:30")
-    out = capsys.readouterr().out
-    assert "性能对比" not in out
+def _write_bench_history(
+    bench_dir: Path,
+    results: list[TemplateBuildResult],
+    wall_time: float,
+    name: str,
+) -> Path:
+    """写入一份历史基准剖析日志（与当前同 schema/环境字段，环境一致可参与统计）."""
+    data = _bench_profile_log_data(results, wall_time)
+    path = bench_dir / name
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    return path
 
 
 def test_save_and_compare_bench_first_run(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """首次运行无历史，保存结果并提示首次基准."""
+    """-P 首次运行无历史：保存聚合日志到 .benchmarks/fsp-d-*.json，无对比."""
     monkeypatch.chdir(tmp_path)
     results = [TemplateBuildResult(template_id="x", success=True, duration_sec=10.0, dist_size=100)]
 
-    _save_and_compare_bench(results)
+    _save_and_compare_bench(results, 10.5, ProfileOptions(enabled=True))
     out = capsys.readouterr().out
 
-    assert "基准已保存" in out
-    assert "首次基准" in out
-    # 确认文件已保存
-    group_dir = _bench_history_group_dir(tmp_path / ".benchmarks")
-    assert group_dir.is_dir()
-    assert len(list(group_dir.glob("*.json"))) == 1
+    assert "基准剖析日志已保存" in out
+    logs = list((tmp_path / ".benchmarks").glob("fsp-d-*.json"))
+    assert len(logs) == 1
+    data = json.loads(logs[0].read_text(encoding="utf-8"))
+    assert data["schema"] == DOCTOR_PROFILE_LOG_SCHEMA
+    assert data["wall_time"] == 10.5
+    # 无 -PC 不渲染对比
+    assert "性能对比" not in out
+    assert "趋势" not in out
+
+
+def test_save_and_compare_bench_compare_last(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """-PC last 与最近一次历史日志对比：模板阶段差异显著项列入差异表."""
+    monkeypatch.chdir(tmp_path)
+    bench_dir = tmp_path / ".benchmarks"
+    bench_dir.mkdir()
+    prev = [TemplateBuildResult(template_id="x", success=True, duration_sec=10.0, dist_size=100)]
+    _write_bench_history(bench_dir, prev, 10.5, "fsp-d-20260101-000000.json")
+
+    cur = [TemplateBuildResult(template_id="x", success=True, duration_sec=12.0, dist_size=100)]
+    _save_and_compare_bench(cur, 12.5, ProfileOptions(enabled=True, compare="last"))
+    out = capsys.readouterr().out
+
+    assert "性能对比" in out
+    assert "x" in out  # 模板阶段名
+    assert "+2.00s" in out  # 模板耗时 12 vs 10，变慢
+    # 两个日志文件（历史 + 本次）
+    assert len(list(bench_dir.glob("fsp-d-*.json"))) == 2
+
+
+def test_save_and_compare_bench_trend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """-PC 不带值输出趋势表：历史 + 本次 + 中位数统计 + 阶段偏离."""
+    monkeypatch.chdir(tmp_path)
+    bench_dir = tmp_path / ".benchmarks"
+    bench_dir.mkdir()
+    prev = [TemplateBuildResult(template_id="x", success=True, duration_sec=10.0, dist_size=100)]
+    _write_bench_history(bench_dir, prev, 10.5, "fsp-d-20260101-000000.json")
+
+    cur = [TemplateBuildResult(template_id="x", success=True, duration_sec=12.0, dist_size=100)]
+    _save_and_compare_bench(cur, 12.5, ProfileOptions(enabled=True, compare="trend"))
+    out = capsys.readouterr().out
+
+    assert "基准剖析趋势" in out
+    assert "中位数" in out
+    # 模板阶段显著偏离（12 vs 10）渲染偏离表
+    assert "基准剖析阶段偏离" in out
+
+
+def test_save_and_compare_bench_out_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """-PO 指定 .json 文件时直写（不落默认目录）。"""
+    monkeypatch.chdir(tmp_path)
+    out_file = tmp_path / "custom.json"
+    results = [TemplateBuildResult(template_id="x", success=True, duration_sec=10.0, dist_size=100)]
+
+    _save_and_compare_bench(results, 10.5, ProfileOptions(enabled=True, out=out_file))
+    capsys.readouterr()
+
+    assert out_file.is_file()
+    data = json.loads(out_file.read_text(encoding="utf-8"))
+    assert data["schema"] == DOCTOR_PROFILE_LOG_SCHEMA
+    # 默认目录未创建（-PO 已接管输出位置）
+    assert not (tmp_path / ".benchmarks").exists()
 
 
 # --- Win7 兼容自检（doctor.win7）---
@@ -3783,30 +3674,19 @@ def test_check_win7_compat_shim_missing(tmp_path: Path, monkeypatch: pytest.Monk
     assert "shim 缺失" in result.detail
 
 
-def test_save_and_compare_bench_with_history(
+def test_save_and_compare_bench_compare_last_no_history(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """有历史时保存当前结果并打印对比表."""
+    """-PC last 无历史日志时警告跳过对比，保存不中断."""
     monkeypatch.chdir(tmp_path)
-    group_dir = _bench_history_group_dir(tmp_path / ".benchmarks")
-    group_dir.mkdir(parents=True)
+    results = [TemplateBuildResult(template_id="x", success=True, duration_sec=12.0, dist_size=100)]
 
-    # 保存历史基准
-    prev_results = [TemplateBuildResult(template_id="x", success=True, duration_sec=10.0, dist_size=100)]
-    (group_dir / "20260101T000000.json").write_text(
-        json.dumps(_serialize_bench_results(prev_results), ensure_ascii=False), encoding="utf-8"
-    )
+    # compare=last 但 .benchmarks 无历史：警告后跳过对比（日志仍正常保存）
+    _save_and_compare_bench(results, 12.5, ProfileOptions(enabled=True, compare="last"))
+    capsys.readouterr()
 
-    # 当前结果（耗时变慢）
-    current_results = [TemplateBuildResult(template_id="x", success=True, duration_sec=12.0, dist_size=100)]
-    _save_and_compare_bench(current_results)
-    out = capsys.readouterr().out
-
-    assert "基准已保存" in out
-    assert "性能对比" in out
-    assert "+2.0s" in out  # 12 vs 10，变慢
-    # 确认两个文件存在（历史 + 当前）
-    assert len(list(group_dir.glob("*.json"))) == 2
+    logs = list((tmp_path / ".benchmarks").glob("fsp-d-*.json"))
+    assert len(logs) == 1
 
 
 def test_print_summary_bench_shows_startup_column(capsys: pytest.CaptureFixture[str]) -> None:
