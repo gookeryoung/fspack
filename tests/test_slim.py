@@ -706,6 +706,31 @@ class TestSlimUnpack:
         assert not (dest / "PySide2" / "designer.exe").exists()
         assert (dest / "PySide2-5.15.2.1.dist-info" / "METADATA").is_file()
 
+    def test_pyqt5_sip_wheel_kept(self, tmp_path: Path) -> None:
+        """pyqt5-sip wheel 的私有 sip 运行时始终保留（C 层导入，AST 不可见）.
+
+        回归：``PyQt5/sip.<abi>.pyd`` 曾被归类为子模块 ``sip`` 而剥离，
+        运行时 ``import PyQt5.QtWidgets`` 报 ModuleNotFoundError: No module
+        named 'PyQt5.sip'（QtCore.pyd 二进制内嵌 C 层导入名，非 Python import）。
+        pyqt5-sip wheel 顶层目录为 ``PyQt5``，经 ``_detect_top_pkg`` 回退匹配
+        走 QtSlimSpec，keep_subs 共享 ``merged["pyqt5"]``。
+        """
+        sip_whl = tmp_path / "wh" / "pyqt5_sip-12.19.0-cp311-cp311-win_amd64.whl"
+        sip_whl.parent.mkdir()
+        _make_wheel(
+            sip_whl,
+            {
+                "PyQt5/sip.cp311-win_amd64.pyd": b"sip-runtime",
+                "pyqt5_sip-12.19.0.dist-info/METADATA": b"meta",
+            },
+        )
+        dest = tmp_path / "sp"
+        # 用户 import PyQt5.QtWidgets：闭包 Core/Gui/Widgets 均不含 "sip"
+        count = slim_unpack([sip_whl], dest, {"pyqt5": frozenset({"QtWidgets"})})
+        assert count == 1
+        # sip 运行时归 shared 始终保留（子模块选择性剥离不适用于它）
+        assert (dest / "PyQt5" / "sip.cp311-win_amd64.pyd").is_file()
+
     def test_no_usage_full_unpack(self, tmp_path: Path) -> None:
         whl = tmp_path / "wh" / "PySide2-5.15.2.1-cp39-none-win_amd64.whl"
         whl.parent.mkdir()
@@ -2632,6 +2657,21 @@ class TestSlimSpecRegistry:
         assert classify_entry("PySide2/QtCore.pyd", "PySide2") == ("submodule", "Core")
         assert classify_entry("PySide6/Qt6Gui.dll", "PySide6") == ("submodule", "Gui")
         assert classify_entry("PyQt5/QtWidgets.pyd", "PyQt5") == ("submodule", "Widgets")
+
+    def test_classify_entry_qt_sip_shared(self) -> None:
+        """Qt 私有 sip 运行时归 shared 始终保留（扩展模块 C 层导入，AST 不可见）.
+
+        回归：曾被归类为子模块 ``sip``，不在 Core/Gui/Widgets 等任何闭包内
+        而被剥离，运行时报 No module named 'PyQt5.sip'。
+        """
+        keep = {"Core", "Gui", "Widgets"}
+        # pyqt5-sip/pyqt6-sip wheel 提供的带 ABI 标签文件名（split(".")[0] 取 stem）
+        assert classify_entry("PyQt5/sip.cp311-win_amd64.pyd", "PyQt5", keep) == ("shared", None)
+        assert classify_entry("PyQt6/sip.cp312-win_amd64.pyd", "PyQt6", keep) == ("shared", None)
+        # Linux .so 变体同样覆盖
+        assert classify_entry("PyQt5/sip.cpython-311-x86_64-linux-gnu.so", "PyQt5", keep) == ("shared", None)
+        # 普通子模块 .pyd 仍按闭包选择性保留（非 sip 名不受影响）
+        assert classify_entry("PyQt5/QtSql.pyd", "PyQt5", keep) == ("submodule", "Sql")
 
     def test_classify_entry_dispatches_to_default(self) -> None:
         """非 Qt 库走默认规则（.pyd 不归一化）。."""

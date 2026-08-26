@@ -132,7 +132,9 @@ class QtSlimSpec(SlimSpec):
         - 顶层 ``QtWebEngineProcess[.exe]``/``icudtl.dat`` → 仅 WebEngine 子模块
           保留时归 shared（须在 STRIP_EXTS 之前拦截，避免 .exe 误剥离）
         - 顶层 ``.pyd``/``.so`` → submodule（归一化子模块名；``.pyi`` 已由
-          :meth:`_is_strip_ext` 在更早阶段统一剥离）
+          :meth:`_is_strip_ext` 在更早阶段统一剥离）；例外：``sip.<abi>.pyd``
+          （pyqt5-sip/pyqt6-sip 提供的私有 sip 运行时，扩展模块 C 层导入）
+          → shared 始终保留
         - 顶层 ``Qt5Xxx.dll``/``Qt6Xxx.dll`` → submodule（归一化子模块名）；
           PySide2/PySide6 的 abi3.dll 隐式依赖 Qml/Network DLL → 归 shared
         - 顶层 FFmpeg 系列 DLL（``avcodec-*``/``avformat-*`` 等）→ submodule，
@@ -180,6 +182,13 @@ class QtSlimSpec(SlimSpec):
             # （Path.stem 会保留 ABI 标签导致与 keep_subs 不匹配，详见 base.py 同处注释）
             stem = filename.split(".")[0]
             if suffix in cls.SUBMODULE_EXTS:
+                # PyQt5/PyQt6 的私有 sip 运行时（pyqt5-sip/pyqt6-sip wheel 提供的
+                # ``PyQt5/sip.<abi>.pyd``）由各扩展模块 C 层导入（``__init__.py``
+                # 不 import，AST 无法发现，二进制内嵌 ``PyQt5.sip`` 字样），
+                # 归 shared 始终保留——否则运行时 ``import PyQt5.QtWidgets``
+                # 直接 ModuleNotFoundError: No module named 'PyQt5.sip'
+                if stem == "sip":
+                    return ("shared", None)
                 # .pyd/.so 按归一化子模块名选择性保留（.pyi 已被 STRIP_EXTS 剥离）
                 return ("submodule", _normalize_qt_sub(stem))
             if suffix == ".dll":
