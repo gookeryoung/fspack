@@ -1,6 +1,0 @@
-id = "pyqt5"
-name = "PyQt5 桌面 GUI"
-description = "PyQt5 QMainWindow 主窗口示例"
-category = "gui"
-app_type = "gui"
-dependencies = ["PyQt5"]

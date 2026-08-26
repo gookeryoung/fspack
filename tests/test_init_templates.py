@@ -8,7 +8,7 @@
 - 入口脚本 import 触发正确的 app_type 推断（GUI 模板识别为 GUI）
 - init_project 创建项目后目录结构与文件内容正确
 
-覆盖 6 个 GUI 模板：pyside2/pyside6/pyside2-qml/pyside6-qml/pyqt5/tkinter。
+覆盖 4 个 GUI 模板：pyside2/pyside6/pyside6-qml/tkinter。
 """
 
 from __future__ import annotations
@@ -23,24 +23,22 @@ from fspack.templates import default_variables, get_template, list_templates, re
 
 # ---- GUI 模板注册与元数据 ----
 
-GUI_TEMPLATE_IDS = ("pyside2", "pyside6", "pyside2-qml", "pyside6-qml", "pyqt5", "tkinter")
+GUI_TEMPLATE_IDS = ("pyside2", "pyside6", "pyside6-qml", "tkinter")
 
 # 各 GUI 模板的依赖声明（与 registry.py 一致）
 GUI_TEMPLATE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
     "pyside2": ("PySide2",),
     "pyside6": ("PySide6",),
-    "pyside2-qml": ("PySide2",),
     "pyside6-qml": ("PySide6",),
-    "pyqt5": ("PyQt5",),
     "tkinter": (),
 }
 
 # QML 模板需要额外的 main.qml 文件
-QML_TEMPLATE_IDS = ("pyside2-qml", "pyside6-qml")
+QML_TEMPLATE_IDS = ("pyside6-qml",)
 
 
 def test_gui_templates_registered() -> None:
-    """6 个 GUI 模板都已注册到 registry."""
+    """4 个 GUI 模板都已注册到 registry."""
     for tpl_id in GUI_TEMPLATE_IDS:
         assert get_template(tpl_id) is not None, f"GUI 模板 {tpl_id!r} 未注册"
 
@@ -161,23 +159,6 @@ def test_init_project_tkinter(tmp_path: Path) -> None:
     assert "import tkinter" in entry
 
 
-def test_init_project_pyside2_qml(tmp_path: Path) -> None:
-    """init_project 用 pyside2-qml 模板创建项目，含 main.qml 文件."""
-    target = init_project("qml-app", template_id="pyside2-qml", directory=tmp_path)
-    # PySide2 不支持 Python 3.10+，模板约束 requires-python
-    pyproject = (target / "pyproject.toml").read_text(encoding="utf-8")
-    assert 'requires-python = ">=3.8,<3.10"' in pyproject
-    # 入口脚本
-    entry = (target / "qml_app.py").read_text(encoding="utf-8")
-    assert "QQmlApplicationEngine" in entry
-    # QML 文件
-    qml_file = target / "main.qml"
-    assert qml_file.is_file()
-    qml = qml_file.read_text(encoding="utf-8")
-    assert "ApplicationWindow" in qml
-    assert "qml-app" in qml
-
-
 def test_init_project_pyside6(tmp_path: Path) -> None:
     """init_project 用 pyside6 模板创建项目，使用 PySide6（exec 而非 exec_）."""
     target = init_project("p6-app", template_id="pyside6", directory=tmp_path)
@@ -189,14 +170,13 @@ def test_init_project_pyside6(tmp_path: Path) -> None:
 
 # ---- 游戏/科学/Web/配置模板 ----
 
-GAME_TEMPLATE_IDS = ("pygame", "snake")
+GAME_TEMPLATE_IDS = ("snake",)
 SCI_TEMPLATE_IDS = ("matplotlib", "numpy", "scipy")
 WEB_TEMPLATE_IDS = ("flask", "fastapi")
 CONFIG_TEMPLATE_IDS = ("pyinstaller",)
 
 # 各模板的依赖声明
 ITER84_DEPENDENCIES: dict[str, tuple[str, ...]] = {
-    "pygame": ("pygame",),
     "snake": ("pygame",),
     "matplotlib": ("matplotlib",),
     "numpy": ("numpy",),
@@ -206,9 +186,8 @@ ITER84_DEPENDENCIES: dict[str, tuple[str, ...]] = {
     "pyinstaller": (),
 }
 
-# 各模板的 app_type（pygame/snake/matplotlib 因 import 在 _GUI_HINTS 中→gui）
+# 各模板的 app_type（snake/matplotlib 因 import 在 _GUI_HINTS 中→gui）
 ITER84_APP_TYPES: dict[str, str] = {
-    "pygame": "gui",
     "snake": "gui",
     "matplotlib": "gui",
     "numpy": "cli",
@@ -223,7 +202,7 @@ ITER84_ALL_IDS = GAME_TEMPLATE_IDS + SCI_TEMPLATE_IDS + WEB_TEMPLATE_IDS + CONFI
 
 @pytest.mark.parametrize("tpl_id", ITER84_ALL_IDS)
 def test_iter84_templates_registered(tpl_id: str) -> None:
-    """8 个模板都已注册."""
+    """7 个模板都已注册."""
     assert get_template(tpl_id) is not None, f"模板 {tpl_id!r} 未注册"
 
 
@@ -272,16 +251,6 @@ def test_pyinstaller_template_contains_tool_fspack_config() -> None:
     assert "# [project.scripts]" in pyproject
     # [tool.fspack.entries] 已移除支持，模板不应再出现
     assert "[tool.fspack.entries]" not in pyproject
-
-
-def test_init_project_pygame(tmp_path: Path) -> None:
-    """init_project 用 pygame 模板创建项目，结构正确."""
-    target = init_project("game-app", template_id="pygame", directory=tmp_path)
-    pyproject = (target / "pyproject.toml").read_text(encoding="utf-8")
-    assert '"pygame"' in pyproject
-    entry = (target / "game_app.py").read_text(encoding="utf-8")
-    assert "import pygame" in entry
-    assert "pygame.init" in entry
 
 
 def test_init_project_snake(tmp_path: Path) -> None:
@@ -435,25 +404,29 @@ def test_init_project_full_config(tmp_path: Path) -> None:
 
 
 def test_template_count_final() -> None:
-    """init 模板总数 = 24（6 CLI + 6 GUI + 2 game + 3 sci + 4 web + 3 config）."""
+    """init 模板总数 = 18（4 CLI + 4 GUI + 1 game + 3 sci + 3 web + 3 config）.
+
+    模板体系精简整合（原 24 个）：删除与保留模板同构冗余的
+    args/click/pyqt5/pyside2-qml/pygame/web-flask-vue。
+    """
     templates = list_templates(role="init")
-    assert len(templates) == 24, f"应有 24 个 init 模板，实际 {len(templates)}"
+    assert len(templates) == 18, f"应有 18 个 init 模板，实际 {len(templates)}"
     # 分类统计
     categories: dict[str, int] = {}
     for tpl in templates:
         categories[tpl.category] = categories.get(tpl.category, 0) + 1
-    assert categories.get("cli", 0) == 6
-    assert categories.get("gui", 0) == 6
-    assert categories.get("game", 0) == 2
+    assert categories.get("cli", 0) == 4
+    assert categories.get("gui", 0) == 4
+    assert categories.get("game", 0) == 1
     assert categories.get("sci", 0) == 3
-    assert categories.get("web", 0) == 4
+    assert categories.get("web", 0) == 3
     assert categories.get("config", 0) == 3
 
 
-# --- iter-148 前后端分离 Web 模板（web-flask-vue / web-fastapi-react）---
+# --- iter-148 前后端分离 Web 模板（web-fastapi-react）---
 
 
-WEB_SEPARATED_TEMPLATE_IDS = ("web-flask-vue", "web-fastapi-react")
+WEB_SEPARATED_TEMPLATE_IDS = ("web-fastapi-react",)
 
 
 @pytest.mark.parametrize("tpl_id", WEB_SEPARATED_TEMPLATE_IDS)
@@ -469,13 +442,6 @@ def test_web_separated_template_metadata(tpl_id: str) -> None:
     assert tpl is not None
     assert tpl.category == "web"
     assert tpl.app_type == "web"
-
-
-def test_web_flask_vue_template_dependencies() -> None:
-    """web-flask-vue 模板依赖为 flask."""
-    tpl = get_template("web-flask-vue")
-    assert tpl is not None
-    assert tpl.dependencies == ("flask",)
 
 
 def test_web_fastapi_react_template_dependencies() -> None:
@@ -509,15 +475,6 @@ def test_web_separated_template_entry_script_syntax_valid() -> None:
         entry_path = Path("test_app.py")
         assert entry_path in rendered, f"{tpl_id} 缺少入口脚本"
         ast.parse(rendered[entry_path])
-
-
-def test_init_project_web_flask_vue(tmp_path: Path) -> None:
-    """init_project 用 web-flask-vue 模板创建项目."""
-    target = init_project("wf-app", template_id="web-flask-vue", directory=tmp_path)
-    assert (target / "wf_app.py").is_file()
-    assert (target / "frontend" / "index.html").is_file()
-    pyproject = (target / "pyproject.toml").read_text(encoding="utf-8")
-    assert 'web-static-dirs = ["frontend"]' in pyproject
 
 
 # --- ``--python-version`` 覆盖 requires-python 的三层兜底 ---

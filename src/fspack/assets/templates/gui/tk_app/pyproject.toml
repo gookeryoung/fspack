@@ -1,3 +1,4 @@
 [project]
 name = "tk_app"
 version = "0.1.0"
+description = "tkinter 标准库 GUI：零第三方依赖，验证 Tcl/Tk 运行时与内置库收集"

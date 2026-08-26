@@ -25,7 +25,7 @@ fsp p                    # 产出 dist/release/your-app-setup.exe
 
 ## 从模板开始：fsp init
 
-没有项目？一行命令从模板创建（22 个模板覆盖 CLI/GUI/游戏/科学/Web 常见场景）：
+没有项目？一行命令从模板创建（18 个模板覆盖 CLI/GUI/游戏/科学/Web 常见场景）：
 
 ```bash
 fsp init my-app --template pyside2   # 创建 PySide2 GUI 项目
@@ -125,7 +125,7 @@ fsp r --entry gui         # 运行 gui 入口
 | `fsp run` | `fsp r` | 运行已打包项目（Linux 原生，`.exe` 自动用 wine） |
 | `fsp clean` | `fsp c` | 清理 dist/ 目录 |
 | `fsp package` | `fsp p` | 生成安装包（Windows NSIS / Linux .deb + tar.gz） |
-| `fsp init` | `fsp i` | 从模板创建新项目（22 个模板可选） |
+| `fsp init` | `fsp i` | 从模板创建新项目（18 个模板可选） |
 | `fsp doctor` | — | 环境诊断：检查打包工具可用性与配置 |
 | `fsp cache` | — | 缓存健康检查与清理（损坏/过期/孤儿文件） |
 

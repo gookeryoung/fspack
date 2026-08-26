@@ -10,7 +10,7 @@
 | `fsp run` | `fsp r` | 运行已打包项目（Linux 原生，`.exe` 自动用 wine） |
 | `fsp clean` | `fsp c` | 清理 dist/ 目录 |
 | `fsp package` | `fsp p` | 生成安装包（Windows NSIS / Linux .deb + tar.gz） |
-| `fsp init` | `fsp i` | 从模板创建新项目（22 个模板可选） |
+| `fsp init` | `fsp i` | 从模板创建新项目（18 个模板可选） |
 | `fsp doctor` | — | 环境诊断：检查打包工具可用性与配置 |
 | `fsp cache` | — | 缓存健康检查与清理（损坏/过期/孤儿文件） |
 
@@ -111,7 +111,7 @@ fsp init [project_name] [--template <id>] [--list] [--description <desc>] [--dir
 | `--description <desc>` | 项目描述（写入 pyproject.toml） |
 | `--directory <path>` | 父目录（默认当前目录） |
 
-22 个模板按分类：CLI(6) / GUI(6) / 游戏(2) / 科学(3) / Web(2) / 配置(3)。详见 `fsp init --list`。
+18 个模板按分类：CLI(4) / GUI(4) / 游戏(1) / 科学(3) / Web(3) / 配置(3)。详见 `fsp init --list`。
 
 ## fsp doctor
 
@@ -127,21 +127,16 @@ fsp doctor                # 环境诊断：检查打包工具与配置
 
 打包失败时先跑 `fsp doctor` 前置发现环境问题。
 
-`fsp doctor --test` 用内置典型项目模板验证环境可打包性。`src/fspack/assets/templates/` 下共 13 个模板：
+`fsp doctor --test` 用内置典型项目模板验证环境可打包性。`src/fspack/assets/templates/` 下共 8 个模板，每个代表一类打包能力维度（依赖形态/入口数/前端/运行时段）：
 
 | 模板 | 类型 | 亮点 |
 |------|------|------|
-| `cli_complex` | CLI | 多文件结构，Python 3.14 |
-| `tk_app` | tkinter | 内置库打包验证 |
-| `pyside2_app` | GUI 应用 | PySide2 依赖 |
-| `pyside2_qml_dashboard` | QML 应用 | PySide2+QML 仪表盘 |
-| `pygame_conway` | 游戏 | pygame 生命游戏 |
-| `pygame_snake` | 游戏 | pygame 贪吃蛇 |
-| `pygame_tetris` | 游戏 | pygame 俄罗斯方块 |
-| `sci_numpy` | 科学计算 | numpy 数值计算 |
-| `sci_scipy` | 科学计算 | scipy 科学计算 |
-| `sci_matplotlib` | 科学计算 | matplotlib 绘图 |
-| `web_app` | Web 服务 | flask web 框架 |
+| `cli_complex` | CLI | 多文件结构 + lxml/ordered-set 二进制依赖，Python 3.14 |
+| `tk_app` | GUI 应用 | tkinter 标准库，零第三方依赖 |
+| `pyside2_qml_dashboard` | QML 应用 | PySide2+QML 仪表盘，uv.lock 真实项目形态 |
+| `pygame_snake` | 游戏 | pygame 贪吃蛇，>=3.13 新运行时段 |
+| `pygame_tetris` | 游戏 | pygame 俄罗斯方块，多模块结构，3.8-3.12 运行时段 |
+| `sci_stack` | 科学计算 | NumPy+SciPy+numexpr+Matplotlib 流水线，free-threaded 3.14t |
 | `webview_app` | 前后端分离 | Vue + Vite + pywebview |
 | `multi_entry` | 多入口 | cli+gui+web 三入口 |
 

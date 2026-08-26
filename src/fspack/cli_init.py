@@ -9,8 +9,8 @@
 
 交互式选择为两步向导（:mod:`fspack.wizard`，↑/↓ 移动 + Enter 确认，
 Esc/q 取消）：先选项目类型（分类），再选该类型下的具体模板，高亮项下方
-动态显示描述与依赖。零新增依赖（rich 已是 fspack 依赖）。非 TTY 环境
-（CI/管道）自动跳过交互。
+动态显示描述、依赖与生成文件结构。零新增依赖（rich 已是 fspack 依赖）。
+非 TTY 环境（CI/管道）自动跳过交互。
 
 公共 API：
 
@@ -50,6 +50,15 @@ _WIN7_UNSUPPORTED_TEMPLATES = frozenset({"fastapi"})
 # requires-python 行的正则：匹配 `requires-python = "..."` 形式（含可选空白）
 _REQUIRES_PYTHON_RE = re.compile(r'^requires-python = "[^"]*"$', re.MULTILINE)
 
+# 模板 pyproject.toml 内容中的 requires-python 行（详情区提取约束显示用）
+_TEMPLATE_REQUIRES_RE = re.compile(r'^requires-python = "([^"]+)"$', re.MULTILINE)
+
+# 视为基线的模板 requires-python 约束（当前全部模板的默认值，偏离时才在详情区显示）
+_DEFAULT_TEMPLATE_REQUIRES: Final = ">=3.8,<3.12"
+
+# 详情区结构行最多显示的文件数（超出折叠为 "等 N 个文件"）
+_DETAIL_MAX_FILES: Final = 6
+
 # 分类目录名 → 向导第一步显示的项目类型标签
 _CATEGORY_LABELS: Final[dict[str, str]] = {
     "cli": "CLI 命令行工具",
@@ -71,17 +80,58 @@ def _category_label(category: str) -> str:
     return _CATEGORY_LABELS.get(category, category or "其他")
 
 
-def _template_detail(tpl: Template) -> str:
-    """构造向导第二步高亮模板的详情文本（描述 + 依赖）.
+def _display_rel_path(rel_path: str) -> str:
+    """将模板相对路径中的占位符替换为用户可读形式（详情区显示用）.
+
+    :param rel_path: 模板文件相对路径（可能含 ``$entry_module``/``$project_name``
+        及其大括号形式占位符）
+    :return: 可读路径（如 ``$entry_module.py`` → ``<项目名>.py``）
+    """
+    return (
+        rel_path.replace("${entry_module}", "<项目名>")
+        .replace("$entry_module", "<项目名>")
+        .replace("${project_name}", "<项目名>")
+        .replace("$project_name", "<项目名>")
+    )
+
+
+def _template_requires_python(tpl: Template) -> str:
+    """从模板 pyproject.toml 内容提取 requires-python 约束.
 
     :param tpl: 模板对象
-    :return: 详情文本（描述行 + 可选依赖行，两者皆空时返回空串）
+    :return: 约束字符串（如 ``>=3.8,<3.10``），未声明返回空串
+    """
+    for file in tpl.files:
+        if file.rel_path != "pyproject.toml":
+            continue
+        matched = _TEMPLATE_REQUIRES_RE.search(file.content)
+        return matched.group(1) if matched else ""
+    return ""
+
+
+def _template_detail(tpl: Template) -> str:
+    """构造向导第二步高亮模板的详情文本（描述 + 依赖 + 结构 + Python 约束）.
+
+    结构行从模板文件列表自动推导（与实际生成文件树一致，无需在
+    template.toml 手工维护）；Python 行仅在约束偏离模板基线
+    （``>=3.8,<3.12``）时显示，聚焦例外模板（如 pyside2 需 ``<3.10``）。
+
+    :param tpl: 模板对象
+    :return: 详情文本（描述行 + 依赖行 + 结构行 + 可选 Python 行，全空返回空串）
     """
     lines: list[str] = []
     if tpl.description:
         lines.append(tpl.description)
     if tpl.dependencies:
         lines.append(f"依赖: {', '.join(tpl.dependencies)}")
+    if tpl.files:
+        rel_paths = [f.rel_path for f in tpl.files]
+        shown = ", ".join(_display_rel_path(p) for p in rel_paths[:_DETAIL_MAX_FILES])
+        suffix = f" 等 {len(rel_paths)} 个文件" if len(rel_paths) > _DETAIL_MAX_FILES else ""
+        lines.append(f"结构: {shown}{suffix}")
+    requires = _template_requires_python(tpl)
+    if requires and requires != _DEFAULT_TEMPLATE_REQUIRES:
+        lines.append(f"Python: {requires}")
     return "\n".join(lines)
 
 
@@ -283,7 +333,7 @@ def prompt_template_selection() -> str:
     :return: 选中的模板 id
     :raises KeyboardInterrupt: 用户按 Esc/q 或 Ctrl+C 中断选择
 
-    交互流程（两步，第二步高亮项下方动态显示描述与依赖）::
+    交互流程（两步，第二步高亮项下方动态显示描述/依赖/生成结构）::
 
         ? [1/2] 选择项目类型
         > CLI 命令行工具（6 个模板）

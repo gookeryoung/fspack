@@ -46,7 +46,7 @@ def test_list_all_has_known_entries() -> None:
     ids = {t.id for t in ProjectTemplate.list_all()}
     assert "cli_complex" in ids
     assert "pyside2_qml_dashboard" in ids
-    assert "sci_numpy" in ids
+    assert "sci_stack" in ids
 
 
 def test_list_all_metadata_complete() -> None:

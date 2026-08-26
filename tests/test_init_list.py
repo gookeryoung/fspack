@@ -39,7 +39,7 @@ def _wizard_keys_to(template_id: str, templates: list[Any]) -> list[str]:
     """构造向导两步选择指定模板的按键序列（down×N + enter，两步）.
 
     第一步选模板所在分类（分类按字母序），第二步选分类内模板（字母序），
-    位置动态推导避免硬编码（cli 分类按 args/click/helloworld/... 排序）。
+    位置动态推导避免硬编码（cli 分类按 helloworld/requests/... 排序）。
     """
     target = next(t for t in templates if t.id == template_id)
     categories = list(dict.fromkeys(t.category for t in templates))
@@ -312,6 +312,86 @@ def test_format_requires_python_invalid_empty() -> None:
 
     with pytest.raises(ValueError, match="无效的 Python 版本号"):
         _format_requires_python("")
+
+
+# ---- _template_detail 向导详情区 ----
+
+
+def test_template_detail_contains_structure_line() -> None:
+    """helloworld 详情含结构行：入口占位符显示为 <项目名>，pyproject 一并展示."""
+    from fspack.cli_init import _template_detail
+    from fspack.templates import get_template
+
+    tpl = get_template("helloworld")
+    assert tpl is not None
+    detail = _template_detail(tpl)
+    assert "结构:" in detail
+    assert "<项目名>.py" in detail
+    assert "pyproject.toml" in detail
+    # helloworld 无第三方依赖：不出现依赖行
+    assert "依赖:" not in detail
+
+
+def test_template_detail_contains_dependency_line() -> None:
+    """fastapi 详情含依赖行（fastapi + uvicorn）."""
+    from fspack.cli_init import _template_detail
+    from fspack.templates import get_template
+
+    tpl = get_template("fastapi")
+    assert tpl is not None
+    assert "依赖: fastapi, uvicorn" in _template_detail(tpl)
+
+
+def test_template_detail_python_line_only_for_deviating_constraint() -> None:
+    """Python 行仅在约束偏离基线（>=3.8,<3.12）时显示：pyside2 显示 <3.10，helloworld 不显示."""
+    from fspack.cli_init import _template_detail
+    from fspack.templates import get_template
+
+    pyside2 = get_template("pyside2")
+    assert pyside2 is not None
+    assert "Python: >=3.8,<3.10" in _template_detail(pyside2)
+
+    helloworld = get_template("helloworld")
+    assert helloworld is not None
+    assert "Python:" not in _template_detail(helloworld)
+
+
+def test_template_detail_qml_structure_contains_main_qml() -> None:
+    """pyside6-qml 详情结构行含 main.qml（QML 资源文件可见）."""
+    from fspack.cli_init import _template_detail
+    from fspack.templates import get_template
+
+    tpl = get_template("pyside6-qml")
+    assert tpl is not None
+    assert "main.qml" in _template_detail(tpl)
+
+
+def test_template_detail_folds_long_file_lists() -> None:
+    """结构行超过 6 个文件时折叠：显示前 6 个 + "等 N 个文件"."""
+    from fspack.cli_init import _template_detail
+    from fspack.templates import Template, TemplateFile
+
+    files = tuple(TemplateFile(rel_path=f"mod_{i}.py", content="pass\n") for i in range(8))
+    tpl = Template(
+        id="many-files",
+        name="Many",
+        description="多文件模板",
+        category="cli",
+        files=files,
+    )
+    detail = _template_detail(tpl)
+    assert "mod_5.py" in detail  # 第 6 个文件仍在展示
+    assert "mod_6.py" not in detail  # 第 7 个起折叠
+    assert "等 8 个文件" in detail
+
+
+def test_template_detail_empty_for_blank_template() -> None:
+    """无描述/依赖/文件的模板返回空串（详情区不渲染）."""
+    from fspack.cli_init import _template_detail
+    from fspack.templates import Template
+
+    tpl = Template(id="blank", name="Blank", description="", category="cli", files=())
+    assert _template_detail(tpl) == ""
 
 
 # ---- Win7 + fastapi 拦截 ----

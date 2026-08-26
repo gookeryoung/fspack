@@ -1,6 +1,6 @@
 [project]
 dependencies    = ["pygame>=2.5.0"]
-description     = "A modern Tetris game with gradient colors, particle effects and dynamic line-clear animations"
+description     = "pygame 俄罗斯方块：多模块实体/粒子动画结构，覆盖 3.8-3.12 运行时段与 pyc 剥离配置"
 name            = "pygame_tetris"
 readme          = "README.md"
 requires-python = ">=3.8,<3.13"

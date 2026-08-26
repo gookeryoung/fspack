@@ -87,7 +87,7 @@ def test_init_full_config_then_parse(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(
     "template_id",
-    ["helloworld", "args", "pyside2", "pyside6", "pyqt5", "tkinter", "pygame", "matplotlib", "numpy", "flask"],
+    ["helloworld", "pyside2", "pyside6", "tkinter", "snake", "matplotlib", "numpy", "flask"],
 )
 def test_init_various_templates_parseable(tmp_path: Path, template_id: str) -> None:
     """各分类代表模板 init 后都能被 ProjectInfo.from_dir 解析（格式正确）."""

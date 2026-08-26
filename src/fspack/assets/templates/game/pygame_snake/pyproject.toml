@@ -1,5 +1,6 @@
 [project]
 name = "pygame_snake"
 version = "0.1.0"
+description = "pygame 贪吃蛇：>=3.13 新运行时段的 C 扩展与 SDL 资源收集"
 requires-python = ">=3.13"
 dependencies = ["pygame"]

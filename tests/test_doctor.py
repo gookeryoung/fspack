@@ -2743,6 +2743,35 @@ def test_print_template_build_summary_all_success(capsys: pytest.CaptureFixture[
     assert "4.0s" in out  # 1.5 + 2.5
 
 
+def test_print_template_build_summary_capability_tags(capsys: pytest.CaptureFixture[str]) -> None:
+    """汇总表能力列：登记的模板 id 显示能力维度标签，未登记的显示 ``-``."""
+    results = [
+        TemplateBuildResult(template_id="sci_stack", success=True, duration_sec=1.0, dist_size=100, entry_count=1),
+        TemplateBuildResult(template_id="a", success=True, duration_sec=1.0, dist_size=100, entry_count=1),
+    ]
+    _print_template_build_summary(results, bench=False)
+    out = capsys.readouterr().out
+    assert "能力" in out  # 表头
+    assert "科学计算栈/3.14t" in out
+    # 未登记 id（如测试注入的合成 id）回退 "-"，不报错
+    assert "二进制依赖" not in out
+
+
+def test_capability_tag_all_doctor_templates_registered() -> None:
+    """能力标签映射覆盖全部 doctor 模板：新模板加入 doctor 集时须同步登记标签.
+
+    直接访问私有 ``_CAPABILITY_TAGS`` 做注册表对齐校验（公共接口无此暴露）。
+    """
+    from fspack.doctor.template_report import _CAPABILITY_TAGS
+    from fspack.templates.project_template import ProjectTemplate
+
+    doctor_ids = {tpl.id for tpl in ProjectTemplate.list_all()}
+    tagged_ids = set(_CAPABILITY_TAGS)
+    assert doctor_ids == tagged_ids, (
+        f"能力标签与 doctor 模板集不一致：缺标签 {doctor_ids - tagged_ids}，多余标签 {tagged_ids - doctor_ids}"
+    )
+
+
 def test_print_template_build_summary_with_failure(capsys: pytest.CaptureFixture[str]) -> None:
     """有失败时汇总输出含"失败"（错误信息仅在 bench 模式显示）."""
     results = [

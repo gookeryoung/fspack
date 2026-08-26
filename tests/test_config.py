@@ -95,9 +95,13 @@ def test_project_info_from_dir_with_explicit_py_version(tmp_path: Path) -> None:
     assert info.py_version == "3.10.0"
 
 
-def test_project_info_from_dir_pyside2_app() -> None:
-    """from_dir 解析 GUI 示例并读取 requires-python 约束."""
-    info = ProjectInfo.from_dir(_EXAMPLES / "gui" / "pyside2_app")
+def test_project_info_from_dir_pyside2_qml_dashboard() -> None:
+    """from_dir 解析 GUI 示例并读取 requires-python 约束.
+
+    原 pyside2_app 模板已精简删除，等价场景（同约束）迁移到
+    pyside2_qml_dashboard。
+    """
+    info = ProjectInfo.from_dir(_EXAMPLES / "gui" / "pyside2_qml_dashboard")
     assert info.requires_python == ">=3.8,<3.11"
     assert info.app_type is AppType.GUI
 
@@ -399,9 +403,12 @@ def test_parse_project_tk_app() -> None:
     assert info.requires_python is None
 
 
-def test_parse_project_pyside2app_requires_python() -> None:
-    """pyside2app 示例的 requires-python 约束正确解析."""
-    info = parse_project(_EXAMPLES / "gui" / "pyside2_app")
+def test_parse_project_pyside2_qml_dashboard_requires_python() -> None:
+    """pyside2_qml_dashboard 示例的 requires-python 约束正确解析.
+
+    原 pyside2_app 模板已精简删除，等价场景迁移到 pyside2_qml_dashboard。
+    """
+    info = parse_project(_EXAMPLES / "gui" / "pyside2_qml_dashboard")
     assert info.requires_python == ">=3.8,<3.11"
     assert info.app_type is AppType.GUI
 
@@ -745,10 +752,14 @@ def test_resolve_py_version_complex_specifier(tmp_path: Path) -> None:
     assert resolve_py_version(tmp_path, None, ">=3.9,<3.12", target=Platform.LINUX) == "3.11.15"
 
 
-def test_resolve_py_version_pyside2app_example() -> None:
-    """pyside2app 示例：.python-version=3.10 + requires-python<3.11 解析到 3.10.11（Windows embed）."""
-    info = parse_project(_EXAMPLES / "gui" / "pyside2_app")
-    resolved = resolve_py_version(_EXAMPLES / "gui" / "pyside2_app", None, info.requires_python)
+def test_resolve_py_version_multi_entry_example() -> None:
+    """multi_entry 示例：.python-version=3.10 + requires-python<3.11 解析到 3.10.11（Windows embed）.
+
+    原 pyside2_app 模板已精简删除，等价场景（同约束 + 同 .python-version 钉扎）
+    迁移到 multi_entry。
+    """
+    info = parse_project(_EXAMPLES / "config" / "multi_entry")
+    resolved = resolve_py_version(_EXAMPLES / "config" / "multi_entry", None, info.requires_python)
     assert resolved == "3.10.11"
 
 

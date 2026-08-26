@@ -9,8 +9,8 @@
 4. 非离线模式缓存未命中 → 不抛离线异常，回退到网络下载路径
 
 集成测试用本模块内构造的最小项目（无第三方依赖）与
-``assets/templates/web/web_app``（有 flask 依赖）作为真实项目输入。runtime/网络层
-用 monkeypatch 替身，不实际下载或解压。
+内联构造的 flask 依赖项目（原 ``assets/templates/web/web_app`` 模板已精简
+删除）作为真实项目输入。runtime/网络层用 monkeypatch 替身，不实际下载或解压。
 
 **平台覆盖**：Windows（embed python）与 Linux（python-build-standalone）各有
 5 个对等测试，验证两个平台的离线模式行为一致。
@@ -18,7 +18,6 @@
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 from urllib.request import Request
 
@@ -28,10 +27,7 @@ from fspack.config import get_mirror
 from fspack.exceptions import DependencyError, EmbedError
 from fspack.packaging.runtime import STANDALONE_RELEASE_TAG, standalone_tarball_name
 from fspack.platform import Platform
-from fspack.templates.project_template import ProjectTemplate
 from tests._stubs import fail_urlopen
-
-_EXAMPLES = ProjectTemplate.root_dir()
 
 _MIRROR = get_mirror()
 
@@ -39,16 +35,21 @@ _MIRROR = get_mirror()
 _LINUX_PY_VERSION = "3.11.15"
 
 
-def _copy_example(rel_path: str, tmp_path: Path) -> Path:
-    """复制 assets/templates/<rel_path> 到 tmp_path/<name>，返回项目路径.
+def _make_flask_project(tmp_path: Path, name: str = "flask_app") -> Path:
+    """构造声明 flask 依赖的最小项目，返回项目路径.
 
-    :param rel_path: 相对于 ``assets/templates/`` 的路径（如 ``web/web_app``）
+    原 ``assets/templates/web/web_app`` 模板已精简删除，此处内联构造等价
+    输入（pyproject 声明 flask 依赖 + 入口脚本），保持离线 wheel 缓存
+    未命中路径的测试语义不变。
     """
-    src = _EXAMPLES / rel_path
-    name = Path(rel_path).name
-    dst = tmp_path / name
-    shutil.copytree(src, dst)
-    return dst
+    proj = tmp_path / name
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text(
+        f'[project]\nname = "{name}"\nversion = "0.1.0"\ndependencies = ["flask"]\n',
+        encoding="utf-8",
+    )
+    (proj / f"{name}.py").write_text("def main():\n    print('hi')\n", encoding="utf-8")
+    return proj
 
 
 def _make_min_project(tmp_path: Path, name: str = "app") -> Path:
@@ -90,14 +91,14 @@ def test_build_offline_wheel_cache_miss_raises_dependency_error(
 ) -> None:
     """离线模式下 wheel 缓存未命中 → build() 抛 DependencyError，错误信息含"离线模式".
 
-    用 web_app 模板（声明 flask 依赖），mock runtime 已就绪（跳过 embed 下载），
+    用内联 flask 项目（声明 flask 依赖），mock runtime 已就绪（跳过 embed 下载），
     mock pip download --no-index 失败（缓存未命中），验证 build() 抛离线异常。
     """
     monkeypatch.setenv("FSPACK_OFFLINE", "1")
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.setattr("urllib.request.urlopen", fail_urlopen)
 
-    proj = _copy_example("web/web_app", tmp_path)
+    proj = _make_flask_project(tmp_path)
     # 让 runtime 已就绪：在 dist/runtime/ 下创建 python311.dll marker
     runtime_dir = proj / "dist" / "runtime"
     runtime_dir.mkdir(parents=True)
@@ -278,7 +279,7 @@ def test_build_offline_wheel_cache_miss_raises_dependency_error_linux(
     # 守卫要求 Linux 目标在 Linux 构建机上（测试可在任意宿主运行）
     monkeypatch.setattr("fspack.packaging.pipeline.executor.detect_platform", lambda: Platform.LINUX)
 
-    proj = _copy_example("web/web_app", tmp_path)
+    proj = _make_flask_project(tmp_path)
     # Linux runtime marker：runtime/python/bin/python3.11（对应 py_version 3.11.15）
     runtime_dir = proj / "dist" / "runtime"
     python_bin = runtime_dir / "python" / "bin"

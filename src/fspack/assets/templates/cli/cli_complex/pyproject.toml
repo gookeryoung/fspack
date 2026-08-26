@@ -1,7 +1,7 @@
 [project]
 name = "cli_complex"
 version = "0.1.0"
-description = "Add your description here"
+description = "多模块 CLI 项目：lxml/ordered-set 二进制依赖，锁定 Python 3.14 最新运行时"
 requires-python = "==3.14.*"
 dependencies = [
     "lxml",

@@ -1,0 +1,11 @@
+[project]
+name = "sci_stack"
+version = "0.1.0"
+description = "科学计算流水线：NumPy 数据生成 + SciPy 曲线拟合 + numexpr 批量计算 + Matplotlib 可视化"
+requires-python = ">=3.8"
+dependencies = [
+    "matplotlib",
+    "numexpr",
+    "numpy",
+    "scipy",
+]

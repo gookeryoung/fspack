@@ -45,11 +45,11 @@ def test_init_template_build_dry_run_smoke(tmp_path: Path, template_id: str) -> 
 
 def test_smoke_matrix_covers_all_categories() -> None:
     """冒烟矩阵模板数不少于已注册 init 模板数，防止参数化列表意外缩水."""
-    assert len(_INIT_TEMPLATE_IDS) >= 20
+    assert len(_INIT_TEMPLATE_IDS) >= 18
     # 各分类至少一个代表：cli/gui/game/sci/web/config
     assert "helloworld" in _INIT_TEMPLATE_IDS
     assert "pyside2" in _INIT_TEMPLATE_IDS
-    assert "pygame" in _INIT_TEMPLATE_IDS
+    assert "snake" in _INIT_TEMPLATE_IDS
     assert "numpy" in _INIT_TEMPLATE_IDS
     assert "flask" in _INIT_TEMPLATE_IDS
     assert "multi-entry" in _INIT_TEMPLATE_IDS

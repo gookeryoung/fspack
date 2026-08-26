@@ -1,12 +1,14 @@
 """模板构建测试报告渲染.
 
-从 :mod:`fspack.doctor.templates` 拆出的渲染层：汇总表格（构建/运行状态/
-耗时/产物大小）、运行验证汇总、性能分析排名（构建耗时/启动耗时/产物大小/
-瓶颈识别），供 :func:`fspack.doctor.templates.run_doctor_test`/
+从 :mod:`fspack.doctor.templates` 拆出的渲染层：汇总表格（模板/能力维度/
+构建/运行状态/耗时/产物大小）、运行验证汇总、性能分析排名（构建耗时/
+启动耗时/产物大小/瓶颈识别），供 :func:`fspack.doctor.templates.run_doctor_test`/
 :func:`fspack.doctor.templates.run_doctor_bench` 在构建完成后调用。
 """
 
 from __future__ import annotations
+
+from typing import Final
 
 from fspack.console import console
 from fspack.doctor.envs import _format_size
@@ -18,6 +20,30 @@ __all__ = [
     "_print_run_summary",
     "_print_template_build_summary",
 ]
+
+# 模板 id → 能力维度标签：doctor 精选模板集每个模板代表一类打包能力
+# （依赖形态/入口数/前端资源/运行时段），汇总表能力列让维度一目了然。
+# 标签属策展语义（如 "lxml 是二进制依赖" 无法从元数据推导），新模板加入
+# doctor 集时同步维护；未登记的模板 id 显示 ``-``。
+_CAPABILITY_TAGS: Final[dict[str, str]] = {
+    "cli_complex": "二进制依赖",
+    "tk_app": "零依赖/内置 GUI",
+    "pyside2_qml_dashboard": "Qt/QML 资源",
+    "pygame_snake": ">=3.13 运行时",
+    "pygame_tetris": "多模块/3.8-3.12",
+    "sci_stack": "科学计算栈/3.14t",
+    "webview_app": "前端静态资源",
+    "multi_entry": "多入口",
+}
+
+
+def _capability_tag(template_id: str) -> str:
+    """返回模板的能力维度标签（doctor 汇总表能力列）.
+
+    :param template_id: 模板 id
+    :return: 能力标签（如 ``多入口``），未登记的模板 id 返回 ``-``
+    """
+    return _CAPABILITY_TAGS.get(template_id, "-")
 
 
 def _print_template_build_summary(results: list[TemplateBuildResult], *, bench: bool) -> None:
@@ -32,6 +58,7 @@ def _print_template_build_summary(results: list[TemplateBuildResult], *, bench: 
     table = Table(title="模板构建汇总", show_lines=False)
     table.add_column("#", justify="right", style="dim")
     table.add_column("模板", style="cyan")
+    table.add_column("能力", style="dim")
     table.add_column("构建", justify="center")
     table.add_column("运行", justify="center")
     table.add_column("耗时", justify="right")
@@ -66,6 +93,7 @@ def _print_template_build_summary(results: list[TemplateBuildResult], *, bench: 
         row = [
             str(i),
             r.template_id,
+            _capability_tag(r.template_id),
             build_str,
             run_str,
             f"{r.duration_sec:.1f}s",

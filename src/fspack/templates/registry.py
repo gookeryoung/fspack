@@ -5,7 +5,7 @@
 - ``assets/init_templates/<category>/<name>/`` — ``fsp init`` 内联模板
   - 含 ``template.toml`` 元数据清单 + ``$variable`` 占位符源文件
   - 渲染路径：:func:`fspack.templates.engine.render_template`
-  - 默认 ``roles = {"init", "doctor"}``
+  - 默认 ``roles = {"init"}``
 
 - ``assets/templates/<category>/<name>/`` — ``fsp doctor`` 富示例模板
   - 含 ``pyproject.toml``（无占位符，doctor 流程直接 ``copytree``）
@@ -35,8 +35,9 @@ _logger = logging.getLogger(__name__)
 # 支持的分类目录名
 _CATEGORIES: frozenset[str] = frozenset({"cli", "gui", "game", "sci", "web", "config"})
 
-# 默认角色集合：init 模板默认同时可用于 init 与 doctor
-_DEFAULT_ROLES: frozenset[str] = frozenset({"init", "doctor"})
+# 默认角色集合：init 模板仅用于 ``fsp init``。doctor 流程走
+# ``ProjectTemplate.list_all()`` 直扫 ``assets/templates/``，不经此角色过滤。
+_DEFAULT_ROLES: frozenset[str] = frozenset({"init"})
 
 # 扫描模板源文件时跳过的目录名与文件后缀：这些是 Python/工具链产生的编译或缓存
 # 产物（非模板源文件），不应作为 $variable 占位符文本读取。安装后的模板目录若被
