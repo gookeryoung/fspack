@@ -98,7 +98,7 @@ def test_make_console_disables_legacy_windows_in_ci(monkeypatch: pytest.MonkeyPa
 
 
 def test_make_console_keeps_auto_detection_outside_ci(monkeypatch: pytest.MonkeyPatch) -> None:
-    """非 CI 环境下保持 legacy_windows=None，交由 rich 自动检测."""
+    """非 CI 现代控制台下保持 legacy_windows=None，交由 rich 自动检测."""
     from rich.console import Console
 
     from fspack.console import CICompat
@@ -107,8 +107,170 @@ def test_make_console_keeps_auto_detection_outside_ci(monkeypatch: pytest.Monkey
     monkeypatch.setattr(Console, "__init__", spy_init)
     for name in ("CI", "GITHUB_ACTIONS", "BUILD_NUMBER"):
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(CICompat, "is_legacy_windows_console", staticmethod(lambda: False))
     CICompat.make_console()
     assert captured.get("legacy_windows") is None
+    assert captured.get("file") is None
+
+
+class _TtyFakeStream:
+    """模拟带 isatty 开关的 stdout."""
+
+    def __init__(self, tty: bool) -> None:
+        self._tty = tty
+
+    def isatty(self) -> bool:
+        return self._tty
+
+    def write(self, text: str) -> int:
+        return len(text)
+
+    def flush(self) -> None:
+        pass
+
+
+def _patch_detect_legacy_windows(monkeypatch: pytest.MonkeyPatch, result: bool) -> None:
+    """patch rich.console.detect_legacy_windows（被测代码函数内延迟导入）."""
+    import rich.console
+
+    monkeypatch.setattr(rich.console, "detect_legacy_windows", lambda: result)
+
+
+def test_is_legacy_windows_console_non_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """非 Windows 平台直接返回 False（不触碰 stdout/detect）."""
+    import sys
+
+    from fspack.console import CICompat
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert CICompat.is_legacy_windows_console() is False
+
+
+def test_is_legacy_windows_console_requires_tty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """stdout 非 tty（重定向/pytest capture）时返回 False，即使控制台无 VT."""
+    import sys
+
+    from fspack.console import CICompat
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "stdout", _TtyFakeStream(tty=False))
+    _patch_detect_legacy_windows(monkeypatch, True)
+    assert CICompat.is_legacy_windows_console() is False
+
+
+def test_is_legacy_windows_console_tty_without_vt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows + 真实 tty + 无 VT（Win7 conhost）：返回 True."""
+    import sys
+
+    from fspack.console import CICompat
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "stdout", _TtyFakeStream(tty=True))
+    _patch_detect_legacy_windows(monkeypatch, True)
+    assert CICompat.is_legacy_windows_console() is True
+
+
+def test_is_legacy_windows_console_tty_with_vt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows + 真实 tty + VT 已开启（Win10+）：返回 False."""
+    import sys
+
+    from fspack.console import CICompat
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "stdout", _TtyFakeStream(tty=True))
+    _patch_detect_legacy_windows(monkeypatch, False)
+    assert CICompat.is_legacy_windows_console() is False
+
+
+def test_is_legacy_windows_console_detect_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """rich 探测抛异常时按非 legacy 处理（保持现代渲染路径）."""
+    import sys
+
+    from fspack.console import CICompat
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(sys, "stdout", _TtyFakeStream(tty=True))
+
+    def _boom() -> bool:
+        raise OSError("probe failed")
+
+    import rich.console
+
+    monkeypatch.setattr(rich.console, "detect_legacy_windows", _boom)
+    assert CICompat.is_legacy_windows_console() is False
+
+
+def test_make_console_legacy_uses_ascii_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """legacy 控制台：legacy_windows=True 且 file 为报告 ASCII 编码的代理."""
+    import sys
+
+    from rich.console import Console
+
+    from fspack.console import CICompat, _AsciiEncodingStream
+
+    captured, spy_init = _spy_console_init()
+    monkeypatch.setattr(Console, "__init__", spy_init)
+    for name in ("CI", "GITHUB_ACTIONS", "BUILD_NUMBER"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(CICompat, "is_legacy_windows_console", staticmethod(lambda: True))
+    fake_stdout = _TtyFakeStream(tty=True)
+    monkeypatch.setattr(sys, "stdout", fake_stdout)
+
+    CICompat.make_console()
+
+    assert captured.get("legacy_windows") is True
+    proxy = captured.get("file")
+    assert isinstance(proxy, _AsciiEncodingStream)
+    assert proxy.encoding == "ascii", "代理须向 rich 报告 ASCII 以启用 ascii_only"
+    assert proxy._stream is fake_stdout, "代理须包装当前 sys.stdout"
+    assert proxy.write == fake_stdout.write, "write 须委托原流"
+
+
+def test_make_console_ci_overrides_legacy_console(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CI + legacy 控制台：CI 优先（legacy_windows=False、无代理，强制 ANSI）."""
+    from rich.console import Console
+
+    from fspack.console import CICompat
+
+    captured, spy_init = _spy_console_init()
+    monkeypatch.setattr(Console, "__init__", spy_init)
+    monkeypatch.setenv("CI", "true")
+    monkeypatch.setattr(CICompat, "is_legacy_windows_console", staticmethod(lambda: True))
+    CICompat.make_console()
+    assert captured.get("legacy_windows") is False
+    assert captured.get("file") is None
+
+
+def test_console_ui_ascii_marks_on_legacy_console(monkeypatch: pytest.MonkeyPatch) -> None:
+    """legacy 控制台下 success/error 用 ASCII v/x 替代 Ambiguous 宽度的 √/×."""
+    from fspack.console import CICompat, ConsoleUI
+
+    monkeypatch.setattr(CICompat, "is_legacy_windows_console", staticmethod(lambda: True))
+    ui = ConsoleUI()
+    with ui.rich.capture() as capture:
+        ui.success("构建完成")
+        ui.error("失败")
+    out = capture.get()
+    assert "构建完成" in out
+    assert "失败" in out
+    assert "v" in out
+    assert "x" in out
+    assert "√" not in out
+    assert "×" not in out
+
+
+def test_console_ui_unicode_marks_on_modern_console(monkeypatch: pytest.MonkeyPatch) -> None:
+    """现代控制台保持 √/× 标记."""
+    from fspack.console import CICompat, ConsoleUI
+
+    monkeypatch.setattr(CICompat, "is_legacy_windows_console", staticmethod(lambda: False))
+    ui = ConsoleUI()
+    with ui.rich.capture() as capture:
+        ui.success("构建完成")
+        ui.error("失败")
+    out = capture.get()
+    assert "√" in out
+    assert "×" in out
 
 
 class _FakeStream:
