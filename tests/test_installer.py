@@ -26,6 +26,7 @@ from fspack.packaging.installer import (
     build_zip,
     compile_installer,
     generate_nsis_script,
+    nsis_tool,
 )
 
 # 注意：installer.nsis 必须在 installer 之后导入（installer 导入会触发子模块加载）
@@ -219,6 +220,8 @@ def test_generate_nsis_script_no_ucrt_block_when_not_needed(tmp_path: Path) -> N
 
 
 def test_compile_installer_makensis_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("fspack.packaging.installer.nsis.ensure_nsis", lambda: "makensis")
+
     def fake_run(cmd: list[str], **kw: Any) -> object:
         raise FileNotFoundError()
 
@@ -228,6 +231,7 @@ def test_compile_installer_makensis_missing(tmp_path: Path, monkeypatch: pytest.
 
 
 def test_compile_installer_makensis_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("fspack.packaging.installer.nsis.ensure_nsis", lambda: "makensis")
     err = subprocess.CalledProcessError(1, "makensis", stderr="bad script")
 
     def fake_run(cmd: list[str], **kw: Any) -> object:
@@ -239,6 +243,7 @@ def test_compile_installer_makensis_error(tmp_path: Path, monkeypatch: pytest.Mo
 
 
 def test_compile_installer_no_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("fspack.packaging.installer.nsis.ensure_nsis", lambda: "makensis")
     monkeypatch.setattr("fspack.packaging.installer.subprocess.run", lambda cmd, **kw: CompletedStub())
     with pytest.raises(InstallerError, match="未产出安装包"):
         compile_installer(tmp_path / "x.nsi", tmp_path / "out.exe")
@@ -255,6 +260,23 @@ def test_compile_installer_success(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     result = compile_installer(tmp_path / "x.nsi", out)
     assert result == out
     assert out.is_file()
+
+
+def test_compile_installer_uses_cached_makensis(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """ensure_nsis 返回缓存绝对路径时作为命令首参数（缓存优先于 PATH）."""
+    cached = tmp_path / "nsis-3.11" / "Bin" / "makensis.exe"
+    monkeypatch.setattr("fspack.packaging.installer.nsis.ensure_nsis", lambda: str(cached))
+    out = tmp_path / "out.exe"
+    seen: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
+        seen.append(cmd)
+        out.write_bytes(b"")
+        return CompletedStub()
+
+    monkeypatch.setattr("fspack.packaging.installer.subprocess.run", fake_run)
+    compile_installer(tmp_path / "x.nsi", out)
+    assert seen[0][0] == str(cached)
 
 
 def test_build_installer_no_build_missing_dist(tmp_path: Path) -> None:
@@ -1470,3 +1492,227 @@ def test_sign_exe_files_single_entry_project(tmp_path: Path, monkeypatch: pytest
 
     assert signed_count == 1
     assert signed_exes[0].name == "app.exe"
+
+
+# ---- NSIS 工具链管理（nsis_tool：缓存识别/下载/解压）测试 ----
+
+
+def _make_nsis_zip(archive: Path, top_dir: str) -> None:
+    """构造含 ``<top_dir>/Bin/makensis.exe`` 的真实 zip 归档（顶层目录 + 启动器）."""
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr(f"{top_dir}/Bin/makensis.exe", b"fake makensis")
+        zf.writestr(f"{top_dir}/makensis.exe", b"launcher")
+
+
+def _make_cached_makensis(cache_root: Path, dir_name: str) -> Path:
+    """在 NSIS 缓存下创建已解压的 makensis.exe，返回其路径."""
+    exe = cache_root / "nsis" / dir_name / "Bin" / "makensis.exe"
+    exe.parent.mkdir(parents=True, exist_ok=True)
+    exe.write_bytes(b"")
+    return exe
+
+
+@pytest.fixture()
+def _nsis_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """NSIS 工具链测试缓存根：重定向缓存、屏蔽 PATH makensis、锁定 win32 分支."""
+    monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path))
+    monkeypatch.delenv("FSPACK_OFFLINE", raising=False)
+    monkeypatch.setattr(nsis_tool.shutil, "which", lambda name: None)
+    monkeypatch.setattr(nsis_tool.sys, "platform", "win32")
+    return tmp_path
+
+
+def test_ensure_nsis_cache_hit(_nsis_cache: Path) -> None:
+    """缓存命中：Bin/makensis.exe 已存在 → 返回其绝对路径."""
+    exe = _make_cached_makensis(_nsis_cache, "nsis-3.11")
+    assert nsis_tool.ensure_nsis() == str(exe)
+
+
+def test_find_cached_makensis_portable_dir(_nsis_cache: Path) -> None:
+    """portable 变体目录（nsis-3.11-portable）同样命中缓存."""
+    exe = _make_cached_makensis(_nsis_cache, "nsis-3.11-portable")
+    assert nsis_tool.find_cached_makensis() == exe
+
+
+def test_ensure_nsis_local_zip_extract(_nsis_cache: Path) -> None:
+    """本地官方 zip：解压后返回 makensis 路径，用户归档保留不删."""
+    nsis_dir = _nsis_cache / "nsis"
+    nsis_dir.mkdir()
+    archive = nsis_dir / "nsis-3.11.zip"
+    _make_nsis_zip(archive, "nsis-3.11")
+
+    result = nsis_tool.ensure_nsis()
+
+    assert Path(result) == nsis_dir / "nsis-3.11" / "Bin" / "makensis.exe"
+    assert archive.is_file(), "用户归档解压后须保留"
+
+
+def test_ensure_nsis_local_portable_7z_extract(_nsis_cache: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """本地 portable .7z：经系统 7-Zip 解压后命中（patch _extract_7z 模拟）."""
+    nsis_dir = _nsis_cache / "nsis"
+    nsis_dir.mkdir()
+    archive = nsis_dir / "nsis-3.11-portable.7z"
+    archive.write_bytes(b"fake 7z")
+
+    def fake_extract_7z(arch: Path, dest: Path) -> None:
+        assert arch == archive
+        _make_cached_makensis(_nsis_cache, "nsis-3.11-portable")
+
+    monkeypatch.setattr(nsis_tool, "_extract_7z", fake_extract_7z)
+    result = nsis_tool.ensure_nsis()
+    assert Path(result) == nsis_dir / "nsis-3.11-portable" / "Bin" / "makensis.exe"
+    assert archive.is_file(), "用户归档解压后须保留"
+
+
+def test_ensure_nsis_7z_without_sevenzip_falls_back_to_path(_nsis_cache: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """本地 .7z 但未装 7-Zip：跳过归档回退 PATH makensis（不 raise）."""
+    nsis_dir = _nsis_cache / "nsis"
+    nsis_dir.mkdir()
+    (nsis_dir / "nsis-3.11.7z").write_bytes(b"fake 7z")
+    monkeypatch.setattr(nsis_tool, "_find_7z", lambda: None)
+    monkeypatch.setattr(nsis_tool.shutil, "which", lambda name: "C:/Tools/makensis.exe" if name == "makensis" else None)
+
+    assert nsis_tool.ensure_nsis() == "makensis"
+
+
+def test_ensure_nsis_corrupt_archive_falls_back_to_download(_nsis_cache: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """本地归档损坏（非 zip 内容）：删除后回退在线下载."""
+    nsis_dir = _nsis_cache / "nsis"
+    nsis_dir.mkdir()
+    archive = nsis_dir / "nsis-3.11.zip"
+    archive.write_bytes(b"not a zip")
+
+    def fake_download() -> Path:
+        return _make_cached_makensis(_nsis_cache, "nsis-3.11")
+
+    monkeypatch.setattr(nsis_tool, "_download_and_extract_nsis", fake_download)
+    result = nsis_tool.ensure_nsis()
+
+    assert result == str(_nsis_cache / "nsis" / "nsis-3.11" / "Bin" / "makensis.exe")
+    assert not archive.exists(), "损坏归档须删除"
+
+
+def test_ensure_nsis_uses_path_makensis(_nsis_cache: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """缓存/归档均无但 PATH 已装 makensis：直接用系统安装，不触发下载."""
+    monkeypatch.setattr(nsis_tool.shutil, "which", lambda name: "C:/Tools/makensis.exe" if name == "makensis" else None)
+    monkeypatch.setattr(
+        nsis_tool, "_download_and_extract_nsis", lambda: (_ for _ in ()).throw(AssertionError("不应下载"))
+    )
+    assert nsis_tool.ensure_nsis() == "makensis"
+
+
+def test_ensure_nsis_offline_raises(_nsis_cache: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """离线且无任何来源：fail-fast，提示归档放置路径与 PATH 安装."""
+    monkeypatch.setenv("FSPACK_OFFLINE", "1")
+    with pytest.raises(InstallerError, match="离线模式下 NSIS 未就绪"):
+        nsis_tool.ensure_nsis()
+
+
+def test_ensure_nsis_offline_7z_without_sevenzip_hint(_nsis_cache: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """离线 + 本地 .7z 未装 7-Zip：错误信息补充 7-Zip 安装建议."""
+    nsis_dir = _nsis_cache / "nsis"
+    nsis_dir.mkdir()
+    (nsis_dir / "nsis-3.11-portable.7z").write_bytes(b"fake 7z")
+    monkeypatch.setattr(nsis_tool, "_find_7z", lambda: None)
+    monkeypatch.setenv("FSPACK_OFFLINE", "1")
+    with pytest.raises(InstallerError, match="7-Zip"):
+        nsis_tool.ensure_nsis()
+
+
+def test_ensure_nsis_downloads_when_missing(_nsis_cache: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """在线且缓存/归档/PATH 均无：下载填充缓存并返回 makensis 路径."""
+    calls: list[int] = []
+
+    def fake_download() -> Path:
+        calls.append(1)
+        return _make_cached_makensis(_nsis_cache, "nsis-3.11")
+
+    monkeypatch.setattr(nsis_tool, "_download_and_extract_nsis", fake_download)
+    assert nsis_tool.ensure_nsis() == str(_nsis_cache / "nsis" / "nsis-3.11" / "Bin" / "makensis.exe")
+    assert calls == [1]
+
+
+def test_ensure_nsis_non_windows_returns_path_command(_nsis_cache: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """非 Windows 平台（Linux 交叉打包）：不做缓存管理，直接返回 "makensis"."""
+    monkeypatch.setattr(nsis_tool.sys, "platform", "linux")
+    assert nsis_tool.ensure_nsis() == "makensis"
+
+
+def test_find_local_nsis_archive_prefers_zip_and_ignores_mismatch(_nsis_cache: Path) -> None:
+    """本地归档识别：.zip 优先于 .7z；版本不匹配（如 3.10）不识别."""
+    nsis_dir = _nsis_cache / "nsis"
+    nsis_dir.mkdir()
+    (nsis_dir / "nsis-3.11.7z").write_bytes(b"a")
+    (nsis_dir / "nsis-3.10.zip").write_bytes(b"b")
+
+    assert nsis_tool._find_local_nsis_archive() == nsis_dir / "nsis-3.11.7z"
+
+    (nsis_dir / "nsis-3.11-portable.zip").write_bytes(b"c")
+    assert nsis_tool._find_local_nsis_archive() == nsis_dir / "nsis-3.11-portable.zip"
+
+
+def test_extract_7z_missing_sevenzip_raises(_nsis_cache: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_extract_7z 未装 7-Zip：InstallerError 含安装建议."""
+    monkeypatch.setattr(nsis_tool, "_find_7z", lambda: None)
+    with pytest.raises(InstallerError, match="7-Zip"):
+        nsis_tool._extract_7z(_nsis_cache / "x.7z", _nsis_cache)
+
+
+def test_extract_7z_nonzero_exit_raises(_nsis_cache: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_extract_7z 退出码非零（归档损坏）：InstallerError 含退出码与尾部输出."""
+
+    class _FailResult:
+        returncode = 2
+        stdout = ""
+        stderr = "archive corrupt"
+
+    def fake_run(cmd: list[str], **kw: Any) -> object:
+        return _FailResult()
+
+    monkeypatch.setattr(nsis_tool, "_find_7z", lambda: "7z")
+    monkeypatch.setattr(nsis_tool.subprocess, "run", fake_run)
+    with pytest.raises(InstallerError, match="退出码 2"):
+        nsis_tool._extract_7z(_nsis_cache / "x.7z", _nsis_cache)
+
+
+def test_download_and_extract_nsis_falls_back_to_second_source(
+    _nsis_cache: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """下载源逐一回退：首源失败（OSError）后第二源成功，归档解压后清理."""
+    urls_seen: list[str] = []
+
+    class FakeDownloader:
+        def __init__(self, *, timeout: int = 0) -> None:
+            pass
+
+        def download(self, url: str, dest: Path, *, stage: object = None, label: str = "") -> int:
+            urls_seen.append(url)
+            if len(urls_seen) == 1:
+                raise OSError("boom")
+            _make_nsis_zip(dest, "nsis-3.11")
+            return 0
+
+    monkeypatch.setattr("fspack.packaging.net.Downloader", FakeDownloader)
+    result = nsis_tool._download_and_extract_nsis()
+
+    assert Path(result) == _nsis_cache / "nsis" / "nsis-3.11" / "Bin" / "makensis.exe"
+    assert len(urls_seen) == 2, "首源失败后应回退第二源"
+    assert urls_seen[0] != urls_seen[1]
+    assert not (_nsis_cache / "nsis" / "nsis-3.11.zip").exists(), "下载归档解压后须清理"
+
+
+def test_download_and_extract_nsis_all_sources_fail(_nsis_cache: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """全部下载源失败：InstallerError 报已尝试源数，归档半成品清理."""
+
+    class FakeDownloader:
+        def __init__(self, *, timeout: int = 0) -> None:
+            pass
+
+        def download(self, url: str, dest: Path, *, stage: object = None, label: str = "") -> int:
+            dest.write_bytes(b"partial")
+            raise OSError("boom")
+
+    monkeypatch.setattr("fspack.packaging.net.Downloader", FakeDownloader)
+    with pytest.raises(InstallerError, match="已尝试 2 个源"):
+        nsis_tool._download_and_extract_nsis()
+    assert not (_nsis_cache / "nsis" / "nsis-3.11.zip").exists(), "失败路径同样清理归档"

@@ -25,6 +25,7 @@ from fspack.packaging.installer.dist_prep import (
     _prepare_dist,
     _release_base,
 )
+from fspack.packaging.installer.nsis_tool import ensure_nsis
 from fspack.packaging.installer.request import _NO_SIGN, ReleaseRequest, SignOptions
 from fspack.packaging.win7.scan import iter_pe_files
 from fspack.platform import Platform
@@ -295,9 +296,14 @@ def _build_uninstall_registry_block(project: ProjectInfo) -> str:
 
 
 def compile_installer(nsi_path: Path, out_setup: Path) -> Path:
-    """调用 makensis 编译 .nsi 为安装包，返回 out_setup 路径。"""
+    """调用 makensis 编译 .nsi 为安装包，返回 out_setup 路径.
+
+    makensis 定位经 :func:`fspack.packaging.installer.nsis_tool.ensure_nsis`
+    （缓存命中 > 本地归档解压 > PATH > 在线下载），非 Windows 平台回退
+    PATH 中的 ``makensis``。
+    """
     _run_tool(
-        ["makensis", str(nsi_path)],
+        [ensure_nsis(), str(nsi_path)],
         not_found_msg="未找到 makensis，请安装 NSIS（如 sudo apt install -y nsis）",
         fail_prefix="makensis 编译失败",
         cwd=nsi_path.parent,

@@ -30,6 +30,7 @@ __all__ = [
     "embed_cache_dir",
     "is_offline",
     "loader_cache_dir",
+    "nsis_cache_dir",
     "nuitka_cache_dir",
     "nuitka_winlibs_cache_dir",
     "standalone_cache_dir",
@@ -129,3 +130,13 @@ def nuitka_work_cache_dir() -> Path:
     :func:`nuitka_winlibs_cache_dir`，清本目录不影响 winlibs 工具链。
     """
     return cache_root() / "nuitka-work"
+
+
+def nsis_cache_dir() -> Path:
+    """NSIS 工具链缓存目录（``<cache_root>/nsis``）.
+
+    存放 NSIS 归档（官方 ``nsis-<version>.zip`` 或社区 portable 变体
+    ``.zip``/``.7z``）与解压后的 makensis 工具链目录，见
+    :mod:`fspack.packaging.installer.nsis_tool`。
+    """
+    return cache_root() / "nsis"

@@ -30,6 +30,7 @@ winlibs 额外区分：检测到 MSVC 时未缓存亦为 OK（scons 优先用 MS
 from __future__ import annotations
 
 import re
+import shutil
 from pathlib import Path
 from typing import Callable
 
@@ -38,6 +39,7 @@ from fspack.config.cache import (
     cache_root,
     embed_cache_dir,
     is_offline,
+    nsis_cache_dir,
     nuitka_cache_dir,
     nuitka_winlibs_cache_dir,
     standalone_cache_dir,
@@ -57,6 +59,7 @@ from fspack.platform import Platform
 __all__ = [
     "_cache_content_fns",
     "_check_embed_contents",
+    "_check_nsis_contents",
     "_check_nuitka_contents",
     "_check_standalone_contents",
     "_check_standalone_windows_contents",
@@ -382,11 +385,105 @@ def _msvc_available() -> bool:
     return winlibs.msvc_available()
 
 
+def _check_nsis_contents() -> CheckResult:
+    """盘点 NSIS 工具链缓存（Windows 安装包编译器 makensis）.
+
+    缓存命中标志为 ``<cache_root>/nsis/<dir>/Bin/makensis.exe``（``<dir>``
+    为 ``nsis-3.11`` 或 portable 变体 ``nsis-3.11-portable``，见
+    :mod:`fspack.packaging.installer.nsis_tool`）；缓存目录下与锁定版本
+    精确匹配的 ``nsis-3.11*.zip``/``*.7z`` 归档可被构建流程识别解压
+    （纯本地操作，离线同样适用；``.7z`` 需系统 7-Zip）。
+
+    与 winlibs 盘点同构：本地归档区分「匹配（待解压）」与「不匹配
+    （版本/变体不符，不算可用缓存，详情单独提示所需确切归档名）」；
+    未缓存时若 PATH 已有 makensis（系统安装）亦为 OK，否则在线 OK
+    （首次打安装包自动下载，约 2.3 MiB）、离线 WARN。
+    """
+    from fspack.packaging.installer.nsis_tool import (
+        NSIS_ARCHIVE_NAMES,
+        NSIS_VERSION,
+        find_cached_makensis,
+    )
+
+    cache_dir = nsis_cache_dir()
+    name = "NSIS 工具链"
+    try:
+        archives = _nsis_local_archives(cache_dir)
+    except OSError as exc:
+        return _scan_error_result(name, cache_dir, exc)
+
+    if find_cached_makensis() is not None:
+        return CheckResult(
+            name=name,
+            status=CheckStatus.OK,
+            detail=f"makensis 已就绪（NSIS {NSIS_VERSION}）",
+        )
+
+    matched = [a for a in archives if a in NSIS_ARCHIVE_NAMES]
+    if matched:
+        # 本地归档待解压：下次打安装包自动识别解压，离线模式同样可用
+        return CheckResult(
+            name=name,
+            status=CheckStatus.OK,
+            detail=f"本地归档 {len(matched)} 个待解压（首次打安装包自动解压）",
+        )
+
+    # 未缓存：不匹配的本地归档（版本/变体不符）追加提示
+    mismatched = [a for a in archives if a not in NSIS_ARCHIVE_NAMES]
+    suffix = f"；另有 {len(mismatched)} 个本地归档不被识别" if mismatched else ""
+    suggestion = (
+        f"本地归档 {_preview_versions(mismatched)} 不会被构建使用（版本或变体不匹配）："
+        f"须为 {_preview_versions(list(NSIS_ARCHIVE_NAMES))} 之一（.zip/.7z 均可）"
+        if mismatched
+        else ""
+    )
+    if shutil.which("makensis") is not None:
+        return CheckResult(
+            name=name,
+            status=CheckStatus.OK,
+            detail=f"未缓存（PATH 已有 makensis，优先用系统安装）{suffix}",
+            suggestion=suggestion,
+        )
+    if is_offline():
+        return CheckResult(
+            name=name,
+            status=CheckStatus.WARN,
+            detail=f"未缓存{suffix}",
+            suggestion=(
+                f"离线模式无法下载 NSIS：请将 NSIS 归档放入 {cache_dir}（构建时自动识别解压），"
+                f"或安装 NSIS 到 PATH（choco install nsis）" + (f"。{suggestion}" if suggestion else "")
+            ),
+        )
+    return CheckResult(
+        name=name,
+        status=CheckStatus.OK,
+        detail=f"未缓存（首次打安装包自动下载，约 2.3 MiB）{suffix}",
+        suggestion=suggestion,
+    )
+
+
+def _nsis_local_archives(cache_dir: Path) -> list[str]:
+    """递归列出缓存目录下用户手动放置的 NSIS 归档文件名（.zip/.7z）.
+
+    扫描范围与 ``nsis_tool._find_local_nsis_archive`` 一致（缓存根与任意
+    子目录），但不校验版本匹配——用户常放置其他版本的 NSIS 归档，盘点须
+    全部可见；是否可用（匹配判定）由调用方结合
+    ``nsis_tool.NSIS_ARCHIVE_NAMES`` 区分。
+
+    :raises OSError: 目录遍历失败。
+    """
+    if not cache_dir.is_dir():
+        return []
+    return sorted(
+        path.name for path in cache_dir.rglob("nsis-*") if path.is_file() and path.suffix.lower() in {".zip", ".7z"}
+    )
+
+
 def _cache_content_fns(platform: Platform) -> list[Callable[[], CheckResult]]:
     """按平台返回缓存内容盘点函数列表（供 ``run_doctor`` 线程池并行执行）.
 
     - Windows：embed（embed 运行时）/ standalone-windows（Nuitka 构建 python
-      与 tkinter 源）/ nuitka / tkinter / winlibs
+      与 tkinter 源）/ nuitka / tkinter / winlibs / nsis
     - Linux/macOS：standalone（运行时源）/ nuitka
     """
     fns: list[Callable[[], CheckResult]] = [_check_nuitka_contents]
@@ -397,6 +494,7 @@ def _cache_content_fns(platform: Platform) -> list[Callable[[], CheckResult]]:
                 _check_standalone_windows_contents,
                 _check_tkinter_contents,
                 _check_winlibs_contents,
+                _check_nsis_contents,
             ]
         )
     else:

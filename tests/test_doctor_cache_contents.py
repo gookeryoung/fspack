@@ -15,6 +15,7 @@ import pytest
 from fspack.doctor.cache_contents import (
     _cache_content_fns,
     _check_embed_contents,
+    _check_nsis_contents,
     _check_nuitka_contents,
     _check_standalone_contents,
     _check_standalone_windows_contents,
@@ -455,15 +456,110 @@ def test_check_nuitka_contents_versions_without_residual(tmp_path: Path) -> None
     assert "残留" not in result.detail
 
 
+# ---- NSIS 工具链盘点 ----
+
+
+def _no_path_makensis(monkeypatch: pytest.MonkeyPatch) -> None:
+    """屏蔽 PATH 中的 makensis（未缓存分支的确定性前置条件）."""
+    monkeypatch.setattr("shutil.which", lambda name: None)
+
+
+def test_check_nsis_contents_ready(tmp_path: Path) -> None:
+    """makensis 已解压就绪：OK，detail 含版本."""
+    exe = tmp_path / "nsis" / "nsis-3.11" / "Bin" / "makensis.exe"
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b"")
+    result = _check_nsis_contents()
+    assert result.status is CheckStatus.OK
+    assert "已就绪" in result.detail
+    assert "3.11" in result.detail
+
+
+def test_check_nsis_contents_portable_ready(tmp_path: Path) -> None:
+    """portable 变体目录（nsis-3.11-portable）同样命中就绪."""
+    exe = tmp_path / "nsis" / "nsis-3.11-portable" / "Bin" / "makensis.exe"
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b"")
+    result = _check_nsis_contents()
+    assert result.status is CheckStatus.OK
+    assert "已就绪" in result.detail
+
+
+def test_check_nsis_contents_archive_pending(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """本地归档（portable .7z）待解压：OK，首次打安装包自动解压."""
+    _no_path_makensis(monkeypatch)
+    nsis = tmp_path / "nsis"
+    nsis.mkdir()
+    (nsis / "nsis-3.11-portable.7z").write_bytes(b"x")
+    result = _check_nsis_contents()
+    assert result.status is CheckStatus.OK
+    assert "待解压" in result.detail
+
+
+def test_check_nsis_contents_archive_mismatched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """版本不匹配归档（nsis-3.10.zip）不算可用：未缓存 + 提示所需确切归档名."""
+    _no_path_makensis(monkeypatch)
+    nsis = tmp_path / "nsis"
+    nsis.mkdir()
+    (nsis / "nsis-3.10.zip").write_bytes(b"x")
+    result = _check_nsis_contents()
+    assert result.status is CheckStatus.OK
+    assert "未缓存" in result.detail
+    assert "1 个本地归档不被识别" in result.detail
+    assert "不会被构建使用" in result.suggestion
+    assert "nsis-3.11.zip" in result.suggestion
+
+
+def test_check_nsis_contents_path_makensis(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """未缓存但 PATH 已有 makensis：OK（优先用系统安装）."""
+    monkeypatch.setattr("shutil.which", lambda name: "C:/Tools/makensis.exe" if name == "makensis" else None)
+    result = _check_nsis_contents()
+    assert result.status is CheckStatus.OK
+    assert "PATH 已有 makensis" in result.detail
+
+
+def test_check_nsis_contents_empty_offline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """未缓存且离线（无 PATH makensis）：WARN，建议放归档或装 NSIS."""
+    _no_path_makensis(monkeypatch)
+    monkeypatch.setenv("FSPACK_OFFLINE", "1")
+    result = _check_nsis_contents()
+    assert result.status is CheckStatus.WARN
+    assert "离线模式无法下载" in result.suggestion
+    assert str(tmp_path / "nsis") in result.suggestion
+
+
+def test_check_nsis_contents_empty_online(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """未缓存且在线（无 PATH makensis）：OK（首次打安装包自动下载）."""
+    _no_path_makensis(monkeypatch)
+    result = _check_nsis_contents()
+    assert result.status is CheckStatus.OK
+    assert "自动下载" in result.detail
+
+
+def test_check_nsis_contents_missing_dir_online(monkeypatch: pytest.MonkeyPatch) -> None:
+    """缓存目录不存在且在线（无 PATH makensis）：OK（同空缓存）."""
+    _no_path_makensis(monkeypatch)
+    result = _check_nsis_contents()
+    assert result.status is CheckStatus.OK
+    assert "未缓存" in result.detail
+
+
 # ---- 平台分发 ----
 
 
 def test_cache_content_fns_windows() -> None:
-    """Windows 平台分发 5 项：nuitka/embed/standalone-windows/tkinter/winlibs."""
+    """Windows 平台分发 6 项：nuitka/embed/standalone-windows/tkinter/winlibs/nsis."""
     fns = _cache_content_fns(Platform.WINDOWS)
     results = [fn() for fn in fns]
     names = {r.name for r in results}
-    assert names == {"nuitka 缓存", "embed 缓存", "standalone-windows 缓存", "tkinter 缓存", "winlibs 工具链"}
+    assert names == {
+        "nuitka 缓存",
+        "embed 缓存",
+        "standalone-windows 缓存",
+        "tkinter 缓存",
+        "winlibs 工具链",
+        "NSIS 工具链",
+    }
 
 
 def test_cache_content_fns_linux() -> None:
