@@ -80,10 +80,10 @@ def _read_key_windows() -> str:
     """
     import msvcrt
 
-    ch = msvcrt.getwch()
+    ch = msvcrt.getwch()  # type: ignore[missing-attribute]
     if ch in ("\x00", "\xe0"):
         # 特殊键前缀：再读一个扩展码字节
-        return _WIN_SPECIAL_KEYS.get(msvcrt.getwch(), "other")
+        return _WIN_SPECIAL_KEYS.get(msvcrt.getwch(), "other")  # type: ignore[missing-attribute]
     return _normalize_plain_key(ch)
 
 

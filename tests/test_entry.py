@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 from fspack.packaging.entry import EntryWrapper
@@ -423,10 +426,17 @@ def test_generate_wrapper_source_gui_ready_hook() -> None:
     """
     source = EntryWrapper.generate_wrapper_source("app", None, "app.py")
     compile(source, "_entry_app.py", "exec")
-    # import 拦截器：仅 FSPACK_TIMING 时安装，patch 成功后恢复原生 import
+    # import 拦截器：仅 FSPACK_TIMING 时安装，patch 成功后保持原生 import
     assert "_fspack_orig_import = _builtins.__import__" in source
     assert "_builtins.__import__ = _fspack_import_hook" in source
     assert "builtins.__import__ = _fspack_orig_import" in source
+    # 防递归关键：命中框架先卸载拦截器再执行本次导入（tkinter 模块体的
+    # from tkinter.constants import * 嵌套导入不得再进入钩子）
+    uninstall_pos = source.index("        _builtins.__import__ = _fspack_orig_import")
+    import_pos = source.index("        mod = _fspack_orig_import(name, *args, **kwargs)")
+    assert uninstall_pos < import_pos
+    # patch 失败（ImportError）时重装拦截器待命重试
+    assert source.count("_builtins.__import__ = _fspack_import_hook") >= 2
     # 框架清单与 patch 目标
     assert '_GUI_TOPS = ("PySide2", "PySide6", "PyQt5", "PyQt6", "tkinter")' in source
     assert "self.processEvents()" in source  # Qt：处理 show/paint 队列首帧上屏
@@ -450,3 +460,107 @@ def test_generate_wrapper_source_gui_hook_no_brace_literals() -> None:
     end = source.index("# tkinter 环境变量")
     hook_block = source[start:end]
     assert "{" not in hook_block and "}" not in hook_block
+
+
+def _run_wrapper_with_timing(tmp_path: Path, site_packages: Path, entry_code: str) -> subprocess.CompletedProcess[str]:
+    """生成 wrapper 并在子进程以 FSPACK_TIMING=1 执行，返回 CompletedProcess.
+
+    site-packages 放置假 GUI 框架包，用户入口由 entry_code 给出；子进程
+    环境继承当前进程并注入剖析开关。
+    """
+    src_dir = tmp_path / "src"
+    src_dir.mkdir(exist_ok=True)
+    (src_dir / "app.py").write_text(entry_code, encoding="utf-8")
+    assert site_packages.is_dir()
+
+    wrapper_source = EntryWrapper.generate_wrapper_source("app", None, "app.py")
+    wrapper_path = tmp_path / "_entry_app.py"
+    wrapper_path.write_text(wrapper_source, encoding="utf-8")
+
+    env = {**os.environ, "FSPACK_TIMING": "1"}
+    return subprocess.run(
+        [sys.executable, str(wrapper_path)],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+        timeout=60,
+    )
+
+
+def test_generate_wrapper_gui_hook_tkinter_no_recursion(tmp_path: Path) -> None:
+    """回归：剖析钩子拦截 tkinter 导入不再无限递归（RecursionError）.
+
+    tkinter 模块体首行 ``from tkinter.constants import *`` 属同框架嵌套导入，
+    旧钩子在该嵌套导入上重入安装逻辑，与 ``_fspack_patch_tkinter`` 自身的
+    ``import tkinter`` 叠加成无限递归。用含同构嵌套导入的假 tkinter 包端到端
+    执行 wrapper 验证：进程正常退出、输出 gui_ready 打点、mainloop 被 patch
+    后立即返回。
+    """
+    tk_dir = tmp_path / "site-packages" / "tkinter"
+    tk_dir.mkdir(parents=True)
+    # 模块体嵌套同框架导入（复现真实 tkinter 的递归触发点）
+    (tk_dir / "__init__.py").write_text(
+        "from tkinter.constants import *\n"
+        "\n"
+        "\n"
+        "class Tk:\n"
+        "    def update(self):\n"
+        "        pass\n"
+        "\n"
+        "    def mainloop(self):\n"
+        "        raise SystemExit('mainloop not patched')\n",
+        encoding="utf-8",
+    )
+    (tk_dir / "constants.py").write_text("X = 1\n", encoding="utf-8")
+
+    result = _run_wrapper_with_timing(
+        tmp_path,
+        tmp_path / "site-packages",
+        "import tkinter\ntkinter.Tk().mainloop()\nprint('app-exit')\n",
+    )
+    assert result.returncode == 0, result.stderr
+    assert "RecursionError" not in result.stderr
+    assert "mainloop not patched" not in result.stderr
+    assert "[fspack timing] gui_ready" in result.stderr
+    assert "app-exit" in result.stdout
+
+
+def test_generate_wrapper_gui_hook_qt_patch_and_native_import_restored(tmp_path: Path) -> None:
+    """剖析钩子 patch Qt exec 并在安装后恢复原生 import（无递归/无残留拦截）.
+
+    假 PySide6 包的 QtWidgets 模块体含 ``from PySide6.QtCore import ...``
+    嵌套同框架导入（对应真实 QtWidgets 结构），验证命中框架先卸载拦截器
+    的新时序下 Qt 路径同样无递归且 patch 生效。
+    """
+    qt_dir = tmp_path / "site-packages" / "PySide6"
+    qt_dir.mkdir(parents=True)
+    (qt_dir / "__init__.py").write_text("", encoding="utf-8")
+    (qt_dir / "QtCore.py").write_text("Qt = object\n", encoding="utf-8")
+    # 模块体嵌套同框架导入（对应真实 QtWidgets 的 from PySide6.QtCore import ...）
+    (qt_dir / "QtWidgets.py").write_text(
+        "from PySide6.QtCore import Qt\n"
+        "\n"
+        "\n"
+        "class QApplication:\n"
+        "    def __init__(self, *args, **kwargs):\n"
+        "        pass\n"
+        "\n"
+        "    def processEvents(self):\n"
+        "        pass\n"
+        "\n"
+        "    def exec(self):\n"
+        "        raise SystemExit('exec not patched')\n",
+        encoding="utf-8",
+    )
+
+    result = _run_wrapper_with_timing(
+        tmp_path,
+        tmp_path / "site-packages",
+        "from PySide6.QtWidgets import QApplication\napp = QApplication([])\napp.exec()\nprint('app-exit')\n",
+    )
+    assert result.returncode == 0, result.stderr
+    assert "RecursionError" not in result.stderr
+    assert "exec not patched" not in result.stderr
+    assert "[fspack timing] gui_ready" in result.stderr
+    assert "app-exit" in result.stdout

@@ -210,8 +210,13 @@ def _close_splash():
 # 永不退出，剖析会永久挂起。经 builtins.__import__ 拦截主流 GUI 框架的首次
 # 导入，patch QApplication.exec/exec_ 与 Tk.mainloop：先处理 pending 事件使
 # 首帧上屏（"进入界面"），打点 gui_ready 后直接返回，程序自然退出（退出码
-# 0），启动耗时得到有效评估。patch 成功即卸载拦截器恢复原生 import；未命中
-# 框架零开销（每次 import 仅一次元组查询），未知框架由 runner 侧超时兜底。
+# 0），启动耗时得到有效评估。命中框架先卸载拦截器恢复原生 import 再执行
+# 该次导入，导入完成后安装 patch；patch 所需子模块暂不可用时重装拦截器
+# 待命重试。先卸载是防递归关键：框架模块体内部的嵌套同框架导入（tkinter
+# 的 from tkinter.constants import *、QtWidgets 的 from PySide2.QtCore
+# import *）若仍经拦截器会重入安装逻辑，与 patch 函数自身的 import 叠加成
+# 无限递归（RecursionError）。未命中框架零开销（每次 import 仅一次元组
+# 查询），未知框架由 runner 侧超时兜底。
 # 注：本块代码不用 dict/set 字面量与 f-string——wrapper 模板经 str.format
 # 填充，字面花括号会被误解析为占位符。
 _GUI_TOPS = ("PySide2", "PySide6", "PyQt5", "PyQt6", "tkinter")
@@ -262,24 +267,15 @@ def _fspack_patch_tkinter():
 
 
 def _fspack_try_install_gui_hook(top):
-    """import 完成回调：目标框架的事件循环入口已可 patch 时安装并卸载拦截.
+    """import 完成回调：patch 目标框架的事件循环入口（拦截器已由调用方卸载）.
 
     Qt 项目常先 import QtCore（此时 QtWidgets 尚不可用），ImportError 向上
-    传播由调用方忽略，保持拦截器待命，待 QtWidgets 导入后重试。
+    传播由调用方捕获并重装拦截器，待 QtWidgets 导入后重试。
     """
-    try:
-        if top == "tkinter":
-            _fspack_patch_tkinter()
-        else:
-            _fspack_patch_qt(top)
-    except ImportError:
-        return
-    global _fspack_orig_import
-    if _fspack_orig_import is not None:
-        import builtins
-
-        builtins.__import__ = _fspack_orig_import
-        _fspack_orig_import = None
+    if top == "tkinter":
+        _fspack_patch_tkinter()
+    else:
+        _fspack_patch_qt(top)
 
 
 _fspack_orig_import = None
@@ -289,10 +285,23 @@ if _FSPACK_TIMING:
     _fspack_orig_import = _builtins.__import__
 
     def _fspack_import_hook(name, *args, **kwargs):
-        mod = _fspack_orig_import(name, *args, **kwargs)
         top = name.split(".", 1)[0]
-        if top in _GUI_TOPS:
+        if top not in _GUI_TOPS:
+            return _fspack_orig_import(name, *args, **kwargs)
+        # 命中 GUI 框架：先卸载拦截器恢复原生 import，再执行本次导入（防
+        # 递归，见块首注释），导入完成后仅安装一次 patch
+        _builtins.__import__ = _fspack_orig_import
+        try:
+            mod = _fspack_orig_import(name, *args, **kwargs)
+        except ImportError:
+            # 框架本体导入失败（未安装/依赖缺失）：重装拦截器待命，异常原样传播
+            _builtins.__import__ = _fspack_import_hook
+            raise
+        try:
             _fspack_try_install_gui_hook(top)
+        except ImportError:
+            # patch 所需子模块暂不可用：重装拦截器待命，下次框架导入重试
+            _builtins.__import__ = _fspack_import_hook
         return mod
 
     _builtins.__import__ = _fspack_import_hook
