@@ -1,9 +1,9 @@
-"""``fsp doctor --bench`` 基准剖析日志：聚合落盘与历史对比.
+"""``fsp doctor --test -P`` 基准剖析日志：聚合落盘与历史对比.
 
-与 ``fsp b -P`` / ``fsp r -P`` 对齐：``fsp d --bench -P`` 将一次基准运行
-聚合为单个剖析日志（schema ``fspack/doctor-bench-profile/1``）写入
-``<当前目录>/.benchmarks/fsp-d-<时间戳>.json``——``stages`` 为各模板构建
-耗时（附产物大小/入口数/启动耗时扩展字段，对比渲染只读 ``elapsed``，
+与 ``fsp b -P`` / ``fsp r -P`` 对齐：``fsp d --test -P`` 将一次模板构建
+测试运行聚合为单个剖析日志（schema ``fspack/doctor-bench-profile/1``）
+写入 ``<当前目录>/.benchmarks/fsp-d-<时间戳>.json``——``stages`` 为各
+模板构建耗时（附产物大小/入口数/启动耗时扩展字段，对比渲染只读 ``elapsed``，
 扩展字段供事后分析），``wall_time`` 为本次基准总墙钟；失败构建单列
 ``failures`` 字段（中断样本不是有效性能数据，不混入阶段统计）。
 

@@ -11,7 +11,7 @@ JSON 日志（默认 ``<项目>/.benchmarks/fsp-b-<时间戳>.json``，``--profi
 ``fspack/run-profile/1``，由 :func:`save_profile_log` 写入完整 dict），
 与构建日志同目录共存、按前缀区分，对比渲染共用同一张差异表。
 
-``fsp d --bench -P`` 基准剖析把一次 doctor 基准运行聚合为单个日志
+``fsp d --test -P`` 基准剖析把一次 doctor 模板构建测试聚合为单个日志
 （``fsp-d-<时间戳>.json``，schema ``fspack/doctor-bench-profile/1``，
 ``stages`` 为各模板构建耗时），与前两类日志同目录共存，``-PC`` 对比
 同样走 :func:`compare_with_baseline`（日志类别 :data:`DOCTOR_LOG_KIND`）。

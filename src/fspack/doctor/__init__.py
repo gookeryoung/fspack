@@ -126,7 +126,6 @@ from fspack.doctor.templates import (
     _find_wrapper,
     _platform_skip_reason,
     _run_template,
-    run_doctor_bench,
     run_doctor_test,
 )
 from fspack.doctor.tools import (
@@ -221,7 +220,6 @@ __all__ = [
     "run_cache_clean",
     "run_cache_status",
     "run_doctor",
-    "run_doctor_bench",
     "run_doctor_cache_check",
     "run_doctor_test",
 ]

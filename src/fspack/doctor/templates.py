@@ -1,9 +1,9 @@
-"""``fsp doctor --test`` / ``--bench`` 模板构建测试.
+"""``fsp doctor --test`` 模板构建测试与基准剖析.
 
 从 ``assets/templates/`` 加载所有项目模板，逐个复制到临时目录并执行
 :func:`fspack.builder.build`，收集成功/失败/耗时/产物大小/运行验证结果，
-输出汇总表格。``--bench`` 额外启用 ``profile=True`` 输出各阶段耗时报告；
-``--bench -P`` 将一次基准运行聚合为单个剖析日志落盘并与历史对比
+输出汇总表格。``--test -P`` 时每个模板启用 ``profile=True`` 输出各阶段
+耗时报告，并将一次运行聚合为单个剖析日志落盘并与历史对比
 （见 :mod:`fspack.doctor.bench`），与 ``fsp b -P/-PC``/``fsp r -P/-PC``
 的剖析日志体系对齐。
 
@@ -53,13 +53,12 @@ __all__ = [
     "_find_wrapper",
     "_platform_skip_reason",
     "_run_template",
-    "run_doctor_bench",
     "run_doctor_test",
 ]
 
 _logger = logging.getLogger(__name__)
 
-# frozen 不可变单例，作为 run_doctor_bench profile 参数的默认值安全共享
+# frozen 不可变单例，作为 run_doctor_test profile 参数的默认值安全共享
 _DEFAULT_PROFILE = ProfileOptions()
 
 # 运行验证超时（秒）：CLI 应用通常 <1s 退出，GUI/Web 进入事件循环不退出。
@@ -417,13 +416,25 @@ def _build_single_template(  # pragma: no cover
     )
 
 
-def run_doctor_test() -> None:  # pragma: no cover
-    """运行所有项目模板构建，打印汇总结果.
+def run_doctor_test(profile: ProfileOptions = _DEFAULT_PROFILE) -> None:  # pragma: no cover
+    """运行所有项目模板构建，打印汇总结果，可选基准剖析落盘与历史对比.
 
     从 ``assets/templates/`` 加载所有项目模板，逐个复制到临时目录并执行
-    :func:`fspack.builder.build`，收集成功/失败/耗时，输出汇总表格。
+    :func:`fspack.builder.build`，收集成功/失败/耗时/产物大小/运行验证
+    结果，输出汇总表格。用于验证打包流程对所有模板项目的兼容性，CI 中
+    可作为回归门禁。
 
-    用于验证打包流程对所有模板项目的兼容性，CI 中可作为回归门禁。
+    ``profile.enabled=True``（``--test -P``）时，每个模板启用
+    ``profile=True`` 输出各阶段耗时报告，汇总表格追加性能分析（耗时
+    排名、产物大小排名、总时间），并将一次运行聚合为单个剖析日志落盘
+    （默认 ``<当前目录>/.benchmarks/fsp-d-<时间戳>.json``），
+    ``profile.compare`` 指定时与历史 ``fsp-d-*`` 日志对比（趋势表/
+    ``last``/近 N 次/基准路径），与 ``fsp b -P/-PC``、``fsp r -P/-PC``
+    的剖析日志体系对齐（见 :func:`fspack.doctor.bench._save_and_compare_bench`）。
+
+    用于建立性能基准，后续优化措施可与此基准对比评估效果。
+
+    :param profile: 基准剖析日志选项（``-P``/``-PO``/``-PC``）
     """
     from fspack.templates.project_template import ProjectTemplate
 
@@ -438,60 +449,13 @@ def run_doctor_test() -> None:  # pragma: no cover
         console.rich.print(f"  [yellow]-[/yellow] 跳过 {tpl.id}: {reason}")
 
     results: list[TemplateBuildResult] = []
+    bench_start = time.perf_counter()
 
     with tempfile.TemporaryDirectory(prefix="fsp-doctor-test-") as tmp:
         work_dir = Path(tmp)
         for i, tpl in enumerate(buildable, 1):
             console.rich.print(f"[cyan][{i}/{len(buildable)}][/cyan] 构建 {tpl.id} ...")
-            result = _build_single_template(tpl, work_dir, bench=False)
-            results.append(result)
-            if result.success:
-                console.rich.print(
-                    f"  [green]√[/green] 成功 ({result.duration_sec:.1f}s, {_format_size(result.dist_size)})"
-                )
-            else:
-                console.rich.print(f"  [red]×[/red] 失败: {result.error}")
-
-    _print_template_build_summary(results, bench=False)
-
-
-def run_doctor_bench(profile: ProfileOptions = _DEFAULT_PROFILE) -> None:  # pragma: no cover
-    """运行所有项目模板构建，收集性能数据，输出性能分析报告.
-
-    与 :func:`run_doctor_test` 相同的构建流程，但每个模板启用
-    ``profile=True``，输出详细的各阶段耗时报告。最后打印汇总表格与
-    性能分析（耗时排名、产物大小排名、总时间）。
-
-    ``profile.enabled=True``（``--bench -P``）时，将一次基准运行聚合为
-    单个剖析日志落盘（默认 ``<当前目录>/.benchmarks/fsp-d-<时间戳>.json``），
-    ``profile.compare`` 指定时与历史 ``fsp-d-*`` 日志对比（趋势表/``last``/
-    近 N 次/基准路径），与 ``fsp b -P/-PC``、``fsp r -P/-PC`` 的剖析日志
-    体系对齐（见 :func:`fspack.doctor.bench._save_and_compare_bench`）。
-
-    用于建立性能基准，后续优化措施可与此基准对比评估效果。
-
-    :param profile: 基准剖析日志选项（``-P``/``-PO``/``-PC``）
-    """
-    from fspack.templates.project_template import ProjectTemplate
-
-    templates = ProjectTemplate.list_all()
-    if not templates:
-        console.warn("未找到项目模板")
-        return
-
-    buildable, skipped = _filter_platform_supported(templates)
-    console.step(f"性能基准测试（{len(buildable)} 个模板）")
-    for tpl, reason in skipped:
-        console.rich.print(f"  [yellow]-[/yellow] 跳过 {tpl.id}: {reason}")
-
-    results: list[TemplateBuildResult] = []
-    bench_start = time.perf_counter()
-
-    with tempfile.TemporaryDirectory(prefix="fsp-doctor-bench-") as tmp:
-        work_dir = Path(tmp)
-        for i, tpl in enumerate(buildable, 1):
-            console.rich.print(f"[cyan][{i}/{len(buildable)}][/cyan] 基准构建 {tpl.id} ...")
-            result = _build_single_template(tpl, work_dir, bench=True)
+            result = _build_single_template(tpl, work_dir, bench=profile.enabled)
             results.append(result)
             if result.success:
                 console.rich.print(
@@ -501,6 +465,6 @@ def run_doctor_bench(profile: ProfileOptions = _DEFAULT_PROFILE) -> None:  # pra
                 console.rich.print(f"  [red]×[/red] 失败: {result.error}")
 
     wall_time = time.perf_counter() - bench_start
-    _print_template_build_summary(results, bench=True)
+    _print_template_build_summary(results, bench=profile.enabled)
     if profile.enabled:
         _save_and_compare_bench(results, wall_time, profile)

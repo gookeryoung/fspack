@@ -362,36 +362,33 @@ def _run_init(ns: argparse.Namespace) -> None:
 
 
 def _run_doctor(ns: argparse.Namespace) -> None:
-    """执行 doctor 子命令：环境诊断 + 可选的模板构建测试/性能基准/缓存检查.
+    """执行 doctor 子命令：环境诊断 + 可选的模板构建测试/基准剖析/缓存检查.
 
-    无 ``--test``/``--bench``/``--check-cache`` 时仅执行环境诊断，输出三色诊断报告。
-    ``--test`` 运行所有模板构建并打印汇总结果。``--bench`` 额外收集
-    性能数据并输出性能分析报告。``-P``/``-PO``/``-PC``（需 ``--bench``）与
-    ``fsp b -P/-PC``、``fsp r -P/-PC`` 对齐：聚合落盘单个基准剖析日志
-    并与历史对比。``--check-cache`` 扫描 wheel 缓存目录的依赖解析缓存
-    文件并删除损坏文件（iter-128，可与 ``--test``/``--bench`` 组合使用）。
+    无 ``--test``/``--check-cache`` 时仅执行环境诊断，输出三色诊断报告。
+    ``--test`` 运行所有模板构建并打印汇总结果。``-P``/``-PO``/``-PC``
+    （需 ``--test``）与 ``fsp b -P/-PC``、``fsp r -P/-PC`` 对齐：启用各
+    模板构建阶段耗时报告，聚合落盘单个基准剖析日志并与历史对比。
+    ``--check-cache`` 扫描 wheel 缓存目录的依赖解析缓存文件并删除损坏
+    文件（iter-128，可与 ``--test`` 组合使用）。
     """
     from pathlib import Path
 
-    from fspack.console import console
     from fspack.doctor import (
         print_doctor_report,
         run_doctor,
-        run_doctor_bench,
         run_doctor_cache_check,
         run_doctor_test,
     )
     from fspack.exceptions import ProjectError
     from fspack.packaging.profile_log import ProfileOptions
 
-    bench = getattr(ns, "bench", False)
     test = getattr(ns, "test", False)
     profile = getattr(ns, "profile", False)
     profile_out = getattr(ns, "profile_out", None)
     profile_compare = getattr(ns, "profile_compare", None)
     # 参数校验前置：诊断报告需数秒，先报参数错误再跑诊断
-    if (profile or profile_out or profile_compare) and not bench:
-        raise ProjectError("--profile/--profile-out/--profile-compare 需配合 --bench 使用")
+    if (profile or profile_out or profile_compare) and not test:
+        raise ProjectError("--profile/--profile-out/--profile-compare 需配合 --test 使用")
     if (profile_out or profile_compare) and not profile:
         raise ProjectError("--profile-out/--profile-compare 需配合 --profile 使用")
 
@@ -401,20 +398,14 @@ def _run_doctor(ns: argparse.Namespace) -> None:
     if getattr(ns, "check_cache", False):
         run_doctor_cache_check()
 
-    if bench and test:
-        # --bench 已包含 --test 的模板构建测试，二者互斥：同时指定时
-        # --test 静默忽略易让用户误以为执行了两轮测试，显式提示
-        console.warn("--test 与 --bench 同时指定：--bench 已包含模板构建测试，--test 被忽略")
-    if bench:
-        run_doctor_bench(
+    if test:
+        run_doctor_test(
             ProfileOptions(
                 enabled=profile,
                 out=Path(profile_out).resolve() if profile_out else None,
                 compare=profile_compare,
             )
         )
-    elif test:
-        run_doctor_test()
 
 
 def _run_cache(ns: argparse.Namespace) -> None:

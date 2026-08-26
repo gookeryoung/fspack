@@ -2627,26 +2627,15 @@ def test_cli_doctor_dispatches_to_run_doctor() -> None:
     mock_print.assert_called_once_with(fake_report)
 
 
-def test_cli_doctor_test_and_bench_mutex_warning() -> None:
-    """``fsp doctor --test --bench`` 同时指定时提示 --test 被忽略，仅执行 bench."""
+def test_cli_doctor_bench_removed() -> None:
+    """``fsp doctor --bench`` 已移除（并入 --test -P）：未知参数报错退出."""
     from fspack.cli import main
 
-    fake_report = DoctorReport(
-        env_info=(CheckResult("Python", CheckStatus.OK, "3.11.9"),),
-        tool_checks=(CheckResult("pip", CheckStatus.OK, "24.0"),),
-    )
-    with patch("fspack.doctor.run_doctor", return_value=fake_report), patch("fspack.doctor.print_doctor_report"), patch(
-        "fspack.doctor.run_doctor_bench"
-    ) as mock_bench, patch("fspack.doctor.run_doctor_test") as mock_test, patch(
-        "fspack.console.console.warn"
-    ) as mock_warn:
+    with patch("fspack.doctor.run_doctor") as mock_run, pytest.raises(SystemExit) as exc_info:
         main(["doctor", "--test", "--bench"])
-    mock_bench.assert_called_once()
-    mock_test.assert_not_called()
-    mock_warn.assert_called_once()
-    # warning 内容提示互斥语义：--bench 已包含 --test 的构建测试
-    assert "--bench" in mock_warn.call_args[0][0]
-    assert "--test" in mock_warn.call_args[0][0]
+    # argparse 对未知 --bench 报错（退出码 2），不进入诊断
+    mock_run.assert_not_called()
+    assert exc_info.value.code == 2
 
 
 def test_cli_doctor_in_help() -> None:
@@ -2659,8 +2648,8 @@ def test_cli_doctor_in_help() -> None:
     assert "环境诊断" in help_text
 
 
-def test_cli_doctor_profile_requires_bench() -> None:
-    """``fsp d -P`` 未指定 --bench 时报错（校验前置，不跑诊断）。"""
+def test_cli_doctor_profile_requires_test() -> None:
+    """``fsp d -P`` 未指定 --test 时报错（校验前置，不跑诊断）。"""
     from fspack.cli import main
 
     with patch("fspack.doctor.run_doctor") as mock_run, pytest.raises(SystemExit) as exc_info:
@@ -2671,17 +2660,17 @@ def test_cli_doctor_profile_requires_bench() -> None:
 
 
 def test_cli_doctor_profile_compare_requires_profile() -> None:
-    """``fsp d --bench -PC last`` 未指定 -P 时报错。"""
+    """``fsp d --test -PC last`` 未指定 -P 时报错。"""
     from fspack.cli import main
 
     with patch("fspack.doctor.run_doctor") as mock_run, pytest.raises(SystemExit) as exc_info:
-        main(["doctor", "--bench", "--profile-compare", "last"])
+        main(["doctor", "--test", "--profile-compare", "last"])
     mock_run.assert_not_called()
     assert exc_info.value.code == 2
 
 
-def test_cli_doctor_bench_passes_profile_options() -> None:
-    """``fsp d --bench -P -PC`` 构造 ProfileOptions 传给 run_doctor_bench。"""
+def test_cli_doctor_test_passes_profile_options() -> None:
+    """``fsp d --test -P -PC`` 构造 ProfileOptions 传给 run_doctor_test。"""
     from fspack.cli import main
 
     fake_report = DoctorReport(
@@ -2689,17 +2678,17 @@ def test_cli_doctor_bench_passes_profile_options() -> None:
         tool_checks=(CheckResult("pip", CheckStatus.OK, "24.0"),),
     )
     with patch("fspack.doctor.run_doctor", return_value=fake_report), patch("fspack.doctor.print_doctor_report"), patch(
-        "fspack.doctor.run_doctor_bench"
-    ) as mock_bench:
-        main(["doctor", "--bench", "--profile", "--profile-compare", "last"])
-    mock_bench.assert_called_once()
-    opts = mock_bench.call_args[0][0]
+        "fspack.doctor.run_doctor_test"
+    ) as mock_test:
+        main(["doctor", "--test", "--profile", "--profile-compare", "last"])
+    mock_test.assert_called_once()
+    opts = mock_test.call_args[0][0]
     assert isinstance(opts, ProfileOptions)
     assert opts.enabled is True
     assert opts.compare == "last"
 
 
-# ---- 平台兼容性过滤（doctor --test/--bench 跳过无兼容 Python 的模板）----
+# ---- 平台兼容性过滤（doctor --test 跳过无兼容 Python 的模板）----
 
 
 def _tpl(tpl_id: str, requires_python: str) -> Template:

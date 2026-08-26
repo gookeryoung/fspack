@@ -142,6 +142,8 @@ fsp doctor                # 环境诊断：检查打包工具与配置
 
 完整模板列表见 [src/fspack/assets/templates/](../src/fspack/assets/templates/) 目录。
 
+`--test` 可选基准剖析选项（与 `fsp b -P`/`fsp r -P` 体系对齐）：`-P` 输出各模板构建阶段耗时报告并聚合落盘单个剖析日志（`.benchmarks/fsp-d-<时间戳>.json`），`-PO <路径>` 指定输出路径，`-PC [REF]` 与历史基准日志对比（不带值趋势表 / `last` / 近 N 次 / 基准文件路径）。
+
 ## fsp cache
 
 ```text

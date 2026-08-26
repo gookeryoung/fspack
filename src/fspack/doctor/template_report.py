@@ -2,8 +2,8 @@
 
 从 :mod:`fspack.doctor.templates` 拆出的渲染层：汇总表格（模板/能力维度/
 构建/运行状态/耗时/产物大小）、运行验证汇总、性能分析排名（构建耗时/
-启动耗时/产物大小/瓶颈识别），供 :func:`fspack.doctor.templates.run_doctor_test`/
-:func:`fspack.doctor.templates.run_doctor_bench` 在构建完成后调用。
+启动耗时/产物大小/瓶颈识别），供 :func:`fspack.doctor.templates.run_doctor_test`
+在构建完成后调用（``-P`` 基准剖析时 ``bench=True`` 追加性能分析）。
 """
 
 from __future__ import annotations
@@ -123,7 +123,7 @@ def _print_template_build_summary(results: list[TemplateBuildResult], *, bench: 
         avg_time = total_time / succeeded
         console.rich.print(f"  总耗时 {total_time:.1f}s | 平均 {avg_time:.1f}s | 总产物 {_format_size(total_size)}")
 
-    # 性能分析（仅 --bench 模式）
+    # 性能分析（仅 -P 基准剖析模式）
     if bench and succeeded > 1:
         _print_performance_analysis(results)
 
