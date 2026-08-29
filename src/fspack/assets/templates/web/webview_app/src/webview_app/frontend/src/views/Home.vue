@@ -88,7 +88,7 @@ onMounted(async () => {
       <pre class="code-block">cd src/webview_app/frontend
 pnpm run build
 cd ../../..
-python -m webview_app.cli</pre>
+python -m webview_app.app</pre>
     </el-alert>
   </div>
 </template>

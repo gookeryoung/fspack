@@ -1,6 +1,13 @@
+"""PyWebApp Demo - 一个基于pywebview的本地桌面应用.
+
+单文件整合：窗口控制 API、前端服务编排与命令行入口。
+"""
+
 from __future__ import annotations
 
+import argparse
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -9,8 +16,6 @@ from pathlib import Path
 from typing import Optional
 
 import webview
-
-from webview_app.api import BaseApi
 
 try:
     # 探测须与 pywebview __generate_ssl_cert 的导入集完全一致（深层导入才会
@@ -28,6 +33,56 @@ else:
     USE_SSL = True
 
 WIN = sys.platform == "win32"
+
+
+class BaseApi:
+    """基础API."""
+
+
+class SystemApi(BaseApi):
+    """系统API."""
+
+    def minimize_window(self) -> None:
+        """最小化窗口."""
+        try:
+            webview.windows[0].minimize()
+        except AttributeError as e:
+            print(f"最小化窗口失败: {e}")
+        else:
+            print("最小化窗口")
+
+    def maximize_window(self) -> None:
+        """最大化/还原窗口."""
+        try:
+            webview.windows[0].maximize()
+        except AttributeError as e:
+            print(f"最大化窗口失败: 未找到窗口: {e}")
+        else:
+            print("最大化窗口")
+
+    def close_window(self) -> None:
+        """关闭窗口."""
+        try:
+            webview.windows[0].destroy()
+        except AttributeError as e:
+            print(f"关闭窗口失败: {e}, 尝试退出应用...")
+            sys.exit(0)
+        else:
+            print("关闭窗口")
+
+    def get_system_info(self) -> dict:
+        """获取系统信息."""
+        return {
+            "platform": platform.system(),
+            "architecture": platform.architecture()[0],
+            "version": platform.version(),
+            "python_version": platform.python_version(),
+            "machine": platform.machine(),
+        }
+
+    def get_app_version(self) -> str:
+        """获取应用版本."""
+        return "1.0.0"
 
 
 class NativeServer:
@@ -71,9 +126,29 @@ class NativeServer:
                 js_api=api_instance,
             )
 
-            webview.start(debug=debug, ssl=USE_SSL)
+            # storage_path 固定 WebView2 用户数据目录：pywebview 默认
+            # private_mode 用临时目录，WebView2 每次启动都从零初始化用户
+            # 数据（数千小文件），Win7 + 机械硬盘 + 杀软扫描下启动可达
+            # 数十秒；固定目录后仅在首跑初始化，后续启动复用缓存。
+            webview.start(
+                debug=debug,
+                ssl=USE_SSL,
+                private_mode=False,
+                storage_path=str(self.webview_storage_dir),
+            )
         except (webview.WebViewException, RuntimeError) as e:
             print(f"应用启动失败: {e}")
+
+    @cached_property
+    def webview_storage_dir(self) -> Path:
+        """WebView2 用户数据目录（跨平台用户数据目录下的应用名子目录）."""
+        if WIN:
+            base = os.environ.get("LOCALAPPDATA") or str(Path.home())
+        elif sys.platform == "darwin":
+            base = str(Path.home() / "Library" / "Application Support")
+        else:
+            base = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+        return Path(base) / "webview_app"
 
     def install_dependencies(self) -> None:
         """安装前端依赖."""
@@ -126,3 +201,44 @@ class NativeServer:
                 return f"{cmd}{suffix}"
         msg = "未找到包管理器"
         raise RuntimeError(msg)
+
+
+def main() -> None:
+    """主函数，启动webview应用."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--debug",
+        "-d",
+        action="store_true",
+        help="启动调试模式",
+    )
+    parser.add_argument(
+        "--build",
+        "-b",
+        action="store_true",
+        help="启动构建模式",
+    )
+    parser.add_argument(
+        "--dev",
+        "-D",
+        action="store_true",
+        help="启动开发模式",
+    )
+
+    server = NativeServer()
+    sys_api = SystemApi()
+
+    args = parser.parse_args()
+    if args.build:
+        server.build()
+        return
+
+    if args.dev:
+        server.development()
+        return
+
+    server.start(debug=args.debug, api_instance=sys_api)
+
+
+if __name__ == "__main__":
+    main()

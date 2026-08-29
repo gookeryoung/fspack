@@ -19,8 +19,25 @@ from fspack.config.models import AppType
 
 __all__ = ["infer_app_type"]
 
-# GUI 框架导入名集合：用于按入口脚本 import 推断 AppType
-_GUI_HINTS = frozenset({"tkinter", "PySide2", "PySide6", "PyQt5", "PyQt6", "matplotlib", "wx", "win32gui", "pygame"})
+# GUI 框架导入名集合：用于按入口脚本 import 推断 AppType。
+# webview/pywebview 桌面应用须归 GUI：console subsystem 的打包产物会常驻
+# 黑色控制台窗口，且 pywebview 在 Win7 上的 GetDpiForWindow 警告会直接
+# 打到控制台惊扰终端用户，按 GUI 关闭控制台后二者均消失。
+_GUI_HINTS = frozenset(
+    {
+        "tkinter",
+        "PySide2",
+        "PySide6",
+        "PyQt5",
+        "PyQt6",
+        "matplotlib",
+        "wx",
+        "win32gui",
+        "pygame",
+        "webview",
+        "pywebview",
+    }
+)
 
 # Web 框架导入名集合：用于按入口脚本 import 推断 AppType.WEB。
 # 含 ASGI/WSGI 服务器（uvicorn/hypercorn）与框架本体（flask/fastapi 等），

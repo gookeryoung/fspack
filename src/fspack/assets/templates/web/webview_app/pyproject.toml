@@ -7,18 +7,11 @@ dependencies = [
 ]
 description = "一个基于pywebview的本地桌面应用示例"
 name = "webview_app"
-requires-python = ">=3.8"
+requires-python = ">=3.10,<3.14"
 version = "0.1.0"
 
-[project.optional-dependencies]
-all = [
-    "pyinstaller>=6.0",
-    "pywebview>=6.1",
-]
-build = ["pyinstaller>=6.0"]
-
 [project.scripts]
-webview_app = "webview_app.cli:main"
+webview_app = "webview_app.app:main"
 
 [[tool.uv.index]]
 url = "https://mirrors.aliyun.com/pypi/simple/"

@@ -1366,6 +1366,22 @@ def test_infer_app_type_pygame_is_gui(tmp_path: Path) -> None:
     assert infer_app_type(script, ()) is AppType.GUI
 
 
+def test_infer_app_type_pywebview_is_gui(tmp_path: Path) -> None:
+    """pywebview 应用推断为 GUI（无控制台）.
+
+    回归：``webview`` 不在 GUI 提示集合时，pywebview 桌面应用被打成
+    console subsystem，黑色控制台常驻且 Win7 上 pywebview 的
+    GetDpiForWindow 警告直接打到控制台。import 与声明依赖两条路径都要覆盖。
+    """
+    script = tmp_path / "app.py"
+    script.write_text("import webview\ndef main():\n    pass\n")
+    assert infer_app_type(script, ()) is AppType.GUI
+    # 声明依赖回退路径：入口未 import webview，仅 pyproject 声明 pywebview
+    plain = tmp_path / "plain.py"
+    plain.write_text("def main():\n    pass\n")
+    assert infer_app_type(plain, ("pywebview[ssl]>=6.1",)) is AppType.GUI
+
+
 def test_infer_app_type_non_utf8_falls_back_to_declared(tmp_path: Path) -> None:
     """非 UTF-8 入口脚本时 infer_app_type 跳过 import 分析，按声明依赖回退（不崩溃）.
 

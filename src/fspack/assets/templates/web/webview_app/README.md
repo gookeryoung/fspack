@@ -35,10 +35,10 @@ pnpm run build
 
 # 2. 返回项目根目录运行应用
 cd ../../..
-python -m webview_app.cli
+python -m webview_app.app
 
 # 前端开发模式 (热更新)
-python -m webview_app.cli --dev
+python -m webview_app.app --dev
 ```
 
 ## 项目结构
@@ -47,9 +47,7 @@ python -m webview_app.cli --dev
 webview_app/
 ├── src/webview_app/
 │   ├── __init__.py
-│   ├── api.py                    # 暴露给前端的 Python API
-│   ├── cli.py                    # 主程序入口
-│   ├── server.py                 # 窗口服务与前端构建编排
+│   ├── app.py                    # 单文件整合：API、入口与服务编排
 │   └── frontend/                 # Vue 前端项目
 │       ├── src/
 │       │   ├── api.ts            # PyWebView API 封装
@@ -92,7 +90,7 @@ webview_app/
 
 ## 自定义配置
 
-- 窗口参数: `src/webview_app/server.py` 中的 `create_window` 调用
+- 窗口参数: `src/webview_app/app.py` 中的 `create_window` 调用
 - 前端构建: `src/webview_app/frontend/vite.config.ts`
 
 ## 开发调试
@@ -103,5 +101,5 @@ cd src/webview_app/frontend
 pnpm run dev
 
 # 启用 pywebview 开发者工具
-python -m webview_app.cli --debug
+python -m webview_app.app --debug
 ```
