@@ -24,6 +24,7 @@ from typing import IO, Any, Final
 
 from rich.console import Console
 from rich.logging import RichHandler
+from rich.markup import escape as markup_escape
 from rich.theme import Theme
 
 __all__ = ["CICompat", "ConsoleUI", "console"]
@@ -180,18 +181,26 @@ class ConsoleUI:
         self._console.print(f"[step]> {title}[/]")
 
     def success(self, msg: str) -> None:
-        """打印成功消息（legacy 控制台用 ASCII ``v`` 避免 Ambiguous 宽度偏移）."""
+        """打印成功消息（legacy 控制台用 ASCII ``v`` 避免 Ambiguous 宽度偏移）.
+
+        消息体经 ``rich.markup.escape`` 转义：消息是纯文本（含路径/异常
+        文本等），其中的方括号（如 ``[project.scripts]``）不得被 rich 当作
+        markup 标签吞掉；样式仅由前缀标记（``[success]``）提供。
+        """
         mark = "v" if self._legacy_console else "√"
-        self._console.print(f"[success]{mark}[/] {msg}")
+        self._console.print(f"[success]{mark}[/] {markup_escape(msg)}")
 
     def warn(self, msg: str) -> None:
-        """打印警告消息."""
-        self._console.print(f"[warning]![/] {msg}")
+        """打印警告消息（消息体转义，见 :meth:`success` 说明）."""
+        self._console.print(f"[warning]![/] {markup_escape(msg)}")
 
     def error(self, msg: str) -> None:
-        """打印错误消息（legacy 控制台用 ASCII ``x`` 避免 Ambiguous 宽度偏移）."""
+        """打印错误消息（消息体转义，见 :meth:`success` 说明）.
+
+        legacy 控制台用 ASCII ``x`` 避免 Ambiguous 宽度偏移。
+        """
         mark = "x" if self._legacy_console else "×"
-        self._console.print(f"[error]{mark}[/] {msg}")
+        self._console.print(f"[error]{mark}[/] {markup_escape(msg)}")
 
 
 console: Final[ConsoleUI] = ConsoleUI()

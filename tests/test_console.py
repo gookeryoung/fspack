@@ -46,6 +46,28 @@ def test_error_prints_cross() -> None:
     assert "×" in out
 
 
+def test_error_message_brackets_not_swallowed() -> None:
+    """error 消息体中的方括号原样显示，不被 rich 当作 markup 标签吞掉.
+
+    回归：``[tool.fspack.entries] 已移除支持，请改用 [project.scripts]``
+    的迁移提示曾因 markup 解析渲染为 "已移除支持，请改用 声明入口"。
+    """
+    msg = "[tool.fspack.entries] 已移除支持，请改用 [project.scripts] 声明入口"
+    with console.rich.capture() as capture:
+        console.error(msg)
+    out = capture.get()
+    assert "[tool.fspack.entries]" in out
+    assert "[project.scripts]" in out
+
+
+def test_warn_and_success_message_brackets_not_swallowed() -> None:
+    """warn/success 消息体同样转义，方括号原样显示."""
+    for method in (console.warn, console.success):
+        with console.rich.capture() as capture:
+            method("[tool.fspack] 配置")
+        assert "[tool.fspack]" in capture.get()
+
+
 def test_setup_logging_configures_root() -> None:
     """setup_logging 配置 root logger 的 level 与 handler."""
     root = logging.getLogger()
