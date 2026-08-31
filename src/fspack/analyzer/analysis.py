@@ -22,6 +22,7 @@ from __future__ import annotations
 import ast
 import logging
 import os
+import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from concurrent.futures.process import BrokenProcessPool
@@ -34,9 +35,7 @@ from fspack.analyzer.ast_scan import (
     collect_imports_and_submodules,
     parse_qml_imports,
 )
-from fspack.analyzer.fingerprint import (
-    _EXCLUDED_DIRS as _FP_EXCLUDED_DIRS,
-)
+from fspack.analyzer.fingerprint import _is_excluded_name as _FP_IS_EXCLUDED_NAME
 from fspack.config import DependencyReport
 
 _logger = logging.getLogger(__name__)
@@ -94,7 +93,7 @@ def analyze_dependencies(  # noqa: PLR0912 - 分支多是分类与异常处理�
     # 生成器在 scandir 层直接跳过排除目录，避免 I/O 与大列表物化。
     # .py 与 .qml 单次遍历同时收集（两次全树扫描的 I/O 减半），
     # qml 解析仍按需仅在 imported_qt_pkgs 分支执行。
-    src_files = list(_iter_src_files_by_ext(src_dir, resolved_data_dirs, _FP_EXCLUDED_DIRS, (".py", ".qml")))
+    src_files = list(_iter_src_files_by_ext(src_dir, resolved_data_dirs, (".py", ".qml")))
     py_files: list[Path] = [p for p in src_files if p.suffix == ".py"]
 
     # 内存优化：跨文件去重用 dict 作保序集合（3.7+ dict 插入序稳定），
@@ -106,7 +105,7 @@ def analyze_dependencies(  # noqa: PLR0912 - 分支多是分类与异常处理�
     all_submodules: dict[str, list[str]] = {}
     all_errors: list[tuple[str, str]] = []  # AST 解析失败记录 (abs_path, error_msg)（iter-138）
 
-    if len(py_files) >= _PARALLEL_THRESHOLD:
+    if len(py_files) >= _PARALLEL_THRESHOLD and _parallel_spawn_ok():
         _parse_parallel(py_files, all_imports_ord, all_stdlib_ord, all_submodules, all_errors)
     else:
         _parse_serial(py_files, all_imports_ord, all_stdlib_ord, all_submodules, all_errors)
@@ -182,6 +181,25 @@ def _format_ast_errors(src_dir: Path, errors: list[tuple[str, str]]) -> list[str
 # Windows spawn 启动 ~100-200ms，需足够工作量摊销；Linux fork 较快可更低
 _PARALLEL_THRESHOLD = 200
 
+
+def _parallel_spawn_ok() -> bool:
+    """判断当前解释器能否承载 multiprocessing spawn 子进程.
+
+    Windows 的 spawn 子进程命令为 ``[sys.executable, "-c", "spawn 引导码"]``,
+    要求 ``sys.executable`` 是真正的 CPython 解释器（能识别 ``-c``）。fspack
+    自举场景下安装版 ``fsp.exe`` 是 C loader：其入口无条件把脚本插到
+    ``argv[1]`` 再调 ``Py_Main``,``-c`` 被吞、引导码变成 CLI 位置参数,
+    进程池所有 worker 立即崩溃（BrokenProcessPool）。
+
+    判据：``sys.executable`` 基名以 ``python`` 开头（覆盖 python.exe/
+    python3.exe/python3.10.exe 及 venv 内的同名副本）；fsp.exe/zyp.exe 等
+    loader exe 不满足，回退串行解析。Linux/macOS 同判据无害（venv 解释器
+    基名同为 python*）。
+    """
+    name = Path(sys.executable).name.lower()
+    return name.startswith("python")
+
+
 # 并行解析整体超时（秒）：``as_completed(timeout=)`` 从调用起算的总等待时间，
 # 任一 future 未就绪则抛 ``TimeoutError``。实测 500 文件 P99 <30s（8 核），
 # 300s 裕量覆盖慢速 CI 与病态输入（深度嵌套 AST）。iter-127 引入。
@@ -213,7 +231,9 @@ def _init_parse_worker(stdlib: frozenset[str]) -> None:
     _WORKER_STATE["stdlib"] = stdlib
 
 
-def _parse_file_worker(py: str) -> tuple[list[str], list[str], dict[str, frozenset[str]], list[tuple[str, str]]]:
+def _parse_file_worker(
+    py: str,
+) -> tuple[list[str], list[str], dict[str, frozenset[str]], list[tuple[str, str]]]:
     """进程池 worker：解析单个 .py 文件返回 ``(非标准库导入, 标准库导入, 子模块字典, AST 错误列表)``.
 
     用 worker 全局 :data:`_WORKER_STATE` （由 :func:`_init_parse_worker` 设置）
@@ -406,7 +426,6 @@ def _data_dir_prefixes(root: Path, data_dirs: tuple[Path, ...]) -> tuple[tuple[s
 def _iter_src_files_by_ext(
     root: Path,
     data_dirs: tuple[Path, ...],
-    excluded_dirs: frozenset[str],
     suffixes: tuple[str, ...],
 ) -> Iterator[Path]:
     """scandir 剪枝生成器：枚举指定后缀集合的源码文件，自动跳过排除目录.
@@ -424,21 +443,22 @@ def _iter_src_files_by_ext(
     前缀做纯字符串比较，消除逐条目 ``Path.resolve()`` 系统调用（该重构
     同时消除了原 resolve() OSError 静默丢子树的路径）。
 
+    目录排除统一走 :func:`fspack.analyzer.fingerprint._is_excluded_name`
+    （精确名 + ``.venv`` 前缀 + egg-info 后缀），与指纹计算口径一致。
+
     Args:
         root: 项目根目录（遍历起点）
         data_dirs: 数据资源目录绝对路径元组（目录树内整个剪枝）
-        excluded_dirs: 始终排除的目录名集合（与 fingerprint 共用）
         suffixes: 目标文件后缀元组（如 ``(".py", ".qml")``）
     """
     prefixes = _data_dir_prefixes(root, data_dirs)
-    yield from _iter_src_tree(root, (), prefixes, excluded_dirs, suffixes)
+    yield from _iter_src_tree(root, (), prefixes, suffixes)
 
 
 def _iter_src_tree(
     current: Path,
     rel_parts: tuple[str, ...],
     data_dir_prefixes: tuple[tuple[str, ...], ...],
-    excluded_dirs: frozenset[str],
     suffixes: tuple[str, ...],
 ) -> Iterator[Path]:
     """``_iter_src_files_by_ext`` 的递归主体：携带相对 parts 做前缀剪枝.
@@ -449,12 +469,12 @@ def _iter_src_tree(
     for entry in sorted(os.scandir(current), key=lambda e: e.name):
         entry_rel = (*rel_parts, entry.name)
         if entry.is_dir(follow_symlinks=False):
-            if entry.name in excluded_dirs or entry.name.endswith(".egg-info"):
+            if _FP_IS_EXCLUDED_NAME(entry.name):
                 continue
             # data-dirs 剪枝：整个目录树不遍历（含 data-dir 自身）
             if data_dir_prefixes and any(entry_rel[: len(p)] == p for p in data_dir_prefixes):
                 continue
-            yield from _iter_src_tree(Path(entry.path), entry_rel, data_dir_prefixes, excluded_dirs, suffixes)
+            yield from _iter_src_tree(Path(entry.path), entry_rel, data_dir_prefixes, suffixes)
         elif entry.is_file(follow_symlinks=False) and entry.name.endswith(suffixes):
             # data-dirs 内的单文件也排除（防御性，剪枝应已跳过整个目录）
             if data_dir_prefixes and any(entry_rel[: len(p)] == p for p in data_dir_prefixes):

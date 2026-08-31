@@ -245,6 +245,102 @@ def test_source_fingerprint_excludes_data_dirs(tmp_path: Path) -> None:
     assert fp_no_exclude != fp_no_exclude_after
 
 
+def test_is_excluded_venv_prefix_variants(tmp_path: Path) -> None:
+    """.venv 前缀目录（.venv38/.venv310 等多版本 venv）被排除，普通 venv 命名不受影响."""
+    from fspack.analyzer.fingerprint import _is_excluded, _is_excluded_name
+
+    assert _is_excluded_name(".venv") is True
+    assert _is_excluded_name(".venv38") is True
+    assert _is_excluded_name(".venv310") is True
+    # 非 venv 的点开头目录不误伤（如 .github/.idea）；无点前缀的 venv38 不匹配
+    assert _is_excluded_name(".github") is False
+    assert _is_excluded_name("venv38") is False
+
+    venv_dir = tmp_path / ".venv38" / "lib" / "site-packages" / "tornado"
+    venv_dir.mkdir(parents=True)
+    assert _is_excluded(venv_dir / "__init__.py", tmp_path) is True
+
+
+def test_analyze_dependencies_excludes_versioned_venv_dirs(tmp_path: Path) -> None:
+    """.venv38 等多版本 venv 目录下的第三方包 .py 不被扫描（AST 分析口径）."""
+    (tmp_path / "main.py").write_text("import os\n")
+    venv_dir = tmp_path / ".venv38" / "lib" / "site-packages" / "tornado"
+    venv_dir.mkdir(parents=True)
+    (venv_dir / "__init__.py").write_text("import cryptography\n")
+    r = analyze_dependencies(tmp_path, "main", ())
+    assert "cryptography" not in r.ast_third_party
+    assert r.ast_third_party == ()
+
+
+def test_source_fingerprint_excludes_versioned_venv_dirs(tmp_path: Path) -> None:
+    """.venv38 等多版本 venv 目录下的 .py 不参与指纹计算（指纹口径与分析一致）."""
+    from fspack.analyzer.fingerprint import source_fingerprint
+
+    (tmp_path / "main.py").write_text("import os\n")
+    venv_dir = tmp_path / ".venv38" / "lib" / "site-packages" / "tornado"
+    venv_dir.mkdir(parents=True)
+    (venv_dir / "__init__.py").write_text("import cryptography\n")
+    fp_before = source_fingerprint(tmp_path)
+    # venv 内文件变化不改变指纹（未参与计算）
+    (venv_dir / "extra.py").write_text("import flask\n")
+    fp_after = source_fingerprint(tmp_path)
+    assert fp_before == fp_after
+
+
+def test_parallel_spawn_ok_guard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """loader exe（非 python 解释器）下强制回退串行解析.
+
+    fspack 自举场景：安装版 fsp.exe 是 C loader，无法承载 spawn 的
+    ``-c`` 引导命令，进程池 worker 全部立即崩溃。守卫按
+    ``sys.executable`` 基名是否 python* 判断，非 python 时走串行。
+    """
+    from fspack.analyzer import analysis
+
+    pkg = tmp_path / "myproj"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "mod.py").write_text("import os\n", encoding="utf-8")
+    (tmp_path / "main.py").write_text("import os\nimport myproj\n", encoding="utf-8")
+
+    # 基线：python 解释器下守卫通过
+    assert analysis._parallel_spawn_ok() is True
+
+    # 模拟 fsp.exe loader：守卫拦截，走串行且结果正确
+    monkeypatch.setattr(analysis.sys, "executable", r"C:\Program Files\fspack\fsp.exe")
+    assert analysis._parallel_spawn_ok() is False
+
+    calls: list[str] = []
+    real_serial = analysis._parse_serial
+    real_parallel = analysis._parse_parallel
+
+    def spy_serial(
+        py_files: list[Path],
+        all_imports_ord: dict[str, None],
+        all_stdlib_ord: dict[str, None],
+        all_submodules: dict[str, list[str]],
+        all_errors: list[tuple[str, str]],
+    ) -> None:
+        calls.append("serial")
+        real_serial(py_files, all_imports_ord, all_stdlib_ord, all_submodules, all_errors)
+
+    def spy_parallel(
+        py_files: list[Path],
+        all_imports_ord: dict[str, None],
+        all_stdlib_ord: dict[str, None],
+        all_submodules: dict[str, list[str]],
+        all_errors: list[tuple[str, str]],
+    ) -> None:
+        calls.append("parallel")
+        real_parallel(py_files, all_imports_ord, all_stdlib_ord, all_submodules, all_errors)
+
+    monkeypatch.setattr(analysis, "_parse_serial", spy_serial)
+    monkeypatch.setattr(analysis, "_parse_parallel", spy_parallel)
+    monkeypatch.setattr(analysis, "_PARALLEL_THRESHOLD", 1)
+    r = analyze_dependencies(tmp_path, "main", ())
+    assert calls == ["serial"]
+    assert "os" in r.ast_stdlib
+
+
 def test_is_excluded_build_and_egg_info_dirs(tmp_path: Path) -> None:
     """构建产物、缓存目录与 egg-info 目录下的文件被排除，普通源码不排除."""
     from fspack.analyzer.fingerprint import _is_excluded
@@ -707,7 +803,17 @@ def test_parse_file_worker_catches_value_and_recursion_error(tmp_path: Path) -> 
 
 def test_stdlib_fallback_underscore_modules() -> None:
     """3.8/3.9 回退集合含常见下划线 C 模块，避免误判为第三方依赖."""
-    for mod in ("_io", "_thread", "_weakref", "_collections", "_functools", "_socket", "_json", "__main__", "_ast"):
+    for mod in (
+        "_io",
+        "_thread",
+        "_weakref",
+        "_collections",
+        "_functools",
+        "_socket",
+        "_json",
+        "__main__",
+        "_ast",
+    ):
         assert mod in STDLIB_FALLBACK, mod
 
 
@@ -779,7 +885,9 @@ def _fake_as_completed(futures: list[_StubFuture], timeout: float | None = None)
     yield from futures
 
 
-def test_parse_parallel_broken_pool_preserves_aggregated_results(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_parse_parallel_broken_pool_preserves_aggregated_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """worker 崩溃（BrokenProcessPool，如 OOM）时保留已聚合结果，不整单失败."""
     from concurrent.futures.process import BrokenProcessPool
 
@@ -800,7 +908,9 @@ def test_parse_parallel_broken_pool_preserves_aggregated_results(monkeypatch: py
     assert stub.shutdown_waits == [True]
 
 
-def test_parse_parallel_timeout_shutdowns_without_waiting(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_parse_parallel_timeout_shutdowns_without_waiting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """并行超时分支 cancel 后 shutdown(wait=False) 立即返回，不再无限等待卡死 worker."""
     from concurrent.futures import TimeoutError as FuturesTimeoutError
 
@@ -859,7 +969,9 @@ def test_parse_parallel_timeout_warns_on_slow_worker(
             cancel_calls.append(True)
             return True
 
-        def result(self) -> tuple[list[str], list[str], dict[str, frozenset[str]], list[tuple[str, str]]]:
+        def result(
+            self,
+        ) -> tuple[list[str], list[str], dict[str, frozenset[str]], list[tuple[str, str]]]:
             return [], [], {}, []
 
     class _FakePool:
@@ -960,7 +1072,9 @@ def test_parse_parallel_uses_initializer(
         def cancel(self) -> bool:
             return False
 
-        def result(self) -> tuple[list[str], list[str], dict[str, frozenset[str]], list[tuple[str, str]]]:
+        def result(
+            self,
+        ) -> tuple[list[str], list[str], dict[str, frozenset[str]], list[tuple[str, str]]]:
             return [], [], {}, []
 
     class _Pool:
@@ -1012,7 +1126,9 @@ def test_parse_parallel_interleave_and_submit(
         def cancel(self) -> bool:
             return False
 
-        def result(self) -> tuple[list[str], list[str], dict[str, frozenset[str]], list[tuple[str, str]]]:
+        def result(
+            self,
+        ) -> tuple[list[str], list[str], dict[str, frozenset[str]], list[tuple[str, str]]]:
             return [], [], {}, []
 
     class _Pool:

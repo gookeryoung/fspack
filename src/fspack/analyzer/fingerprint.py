@@ -7,7 +7,9 @@
 公开 API：
 
 - :func:`source_fingerprint`：BLAKE2b 源码指纹（用于依赖分析缓存键）
-- :func:`_is_excluded`：判断路径是否位于构建产物/缓存目录
+- :func:`_is_excluded_name`：判断目录名是否应被排除（精确名 + ``.venv`` 前缀 + egg-info 后缀）
+- :func:`_is_excluded`：判断路径是否位于构建产物目录（AST 解析见
+  :mod:`fspack.analyzer.ast_scan`）
 - :data:`_EXCLUDED_DIRS`：始终排除的目录名集合
 """
 
@@ -22,6 +24,7 @@ from typing import Iterator
 __all__ = [
     "_EXCLUDED_DIRS",
     "_is_excluded",
+    "_is_excluded_name",
     "cached_source_fingerprint",
     "clear_fingerprint_cache",
     "source_fingerprint",
@@ -53,16 +56,29 @@ _EXCLUDED_DIRS = frozenset(
 )
 
 
+def _is_excluded_name(name: str) -> bool:
+    """判断目录名是否应被排除：精确名匹配 ``_EXCLUDED_DIRS``、``.venv`` 前缀或 ``.egg-info`` 后缀.
+
+    ``.venv`` 用前缀匹配而非精确匹配：多版本 venv 命名惯例为 ``.venv38``/
+    ``.venv310`` 等（同项目并存多个 Python 版本的兼容线），精确匹配会漏排，
+    导致 venv 内数千个第三方 ``.py`` 被误扫——既拖慢依赖分析与指纹计算，
+    又可能把 venv 内部依赖误报为项目依赖（甚至触发并行解析阈值）。
+    供 :func:`_is_excluded` 与 :mod:`fspack.analyzer.analysis` 的 scandir
+    剪枝共用，保证指纹与分析的排除口径一致。
+    """
+    return name in _EXCLUDED_DIRS or name.startswith(".venv") or name.endswith(".egg-info")
+
+
 def _is_excluded(path: Path, src_dir: Path, data_dirs: tuple[Path, ...] = ()) -> bool:
     """判断文件是否位于构建产物或缓存目录下，应跳过扫描.
 
-    适用于 .py 与 .qml 文件：检查路径的目录前缀是否在
-    :data:`_EXCLUDED_DIRS` 中、为 ``.egg-info`` 后缀，或位于 ``data_dirs``
-    数据资源目录树内（data-dirs 内的 .py 是模板/前端产物等数据资源，
-    不应被 AST 扫描误判为项目依赖）。
+    适用于 .py 与 .qml 文件：检查路径的目录前缀是否应被排除
+    （:func:`_is_excluded_name`：精确名 + ``.venv`` 前缀 + egg-info 后缀），
+    或位于 ``data_dirs`` 数据资源目录树内（data-dirs 内的 .py 是模板/
+    前端产物等数据资源，不应被 AST 扫描误判为项目依赖）。
     """
     parts = path.relative_to(src_dir).parts[:-1]
-    if any(part in _EXCLUDED_DIRS or part.endswith(".egg-info") for part in parts):
+    if any(_is_excluded_name(part) for part in parts):
         return True
     # data-dirs 内的 .py 是数据资源（模板/前端产物），不扫描
     return bool(data_dirs) and _is_in_data_dirs(path, data_dirs)
@@ -192,7 +208,7 @@ def _iter_entries_tree(
     for entry in sorted(os.scandir(current), key=lambda e: e.name):
         entry_rel = (*rel_parts, entry.name)
         if entry.is_dir(follow_symlinks=False):
-            if entry.name in _EXCLUDED_DIRS or entry.name.endswith(".egg-info"):
+            if _is_excluded_name(entry.name):
                 continue
             # data-dirs 剪枝：整个目录树不遍历
             if data_dir_prefixes and any(entry_rel[: len(p)] == p for p in data_dir_prefixes):
