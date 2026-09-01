@@ -948,6 +948,63 @@ def test_parse_project_fspack_entries_removed_even_with_scripts(tmp_path: Path) 
         parse_project(tmp_path)
 
 
+# --- [tool.fspack] entry-app-types 入口级类型覆盖测试 ---
+#
+# infer_app_type 仅按入口脚本自身 import 推断（from_script 传空 declared），
+# GUI 框架惰性导入（CLI 分发器入口）或全相对导入时判 CLI；entry-app-types
+# 提供入口名 → cli/gui/web 的显式覆盖。
+
+
+def test_parse_project_entry_app_types_override(tmp_path: Path) -> None:
+    """entry-app-types 覆盖入口 app_type：惰性导入 GUI 的分发器入口显式判 GUI.
+
+    入口脚本顶层无 GUI 框架 import（GUI 在 main() 内经自有包惰性导入）时
+    infer_app_type 判 CLI；配置覆盖后 app_type 变 GUI，且 default_entry
+    GUI 优先排序生效（exe_name / NSIS 快捷方式 / fsp r 默认入口随之切换）。
+    """
+    _write_script(tmp_path / "cli.py")
+    _write_script(tmp_path / "gui_app.py", "def main():\n    from mylib.gui import run\n    run()\n")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n'
+        '[project.scripts]\ncli = "cli:main"\ngui-app = "gui_app:main"\n\n'
+        '[tool.fspack]\nentry-app-types = { gui-app = "gui" }\n'
+    )
+    info = parse_project(tmp_path)
+    assert [ep.name for ep in info.entries] == ["cli", "gui-app"]
+    # 未覆盖的入口保持推断结果，被覆盖的入口变为显式类型
+    assert info.entries[0].app_type is AppType.CLI
+    assert info.entries[1].app_type is AppType.GUI
+    # GUI 优先排序：default_entry 指向被覆盖为 GUI 的入口
+    assert info.default_entry.name == "gui-app"
+    assert info.exe_name == "gui-app.exe"
+
+
+def test_parse_project_entry_app_types_unknown_entry_raises(tmp_path: Path) -> None:
+    """entry-app-types 键未在 [project.scripts] 声明时报错（显式报错优于静默失效）."""
+    _write_script(tmp_path / "cli.py")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n'
+        '[project.scripts]\ncli = "cli:main"\n\n'
+        '[tool.fspack]\nentry-app-types = { other = "gui" }\n'
+    )
+    clear_project_cache()
+    with pytest.raises(ProjectError, match=r'"other" 未在 \[project\.scripts\] 声明'):
+        parse_project(tmp_path)
+
+
+def test_parse_project_entry_app_types_invalid_type_raises(tmp_path: Path) -> None:
+    """entry-app-types 值非 cli/gui/web 时报错并提示可选值."""
+    _write_script(tmp_path / "cli.py")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1"\n\n'
+        '[project.scripts]\ncli = "cli:main"\n\n'
+        '[tool.fspack]\nentry-app-types = { cli = "window" }\n'
+    )
+    clear_project_cache()
+    with pytest.raises(ProjectError, match=r'"cli" 的类型 "window" 无效'):
+        parse_project(tmp_path)
+
+
 # --- [project.scripts] 入口点解析测试 ---
 #
 # PEP 621 标准入口点：name = "module:function"。

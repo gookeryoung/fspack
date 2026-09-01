@@ -251,6 +251,29 @@ def test_generate_wrapper_source_tkinter_enabled() -> None:
     assert "glob.glob" in source
 
 
+def test_generate_wrapper_source_multiprocessing_spawn_dispatch() -> None:
+    """wrapper 含 multiprocessing spawn 重入分发：环境就绪后执行引导码退出.
+
+    Windows spawn 以 ``[exe, ..., '-c', 'from multiprocessing.spawn import
+    spawn_main; ...']`` 重入应用，C loader 把入口脚本插到 argv[1] 后 ``-c``
+    沦为入口 CLI 参数（argparse invalid choice → worker 全崩 exitcode=2）。
+    wrapper 须在进入 runpy 之前检测该布局：执行引导码（spawn_main 内部完成
+    worker 反序列化与执行）并 ``SystemExit(0)``，不再走用户入口。
+    """
+    source = EntryWrapper.generate_wrapper_source("app", None, "app.py")
+    # 检测逻辑：'-c' 精确匹配 + 'from multiprocessing.' 前缀匹配三类引导码
+    assert 'sys.argv[_mp_arg_i] == "-c"' in source
+    assert 'startswith("from multiprocessing.")' in source
+    # 命中后执行引导码并以 0 退出（不走 runpy 用户入口）
+    assert "exec(sys.argv[_mp_arg_i + 1])" in source
+    assert "raise SystemExit(0)" in source
+    # 分发须在 runpy 进入用户入口之前（环境就绪但未被入口副作用污染）；
+    # 用实际调用语句定位（模板 docstring/注释亦含 runpy 字样，不可作定位点）
+    assert source.index('startswith("from multiprocessing.")') < source.index(
+        "runpy.run_path(os.path.join(_SRC_DIR"
+    )
+
+
 def test_generate_wrapper_source_includes_site_packages_path() -> None:
     """wrapper 将 dist/site-packages 加入 sys.path.
 

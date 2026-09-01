@@ -435,19 +435,33 @@ _PKG_ROOT = os.path.normpath(os.path.join(_DIST_DIR, _PKG_ROOT_REL))
 # 进入用户入口打点：此后 runpy 会 import 用户代码（含入口包 __init__ 链）并执行
 # __main__；entry_done 与 entry_start 的差值即用户入口总耗时（导入+执行）。
 _fspack_tick("entry_start")
+# sys.path 注入提前（spawn 重入与 runpy 共用）：
+# - 包模式：加入包根让首层包可 import，run_module 保留包上下文（相对导入可用）
+# - 顶层模式：runpy.run_path 对文件路径不自动把脚本目录加入 sys.path
+#   （_run_module_code 仅修改 sys.argv[0] 与 sys.modules），需显式注入
+#   _SRC_DIR，否则 `import module_c`/`from pkg.mod import f` 等顶层绝对
+#   导入找不到本地模块（cli_complex 等模板的 ModuleNotFoundError 根因）
 if _ENTRY_MODULE:
-    # 包模式：加入包根让首层包可 import，run_module 保留包上下文（相对导入可用）
     if _PKG_ROOT not in sys.path:
         sys.path.insert(0, _PKG_ROOT)
-    runpy.run_module(_ENTRY_MODULE, run_name="__main__", alter_sys=True)
 else:
-    # 顶层模式：加入 src 目录使绝对导入可用。
-    # runpy.run_path 对文件路径不自动把脚本目录加入 sys.path
-    # （_run_module_code 仅修改 sys.argv[0] 与 sys.modules），需显式注入
-    # _SRC_DIR，否则 `import module_c`/`from pkg.mod import f` 等顶层绝对
-    # 导入找不到本地模块（cli_complex 等模板的 ModuleNotFoundError 根因）。
     if _SRC_DIR not in sys.path:
         sys.path.insert(0, _SRC_DIR)
+# multiprocessing 子进程重入分发：Windows spawn/forkserver/resource_tracker
+# 以 [exe, ('-E/-B 等解释器 flag'), '-c', 'from multiprocessing.xxx import main; ...']
+# 重入应用；C loader 把入口脚本插到 argv[1]，'-c 引导码' 沦为入口的 CLI 参数
+# （argparse invalid choice → ProcessPoolExecutor worker 全崩 exitcode=2）。
+# 标准 freeze_support 只认 '--multiprocessing-fork' 布局（is_forking 查
+# argv[1]），与此布局不符，故在此自行检测：环境就绪（sys.path/Qt 等）后执行
+# 引导码并退出，由 spawn_main 内部完成 worker 的反序列化与执行。解释器 flag
+# 可能插在 -c 之前，扫描前几个参数；startswith 前缀覆盖三类引导码。
+for _mp_arg_i in range(1, min(len(sys.argv) - 1, 5)):
+    if sys.argv[_mp_arg_i] == "-c" and sys.argv[_mp_arg_i + 1].startswith("from multiprocessing."):
+        exec(sys.argv[_mp_arg_i + 1])
+        raise SystemExit(0)
+if _ENTRY_MODULE:
+    runpy.run_module(_ENTRY_MODULE, run_name="__main__", alter_sys=True)
+else:
     runpy.run_path(os.path.join(_SRC_DIR, _ENTRY_REL), run_name="__main__")
 # 用户入口执行完成打点：CLI 应用 main() 返回、GUI 事件循环退出后到达；
 # 用户代码调用 os._exit() 时不会到达（runner 侧显示为未返回）。

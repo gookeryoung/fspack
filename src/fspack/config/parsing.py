@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import replace
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, cast
@@ -51,6 +52,7 @@ from fspack.config.entries import (  # noqa: F401
     detect_entry,
 )
 from fspack.config.models import (
+    AppType,
     BuildDefaults,
     ProjectInfo,
     SlimRules,
@@ -210,6 +212,13 @@ def _parse_project_cached(
     if scripts_tbl:
         merged = _parse_project_scripts(project_dir, scripts_tbl)
         if merged:
+            # [tool.fspack] entry-app-types：入口级 app_type 显式覆盖
+            entry_app_types = _parse_entry_app_types(fspack_cfg.get("entry-app-types"), tuple(scripts_tbl))
+            if entry_app_types:
+                merged = tuple(
+                    replace(ep, app_type=entry_app_types[ep.name]) if ep.name in entry_app_types else ep
+                    for ep in merged
+                )
             first = merged[0]
             return ProjectInfo(
                 name=name,
@@ -331,6 +340,43 @@ def _parse_web_static_dirs(value: object) -> tuple[str, ...]:
     表示无前端构建产物（仅 ``AppType.WEB`` 项目使用）。
     """
     return _parse_string_list_cfg(value, "web-static-dirs", reject_empty=True)
+
+
+def _parse_entry_app_types(value: object, entry_names: tuple[str, ...]) -> dict[str, AppType]:
+    """解析 ``[tool.fspack] entry-app-types``：入口名 → 应用类型显式覆盖.
+
+    配置形如 ``entry-app-types = { app = "gui" }``，键须为 ``[project.scripts]``
+    已声明的入口名，值须为 ``cli``/``gui``/``web``（大小写不敏感）。用于
+    ``infer_app_type`` 按入口脚本自身 import 推断失效的场景：GUI 框架在
+    ``main()`` 内惰性导入（CLI 分发器入口）或入口全为相对导入时，静态扫描
+    判为 CLI，导致 loader 用 console 子系统（GUI 应用带控制台窗口）。
+
+    返回 ``{入口名: AppType}``；未配置（``None``）返回空字典（推断结果不覆盖）。
+    键未声明或值非法时抛 :class:`ProjectError`（显式报错优于静默失效）。
+    """
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ProjectError(
+            '[tool.fspack] entry-app-types 必须是表（入口名 = "cli"/"gui"/"web"），'
+            '如 entry-app-types = { app = "gui" }'
+        )
+    type_map = {t.value: t for t in AppType}
+    result: dict[str, AppType] = {}
+    for raw_name, raw_type in value.items():
+        name = str(raw_name)
+        type_str = str(raw_type).strip().lower()
+        if name not in entry_names:
+            raise ProjectError(
+                f'[tool.fspack] entry-app-types 中的入口 "{name}" 未在 [project.scripts] 声明'
+            )
+        if type_str not in type_map:
+            raise ProjectError(
+                f'[tool.fspack] entry-app-types 中入口 "{name}" 的类型 "{raw_type}" 无效，'
+                f"可选: {', '.join(type_map)}"
+            )
+        result[name] = type_map[type_str]
+    return result
 
 
 def _parse_optional_dependencies(value: object) -> dict[str, tuple[str, ...]]:

@@ -647,7 +647,7 @@ wheels = [
 
 [[package]]
 name = "fspack"
-version = "0.5.11"
+version = "0.5.12"
 source = { editable = "." }
 dependencies = [
     { name = "certifi" },
