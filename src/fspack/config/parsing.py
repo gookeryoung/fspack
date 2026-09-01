@@ -358,8 +358,7 @@ def _parse_entry_app_types(value: object, entry_names: tuple[str, ...]) -> dict[
         return {}
     if not isinstance(value, dict):
         raise ProjectError(
-            '[tool.fspack] entry-app-types 必须是表（入口名 = "cli"/"gui"/"web"），'
-            '如 entry-app-types = { app = "gui" }'
+            '[tool.fspack] entry-app-types 必须是表（入口名 = "cli"/"gui"/"web"），如 entry-app-types = { app = "gui" }'
         )
     type_map = {t.value: t for t in AppType}
     result: dict[str, AppType] = {}
@@ -367,13 +366,10 @@ def _parse_entry_app_types(value: object, entry_names: tuple[str, ...]) -> dict[
         name = str(raw_name)
         type_str = str(raw_type).strip().lower()
         if name not in entry_names:
-            raise ProjectError(
-                f'[tool.fspack] entry-app-types 中的入口 "{name}" 未在 [project.scripts] 声明'
-            )
+            raise ProjectError(f'[tool.fspack] entry-app-types 中的入口 "{name}" 未在 [project.scripts] 声明')
         if type_str not in type_map:
             raise ProjectError(
-                f'[tool.fspack] entry-app-types 中入口 "{name}" 的类型 "{raw_type}" 无效，'
-                f"可选: {', '.join(type_map)}"
+                f'[tool.fspack] entry-app-types 中入口 "{name}" 的类型 "{raw_type}" 无效，可选: {", ".join(type_map)}'
             )
         result[name] = type_map[type_str]
     return result

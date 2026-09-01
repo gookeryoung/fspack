@@ -269,9 +269,7 @@ def test_generate_wrapper_source_multiprocessing_spawn_dispatch() -> None:
     assert "raise SystemExit(0)" in source
     # 分发须在 runpy 进入用户入口之前（环境就绪但未被入口副作用污染）；
     # 用实际调用语句定位（模板 docstring/注释亦含 runpy 字样，不可作定位点）
-    assert source.index('startswith("from multiprocessing.")') < source.index(
-        "runpy.run_path(os.path.join(_SRC_DIR"
-    )
+    assert source.index('startswith("from multiprocessing.")') < source.index("runpy.run_path(os.path.join(_SRC_DIR")
 
 
 def test_generate_wrapper_source_includes_site_packages_path() -> None:
