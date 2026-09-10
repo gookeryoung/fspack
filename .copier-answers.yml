@@ -7,7 +7,7 @@ coverage_fail_under: 95
 description: 极速 Python 项目打包器。
 license: MIT
 max_python_version: '3.14'
-min_python_version: '3.8'
+min_python_version: '3.13'
 package_name: fspack
 project_name: fspack
 project_type: cli

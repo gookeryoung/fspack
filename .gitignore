@@ -3,7 +3,7 @@ __pycache__/
 *.py[oc]
 build/
 dist/
-/wheels/
+wheels/
 *.egg-info
 
 # Virtual environments
@@ -15,7 +15,6 @@ dist/
 htmlcov/
 coverage.xml
 .tox/
-.benchmarks/
 
 # 工具缓存
 .ruff_cache/
@@ -27,18 +26,10 @@ coverage.xml
 .idea/
 *_profile.html
 
-# 本地协作产物（需求/迭代/规则记录），不提交
-/.trae/
-
-# loader 运行时日志目录（构建产物冒烟运行产生）
-logs/
-
 # 环境变量与凭证（勿提交）
 .env
 .env.*
 
 # Sphinx 文档构建输出
 docs/_build/
-refs/
-src/fspack/assets/templates/web/webview_app/src/webview_app/frontend/.pnpm-store
-.vscode
+.trae/

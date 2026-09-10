@@ -1,6 +1,6 @@
 extend-exclude = ["template", "docs", "examples", "src/fspack/assets/templates", "src/fspack/assets/init_templates"]
 line-length    = 120
-target-version = "py38"
+target-version = "py313"
 
 [lint]
 ignore = [
