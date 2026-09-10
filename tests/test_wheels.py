@@ -5,8 +5,9 @@ from __future__ import annotations
 import os
 import subprocess
 import types
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 import pytest
 
@@ -260,8 +261,9 @@ def test_download_wheels_pip_error_cleans_partial_wheels(
     monkeypatch.setattr("fspack.packaging.wheels.downloader._find_pip_python", lambda: "/py/python")
     monkeypatch.setattr("fspack.packaging.wheels.resolver._find_uv", lambda: None)
 
-    with caplog.at_level("WARNING", logger="fspack.packaging.wheels.downloader"), pytest.raises(
-        DependencyError, match="依赖下载失败"
+    with (
+        caplog.at_level("WARNING", logger="fspack.packaging.wheels.downloader"),
+        pytest.raises(DependencyError, match="依赖下载失败"),
     ):
         download_wheels(("numpy",), "3.11.9", "https://idx", cache)
 

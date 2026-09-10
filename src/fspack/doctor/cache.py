@@ -21,7 +21,7 @@ iter-148 扩展为多 cache 类型：
 
 from __future__ import annotations
 
-from typing import Iterable
+from collections.abc import Iterable
 
 from fspack.doctor.cache_health import (
     _clean_all_caches,

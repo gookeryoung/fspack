@@ -25,7 +25,6 @@ from __future__ import annotations
 import email.message
 import hashlib
 import io
-import socket
 import ssl
 import urllib.error
 from pathlib import Path
@@ -88,7 +87,7 @@ class TestIsRetryableNetworkError:
 
     def test_socket_timeout_is_retryable(self) -> None:
         """socket.timeout（读超时）可重试."""
-        exc = socket.timeout("read timed out")
+        exc = TimeoutError("read timed out")
         assert _is_retryable_network_error(exc) is True
 
     def test_connection_reset_error_is_retryable(self) -> None:
@@ -332,7 +331,7 @@ class TestDownloaderRetry:
         def fake_urlopen(req: Request, timeout: int, **kwargs: object) -> FakeResp:
             calls.append(len(calls) + 1)
             if len(calls) < 2:
-                raise socket.timeout("read timed out")
+                raise TimeoutError("read timed out")
             return FakeResp(b"recovered")
 
         monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)

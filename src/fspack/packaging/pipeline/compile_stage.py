@@ -12,9 +12,10 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor as _DefaultThreadPoolExecutor
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 from fspack.config import AppType, EntryPoint, nuitka_cache_dir
 from fspack.packaging.entry import EntryWrapper

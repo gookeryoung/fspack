@@ -264,7 +264,7 @@ def test_build_entry_loaders_parallel_preserves_order(tmp_path: Path, monkeypatc
     # 模拟不同编译耗时，确保完成顺序与提交顺序不同
     import time
 
-    compile_times = dict(zip(names, [0.05, 0.01, 0.04, 0.02, 0.03]))
+    compile_times = dict(zip(names, [0.05, 0.01, 0.04, 0.02, 0.03], strict=False))
 
     def fake_compile(source: str, out_exe: Path, app_type: object, work_dir: Path, platform: object, **kw: Any) -> Path:
         time.sleep(compile_times.get(out_exe.stem, 0.01))

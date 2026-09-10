@@ -30,8 +30,8 @@ winlibs 额外区分：检测到 MSVC 时未缓存亦为 OK（scons 优先用 MS
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from fspack.config import _ver_key
 from fspack.config.cache import (

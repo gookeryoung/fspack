@@ -18,9 +18,10 @@ from __future__ import annotations
 
 import logging
 import sys
+from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING
 
 from fspack.config import (
     DEFAULT_LINUX_PY_VERSION,

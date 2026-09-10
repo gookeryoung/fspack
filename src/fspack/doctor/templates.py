@@ -29,8 +29,9 @@ import shutil
 import subprocess
 import tempfile
 import time
+from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Mapping
+from typing import TYPE_CHECKING
 
 from fspack.console import console
 from fspack.doctor.bench import _save_and_compare_bench

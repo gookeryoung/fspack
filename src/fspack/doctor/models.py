@@ -14,7 +14,7 @@ facade 从子模块 import 函数并 re-export 数据类保持 ``fspack.doctor.X
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 
 __all__ = [
@@ -27,7 +27,7 @@ __all__ = [
 ]
 
 
-class CheckStatus(str, Enum):
+class CheckStatus(StrEnum):
     """诊断项状态：OK 绿 / WARN 黄 / ERROR 红.
 
     继承 ``str`` 便于序列化与测试断言（``status == "ok"``）。

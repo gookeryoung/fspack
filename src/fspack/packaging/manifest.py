@@ -35,7 +35,7 @@ import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -139,7 +139,7 @@ def collect_manifest(dist_dir: Path, info: ProjectInfo) -> dict[str, Any]:
             None if dir_entry.is_symlink() else executor.submit(_sha256_file, Path(dir_entry.path))
             for _, dir_entry in collected
         ]
-        for (rel, dir_entry), future in zip(collected, futures):
+        for (rel, dir_entry), future in zip(collected, futures, strict=False):
             try:
                 size = dir_entry.stat(follow_symlinks=False).st_size
             except OSError:
@@ -159,7 +159,7 @@ def collect_manifest(dist_dir: Path, info: ProjectInfo) -> dict[str, Any]:
     # 按相对路径排序：保证同一 dist 多次生成 manifest 字段顺序一致
     entries.sort(key=lambda e: e.path)
 
-    created = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    created = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     return {
         "manifestVersion": _MANIFEST_VERSION,
         "created": created,

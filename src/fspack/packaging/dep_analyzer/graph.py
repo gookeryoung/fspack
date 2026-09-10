@@ -95,7 +95,7 @@ def analyze_binary_dependencies(
     else:
         results = [_parse_dependencies(p, target) for p in paths]
 
-    for path, deps in zip(paths, results):
+    for path, deps in zip(paths, results, strict=False):
         if deps is None:
             continue
         graph.binaries[path] = BinaryInfo(path=path, deps=tuple(deps))

@@ -14,8 +14,9 @@ from __future__ import annotations
 
 import logging
 import shutil
+from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 from fspack.config import standalone_cache_dir, win7_dll_cache_dir
 from fspack.exceptions import EmbedError

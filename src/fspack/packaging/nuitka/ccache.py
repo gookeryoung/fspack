@@ -23,7 +23,6 @@ from __future__ import annotations
 import contextlib
 import logging
 import shutil
-import sys
 import tarfile
 import zipfile
 from pathlib import Path
@@ -158,10 +157,7 @@ class NuitkaCcache:
             downloader.download(url, archive, label="ccache")
             with tarfile.open(archive, "r:xz") as tf:
                 # PEP 706: 3.12+ 需 filter="data" 防路径穿越
-                if sys.version_info >= (3, 12):
-                    tf.extractall(ccache_dir, filter="data")  # type: ignore[call-arg]
-                else:  # pragma: no cover
-                    tf.extractall(ccache_dir)
+                tf.extractall(ccache_dir, filter="data")
             archive.unlink()
             # 归档内 ccache 在 ccache-<ver>-linux-x86_64/ccache，移动到根目录
             extracted = list(ccache_dir.glob("ccache-*/ccache"))

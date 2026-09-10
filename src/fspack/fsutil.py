@@ -22,8 +22,8 @@ import logging
 import os
 import shutil
 import tempfile
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator
 
 __all__ = [
     "atomic_write_text",

@@ -10,9 +10,8 @@ import hashlib
 import logging
 import os
 import shutil
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Callable
 
 from fspack.fsutil import scandir_dir_size
 

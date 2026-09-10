@@ -23,11 +23,11 @@ import ast
 import logging
 import os
 import sys
+from collections.abc import Iterator
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
-from typing import Iterator
 
 from fspack.analyzer.ast_scan import (
     _QT_PYTHON_PACKAGES,

@@ -177,8 +177,9 @@ def test_extract_embed_bad_zip_unlink_failure_warns(
         raise OSError("permission denied")
 
     monkeypatch.setattr(Path, "unlink", fail_unlink)
-    with caplog.at_level("WARNING", logger="fspack.packaging.runtime"), pytest.raises(
-        EmbedError, match="embed zip 损坏"
+    with (
+        caplog.at_level("WARNING", logger="fspack.packaging.runtime"),
+        pytest.raises(EmbedError, match="embed zip 损坏"),
     ):
         extract_embed(bad, tmp_path / "runtime")
     assert any("删除损坏的 embed zip 失败" in r.message for r in caplog.records)

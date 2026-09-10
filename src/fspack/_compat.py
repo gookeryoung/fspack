@@ -17,24 +17,7 @@ CI 环境兼容 shim（:class:`CICompat`）依赖 rich，位于其唯一消费�
 
 from __future__ import annotations
 
-import sys
-from typing import TYPE_CHECKING, TypeVar
-
-if sys.version_info >= (3, 12):
-    from typing import override
-elif TYPE_CHECKING:
-    # 类型检查期用 typing_extensions 保留 pyrefly 对 @override 的语义检查
-    from typing_extensions import override
-else:
-    # 运行时 no-op：typing_extensions.override 运行时行为等价于返回原函数
-    # （仅尝试设置 __override__ 标记），此处直接定义避免 typing_extensions
-    # 导入开销（~20ms）与 embed python 3.8 携带过新版本时的 AttributeError。
-    _F = TypeVar("_F")
-
-    def override(method: _F, /) -> _F:
-        """运行时 no-op 的 @override（类型标记由 TYPE_CHECKING 分支提供）."""
-        return method
-
+from typing import override
 
 try:
     import tomllib

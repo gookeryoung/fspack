@@ -33,9 +33,9 @@ import argparse
 import json
 import struct
 import sys
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Sequence
 
 __all__ = ["PeParseError", "Win7ApiViolation", "Win7CheckResult", "check_win7_imports", "main"]
 

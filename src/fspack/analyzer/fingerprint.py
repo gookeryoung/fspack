@@ -17,9 +17,9 @@ from __future__ import annotations
 
 import hashlib
 import os
+from collections.abc import Iterator
 from functools import lru_cache
 from pathlib import Path
-from typing import Iterator
 
 __all__ = [
     "_EXCLUDED_DIRS",

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 import stat
-import sys
 import tarfile
 import zipfile
 import zlib
@@ -136,10 +135,7 @@ def extract_tar_safe(archive_path: Path, runtime_dir: Path, label: str) -> None:
         with tarfile.open(archive_path, "r:gz") as tf:
             for member in tf.getmembers():
                 _validate_tar_member(member)
-            if sys.version_info >= (3, 12):
-                tf.extractall(runtime_dir, filter="data")
-            else:  # pragma: no cover - 测试环境 3.13，低版本分支不可达
-                tf.extractall(runtime_dir)
+            tf.extractall(runtime_dir, filter="data")
     except (tarfile.TarError, OSError, EOFError, zlib.error) as e:
         _safe_unlink_archive(archive_path, label)
         raise EmbedError(f"{label} 损坏: {archive_path}") from e

@@ -15,8 +15,9 @@ from __future__ import annotations
 
 import logging
 import sys
+from collections.abc import Mapping
 from pathlib import Path
-from typing import TYPE_CHECKING, Mapping
+from typing import TYPE_CHECKING
 
 from fspack import __version__
 from fspack.doctor.cache_health import _scan_cache_health

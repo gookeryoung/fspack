@@ -5,10 +5,10 @@ dep_analyzer 子包公共层。
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
 
 from fspack.platform import Platform
 

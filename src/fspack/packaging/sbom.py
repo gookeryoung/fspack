@@ -40,7 +40,7 @@ import logging
 import re
 import uuid
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -125,7 +125,7 @@ def collect_sbom(dist_dir: Path, info: ProjectInfo) -> dict[str, Any]:
 
     # 文档命名空间：含 UUID 避免同项目多次构建命名空间冲突
     namespace = f"https://fspack.dev/spdx/{info.name}-{info.version}-{uuid.uuid4()}"
-    created = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    created = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     return {
         "spdxVersion": _SPDX_VERSION,

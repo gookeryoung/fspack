@@ -12,7 +12,7 @@
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 from fspack.doctor.cache_contents import _cache_content_fns
 from fspack.doctor.envs import (

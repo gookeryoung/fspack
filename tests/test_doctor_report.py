@@ -141,9 +141,11 @@ def test_cli_doctor_check_cache_flag_dispatches() -> None:
         env_info=(CheckResult("Python", CheckStatus.OK, "3.11.9"),),
         tool_checks=(CheckResult("pip", CheckStatus.OK, "24.0"),),
     )
-    with patch("fspack.doctor.run_doctor", return_value=fake_report), patch("fspack.doctor.print_doctor_report"), patch(
-        "fspack.doctor.run_doctor_cache_check"
-    ) as mock_check:
+    with (
+        patch("fspack.doctor.run_doctor", return_value=fake_report),
+        patch("fspack.doctor.print_doctor_report"),
+        patch("fspack.doctor.run_doctor_cache_check") as mock_check,
+    ):
         main(["doctor", "--check-cache"])
     mock_check.assert_called_once()
 
@@ -406,9 +408,10 @@ def test_cli_doctor_dispatches_to_run_doctor() -> None:
         env_info=(CheckResult("Python", CheckStatus.OK, "3.11.9"),),
         tool_checks=(CheckResult("pip", CheckStatus.OK, "24.0"),),
     )
-    with patch("fspack.doctor.run_doctor", return_value=fake_report) as mock_run, patch(
-        "fspack.doctor.print_doctor_report"
-    ) as mock_print:
+    with (
+        patch("fspack.doctor.run_doctor", return_value=fake_report) as mock_run,
+        patch("fspack.doctor.print_doctor_report") as mock_print,
+    ):
         main(["doctor"])
     mock_run.assert_called_once()
     mock_print.assert_called_once_with(fake_report)
@@ -464,9 +467,11 @@ def test_cli_doctor_test_passes_profile_options() -> None:
         env_info=(CheckResult("Python", CheckStatus.OK, "3.11.9"),),
         tool_checks=(CheckResult("pip", CheckStatus.OK, "24.0"),),
     )
-    with patch("fspack.doctor.run_doctor", return_value=fake_report), patch("fspack.doctor.print_doctor_report"), patch(
-        "fspack.doctor.run_doctor_test"
-    ) as mock_test:
+    with (
+        patch("fspack.doctor.run_doctor", return_value=fake_report),
+        patch("fspack.doctor.print_doctor_report"),
+        patch("fspack.doctor.run_doctor_test") as mock_test,
+    ):
         main(["doctor", "--test", "--profile", "--profile-compare", "last"])
     mock_test.assert_called_once()
     opts = mock_test.call_args[0][0]

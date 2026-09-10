@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import logging
 import zipfile
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 from fspack.config import DEFAULT_SLIM_RULES, SlimRules
 from fspack.exceptions import DependencyError

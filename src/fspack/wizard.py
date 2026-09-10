@@ -22,7 +22,8 @@
 from __future__ import annotations
 
 import sys
-from typing import Callable, Final, Sequence
+from collections.abc import Callable, Sequence
+from typing import Final
 
 from rich.live import Live
 from rich.text import Text

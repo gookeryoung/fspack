@@ -33,8 +33,8 @@ import re
 import shutil
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from fspack.doctor.integrity import _file_size, _is_pe_file, _is_tar_intact, _is_zip_intact, _try_unlink
 from fspack.doctor.models import CacheHealthReport

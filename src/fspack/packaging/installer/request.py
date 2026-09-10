@@ -9,9 +9,10 @@ CLI/编排层的公共构建参数（项目目录/镜像/Python 版本/no_build/
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING
 
 from fspack.config import MirrorConfig
 
