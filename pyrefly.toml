@@ -1,11 +1,12 @@
-preset           = "strict"
+preset = "strict"
 project-excludes = [
   ".venv/**",
   "template/**",
-  "**/assets/templates/**",
-  "**/assets/init_templates/**",
-  "**/tests/**",
+  "src/fspack/assets/templates",
+  "src/fspack/assets/templates/**",
+  "src/fspack/assets/init_templates",
+  "src/fspack/assets/init_templates/**",
 ]
 project-includes = ["**/*.ipynb", "**/*.py*"]
-python-version   = "3.13"
-search-path      = ["."]
+python-version = "3.13"
+search-path = ["src", "."]
