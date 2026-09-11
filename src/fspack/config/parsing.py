@@ -114,10 +114,12 @@ def parse_project(project_dir: Path, py_version: str | None = None) -> ProjectIn
     声明多入口时，``ProjectInfo.entries`` 非空，``entry_module``/
     ``entry_file``/``app_type`` 取首个入口（保持向后兼容）。
 
-    解析结果按 ``(project_dir, py_version, pyproject.toml mtime)`` 缓存（最多 64
-    个条目），同一项目在 pyproject.toml 未修改时复用缓存，避免 ``fsp b``/
-    ``fsp p`` 流程内多次调用重复读取与 AST 扫描。pyproject.toml 修改后 mtime
-    变化，下次调用自动获取新值。
+    解析结果按 ``(project_dir, py_version, pyproject.toml mtime, size)``
+    缓存（最多 64 个条目），同一项目在 pyproject.toml 未修改时复用缓存，
+    避免 ``fsp b``/``fsp p`` 流程内多次调用重复读取与 AST 扫描。
+    mtime + size 双因子组合，兜底部分 ReFS/FAT32 环境下 mtime 精度不足
+    （秒级）导致的缓存穿透——ReFS 默认不更新 last access time，极端场景下
+    两次快速写入 mtime 可能相同，但文件 size 必然变化。
     """
     p = Path(project_dir)
     if p.is_absolute() and "." not in p.parts and ".." not in p.parts:
@@ -128,10 +130,11 @@ def parse_project(project_dir: Path, py_version: str | None = None) -> ProjectIn
     pp = project_dir / "pyproject.toml"
     if not pp.is_file():
         raise ProjectError(f"未找到 pyproject.toml: {pp}")
-    # 用 mtime_ns 作为缓存键：分辨率纳秒级，覆盖秒级与亚秒级修改；
-    # 文件被 touch 但内容未改也会失效，但这是可接受的过度失效（缓存重建成本低）
-    mtime_ns = pp.stat().st_mtime_ns
-    return _parse_project_cached(project_dir, py_version, mtime_ns)
+    stat = pp.stat()
+    # mtime_ns 分辨率纳秒级，覆盖绝大多数修改；size 兜底 ReFS/FAT32 精度不足
+    mtime_ns = stat.st_mtime_ns
+    file_size = stat.st_size
+    return _parse_project_cached(project_dir, py_version, mtime_ns, file_size)
 
 
 @lru_cache(maxsize=_PROJECT_CACHE_MAXSIZE)
@@ -139,13 +142,16 @@ def _parse_project_cached(
     project_dir: Path,
     py_version: str | None,
     pyproject_mtime_ns: int,  # noqa: ARG001 — 仅作缓存键，函数内不读取（避免重复 stat）
+    pyproject_size: int,  # noqa: ARG001 — 仅作缓存键（与 mtime 组合兜底文件系统精度不足）
 ) -> ProjectInfo:
     """缓存版项目解析：实际读取 pyproject.toml + AST 识别入口.
 
-    缓存键含 ``pyproject_mtime_ns``，文件修改后 mtime 变化触发新解析。
-    ``project_dir`` 已在 :func:`parse_project` 中 resolve，此处不再重复。
+    缓存键含 ``pyproject_mtime_ns`` + ``pyproject_size``，文件修改后任一变化
+    均触发新解析。``project_dir`` 已在 :func:`parse_project` 中 resolve，
+    此处不再重复。
 
-    ``pyproject_mtime_ns`` 仅作缓存键，函数内不读取该参数（避免重复 stat）。
+    ``pyproject_mtime_ns`` 与 ``pyproject_size`` 仅作缓存键，函数内不读取
+    （避免重复 stat）。
     """
     pp = project_dir / "pyproject.toml"
     try:
