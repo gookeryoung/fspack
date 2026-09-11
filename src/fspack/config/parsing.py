@@ -574,4 +574,3 @@ def _resolve_icon(project_dir: Path, icon_rel: object) -> Path | None:
     if not icon_path.is_file():
         raise ProjectError(f"[tool.fspack] icon 文件不存在: {icon_rel}")
     return icon_path
-    return icon_path

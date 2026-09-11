@@ -103,6 +103,7 @@ class JsonFormatter(logging.Formatter):
         ``datefmt`` 参数为父类 :meth:`logging.Formatter.formatTime` 签名兼容保留，
         本实现忽略用户传入的 ``datefmt``，固定输出 ``YYYY-MM-DDTHH:MM:SS.mmm``。
         """
+        _ = datefmt  # 签名兼容保留，本实现固定 ISO 8601+毫秒
         ct = self.converter(record.created)
         base = time.strftime("%Y-%m-%dT%H:%M:%S", ct)
         return f"{base}.{int(record.msecs):03d}"
