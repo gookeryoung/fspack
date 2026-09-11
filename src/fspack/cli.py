@@ -392,6 +392,29 @@ def _run_doctor(ns: argparse.Namespace) -> None:
     if (profile_out or profile_compare) and not profile:
         raise ProjectError("--profile-out/--profile-compare 需配合 --profile 使用")
 
+    # --bench-compare 独立路径：CI 门禁场景不需要环境诊断，跳过直接运行对比
+    if getattr(ns, "bench_compare", False) and not test and not getattr(ns, "check_cache", False):
+        from fspack.doctor.benchmark_compare import (
+            DEFAULT_CATEGORIES,
+            DEFAULT_THRESHOLD,
+            compare_entry,
+        )
+
+        bench_dir = Path(ns.bench_dir).resolve() if getattr(ns, "bench_dir", None) else None
+        bench_threshold = getattr(ns, "bench_threshold", None) or DEFAULT_THRESHOLD
+        bench_no_cats = getattr(ns, "bench_no_categories", False)
+        bench_list = getattr(ns, "bench_list_categories", False)
+
+        categories = None if bench_no_cats else DEFAULT_CATEGORIES
+
+        rc = compare_entry(
+            bench_dir=bench_dir,
+            threshold=bench_threshold,
+            categories=categories,
+            list_categories=bench_list,
+        )
+        sys.exit(rc)
+
     report = run_doctor()
     print_doctor_report(report)
 

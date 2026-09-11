@@ -556,6 +556,35 @@ _DOCTOR_OPTS: tuple[_Opt, ...] = (
         "扫描 wheel 缓存目录的依赖解析缓存文件，删除损坏文件，报告 stale/orphan",
         action="store_true",
     ),
+    _Opt(
+        ("--bench-compare",),
+        "pytest-benchmark 最佳基准对比：扫描 .benchmarks/ 下所有历史 JSON，"
+        "当前运行与历史最小 median 对比判退化，退出码 1=退化超过阈值（CI 门禁）",
+        action="store_true",
+    ),
+    _Opt(
+        ("--bench-dir",),
+        "benchmark JSON 存储目录（需 --bench-compare），默认 .benchmarks/",
+        default=None,
+        metavar="PATH",
+    ),
+    _Opt(
+        ("--bench-threshold",),
+        "全局退化阈值百分比（需 --bench-compare），默认 25，用于未匹配类别的测试",
+        type=float,
+        default=None,
+        metavar="PCT",
+    ),
+    _Opt(
+        ("--bench-no-categories",),
+        "禁用基线类别分组（需 --bench-compare），所有测试用 --bench-threshold 全局阈值",
+        action="store_true",
+    ),
+    _Opt(
+        ("--bench-list-categories",),
+        "列出基线类别与阈值后退出（需 --bench-compare）",
+        action="store_true",
+    ),
 )
 
 

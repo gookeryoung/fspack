@@ -1,50 +1,51 @@
-#!/usr/bin/env python3
-"""与历史最佳基准对比当前 benchmark 运行结果.
+"""pytest-benchmark 最佳基准对比：扫描历史 JSON，与当前运行对比判退化.
 
-pytest-benchmark 的 ``--benchmark-compare`` 仅与上一次运行对比，GitHub Actions
-共享机器性能波动 12-29% 时易误报退化。本脚本扫描 ``.benchmarks/`` 下所有历史
-JSON，按测试名找最小 median 作为最佳基准，当前运行与最佳对比，超过阈值报退化.
+pytest-benchmark 的 `--benchmark-compare` 仅与上一次运行对比，GitHub Actions
+共享机器性能波动 12-29% 时易误报退化。本模块扫描 `.benchmarks/` 下所有历史
+pytest-benchmark 格式 JSON，按测试名找最小 median 作为最佳基准，当前运行与
+最佳对比，超过阈值报退化。
 
 支持按基线类别分组对比：不同类别的测试有不同的 StdDev 特性，单一全局阈值会让
 确定性高的测试（StdDev <1%）容差过大，让 I/O 抖动大的测试（StdDev 5-27%）
 误报频繁。按类别设阈值后，确定性测试可用 10% 严格阈值，抖动测试用 15-25%
-宽松阈值，减少误报同时保留检测灵敏度.
+宽松阈值，减少误报同时保留检测灵敏度。
 
-用法::
+与 :mod:spack.doctor.bench 的关系：后者处理 doctor 自身模板构建基准剖析
+（schema `fspack/doctor-bench-profile/1`，落盘 `fsp-d-*.json`），本模块
+处理 pytest-benchmark 原生 JSON（`{"benchmarks": [...]}`）。两类 JSON 同目录
+共存但结构完全不同，本模块解析时跳过非 pytest-benchmark 格式的 JSON（如
+doctor / profile_log 系列）。
 
-    # 先运行 benchmark 并保存
-    uv run pytest tests/test_perf_baseline.py -m slow --benchmark-only --benchmark-save=main
+CLI 入口见 :func:compare_entry，由 `fspack.cli._run_doctor` 在 doctor 子
+命令 `--bench-compare` 触发。
 
-    # 与历史最佳对比（默认按类别阈值，未匹配类别用全局 25%）
-    uv run python scripts/compare_benchmark.py
-
-    # 自定义全局阈值（用于未匹配类别的测试）
-    uv run python scripts/compare_benchmark.py --threshold 20
-
-    # 列出基线类别与阈值
-    uv run python scripts/compare_benchmark.py --list-categories
-
-    # 禁用类别分组，仅用全局阈值（兼容旧行为）
-    uv run python scripts/compare_benchmark.py --no-categories --threshold 25
-
-退出码：0=无退化或无历史基线，1=有退化超过阈值.
+退出码：0=无退化或无历史基线，1=有退化超过阈值。
 """
 
 from __future__ import annotations
 
-import argparse
-import json
 import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-__all__ = ["main"]
+__all__ = [
+    "DEFAULT_CATEGORIES",
+    "DEFAULT_THRESHOLD",
+    "BenchmarkCategory",
+    "BenchmarkEntry",
+    "ComparisonReport",
+    "ComparisonRow",
+    "compare",
+    "compare_entry",
+    "main",
+    "print_report",
+]
 
 # 全局退化阈值默认值：median 超过最佳基准 25% 视为退化
 # 用于未匹配任何类别的测试，GitHub Actions 共享机器性能波动可达 12-29%，
-# 25% 容忍正常抖动。匹配类别的测试使用类别专属阈值（见 _DEFAULT_CATEGORIES）
-_DEFAULT_THRESHOLD = 25.0
+# 25% 容忍正常抖动。匹配类别的测试使用类别专属阈值（见 DEFAULT_CATEGORIES）
+DEFAULT_THRESHOLD = 25.0
 
 
 @dataclass(frozen=True)
@@ -77,7 +78,7 @@ class BenchmarkCategory:
 
 # 默认基线类别阈值（基于 iter-141~144 实测 StdDev 设定）
 # 顺序重要：具体类别在前，core 兜底在后。_match_category 返回首个匹配
-_DEFAULT_CATEGORIES: tuple[BenchmarkCategory, ...] = (
+DEFAULT_CATEGORIES: tuple[BenchmarkCategory, ...] = (
     # test_build_perf_baseline.py：含 AST 扫描与文件 I/O，StdDev 5-27%
     BenchmarkCategory(
         name="build_perf",
@@ -128,10 +129,10 @@ def _match_category(
 
     Args:
         test_name: benchmark 测试函数名
-        categories: 类别列表，默认用 _DEFAULT_CATEGORIES
+        categories: 类别列表，默认用 DEFAULT_CATEGORIES
     """
     if categories is None:
-        categories = _DEFAULT_CATEGORIES
+        categories = DEFAULT_CATEGORIES
     for cat in categories:
         if re.match(cat.pattern, test_name):
             return cat
@@ -151,7 +152,7 @@ class ComparisonRow:
     is_current_best: bool  # 当前运行即为历史最佳
     is_first_run: bool  # 仅当前运行、无历史可比
     category: str = ""  # 匹配的类别名（空表示未匹配，用全局阈值）
-    threshold: float = _DEFAULT_THRESHOLD  # 应用于此测试的退化阈值
+    threshold: float = DEFAULT_THRESHOLD  # 应用于此测试的退化阈值
 
 
 @dataclass
@@ -179,6 +180,8 @@ def _find_benchmark_files(bench_dir: Path) -> list[Path]:
 def _parse_benchmark_file(path: Path) -> list[BenchmarkEntry]:
     """解析单个 pytest-benchmark JSON 文件，返回测试项列表.
 
+    延迟 `import json` 避免顶层加载。
+
     pytest-benchmark JSON 格式::
 
         {
@@ -189,6 +192,8 @@ def _parse_benchmark_file(path: Path) -> list[BenchmarkEntry]:
 
     跳过非 pytest-benchmark 格式的 JSON（如 doctor 测试自定义格式）。
     """
+    import json
+
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
@@ -249,8 +254,8 @@ def _identify_current_file(files: list[Path]) -> Path | None:
 
 def compare(
     bench_dir: Path,
-    threshold: float = _DEFAULT_THRESHOLD,
-    categories: tuple[BenchmarkCategory, ...] | None = _DEFAULT_CATEGORIES,
+    threshold: float = DEFAULT_THRESHOLD,
+    categories: tuple[BenchmarkCategory, ...] | None = DEFAULT_CATEGORIES,
 ) -> ComparisonReport:
     """扫描 benchmark 目录，生成当前运行 vs 历史最佳的对比报告.
 
@@ -404,7 +409,7 @@ def _format_pct(pct: float) -> str:
 def print_report(
     report: ComparisonReport,
     threshold: float,
-    categories: tuple[BenchmarkCategory, ...] | None = _DEFAULT_CATEGORIES,
+    categories: tuple[BenchmarkCategory, ...] | None = DEFAULT_CATEGORIES,
 ) -> None:
     """打印对比报告表到 stdout.
 
@@ -470,8 +475,62 @@ def print_report(
         print("建议人工审查 artifact 中的 JSON 数据确认无真实退化。")
 
 
+def compare_entry(
+    bench_dir: Path | None = None,
+    threshold: float = DEFAULT_THRESHOLD,
+    categories: tuple[BenchmarkCategory, ...] | None = DEFAULT_CATEGORIES,
+    list_categories: bool = False,
+) -> int:
+    """CLI 入口：参数分发、执行对比、打印报告、返回退出码.
+
+    `fsp doctor --bench-compare` 的实际执行函数，与原
+    `scripts/compare_benchmark.py` 的 :func:main 对齐，替换后者独立 argparse
+    为参数直接传入。保持相同的退出码语义（0=通过，1=退化）。
+
+    :param bench_dir: benchmark JSON 目录，默认 `Path(".benchmarks")`
+    :param threshold: 全局退化阈值百分比
+    :param categories: 启用的基线类别列表，传 None 禁用类别分组
+    :param list_categories: True 时仅打印类别阈值并返回 0
+    :return: 退出码
+    """
+    if list_categories:
+        print("基线类别与阈值：")
+        for cat in DEFAULT_CATEGORIES:
+            print(f"  {cat.name:<16} 阈值 {cat.threshold:>4.0f}%  {cat.description}")
+        print(f"  {'（全局）':<16} 阈值 {threshold:>4.0f}%  未匹配类别的测试用此阈值")
+        return 0
+
+    if bench_dir is None:
+        bench_dir = Path(".benchmarks")
+
+    report = compare(bench_dir, threshold, categories)
+    print_report(report, threshold, categories)
+
+    if report.is_systemic:
+        # 系统性退化（机器负载波动）：输出警告但不阻断 CI
+        return 0
+    if report.regressions > 0:
+        # 显示退化项的详情，含类别阈值便于排查
+        print(f"\n失败: {report.regressions} 项退化超过阈值（全局 {threshold:.0f}%）")
+        for row in report.rows:
+            if row.is_regression:
+                print(
+                    f"  {row.name}  Δ={_format_pct(row.delta_pct)}  "
+                    f"阈值={row.threshold:.0f}%  类别={row.category or '（全局）'}"
+                )
+        return 1
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# 过渡期 shim：保持 scripts/compare_benchmark.py 可直接调用（importlib
+# 按路径加载场景仍需 main 函数入口）。CI 已迁移到 fsp doctor --bench-compare，
+# scripts 删除后本 shim 一并移除。
+# ---------------------------------------------------------------------------
 def main(argv: list[str] | None = None) -> int:
-    """CLI 入口：解析参数、运行对比、打印报告、返回退出码."""
+    """独立 CLI 入口（兼容旧调用路径，内部委托 :func:compare_entry）."""
+    import argparse
+
     parser = argparse.ArgumentParser(
         description="与历史最佳基准对比当前 pytest-benchmark 运行结果",
     )
@@ -484,8 +543,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--threshold",
         type=float,
-        default=_DEFAULT_THRESHOLD,
-        help=f"全局退化阈值百分比（默认 {_DEFAULT_THRESHOLD:.0f}，用于未匹配类别的测试）",
+        default=DEFAULT_THRESHOLD,
+        help=f"全局退化阈值百分比（默认 {DEFAULT_THRESHOLD:.0f}，用于未匹配类别的测试）",
     )
     parser.add_argument(
         "--no-categories",
@@ -499,32 +558,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    if args.list_categories:
-        print("基线类别与阈值：")
-        for cat in _DEFAULT_CATEGORIES:
-            print(f"  {cat.name:<16} 阈值 {cat.threshold:>4.0f}%  {cat.description}")
-        print(f"  {'（全局）':<16} 阈值 {args.threshold:>4.0f}%  未匹配类别的测试用此阈值")
-        return 0
-
-    categories = None if args.no_categories else _DEFAULT_CATEGORIES
-
-    report = compare(args.bench_dir, args.threshold, categories)
-    print_report(report, args.threshold, categories)
-
-    if report.is_systemic:
-        # 系统性退化（机器负载波动）：输出警告但不阻断 CI
-        return 0
-    if report.regressions > 0:
-        # 显示退化项的详情，含类别阈值便于排查
-        print(f"\n失败: {report.regressions} 项退化超过阈值（全局 {args.threshold:.0f}%）")
-        for row in report.rows:
-            if row.is_regression:
-                print(
-                    f"  {row.name}  Δ={_format_pct(row.delta_pct)}  "
-                    f"阈值={row.threshold:.0f}%  类别={row.category or '（全局）'}"
-                )
-        return 1
-    return 0
+    categories = None if args.no_categories else DEFAULT_CATEGORIES
+    return compare_entry(
+        bench_dir=args.bench_dir,
+        threshold=args.threshold,
+        categories=categories,
+        list_categories=args.list_categories,
+    )
 
 
 if __name__ == "__main__":

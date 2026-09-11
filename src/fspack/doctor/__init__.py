@@ -46,6 +46,20 @@ from fspack.doctor.bench import (
     _machine_id,
     _save_and_compare_bench,
 )
+from fspack.doctor.benchmark_compare import (
+    DEFAULT_CATEGORIES,
+    DEFAULT_THRESHOLD,
+    BenchmarkCategory,
+    BenchmarkEntry,
+    ComparisonReport,
+    ComparisonRow,
+    compare,
+    compare_entry,
+    print_report,
+)
+from fspack.doctor.benchmark_compare import (
+    main as compare_main,
+)
 from fspack.doctor.cache import (
     CACHE_TYPES,
     _preview_names,
@@ -144,14 +158,20 @@ from fspack.doctor.win7 import _check_win7_compat
 
 __all__ = [
     "CACHE_TYPES",
+    "DEFAULT_CATEGORIES",
+    "DEFAULT_THRESHOLD",
+    "BenchmarkCategory",
+    "BenchmarkEntry",
     "CacheHealthReport",
     "CheckResult",
     "CheckStatus",
+    "ComparisonReport",
+    # 各私有名（绑定到 facade 命名空间供直接引用与单元测试导入，
+    # 拦截 run_doctor 内部调用请 patch `fspack.doctor.runner._xxx`）
+    "ComparisonRow",
     "DoctorReport",
     "TemplateBuildResult",
     "TemplateRunResult",
-    # 各私有名（绑定到 facade 命名空间供直接引用与单元测试导入，
-    # 拦截 run_doctor 内部调用请 patch `fspack.doctor.runner._xxx`）
     "_bench_profile_log_data",
     "_build_debug_cmd",
     "_build_run_cmd",
@@ -216,7 +236,11 @@ __all__ = [
     "_scan_standalone_health",
     "_scan_tkinter_health",
     "_try_unlink",
+    "compare",
+    "compare_entry",
+    "compare_main",
     "print_doctor_report",
+    "print_report",
     "run_cache_clean",
     "run_cache_status",
     "run_doctor",

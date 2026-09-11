@@ -1,30 +1,20 @@
-"""``scripts/compare_benchmark.py`` 单元测试.
+"""`fspack.doctor.benchmark_compare` 单元测试.
 
-CI benchmark gate 完全依赖此脚本的判定逻辑，零测试覆盖是盲点。本测试守护
+CI benchmark gate 完全依赖该模块的判定逻辑，零测试覆盖是盲点。本测试守护
 核心判定路径：systemic 检测阈值、最佳基线构建、JSON 解析容错、退出码语义。
 
-脚本不在 ``src/fspack`` 包内，用 :mod:`importlib.util` 按文件路径加载，
-避免污染 ``sys.path``。
+模块已迁入 `src/fspack/doctor/benchmark_compare.py`，通过包导入加载。
 """
 
 from __future__ import annotations
 
-import importlib.util
 import json
-import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "compare_benchmark.py"
-_spec = importlib.util.spec_from_file_location("_compare_benchmark", _SCRIPT)
-assert _spec is not None and _spec.loader is not None
-cb = importlib.util.module_from_spec(_spec)
-# dataclass(frozen=True) 内部通过 sys.modules[cls.__module__] 解析类型，
-# 必须先注册模块再 exec，否则 AttributeError: 'NoneType' has no __dict__
-sys.modules["_compare_benchmark"] = cb
-_spec.loader.exec_module(cb)
+from fspack.doctor import benchmark_compare as cb
 
 
 def _row(  # noqa: PLR0913
@@ -488,8 +478,13 @@ class TestMatchCategory:
     def test_no_collision_between_cache_hit_tests(self) -> None:
         """test_cache_hit_baseline（wheel_download）与 test_wheel_download_cache_hit_baseline
         （core）分别匹配到不同类别，验证正则无歧义."""
-        assert cb._match_category("test_cache_hit_baseline").name == "wheel_download"
-        assert cb._match_category("test_wheel_download_cache_hit_baseline").name == "core"
+        hit = cb._match_category("test_cache_hit_baseline")
+        assert hit is not None
+        assert hit.name == "wheel_download"
+
+        miss = cb._match_category("test_wheel_download_cache_hit_baseline")
+        assert miss is not None
+        assert miss.name == "core"
 
     def test_custom_categories(self) -> None:
         """自定义类别列表覆盖默认."""

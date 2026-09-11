@@ -76,7 +76,7 @@ jobs:
 
   # ===== 性能基准监控：仅 push to main 触发，PR 不触发 =====
   # 运行 pytest-benchmark 基线测试，保存结果并与历史最佳基准对比。
-  # 对比逻辑见 scripts/compare_benchmark.py：扫描所有历史 JSON，按测试名
+  # 对比逻辑见 fspack.doctor.benchmark_compare：扫描所有历史 JSON，按测试名
   # 找最小 median 作为最佳基准，当前运行与最佳对比。
   # 按基线类别分组设阈值（iter-145）：确定性测试（mock sleep StdDev <1%）
   # 用 10% 严格阈值，I/O 抖动测试（build_perf StdDev 5-27%）用 25% 宽松阈值，
@@ -125,7 +125,7 @@ jobs:
       # 与历史最佳基准对比（非上一次基线），median 超过最佳 25% 视为退化
       # 首次运行无历史基线时脚本输出"无 benchmark 结果可对比"并 exit 0
       - name: Compare against best baseline
-        run: uv run python scripts/compare_benchmark.py --threshold 25
+        run: uv run fsp doctor --bench-compare --bench-threshold 25
 
       # if-no-files-found=ignore：首次运行（v2 缓存未命中）无历史基线时
       # .benchmarks/ 可能为空，此为正常情况，不报 warning
