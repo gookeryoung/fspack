@@ -754,3 +754,257 @@ class TestMainCategoryArgs:
         os.utime(cur, (ts, ts))
         # 退化 20% > 10% 类别阈值
         assert cb.main(["--bench-dir", str(tmp_path), "--threshold", "25"]) == 1
+
+
+class TestFindBenchmarkFilesEdge:
+    """_find_benchmark_files 与 _identify_current_file 边界."""
+
+    def test_non_directory_returns_empty(self, tmp_path: Path) -> None:
+        """bench_dir 非目录时返回空列表."""
+        file_path = tmp_path / "not_a_dir.json"
+        file_path.write_text("{}", encoding="utf-8")
+        assert cb._find_benchmark_files(file_path) == []
+
+    def test_identify_current_empty(self) -> None:
+        """空文件列表返回 None."""
+        assert cb._identify_current_file([]) is None
+
+
+class TestParseBenchmarkFileEdge:
+    """_parse_benchmark_file 容错边界."""
+
+    def test_non_dict_benchmark_entry_skipped(self, tmp_path: Path) -> None:
+        """benchmarks 列表中非 dict 条目（如 string）跳过."""
+        data = {
+            "benchmarks": [
+                "not a dict",
+                {"name": "good", "stats": {"median": 0.001}},
+                123,
+            ]
+        }
+        p = tmp_path / "mixed.json"
+        p.write_text(json.dumps(data), encoding="utf-8")
+        entries = cb._parse_benchmark_file(p)
+        assert len(entries) == 1
+        assert entries[0].name == "good"
+
+    def test_malformed_name_or_stats_skipped(self, tmp_path: Path) -> None:
+        """name 非 str 或 stats 非 dict 时跳过该条目."""
+        data = {
+            "benchmarks": [
+                {"name": 123, "stats": {"median": 0.001}},
+                {"name": "bad", "stats": "not a dict"},
+                {"name": "good", "stats": {"median": 0.002}},
+            ]
+        }
+        p = tmp_path / "malformed.json"
+        p.write_text(json.dumps(data), encoding="utf-8")
+        entries = cb._parse_benchmark_file(p)
+        assert len(entries) == 1
+        assert entries[0].name == "good"
+
+
+class TestImprovementsBranch:
+    """compare 中 improvements > 0 的提升分支."""
+
+    def test_current_faster_than_best_counts_improvement(self, tmp_path: Path) -> None:
+        """当前 median 比历史最佳低 30% 时计入 improvements."""
+
+        self._write_bench_file(tmp_path / "001_hist.json", [("t1", 0.100)], mtime_offset=-100)
+        self._write_bench_file(tmp_path / "002_cur.json", [("t1", 0.070)], mtime_offset=0)
+        report = cb.compare(tmp_path, threshold=25.0)
+        assert report.improvements == 1
+        row = report.rows[0]
+        assert row.delta_pct == pytest.approx(-30.0, abs=0.1)
+        assert row.is_regression is False
+        assert row.is_current_best is True
+
+    def _write_bench_file(self, path: Path, entries: list[tuple[str, float]], mtime_offset: float = 0.0) -> None:
+        import os
+
+        data: dict[str, Any] = {
+            "benchmarks": [
+                {"name": n, "stats": {"median": m, "min": m, "mean": m, "stddev": 0, "rounds": 20}} for n, m in entries
+            ]
+        }
+        path.write_text(json.dumps(data), encoding="utf-8")
+        if mtime_offset:
+            ts = path.stat().st_mtime + mtime_offset
+            os.utime(path, (ts, ts))
+
+
+class TestDetectSystemicRegressionEdge:
+    """_detect_systemic_regression 边界：退化列表为空."""
+
+    def test_no_regression_rows_no_trigger(self) -> None:
+        """无退化行时 regressed_deltas 为空，不触发 systemic."""
+        rows = [
+            _row("t1", 1.10, 1.0, is_regression=False, delta_pct=10.0),
+            _row("t2", 1.05, 1.0, is_regression=False, delta_pct=5.0),
+            _row("t3", 1.08, 1.0, is_regression=False, delta_pct=8.0),
+            _row("t4", 1.02, 1.0, is_regression=False, delta_pct=2.0),
+            _row("t5", 1.12, 1.0, is_regression=False, delta_pct=12.0),
+        ]
+        report = _report(rows)
+        cb._detect_systemic_regression(report)
+        assert report.is_systemic is False
+
+    def test_manual_regressions_count_mismatch(self) -> None:
+        """手工 report.regressions=5 但所有行 is_regression=False，regressed_deltas 为空."""
+        rows = [
+            _row("t1", 1.20, 1.0, is_regression=False, delta_pct=20.0),
+            _row("t2", 1.20, 1.0, is_regression=False, delta_pct=20.0),
+            _row("t3", 1.20, 1.0, is_regression=False, delta_pct=20.0),
+            _row("t4", 1.20, 1.0, is_regression=False, delta_pct=20.0),
+            _row("t5", 1.20, 1.0, is_regression=False, delta_pct=20.0),
+        ]
+        report = _report(rows, regressions=5)
+        cb._detect_systemic_regression(report)
+        assert report.is_systemic is False
+
+
+class TestFormatHelpers:
+    """_format_time 与 _format_pct 边界分支."""
+
+    def test_format_time_microseconds(self) -> None:
+        """< 1ms 的耗时格式化为 µs."""
+        result = cb._format_time(0.0005)
+        assert "µs" in result
+        assert "500" in result
+
+    def test_format_pct_negative(self) -> None:
+        """负百分比不加 + 前缀."""
+        assert cb._format_pct(-15.5) == "-15.5%"
+
+
+class TestPrintReportStatus:
+    """print_report 状态列渲染边界."""
+
+    def test_print_report_first_run_status(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """首次运行的测试在状态列显示 '首次'."""
+        rows = [_row("t1", 1.0, 1.0, is_first_run=True)]
+        report = _report(rows, no_history=1)
+        cb.print_report(report, threshold=25.0)
+        out = capsys.readouterr().out
+        assert "首次" in out
+
+    def test_print_report_improvement_status(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """显著提升的测试显示 '提升'."""
+        rows = [_row("t1", 0.70, 1.0, delta_pct=-30.0)]
+        report = _report(rows)
+        cb.print_report(report, threshold=25.0)
+        out = capsys.readouterr().out
+        assert "提升" in out
+
+    def test_print_report_regression_detail_list(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        """compare_entry 有退化时输出退化详情列表（for 循环覆盖）."""
+        import os
+
+        data_hist = {
+            "benchmarks": [{"name": "t1", "stats": {"median": 0.1, "min": 0.1, "mean": 0.1, "stddev": 0, "rounds": 20}}]
+        }
+        data_cur = {
+            "benchmarks": [{"name": "t1", "stats": {"median": 0.2, "min": 0.2, "mean": 0.2, "stddev": 0, "rounds": 20}}]
+        }
+        p1 = tmp_path / "001.json"
+        p1.write_text(json.dumps(data_hist), encoding="utf-8")
+        p2 = tmp_path / "002.json"
+        p2.write_text(json.dumps(data_cur), encoding="utf-8")
+        ts = p2.stat().st_mtime + 100
+        os.utime(p2, (ts, ts))
+        exit_code = cb.compare_entry(bench_dir=tmp_path, threshold=25.0)
+        out = capsys.readouterr().out
+        assert "退化" in out
+        assert exit_code == 1
+
+
+class TestCompareEntryDefaults:
+    """compare_entry 默认参数与 None 路径."""
+
+    def test_compare_entry_defaults_bench_dir_none(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        """bench_dir=None 时使用默认的 Path('.benchmarks')."""
+        bench = tmp_path / ".benchmarks"
+        bench.mkdir()
+        old_cwd = Path.cwd()
+        import os
+
+        os.chdir(tmp_path)
+        try:
+            exit_code = cb.compare_entry(bench_dir=None, threshold=25.0)
+        finally:
+            os.chdir(old_cwd)
+        assert exit_code == 0
+        out = capsys.readouterr().out
+        assert "无 benchmark" in out
+
+
+class TestCompareDefensive:
+    """compare 与 compare_entry 防御性分支."""
+
+    def test_identify_current_returns_none_defensive(self, tmp_path: Path) -> None:
+        """patch _identify_current_file 返回 None，触发 279 行防御分支."""
+        import json
+        from unittest.mock import patch
+
+        data = {
+            "benchmarks": [{"name": "t1", "stats": {"median": 0.1, "min": 0.1, "mean": 0.1, "stddev": 0, "rounds": 20}}]
+        }
+        p = tmp_path / "001.json"
+        p.write_text(json.dumps(data), encoding="utf-8")
+        with patch.object(cb, "_identify_current_file", return_value=None):
+            report = cb.compare(tmp_path)
+        # 直接返回空 report
+        assert report.total_benchmarks == 0
+        assert report.rows == []
+
+    def test_regressions_but_empty_rows(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """手工 report.regressions>0 但 rows 为空——for 循环零迭代覆盖 branch."""
+        report = cb.ComparisonReport(regressions=1, total_benchmarks=1)
+        exit_code = cb.compare_entry.__wrapped__ if hasattr(cb.compare_entry, "__wrapped__") else cb.compare_entry
+        # 直接调用内部函数构造 report.regressions>0 但 rows=[]
+        # 改走 print_report + 手工 report
+        cb.print_report(report, threshold=25.0)
+        # 单独验证 compare_entry 的退化列表输出逻辑
+        # 用手工构造的 report：regressions=1 但 rows 没有 is_regression
+        report2 = cb.ComparisonReport(
+            rows=[],
+            regressions=1,
+            total_benchmarks=1,
+        )
+        # 直接调用函数体跳过 compare（无文件 bench_dir=None）
+        from unittest.mock import patch as _patch
+
+        with _patch.object(cb, "compare", return_value=report2):
+            exit_code = cb.compare_entry(bench_dir=None, threshold=25.0)
+        assert exit_code == 1
+
+
+class TestMixedRegressionsAndNormal:
+    """compare_entry 退化详情：有 regressions 也有非退化行."""
+
+    def test_regression_detail_mixed_rows(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        """两个测试：一个退化、一个不退化，覆盖 if row.is_regression=False 分支."""
+        import os
+
+        data_hist = {
+            "benchmarks": [
+                {"name": "t_reg", "stats": {"median": 0.1, "min": 0.1, "mean": 0.1, "stddev": 0, "rounds": 20}},
+                {"name": "t_ok", "stats": {"median": 0.1, "min": 0.1, "mean": 0.1, "stddev": 0, "rounds": 20}},
+            ]
+        }
+        data_cur = {
+            "benchmarks": [
+                {"name": "t_reg", "stats": {"median": 0.2, "min": 0.2, "mean": 0.2, "stddev": 0, "rounds": 20}},
+                {"name": "t_ok", "stats": {"median": 0.105, "min": 0.105, "mean": 0.105, "stddev": 0, "rounds": 20}},
+            ]
+        }
+        p1 = tmp_path / "001.json"
+        p1.write_text(json.dumps(data_hist), encoding="utf-8")
+        p2 = tmp_path / "002.json"
+        p2.write_text(json.dumps(data_cur), encoding="utf-8")
+        ts = p2.stat().st_mtime + 100
+        os.utime(p2, (ts, ts))
+        exit_code = cb.compare_entry(bench_dir=tmp_path, threshold=25.0)
+        out = capsys.readouterr().out
+        assert "t_reg" in out
+        assert exit_code == 1

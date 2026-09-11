@@ -11,10 +11,18 @@ import pytest
 from fspack.console import console
 from fspack.doctor import (
     CheckStatus,
+    _check_clang,
+    _check_gcc,
+    _check_makensis_on_linux,
+    _check_mingw,
+    _check_nsis,
     _check_pillow,
     _check_pip,
     _check_tool_version,
+    _check_uv,
+    _check_wine,
 )
+from fspack.doctor.models import CheckResult
 
 
 @pytest.fixture(autouse=True)
@@ -313,3 +321,90 @@ def test_check_pip_python_module_oserror() -> None:
     ):
         result = _check_pip()
     assert result.status is CheckStatus.ERROR
+
+
+# ---- 工具包装函数入口 ----
+# 覆盖各 _check_* 包装函数的入口行，patch 底层 _check_tool_version 验证参数传递
+
+
+def test_check_mingw_entry() -> None:
+    """_check_mingw 薄包装：传入 mingw 工具链参数到 _check_tool_version."""
+    fake = CheckResult(name="mingw-w64", status=CheckStatus.OK, detail="10.0")
+    with patch("fspack.doctor.tools._check_tool_version", return_value=fake) as mock:
+        result = _check_mingw()
+    assert result is fake
+    mock.assert_called_once()
+    args, kwargs = mock.call_args
+    assert args[0] == "mingw-w64"
+    assert args[1] == ["x86_64-w64-mingw32-gcc", "--version"]
+    assert "mingw-w64" in kwargs["error_suggestion"]
+
+
+def test_check_gcc_entry() -> None:
+    """_check_gcc 薄包装：传入 gcc 参数到 _check_tool_version."""
+    fake = CheckResult(name="gcc", status=CheckStatus.OK, detail="11.4")
+    with patch("fspack.doctor.tools._check_tool_version", return_value=fake) as mock:
+        result = _check_gcc()
+    assert result is fake
+    args = mock.call_args.args
+    assert args[0] == "gcc"
+    assert args[1] == ["gcc", "--version"]
+
+
+def test_check_clang_entry() -> None:
+    """_check_clang 薄包装：传入 clang 参数到 _check_tool_version."""
+    fake = CheckResult(name="clang", status=CheckStatus.OK, detail="15.0")
+    with patch("fspack.doctor.tools._check_tool_version", return_value=fake) as mock:
+        result = _check_clang()
+    assert result is fake
+    args = mock.call_args.args
+    assert args[0] == "clang"
+    assert args[1] == ["clang", "--version"]
+
+
+def test_check_nsis_entry() -> None:
+    """_check_nsis 薄包装：传入 makensis 参数到 _check_tool_version."""
+    fake = CheckResult(name="NSIS", status=CheckStatus.OK, detail="v3.10")
+    with patch("fspack.doctor.tools._check_tool_version", return_value=fake) as mock:
+        result = _check_nsis()
+    assert result is fake
+    args = mock.call_args.args
+    assert args[0] == "NSIS"
+    assert args[1] == ["makensis", "-VERSION"]
+
+
+def test_check_makensis_on_linux_entry() -> None:
+    """_check_makensis_on_linux 薄包装：warn_only=True 标记可选工具."""
+    fake = CheckResult(name="NSIS (交叉打包)", status=CheckStatus.WARN, detail="未找到")
+    with patch("fspack.doctor.tools._check_tool_version", return_value=fake) as mock:
+        result = _check_makensis_on_linux()
+    assert result is fake
+    args, kwargs = mock.call_args
+    assert args[0] == "NSIS (交叉打包)"
+    assert args[1] == ["makensis", "-VERSION"]
+    assert kwargs["warn_only"] is True
+
+
+def test_check_wine_entry() -> None:
+    """_check_wine 薄包装：parse_version=False + warn_only=True."""
+    fake = CheckResult(name="wine", status=CheckStatus.WARN, detail="未找到")
+    with patch("fspack.doctor.tools._check_tool_version", return_value=fake) as mock:
+        result = _check_wine()
+    assert result is fake
+    args, kwargs = mock.call_args
+    assert args[0] == "wine"
+    assert args[1] == ["wine", "--version"]
+    assert kwargs["parse_version"] is False
+    assert kwargs["warn_only"] is True
+
+
+def test_check_uv_entry() -> None:
+    """_check_uv 薄包装：warn_only=True 标记可选工具."""
+    fake = CheckResult(name="uv", status=CheckStatus.WARN, detail="未找到")
+    with patch("fspack.doctor.tools._check_tool_version", return_value=fake) as mock:
+        result = _check_uv()
+    assert result is fake
+    args, kwargs = mock.call_args
+    assert args[0] == "uv"
+    assert args[1] == ["uv", "--version"]
+    assert kwargs["warn_only"] is True
