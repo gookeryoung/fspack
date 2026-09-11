@@ -24,9 +24,10 @@ from typing import TYPE_CHECKING
 # 触发 net 模块定义不再连带加载 rich.progress。
 from fspack.config import is_offline
 from fspack.config.versions import _split_t_suffix
-from fspack.exceptions import BuiltinError
+from fspack.exceptions import BuiltinError, EmbedError
 from fspack.packaging.net import Downloader
 from fspack.packaging.runtime import STANDALONE_BASE_URL, STANDALONE_RELEASE_TAG
+from fspack.packaging.runtime.extract import _validate_tar_member, extract_zip_safe
 from fspack.platform import Platform
 
 if TYPE_CHECKING:
@@ -124,7 +125,7 @@ class TkinterBundler:
                 cls._unpack_tkinter_zip(cache_zip, runtime_dir)
                 stage.processed(1)
                 return
-            except zipfile.BadZipFile as e:
+            except (zipfile.BadZipFile, EmbedError) as e:
                 # 缓存 zip 损坏，删除后落到 tarball 下载分支重建
                 _logger.warning("tkinter 缓存 zip 损坏，删除并重建: %s", e)
                 cache_zip.unlink(missing_ok=True)
@@ -155,7 +156,7 @@ class TkinterBundler:
         _logger.info("tkinter 打包: 从 tarball 提取 tkinter 组件")
         try:
             zip_data = cls._build_tkinter_zip(tarball_path)
-        except (EOFError, zlib.error, tarfile.ReadError) as e:
+        except (EOFError, zlib.error, tarfile.ReadError, EmbedError) as e:
             # tarball 损坏（gzip 流提前结束/解压数据错误等），删除缓存并重新下载重试一次
             _logger.warning("standalone tarball 损坏，删除并重新下载: %s", e)
             tarball_path.unlink(missing_ok=True)
@@ -192,9 +193,13 @@ class TkinterBundler:
           含 ``tcl8.6``/``tk8.6`` 主脚本与 ``dde1.4``/``reg1.3``/``tix8.4.3`` 等
           扩展；排除 ``.lib``/``.sh`` 等开发期文件以节省空间）
         """
-        # 安全：用 tar.extractfile() 逐文件读取而非 extractall，避免路径穿越风险
+        # 安全：对 tarball 条目执行 _validate_tar_member 预检，拒绝绝对路径、
+        # 路径穿越、危险符号链接与设备文件；extractfile() 虽然不直接 write
+        # 到磁盘，但若 tarball 含恶意条目仍有安全风险（如符号链接指向敏感文件）
         with tarfile.open(tar_path, "r:gz") as tar:
             members = tar.getmembers()
+            for m in members:
+                _validate_tar_member(m)
 
             # 定位 tkinter 包目录前缀（如 python/install/Lib 或 python/install/lib/python3.11）
             tkinter_prefix = ""
@@ -249,11 +254,5 @@ class TkinterBundler:
 
     @staticmethod
     def _unpack_tkinter_zip(zip_path: Path, runtime_dir: Path) -> None:
-        """解压 tkinter zip 到 runtime 目录（条目安全预检 + extractall）。"""
-        from fspack.packaging.runtime.extract import _validate_zip_member
-
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            for info in zf.infolist():
-                _validate_zip_member(info)
-            # 安全：条目已通过 _validate_zip_member 预检
-            zf.extractall(runtime_dir)
+        """解压 tkinter zip 到 runtime 目录（委托 extract_zip_safe 执行安全解压）。"""
+        extract_zip_safe(zip_path, runtime_dir, "tkinter cache zip")

@@ -29,14 +29,13 @@ from __future__ import annotations
 import logging
 import shutil
 import sys
-import tarfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fspack.config import KNOWN_STANDALONE_VERSIONS
 from fspack.config.versions import _split_t_suffix
 from fspack.exceptions import EmbedError, NuitkaError
-from fspack.packaging.runtime.extract import _validate_tar_member
+from fspack.packaging.runtime.extract import extract_tar_safe
 from fspack.platform import Platform
 from fspack.progress import StageRecorder
 
@@ -310,14 +309,9 @@ class NuitkaStandalone:
 
         _logger.info("解压 standalone python 到 %s", build_python_dir)
         try:
-            with tarfile.open(archive_path, "r:gz") as tf:
-                # PEP 706 filter="data" + 手动预检双重防护
-                # Python 3.13 filter="data" 实测会静默规范化绝对路径而非拒绝
-                for member in tf.getmembers():
-                    _validate_tar_member(member)
-                # 安全：双重防护机制见上文注释
-                tf.extractall(build_python_dir, filter="data")  # pragma: no cover
-        except (tarfile.TarError, OSError, EmbedError) as e:
+            # 安全：委托 extract_tar_safe 执行条目预检 + filter="data" 双重防护
+            extract_tar_safe(archive_path, build_python_dir, "standalone python tarball")
+        except EmbedError as e:
             raise NuitkaError(f"standalone python tarball 损坏: {archive_path}") from e
 
         # 解压后结构：build_python_dir/cpython-<base>+<tag>-x86_64-pc-windows-msvc[-freethreaded]-install_only/python/python.exe
