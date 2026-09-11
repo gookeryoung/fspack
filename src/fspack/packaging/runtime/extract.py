@@ -101,6 +101,7 @@ def extract_zip_safe(archive_path: Path, runtime_dir: Path, label: str) -> None:
         with zipfile.ZipFile(archive_path) as zf:
             for info in zf.infolist():
                 _validate_zip_member(info)
+            # 安全：条目已通过 _validate_zip_member 预检
             zf.extractall(runtime_dir)
     except zipfile.BadZipFile as e:
         _safe_unlink_archive(archive_path, label)
@@ -135,6 +136,7 @@ def extract_tar_safe(archive_path: Path, runtime_dir: Path, label: str) -> None:
         with tarfile.open(archive_path, "r:gz") as tf:
             for member in tf.getmembers():
                 _validate_tar_member(member)
+            # 安全：手动校验 + filter="data" 双重防护（PEP 706）
             tf.extractall(runtime_dir, filter="data")
     except (tarfile.TarError, OSError, EOFError, zlib.error) as e:
         _safe_unlink_archive(archive_path, label)

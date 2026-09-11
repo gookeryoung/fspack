@@ -315,6 +315,7 @@ class NuitkaStandalone:
                 # Python 3.13 filter="data" 实测会静默规范化绝对路径而非拒绝
                 for member in tf.getmembers():
                     _validate_tar_member(member)
+                # 安全：双重防护机制见上文注释
                 tf.extractall(build_python_dir, filter="data")  # pragma: no cover
         except (tarfile.TarError, OSError, EmbedError) as e:
             raise NuitkaError(f"standalone python tarball 损坏: {archive_path}") from e

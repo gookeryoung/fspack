@@ -153,6 +153,7 @@ class NativeServer:
     def install_dependencies(self) -> None:
         """安装前端依赖."""
         try:
+            # 安全：列表参数形式 + 无 shell=True；命令由 package_cmd 返回固定路径
             subprocess.run(
                 [*self.package_cmd, "install"],
                 cwd=self.DIR_FRONTEND,
@@ -164,6 +165,7 @@ class NativeServer:
     def build(self) -> None:
         """构建前端."""
         try:
+            # 安全：列表参数形式 + 无 shell=True；命令由 package_cmd 返回固定路径
             subprocess.run(
                 [*self.package_cmd, "run", "build"],
                 cwd=self.DIR_FRONTEND,
@@ -177,6 +179,7 @@ class NativeServer:
     def development(self) -> None:
         """启动前端开发服务."""
         try:
+            # 安全：列表参数形式 + 无 shell=True；命令由 package_cmd 返回固定路径
             subprocess.run(
                 [*self.package_cmd, "run", "dev"],
                 cwd=self.DIR_FRONTEND,

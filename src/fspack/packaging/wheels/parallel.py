@@ -161,6 +161,8 @@ def _download_one_with_uv(
     _logger.info("uv 下载 %s（镜像 %s）", req, ctx.pypi_index if with_index else "默认")
     start = time.perf_counter()
     try:
+        # 安全：cmd 由代码构造（固定 uv pip download + 用户配置 PyPI 镜像地址），
+        # 列表参数形式 + 无 shell=True，无命令注入风险
         result = subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8", errors="replace")
     except FileNotFoundError as e:
         raise DependencyError(f"未找到 uv: {ctx.uv_path}") from e
@@ -228,6 +230,8 @@ def _download_one_resolved(
             finally:
                 monitor.stop()
         else:
+            # 安全：cmd 由代码构造（固定 pip download + 用户配置 PyPI 镜像地址），
+            # 列表参数形式 + 无 shell=True，无命令注入风险
             result = subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8", errors="replace")
     except FileNotFoundError as e:
         raise DependencyError(f"未找到 pip: {cmd[0]}") from e

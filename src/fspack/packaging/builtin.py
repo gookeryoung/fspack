@@ -192,6 +192,7 @@ class TkinterBundler:
           含 ``tcl8.6``/``tk8.6`` 主脚本与 ``dde1.4``/``reg1.3``/``tix8.4.3`` 等
           扩展；排除 ``.lib``/``.sh`` 等开发期文件以节省空间）
         """
+        # 安全：用 tar.extractfile() 逐文件读取而非 extractall，避免路径穿越风险
         with tarfile.open(tar_path, "r:gz") as tar:
             members = tar.getmembers()
 
@@ -254,4 +255,5 @@ class TkinterBundler:
         with zipfile.ZipFile(zip_path, "r") as zf:
             for info in zf.infolist():
                 _validate_zip_member(info)
+            # 安全：条目已通过 _validate_zip_member 预检
             zf.extractall(runtime_dir)

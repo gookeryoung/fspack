@@ -82,6 +82,7 @@ def _retry_wait_seconds(failed_attempts: int) -> float:
     抖动避免多个客户端同步重试风暴。标准库实现替代 tenacity，减少第三方依赖。
     """
     upper = min(_RETRY_INITIAL_WAIT * 2 ** (failed_attempts - 1), _RETRY_MAX_WAIT)
+    # 安全：random.uniform 用于重试退避抖动，不涉及加密场景
     return random.uniform(0, upper)
 
 
@@ -196,6 +197,8 @@ class Downloader:
         # 原子写入：先写 .part 临时文件，成功后 replace 到 dest。中途退出
         # （进程被杀/断电）只留下 .part，缓存按精确文件名命中不会误用半成品。
         part = dest.with_name(dest.name + ".part")
+        # 安全：URL 来自可信源（PyPI 镜像 / GitHub releases / python-build-standalone）
+        # 通过 SSLContext 强校验保障传输安全
         req = urllib.request.Request(url, headers={"User-Agent": "fspack"})
 
         written = 0

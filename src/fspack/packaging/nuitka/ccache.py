@@ -211,6 +211,7 @@ class NuitkaCcache:
                 # Python 3.13 filter="data" 实测会静默规范化绝对路径而非拒绝
                 for member in tf.getmembers():
                     _validate_tar_member(member)
+                # 安全：双重防护机制见上文注释
                 tf.extractall(ccache_dir, filter="data")
             archive.unlink()
             # 归档内 ccache 在 ccache-<ver>-linux-x86_64/ccache，移动到根目录
@@ -226,6 +227,7 @@ class NuitkaCcache:
             with zipfile.ZipFile(archive) as zf:
                 for info in zf.infolist():
                     _validate_zip_member(info)
+                # 安全：条目已通过 _validate_zip_member 预检
                 zf.extractall(ccache_dir)
             archive.unlink()
             # 归档内 ccache.exe 在 ccache-<ver>-windows-x86_64/ccache.exe，移动到根目录
