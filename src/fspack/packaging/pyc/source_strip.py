@@ -129,17 +129,8 @@ def _strip_py_sources(  # noqa: PLR0913
 def _is_in_data_dirs(path: Path, data_dirs: tuple[Path, ...]) -> bool:
     """判断 ``path`` 是否位于任一 ``data_dirs`` 目录树内（含 data-dir 自身）.
 
-    ``Path.is_relative_to`` 是 Python 3.9+，fspack 支持 3.8，用 try/except
-    :class:`ValueError` 兼容。``data_dirs`` 为空时直接返回 ``False``（热路径短路）。
+    ``data_dirs`` 为空时直接返回 ``False``（热路径短路）。
     """
     if not data_dirs:
         return False
-    for d in data_dirs:
-        if path == d:
-            return True
-        try:
-            path.relative_to(d)
-            return True
-        except ValueError:
-            continue
-    return False
+    return any(path.is_relative_to(d) for d in data_dirs)

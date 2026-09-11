@@ -84,7 +84,7 @@ class Template:
     :param extra_config: 额外 ``[tool.fspack]`` 配置行（如 ``icon = "assets/app.ico"``）
     :param dir: 模板目录绝对路径（doctor 流程 ``copytree`` 用，init 模板也填充）
     :param version: 项目版本（从 ``pyproject.toml`` 解析，默认 ``0.1.0``）
-    :param requires_python: Python 版本约束（从 ``pyproject.toml`` 解析，默认 ``>=3.8``）
+    :param requires_python: Python 版本约束（从 ``pyproject.toml`` 解析，默认 ``>=3.13``）
     :param roles: 角色集合（``"init"``/``"doctor"``），决定模板出现在哪些命令中
     """
 
@@ -99,7 +99,7 @@ class Template:
     extra_config: str = ""
     dir: Path = Path()
     version: str = "0.1.0"
-    requires_python: str = ">=3.8"
+    requires_python: str = ">=3.13"
     roles: frozenset[str] = _DEFAULT_ROLES
 
 
@@ -214,7 +214,7 @@ def _load_template(tpl_dir: Path) -> Template | None:
         extra_config=data.get("extra_config", ""),
         dir=tpl_dir,
         version=data.get("version", "0.1.0"),
-        requires_python=data.get("requires_python", ">=3.8"),
+        requires_python=data.get("requires_python", ">=3.13"),
         roles=_roles_from_data(data),
     )
 
@@ -261,7 +261,7 @@ def _load_doctor_template(tpl_dir: Path) -> Template | None:
         app_type=fsp.get("app-type", "cli"),
         dir=tpl_dir,
         version=proj.get("version", "0.0.0"),
-        requires_python=proj.get("requires-python", ">=3.8"),
+        requires_python=proj.get("requires-python", ">=3.13"),
         roles=frozenset({"doctor"}),
     )
 

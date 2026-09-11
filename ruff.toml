@@ -13,9 +13,6 @@ ignore = [
     "RUF003",  # ambiguous unicode characters in comment
     "RUF012",  # mutable class attributes (intentional for config)
     "SIM108",  # use ternary operator
-    # UP045 建议 Optional[X] -> X | None（PEP 604），但 typer 运行时用 typing.get_type_hints()
-    # 求值注解，X | None 在 Python 3.8/3.9 会抛 TypeError。typer 命令函数须保留 Optional[X]。
-    "UP045",
 ]
 select = [
     "ARG", # flake8-unused-arguments
@@ -34,3 +31,4 @@ select = [
 
 [lint.per-file-ignores]
 "**/tests/**" = ["ARG001", "ARG002", "ARG005"]
+

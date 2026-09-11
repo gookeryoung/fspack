@@ -121,7 +121,7 @@ def test_from_id_existing() -> None:
     assert tpl is not None
     assert tpl.id == "tk_app"
     assert tpl.name == "tk_app"
-    assert tpl.requires_python == ">=3.8"
+    assert tpl.requires_python == ">=3.13"
     assert tpl.dependencies == ()
 
 
@@ -198,7 +198,7 @@ def test_from_dir_with_minimal_pyproject_uses_defaults(tmp_path: Path) -> None:
     assert tpl is not None
     assert tpl.name == "minimal"
     assert tpl.version == "0.0.0"
-    assert tpl.requires_python == ">=3.8"
+    assert tpl.requires_python == ">=3.13"
     assert tpl.dependencies == ()
     assert tpl.app_type == "cli"
     assert tpl.description == ""
