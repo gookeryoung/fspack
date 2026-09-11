@@ -55,11 +55,6 @@ exclude = [
     "Makefile",  # 开发辅助脚本
 ]
 
-[tool.hatch.build.targets.sdist.force-include]
-".coveragerc"    = ".coveragerc"
-".gitignore"     = ".gitignore"
-".gitattributes" = ".gitattributes"
-
 [tool.fspack]
 exclude   = [".trae"]
 data-dirs = ["src/fspack/assets/templates", "src/fspack/assets/init_templates"]
