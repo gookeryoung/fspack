@@ -949,7 +949,7 @@ def test_build_with_profile_outputs_report(tmp_path: Path, monkeypatch: pytest.M
 
     # mock 写操作避免实际下载
     monkeypatch.setattr(
-        "fspack.packaging.pipeline._prepare_runtime",
+        "fspack.packaging.pipeline.executor._prepare_runtime",
         lambda ctx: ctx.cfg.dist_dir / "site-packages",
     )
     monkeypatch.setattr("fspack.packaging.pipeline.executor._analyze_dependencies", lambda ctx, **kw: _empty_report())
@@ -982,7 +982,7 @@ def test_build_without_profile_no_report(tmp_path: Path, monkeypatch: pytest.Mon
     (proj / "app.py").write_text("def main():\n    pass\n")
 
     monkeypatch.setattr(
-        "fspack.packaging.pipeline._prepare_runtime",
+        "fspack.packaging.pipeline.executor._prepare_runtime",
         lambda ctx: ctx.cfg.dist_dir / "site-packages",
     )
     monkeypatch.setattr("fspack.packaging.pipeline.executor._analyze_dependencies", lambda ctx, **kw: _empty_report())
@@ -1049,7 +1049,7 @@ def test_build_sbom_manifest_parallel_in_threads(tmp_path: Path, monkeypatch: py
 
     # mock 构建主体避免实际下载/编译
     monkeypatch.setattr(
-        "fspack.packaging.pipeline._prepare_runtime",
+        "fspack.packaging.pipeline.executor._prepare_runtime",
         lambda ctx: ctx.cfg.dist_dir / "site-packages",
     )
     monkeypatch.setattr("fspack.packaging.pipeline.executor._analyze_dependencies", lambda ctx, **kw: _empty_report())

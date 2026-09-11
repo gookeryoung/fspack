@@ -70,7 +70,7 @@ def _mock_pipeline(monkeypatch: pytest.MonkeyPatch) -> None:
     无需额外 mock。
     """
     monkeypatch.setattr(
-        "fspack.packaging.pipeline._prepare_runtime",
+        "fspack.packaging.pipeline.executor._prepare_runtime",
         lambda ctx: ctx.cfg.dist_dir / "site-packages",
     )
     monkeypatch.setattr("fspack.packaging.pipeline.executor._analyze_dependencies", lambda ctx, **kw: _empty_report())
@@ -247,7 +247,7 @@ class TestBuildPerfBaseline:
     ``lru_cache`` 收益，多入口场景体现 ``all_entries`` 元组构建与
     ``_build_entry_loaders`` 分发开销。
 
-    使用 ``BuildOptions(no_sbom=True, no_size_report=True)`` 跳过 SBOM 生成
+    使用 ``BuildOptions(no_sbom=True, no_size_report=True, no_manifest=True, no_win7_scan=True)`` 跳过 SBOM 生成
     与 size report 扫描：两者会写入/扫描 dist 目录，引入 I/O 噪声且跨轮次
     累积文件触发 ``_handle_dist_incomplete`` 半成品告警。
     """
@@ -269,7 +269,7 @@ class TestBuildPerfBaseline:
         from fspack.packaging.pipeline import build
         from fspack.platform import Platform
 
-        opts = BuildOptions(no_sbom=True, no_size_report=True)
+        opts = BuildOptions(no_sbom=True, no_size_report=True, no_manifest=True, no_win7_scan=True)
         kwargs: dict[str, object] = {
             "mirror": get_mirror("huawei"),
             "py_version": "3.11.9",
@@ -312,7 +312,7 @@ class TestBuildPerfBaseline:
 
         # 预热一次填充缓存
         ProjectInfo.from_dir(small_project)
-        opts = BuildOptions(no_sbom=True, no_size_report=True)
+        opts = BuildOptions(no_sbom=True, no_size_report=True, no_manifest=True, no_win7_scan=True)
         kwargs: dict[str, object] = {
             "mirror": get_mirror("huawei"),
             "py_version": "3.11.9",
@@ -351,7 +351,7 @@ class TestBuildPerfBaseline:
         from fspack.packaging.pipeline import build
         from fspack.platform import Platform
 
-        opts = BuildOptions(no_sbom=True, no_size_report=True)
+        opts = BuildOptions(no_sbom=True, no_size_report=True, no_manifest=True, no_win7_scan=True)
         kwargs: dict[str, object] = {
             "mirror": get_mirror("huawei"),
             "py_version": "3.11.9",
@@ -394,7 +394,7 @@ class TestBuildPerfBaseline:
         from fspack.platform import Platform
 
         ProjectInfo.from_dir(medium_project)
-        opts = BuildOptions(no_sbom=True, no_size_report=True)
+        opts = BuildOptions(no_sbom=True, no_size_report=True, no_manifest=True, no_win7_scan=True)
         kwargs: dict[str, object] = {
             "mirror": get_mirror("huawei"),
             "py_version": "3.11.9",

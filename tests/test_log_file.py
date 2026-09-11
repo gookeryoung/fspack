@@ -563,7 +563,7 @@ def test_build_writes_log_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
     # mock 写操作避免实际下载
     monkeypatch.setattr(
-        "fspack.packaging.pipeline._prepare_runtime",
+        "fspack.packaging.pipeline.executor._prepare_runtime",
         lambda ctx: ctx.cfg.dist_dir / "site-packages",
     )
     monkeypatch.setattr("fspack.packaging.pipeline.executor._analyze_dependencies", lambda ctx, **kw: _empty_report())
@@ -623,7 +623,7 @@ def test_build_log_format_json_writes_json(tmp_path: Path, monkeypatch: pytest.M
     log_path = tmp_path / "build.log"
 
     monkeypatch.setattr(
-        "fspack.packaging.pipeline._prepare_runtime",
+        "fspack.packaging.pipeline.executor._prepare_runtime",
         lambda ctx: ctx.cfg.dist_dir / "site-packages",
     )
     monkeypatch.setattr("fspack.packaging.pipeline.executor._analyze_dependencies", lambda ctx, **kw: _empty_report())
@@ -662,7 +662,7 @@ def test_build_without_log_file_does_not_create_file(tmp_path: Path, monkeypatch
     log_path = tmp_path / "build.log"
 
     monkeypatch.setattr(
-        "fspack.packaging.pipeline._prepare_runtime",
+        "fspack.packaging.pipeline.executor._prepare_runtime",
         lambda ctx: ctx.cfg.dist_dir / "site-packages",
     )
     monkeypatch.setattr("fspack.packaging.pipeline.executor._analyze_dependencies", lambda ctx, **kw: _empty_report())
