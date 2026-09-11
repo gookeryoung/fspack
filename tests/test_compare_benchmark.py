@@ -221,6 +221,12 @@ class TestParseBenchmarkFile:
         p.write_text(json.dumps({"machine": {}}), encoding="utf-8")
         assert cb._parse_benchmark_file(p) == []
 
+    def test_list_root_json_returns_empty(self, tmp_path: Path) -> None:
+        """list 根 JSON（非 pytest-benchmark 格式）返回空."""
+        p = tmp_path / "list.json"
+        p.write_text(json.dumps([{"name": "foo"}, {"name": "bar"}]), encoding="utf-8")
+        assert cb._parse_benchmark_file(p) == []
+
     def test_non_positive_median_skipped(self, tmp_path: Path) -> None:
         """median ≤ 0 的条目跳过."""
         data = {

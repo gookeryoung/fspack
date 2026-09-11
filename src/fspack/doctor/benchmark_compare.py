@@ -198,6 +198,9 @@ def _parse_benchmark_file(path: Path) -> list[BenchmarkEntry]:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return []
+    # 非 dict 根（list、string、number 等）不是 pytest-benchmark 格式，跳过
+    if not isinstance(data, dict):
+        return []
     benchmarks = data.get("benchmarks")
     if not isinstance(benchmarks, list):
         return []
