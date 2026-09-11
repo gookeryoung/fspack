@@ -16,8 +16,8 @@ import logging
 import shutil
 import subprocess  # noqa: F401  # 保留 patch 路径 fspack.packaging.installer.linux.subprocess.run
 from pathlib import Path
+from typing import override
 
-from fspack._compat import override
 from fspack.config import ProjectInfo
 from fspack.console import console
 from fspack.exceptions import InstallerError
@@ -45,7 +45,6 @@ __all__ = [
 
 _logger = logging.getLogger("fspack.packaging.installer")
 
-
 def _deb_arch() -> str:
     """返回 .deb 包 Architecture 字段值：固定 ``amd64``（与 Linux 目标 runtime 一致）.
 
@@ -57,7 +56,6 @@ def _deb_arch() -> str:
     目标时在此参数化。
     """
     return "amd64"
-
 
 class LinuxInstaller(Installer):
     """Linux 安装包生成器：tar.gz 便携包 + .deb 安装包。"""
@@ -102,7 +100,6 @@ class LinuxInstaller(Installer):
         console.success(f"安装包已生成: {result}")
         return result
 
-
 def build_tarball(dist_dir: Path, info: ProjectInfo, release_dir: Path, *, keep_staging: bool = False) -> Path:
     """打包 dist 为 tar.gz 便携包，返回包路径。
 
@@ -116,7 +113,6 @@ def build_tarball(dist_dir: Path, info: ProjectInfo, release_dir: Path, *, keep_
     archive_path = _make_staged_archive(dist_dir, release_dir, base, "gztar", keep_staging=keep_staging)
     _logger.info("已生成 tar.gz 便携包: %s", archive_path)
     return archive_path
-
 
 def build_deb(dist_dir: Path, info: ProjectInfo, release_dir: Path) -> Path:
     """构造 .deb 安装包，返回 .deb 路径。
@@ -163,9 +159,7 @@ def build_deb(dist_dir: Path, info: ProjectInfo, release_dir: Path) -> Path:
     _logger.info("已生成 .deb 安装包: %s", deb_path)
     return deb_path
 
-
 # ---- 单格式编排（tar.gz / deb）----
-
 
 def build_tarball_release(req: ReleaseRequest, *, keep_staging: bool = False) -> Path:
     """编排：可选 build → 校验可执行文件 → 生成 tar.gz 便携包，返回包路径。
@@ -188,7 +182,6 @@ def build_tarball_release(req: ReleaseRequest, *, keep_staging: bool = False) ->
     if own_tracker:
         console.rich.print(tk.summary())
     return result
-
 
 def build_deb_release(req: ReleaseRequest, *, sign: SignOptions = _NO_SIGN) -> Path:
     """编排：可选 build → 校验可执行文件 → 构造 .deb → 可选 GPG 签名.
@@ -222,7 +215,6 @@ def build_deb_release(req: ReleaseRequest, *, sign: SignOptions = _NO_SIGN) -> P
     if own_tracker:
         console.rich.print(tk.summary())
     return result
-
 
 def sign_deb_file(deb_path: Path, key_id: str | None = None) -> Path:
     """用 GPG 对 .deb 做分离签名，返回 .asc 签名文件路径.

@@ -19,9 +19,8 @@ import logging
 import shutil
 import subprocess
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, override
 
-from fspack._compat import override
 from fspack.config import AppType
 from fspack.exceptions import LoaderError
 from fspack.packaging.loader.cache_keys import (
@@ -66,9 +65,7 @@ _logger = logging.getLogger("fspack.packaging.loader")
 # LoaderError 终止构建，避免编译器卡死（如杀软文件锁）无限阻塞
 _LOADER_COMPILE_TIMEOUT = 300.0
 
-
 # ---- 基类 ----
-
 
 class LoaderCompiler(abc.ABC):
     """C loader 编译器基类。
@@ -228,9 +225,7 @@ class LoaderCompiler(abc.ABC):
             stage.set_detail(cls.compiler_name)
         return out_exe
 
-
 # ---- 子类 ----
-
 
 class WindowsLoader(LoaderCompiler):
     """Windows C loader 编译器（mingw 交叉编译）。"""
@@ -304,7 +299,6 @@ class WindowsLoader(LoaderCompiler):
         """用 windres 编译资源（icon + 版本信息 + manifest）为 COFF .o，返回路径。"""
         return _compile_resource_obj(icon, work_dir, version_info=version_info)
 
-
 class LinuxLoader(LoaderCompiler):
     """Linux C loader 编译器（gcc 链接 libdl）。"""
 
@@ -327,8 +321,8 @@ class LinuxLoader(LoaderCompiler):
         cls,
         c_file: Path,
         out_exe: Path,
-        app_type: AppType,  # noqa: ARG003 # 抽象方法签名要求，Linux 不区分 app_type
-        resource_obj: Path | None,  # noqa: ARG003 # 抽象方法签名要求，Linux 无 PE 资源段
+        app_type: AppType,  # 抽象方法签名要求，Linux 不区分 app_type
+        resource_obj: Path | None,  # 抽象方法签名要求，Linux 无 PE 资源段
     ) -> list[str]:
         """构造 gcc 编译命令，链接 libdl + 设置 runtime 库搜索 RPATH.
 
@@ -348,7 +342,6 @@ class LinuxLoader(LoaderCompiler):
             "-Wl,--disable-new-dtags",
             "-Wl,-rpath,$ORIGIN/runtime/python/lib",
         ]
-
 
 class MacLoader(LoaderCompiler):
     """macOS C loader 编译器（clang，dlopen libpython3.X.dylib）。
@@ -382,15 +375,13 @@ class MacLoader(LoaderCompiler):
         cls,
         c_file: Path,
         out_exe: Path,
-        app_type: AppType,  # noqa: ARG003 # 抽象方法签名要求，macOS 不区分 app_type
-        resource_obj: Path | None,  # noqa: ARG003 # 抽象方法签名要求，macOS 无 PE 资源段
+        app_type: AppType,  # 抽象方法签名要求，macOS 不区分 app_type
+        resource_obj: Path | None,  # 抽象方法签名要求，macOS 无 PE 资源段
     ) -> list[str]:
         """构造 clang 编译命令（dlopen 在 libSystem，无需 -ldl）。"""
         return [MACOS_CLANG, "-O2", "-o", str(out_exe), str(c_file)]
 
-
 # ---- 函数式 API（委托给类，按 platform dispatch）----
-
 
 def generate_loader_source(
     py_xy: str,
@@ -420,7 +411,6 @@ def generate_loader_source(
     else:
         source = apply_splash(source, None)
     return source
-
 
 def compile_loader(  # noqa: PLR0913
     source: str,
@@ -457,7 +447,6 @@ def compile_loader(  # noqa: PLR0913
         source, out_exe, app_type, work_dir, icon=icon, version_info=version_info, cache_dir=cache_dir, stage=stage
     )
 
-
 def _loader_class_for(platform: Platform) -> type[LoaderCompiler]:
     """按目标平台返回对应的 loader 编译器子类。"""
     if platform is Platform.LINUX:
@@ -466,16 +455,13 @@ def _loader_class_for(platform: Platform) -> type[LoaderCompiler]:
         return MacLoader
     return WindowsLoader
 
-
 def mingw_available() -> bool:
     """检测 mingw 交叉编译器是否可用。"""
     return WindowsLoader.available()
 
-
 def gcc_available() -> bool:
     """检测 gcc 编译器是否可用。"""
     return LinuxLoader.available()
-
 
 def clang_available() -> bool:
     """检测 clang 编译器是否可用（macOS）。"""

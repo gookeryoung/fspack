@@ -10,7 +10,6 @@ from pathlib import Path
 import pytest
 
 from fspack.analyzer import (
-    STDLIB_FALLBACK,
     _qml_module_to_qt_sub,
     analyze_dependencies,
     collect_imports,
@@ -22,25 +21,20 @@ from fspack.analyzer import (
 def _tree(src: str) -> ast.AST:
     return ast.parse(src)
 
-
 def test_collect_imports_basic() -> None:
     tree = _tree("import os\nfrom sys import path\nimport numpy as np\nfrom numpy import array\nimport os.path\n")
     assert collect_imports(tree) == ["os", "sys", "numpy"]
-
 
 def test_collect_imports_relative_skipped() -> None:
     tree = _tree("from . import foo\nfrom .sub import bar\nimport json\n")
     assert collect_imports(tree) == ["json"]
 
-
 def test_collect_imports_dedup() -> None:
     tree = _tree("import os\nimport os\nimport os\n")
     assert collect_imports(tree) == ["os"]
 
-
 def test_collect_imports_empty() -> None:
     assert collect_imports(_tree("x = 1\n")) == []
-
 
 def test_collect_submodule_imports_dotted() -> None:
     """import X.Y 收集 {X: {Y}}."""
@@ -48,35 +42,29 @@ def test_collect_submodule_imports_dotted() -> None:
     result = collect_submodule_imports(tree)
     assert result == {"os": frozenset({"path"}), "numpy": frozenset({"core"})}
 
-
 def test_collect_submodule_imports_from_dotted() -> None:
     """from X.Y import Z 收集 {X: {Y}}."""
     tree = _tree("from PySide2.QtWidgets import QApplication\n")
     assert collect_submodule_imports(tree) == {"PySide2": frozenset({"QtWidgets"})}
-
 
 def test_collect_submodule_imports_from_simple() -> None:
     """from X import Y 收集 {X: {Y}}（Y 可能是类名，不匹配 wheel 文件时自然忽略）."""
     tree = _tree("from flask import Flask\n")
     assert collect_submodule_imports(tree) == {"flask": frozenset({"Flask"})}
 
-
 def test_collect_submodule_imports_relative_skipped() -> None:
     """相对导入跳过."""
     tree = _tree("from .sub import bar\nfrom . import foo\n")
     assert collect_submodule_imports(tree) == {}
-
 
 def test_collect_submodule_imports_star_skipped() -> None:
     """星号导入跳过."""
     tree = _tree("from numpy import *\n")
     assert collect_submodule_imports(tree) == {}
 
-
 def test_collect_submodule_imports_empty() -> None:
     """无 import 返回空字典."""
     assert collect_submodule_imports(_tree("x = 1\n")) == {}
-
 
 def test_analyze_dependencies_classification(tmp_path: Path) -> None:
     pkg = tmp_path / "pkg"
@@ -92,20 +80,12 @@ def test_analyze_dependencies_classification(tmp_path: Path) -> None:
     assert "requests" in r.missing
     assert "numpy" not in r.missing
 
-
 def test_analyze_dependencies_syntax_error_skipped(tmp_path: Path) -> None:
     (tmp_path / "bad.py").write_text("import os\ndef bad(:\n")
     (tmp_path / "good.py").write_text("import sys\n")
     r = analyze_dependencies(tmp_path, "good", ())
     assert "sys" in r.ast_stdlib
     assert r.ast_third_party == ()
-
-
-def test_stdlib_fallback_contents() -> None:
-    assert "os" in STDLIB_FALLBACK
-    assert "json" in STDLIB_FALLBACK
-    assert "numpy" not in STDLIB_FALLBACK
-
 
 def test_analyze_dependencies_excludes_build_artifacts(tmp_path: Path) -> None:
     """dist/build/.venv 等目录下的 .py 不应被扫描，避免误报标准库内部模块为第三方依赖."""
@@ -123,7 +103,6 @@ def test_analyze_dependencies_excludes_build_artifacts(tmp_path: Path) -> None:
     assert "_weakrefset" not in r.ast_third_party
     assert "cryptography" not in r.ast_third_party
     assert r.ast_third_party == ()
-
 
 def test_analyze_dependencies_excludes_dev_directories(tmp_path: Path) -> None:
     """examples/tests/docs/templates 等开发期目录不应被扫描，避免误报依赖."""
@@ -148,7 +127,6 @@ def test_analyze_dependencies_excludes_dev_directories(tmp_path: Path) -> None:
     assert "sphinx" not in r.ast_third_party
     assert "yaml" not in r.ast_third_party
     assert r.ast_third_party == ()
-
 
 def test_analyze_dependencies_excludes_cache_and_tool_dirs(tmp_path: Path) -> None:
     """.uv-cache/node_modules/.pyrefly_cache/htmlcov 等缓存与工具目录不应被扫描.
@@ -180,7 +158,6 @@ def test_analyze_dependencies_excludes_cache_and_tool_dirs(tmp_path: Path) -> No
     assert "coverage" not in r.ast_third_party
     assert r.ast_third_party == ()
 
-
 def test_analyze_dependencies_excludes_data_dirs(tmp_path: Path) -> None:
     """data-dirs 配置的数据资源目录树不应被扫描，避免模板/前端产物误报依赖.
 
@@ -209,7 +186,6 @@ def test_analyze_dependencies_excludes_data_dirs(tmp_path: Path) -> None:
     assert "tkinter" not in r_excluded.ast_stdlib
     assert "PySide2" not in r_excluded.ast_third_party
     assert r_excluded.ast_third_party == ()
-
 
 def test_source_fingerprint_excludes_data_dirs(tmp_path: Path) -> None:
     """source_fingerprint 传入 data_dirs 后排除数据资源目录，与 AST 扫描一致.
@@ -244,7 +220,6 @@ def test_source_fingerprint_excludes_data_dirs(tmp_path: Path) -> None:
     fp_no_exclude_after = source_fingerprint(tmp_path)
     assert fp_no_exclude != fp_no_exclude_after
 
-
 def test_is_excluded_venv_prefix_variants(tmp_path: Path) -> None:
     """.venv 前缀目录（.venv38/.venv310 等多版本 venv）被排除，普通 venv 命名不受影响."""
     from fspack.analyzer.fingerprint import _is_excluded, _is_excluded_name
@@ -260,7 +235,6 @@ def test_is_excluded_venv_prefix_variants(tmp_path: Path) -> None:
     venv_dir.mkdir(parents=True)
     assert _is_excluded(venv_dir / "__init__.py", tmp_path) is True
 
-
 def test_analyze_dependencies_excludes_versioned_venv_dirs(tmp_path: Path) -> None:
     """.venv38 等多版本 venv 目录下的第三方包 .py 不被扫描（AST 分析口径）."""
     (tmp_path / "main.py").write_text("import os\n")
@@ -270,7 +244,6 @@ def test_analyze_dependencies_excludes_versioned_venv_dirs(tmp_path: Path) -> No
     r = analyze_dependencies(tmp_path, "main", ())
     assert "cryptography" not in r.ast_third_party
     assert r.ast_third_party == ()
-
 
 def test_source_fingerprint_excludes_versioned_venv_dirs(tmp_path: Path) -> None:
     """.venv38 等多版本 venv 目录下的 .py 不参与指纹计算（指纹口径与分析一致）."""
@@ -285,7 +258,6 @@ def test_source_fingerprint_excludes_versioned_venv_dirs(tmp_path: Path) -> None
     (venv_dir / "extra.py").write_text("import flask\n")
     fp_after = source_fingerprint(tmp_path)
     assert fp_before == fp_after
-
 
 def test_parallel_spawn_ok_guard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """loader exe（非 python 解释器）下强制回退串行解析.
@@ -340,7 +312,6 @@ def test_parallel_spawn_ok_guard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert calls == ["serial"]
     assert "os" in r.ast_stdlib
 
-
 def test_is_excluded_build_and_egg_info_dirs(tmp_path: Path) -> None:
     """构建产物、缓存目录与 egg-info 目录下的文件被排除，普通源码不排除."""
     from fspack.analyzer.fingerprint import _is_excluded
@@ -351,7 +322,6 @@ def test_is_excluded_build_and_egg_info_dirs(tmp_path: Path) -> None:
     # 排除判断只看目录段（parts[:-1]），不误伤同名源文件
     assert _is_excluded(tmp_path / "build.py", tmp_path) is False
     assert _is_excluded(tmp_path / "src" / "a.py", tmp_path) is False
-
 
 def test_is_excluded_data_dirs_tree(tmp_path: Path) -> None:
     """data-dirs 目录树内的文件被排除（含子目录），树外文件不受影响."""
@@ -367,13 +337,11 @@ def test_is_excluded_data_dirs_tree(tmp_path: Path) -> None:
     # data_dirs 为空元组时不启用 data-dirs 排除（bool(()) 短路）
     assert _is_excluded(data_dir / "x.py", tmp_path, ()) is False
 
-
 def test_analyze_dependencies_submodules(tmp_path: Path) -> None:
     """第三方包的子模块 import 被收集到 ast_submodules."""
     (tmp_path / "main.py").write_text("from PySide2.QtCore import QTimer\nfrom PySide2.QtWidgets import QApplication\n")
     r = analyze_dependencies(tmp_path, "main", ())
     assert r.ast_submodules["PySide2"] == frozenset({"QtCore", "QtWidgets"})
-
 
 def test_analyze_dependencies_submodules_stdlib_filtered(tmp_path: Path) -> None:
     """标准库的子模块 import 不进入 ast_submodules."""
@@ -381,7 +349,6 @@ def test_analyze_dependencies_submodules_stdlib_filtered(tmp_path: Path) -> None
     r = analyze_dependencies(tmp_path, "main", ())
     assert "os" not in r.ast_submodules
     assert "json" not in r.ast_submodules
-
 
 def test_fingerprint_excluded_and_data_dirs(tmp_path: Path) -> None:
     """_is_excluded 排除构建产物目录与 data-dirs；_is_in_data_dirs 命中/未命中."""
@@ -399,7 +366,6 @@ def test_fingerprint_excluded_and_data_dirs(tmp_path: Path) -> None:
     assert _is_in_data_dirs(assets / "t.py", (assets.resolve(),)) is True
     assert _is_in_data_dirs(tmp_path / "main.py", (assets.resolve(),)) is False
 
-
 def test_iter_py_entries_prunes_and_drops_out_of_tree_data_dir(tmp_path: Path) -> None:
     """_iter_py_entries 排除 .egg-info/数据目录树；root 树外的 data-dir 被丢弃不报错."""
     from fspack.analyzer.fingerprint import _iter_py_entries
@@ -415,7 +381,6 @@ def test_iter_py_entries_prunes_and_drops_out_of_tree_data_dir(tmp_path: Path) -
 
     entries = list(_iter_py_entries(tmp_path, tmp_path, (assets, outside)))
     assert [rel for rel, _, _ in entries] == ["main.py"]
-
 
 def test_analyze_dependencies_parallel_matches_serial(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """并行解析路径与串行路径结果一致.
@@ -446,7 +411,6 @@ def test_analyze_dependencies_parallel_matches_serial(tmp_path: Path, monkeypatc
 
     assert serial == parallel
 
-
 def test_parse_file_worker_skips_syntax_error(tmp_path: Path) -> None:
     """worker 函数对语法错误文件返回空结果与错误记录（iter-138 记录 ast_errors）."""
     from fspack.analyzer import _parse_file_worker
@@ -462,7 +426,6 @@ def test_parse_file_worker_skips_syntax_error(tmp_path: Path) -> None:
     assert errors[0][0] == str(bad)
     assert "bad" in errors[0][1].lower() or "syntax" in errors[0][1].lower() or errors[0][1]
 
-
 def test_parse_file_worker_normal(tmp_path: Path) -> None:
     """worker 函数正常解析返回非标准库/标准库分离的顶层导入与子模块."""
     from fspack.analyzer import _parse_file_worker
@@ -477,9 +440,7 @@ def test_parse_file_worker_normal(tmp_path: Path) -> None:
     assert subs["PySide2"] == frozenset({"QtWidgets"})
     assert errors == []
 
-
 # ---------- iter-134 AST 并行解析调优测试 ----------
-
 
 def test_init_parse_worker_sets_stdlib(monkeypatch: pytest.MonkeyPatch) -> None:
     """``_init_parse_worker`` 设置 worker 状态 ``_WORKER_STATE["stdlib"]``."""
@@ -489,7 +450,6 @@ def test_init_parse_worker_sets_stdlib(monkeypatch: pytest.MonkeyPatch) -> None:
     custom = frozenset({"os", "sys", "json"})
     analysis._init_parse_worker(custom)
     assert custom == analysis._WORKER_STATE["stdlib"]
-
 
 def test_parse_file_worker_uses_worker_stdlib(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``_parse_file_worker`` 用 ``_WORKER_STATE["stdlib"]`` 分离标准库（worker 路径）.
@@ -510,7 +470,6 @@ def test_parse_file_worker_uses_worker_stdlib(tmp_path: Path, monkeypatch: pytes
     assert subs == {}
     assert errors == []
 
-
 def test_parse_file_worker_falls_back_to_module_stdlib(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``_WORKER_STATE["stdlib"]`` 为空时回退到模块级 ``_STDLIB``（主进程直接调用）."""
     from fspack.analyzer import analysis
@@ -523,9 +482,7 @@ def test_parse_file_worker_falls_back_to_module_stdlib(tmp_path: Path, monkeypat
     assert "os" in stdlib_tops
     assert non_stdlib_tops == []
 
-
 # ---------- QML 文件扫描测试 ----------
-
 
 def test_qml_module_to_qt_sub_default_rule() -> None:
     """默认规则：去掉 Qt 前缀（QtQuick → Quick）."""
@@ -535,7 +492,6 @@ def test_qml_module_to_qt_sub_default_rule() -> None:
     assert _qml_module_to_qt_sub("QtDataVisualization") == "DataVisualization"
     assert _qml_module_to_qt_sub("QtWebSockets") == "WebSockets"
     assert _qml_module_to_qt_sub("QtQuick3D") == "Quick3D"
-
 
 def test_qml_module_to_qt_sub_explicit_mapping() -> None:
     """显式映射：QML 模块名与 DLL 子模块名不一致的特殊情况."""
@@ -550,13 +506,11 @@ def test_qml_module_to_qt_sub_explicit_mapping() -> None:
     # WebEngine QML 模块对应 WebEngineCore DLL
     assert _qml_module_to_qt_sub("QtWebEngine") == "WebEngineCore"
 
-
 def test_qml_module_to_qt_sub_non_qt_returns_none() -> None:
     """非 Qt 前缀返回 None."""
     assert _qml_module_to_qt_sub("Qt") is None  # 仅 "Qt" 无后续字符
     assert _qml_module_to_qt_sub("numpy") is None
     assert _qml_module_to_qt_sub("") is None
-
 
 def test_parse_qml_imports_basic(tmp_path: Path) -> None:
     """基本 QML import 解析：import QtQuick 2.15 → Quick."""
@@ -568,14 +522,12 @@ def test_parse_qml_imports_basic(tmp_path: Path) -> None:
     subs = parse_qml_imports(qml)
     assert subs == {"Quick", "QuickControls2", "QuickLayouts"}
 
-
 def test_parse_qml_imports_relative_skipped(tmp_path: Path) -> None:
     """相对导入（import "."）被忽略."""
     qml = tmp_path / "Main.qml"
     qml.write_text('import "."\nimport ".."\nimport QtQuick 2.15\n', encoding="utf-8")
     subs = parse_qml_imports(qml)
     assert subs == {"Quick"}
-
 
 def test_parse_qml_imports_js_skipped(tmp_path: Path) -> None:
     """JS 文件导入（import "scripts.js" as Scripts）被忽略."""
@@ -587,7 +539,6 @@ def test_parse_qml_imports_js_skipped(tmp_path: Path) -> None:
     subs = parse_qml_imports(qml)
     assert subs == {"Quick"}
 
-
 def test_parse_qml_imports_no_version(tmp_path: Path) -> None:
     """无版本号的 import 也能解析."""
     qml = tmp_path / "Main.qml"
@@ -595,20 +546,17 @@ def test_parse_qml_imports_no_version(tmp_path: Path) -> None:
     subs = parse_qml_imports(qml)
     assert subs == {"Quick", "QuickControls2"}
 
-
 def test_parse_qml_imports_empty_file(tmp_path: Path) -> None:
     """空文件返回空集合."""
     qml = tmp_path / "empty.qml"
     qml.write_text("", encoding="utf-8")
     assert parse_qml_imports(qml) == set()
 
-
 def test_parse_qml_imports_unreadable_returns_empty(tmp_path: Path) -> None:
     """文件读取失败返回空集合（不抛异常）."""
     # 使用不存在路径触发 OSError
     qml = tmp_path / "nonexistent.qml"
     assert parse_qml_imports(qml) == set()
-
 
 def test_analyze_dependencies_qml_merges_to_qt_pkg(tmp_path: Path) -> None:
     """QML 文件扫描结果合并到 Qt 绑定包的 ast_submodules.
@@ -628,7 +576,6 @@ def test_analyze_dependencies_qml_merges_to_qt_pkg(tmp_path: Path) -> None:
     # Python 层收集的 QtQml + QML 层补充的 Quick/QuickControls2/QuickLayouts
     assert r.ast_submodules["PySide2"] >= frozenset({"QtQml", "Quick", "QuickControls2", "QuickLayouts"})
 
-
 def test_analyze_dependencies_qml_with_multiple_qt_pkgs(tmp_path: Path) -> None:
     """项目同时 import 多个 Qt 绑定包时，QML 依赖加入所有 Qt 包的子模块集合.
 
@@ -643,7 +590,6 @@ def test_analyze_dependencies_qml_with_multiple_qt_pkgs(tmp_path: Path) -> None:
     assert "Quick" in r.ast_submodules["PySide2"]
     assert "Quick" in r.ast_submodules["PySide6"]
 
-
 def test_analyze_dependencies_no_qt_pkg_skips_qml_scan(tmp_path: Path) -> None:
     """项目未 import 任何 Qt 绑定包时，QML 文件不被扫描."""
     (tmp_path / "main.py").write_text("import os\n", encoding="utf-8")
@@ -651,7 +597,6 @@ def test_analyze_dependencies_no_qt_pkg_skips_qml_scan(tmp_path: Path) -> None:
     r = analyze_dependencies(tmp_path, "main", ())
     # 无 Qt 包，QML 扫描不触发，PySide2 不在 ast_submodules 中
     assert "PySide2" not in r.ast_submodules
-
 
 def test_analyze_dependencies_qml_excluded_dirs_skipped(tmp_path: Path) -> None:
     """examples/tests 等开发目录下的 QML 文件不被扫描."""
@@ -673,9 +618,7 @@ def test_analyze_dependencies_qml_excluded_dirs_skipped(tmp_path: Path) -> None:
     # Quick 在项目根 QML 中，应被收集
     assert "Quick" in r.ast_submodules["PySide2"]
 
-
 # ---------- iter-138 依赖分析异常容错测试 ----------
-
 
 def test_analyze_dependencies_records_ast_errors(tmp_path: Path) -> None:
     """``analyze_dependencies`` 将 AST 解析失败记录到 ``ast_errors`` 字段（iter-138）.
@@ -690,7 +633,6 @@ def test_analyze_dependencies_records_ast_errors(tmp_path: Path) -> None:
     assert len(r.ast_errors) == 1
     assert "bad.py" in r.ast_errors[0]
 
-
 def test_analyze_dependencies_records_multiple_ast_errors(tmp_path: Path) -> None:
     """多个语法错误文件都记录到 ``ast_errors``（iter-138）."""
     (tmp_path / "bad1.py").write_text("def bad1(:\n", encoding="utf-8")
@@ -701,7 +643,6 @@ def test_analyze_dependencies_records_multiple_ast_errors(tmp_path: Path) -> Non
     error_files = {e.split(":")[0] for e in r.ast_errors}
     assert "bad1.py" in error_files
     assert "bad2.py" in error_files
-
 
 def test_analyze_dependencies_parallel_records_ast_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """并行路径下 AST 解析失败也记录到 ``ast_errors``（iter-138）."""
@@ -715,7 +656,6 @@ def test_analyze_dependencies_parallel_records_ast_errors(tmp_path: Path, monkey
     assert "os" in r.ast_stdlib
     assert len(r.ast_errors) == 1
     assert "bad.py" in r.ast_errors[0]
-
 
 def test_analyze_dependencies_qml_parse_failure_does_not_block(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """QML 文件解析失败（OSError）不阻塞依赖分析主流程（iter-138）.
@@ -736,7 +676,6 @@ def test_analyze_dependencies_qml_parse_failure_does_not_block(tmp_path: Path, m
     assert "PySide2" in r.ast_third_party
     assert r.ast_submodules.get("PySide2", frozenset()) >= frozenset({"QtQml"})
 
-
 def test_format_ast_errors_converts_to_relative_path(tmp_path: Path) -> None:
     """``_format_ast_errors`` 将绝对路径转为相对 src_dir 的 POSIX 路径（iter-138）."""
     from fspack.analyzer import _format_ast_errors
@@ -746,7 +685,6 @@ def test_format_ast_errors_converts_to_relative_path(tmp_path: Path) -> None:
     errors = [(bad_abs, "invalid syntax")]
     formatted = _format_ast_errors(src_dir, errors)
     assert formatted == ["subdir/bad.py: invalid syntax"]
-
 
 def test_format_ast_errors_falls_back_to_abs_path(tmp_path: Path) -> None:
     """``_format_ast_errors`` 路径不在 src_dir 下时回退到绝对路径（iter-138，不同盘符场景）."""
@@ -762,9 +700,7 @@ def test_format_ast_errors_falls_back_to_abs_path(tmp_path: Path) -> None:
     assert "syntax error" in formatted[0]
     assert outside_abs in formatted[0]
 
-
 # ---------- AST 解析异常容错增强测试（ValueError/RecursionError） ----------
-
 
 def test_analyze_dependencies_nul_byte_records_ast_error(tmp_path: Path) -> None:
     """源码含 NUL 字节触发 ValueError，记入 ast_errors 而非崩溃."""
@@ -775,7 +711,6 @@ def test_analyze_dependencies_nul_byte_records_ast_error(tmp_path: Path) -> None
     assert len(r.ast_errors) == 1
     assert "bad.py" in r.ast_errors[0]
 
-
 def test_analyze_dependencies_deeply_nested_records_ast_error(tmp_path: Path) -> None:
     """深度嵌套源码触发 RecursionError，记入 ast_errors 而非崩溃."""
     (tmp_path / "deep.py").write_text("x = " + "(" * 50000 + "1" + ")" * 50000, encoding="utf-8")
@@ -784,7 +719,6 @@ def test_analyze_dependencies_deeply_nested_records_ast_error(tmp_path: Path) ->
     assert "sys" in r.ast_stdlib
     assert len(r.ast_errors) == 1
     assert "deep.py" in r.ast_errors[0]
-
 
 def test_parse_file_worker_catches_value_and_recursion_error(tmp_path: Path) -> None:
     """worker 函数对 NUL 字节与深度嵌套源码返回错误记录（并行路径同等容错）."""
@@ -800,25 +734,7 @@ def test_parse_file_worker_catches_value_and_recursion_error(tmp_path: Path) -> 
     _non_stdlib, _stdlib, _subs, errors = _parse_file_worker(str(deep))
     assert len(errors) == 1
 
-
-def test_stdlib_fallback_underscore_modules() -> None:
-    """3.8/3.9 回退集合含常见下划线 C 模块，避免误判为第三方依赖."""
-    for mod in (
-        "_io",
-        "_thread",
-        "_weakref",
-        "_collections",
-        "_functools",
-        "_socket",
-        "_json",
-        "__main__",
-        "_ast",
-    ):
-        assert mod in STDLIB_FALLBACK, mod
-
-
 # ---------- 指纹纳入 QML 测试 ----------
-
 
 def test_source_fingerprint_includes_qml_changes(tmp_path: Path) -> None:
     """QML 文件参与源码指纹：修改 .qml 触发指纹变化（与 analyze_dependencies 范围一致）.
@@ -841,9 +757,7 @@ def test_source_fingerprint_includes_qml_changes(tmp_path: Path) -> None:
     (tmp_path / "Other.qml").write_text("import QtQuick 2.15\n", encoding="utf-8")
     assert fp_after != source_fingerprint(tmp_path)
 
-
 # ---------- 并行解析容错测试（BrokenProcessPool / 超时 shutdown） ----------
-
 
 class _StubFuture:
     """测试桩：预置 result 返回值或异常，done/cancel 固定返回（仅供 ``_parse_parallel`` 消费）."""
@@ -862,13 +776,12 @@ class _StubFuture:
             raise self._payload
         return self._payload
 
-
 class _StubExecutor:
     """测试桩：submit 按序弹回预置 payload，记录 shutdown 的 wait 参数."""
 
     def __init__(self, payloads: list[object]) -> None:
         self._payloads = list(payloads)
-        self.shutdown_waits: list[bool] = []
+        self.shutdown_waits: list[tuple[bool, bool]] = []
 
     def submit(self, fn: object, arg: object) -> _StubFuture:
         # 空 payload 默认值：与 _parse_file_worker 返回结构一致的空结果（注解供类型检查）
@@ -876,14 +789,12 @@ class _StubExecutor:
         payload = self._payloads.pop(0) if self._payloads else empty
         return _StubFuture(payload)
 
-    def shutdown(self, wait: bool = True) -> None:
-        self.shutdown_waits.append(wait)
-
+    def shutdown(self, wait: bool = True, cancel_futures: bool = False) -> None:
+        self.shutdown_waits.append((wait, cancel_futures))
 
 def _fake_as_completed(futures: list[_StubFuture], timeout: float | None = None) -> Iterator[_StubFuture]:
     """测试桩：直接按序 yield futures，替代真实 as_completed 的完成顺序调度."""
     yield from futures
-
 
 def test_parse_parallel_broken_pool_preserves_aggregated_results(
     monkeypatch: pytest.MonkeyPatch,
@@ -905,8 +816,7 @@ def test_parse_parallel_broken_pool_preserves_aggregated_results(
     # 第一个 worker 的结果已聚合保留，第二个崩溃不吞掉已完成部分
     assert "os" in imports_ord
     # 正常结束路径：finally 中 shutdown(wait=True)
-    assert stub.shutdown_waits == [True]
-
+    assert stub.shutdown_waits == [(True, False)]
 
 def test_parse_parallel_timeout_shutdowns_without_waiting(
     monkeypatch: pytest.MonkeyPatch,
@@ -932,11 +842,9 @@ def test_parse_parallel_timeout_shutdowns_without_waiting(
     # 超时前已完成的结果保留
     assert "os" in imports_ord
     # 超时分支 shutdown(wait=False)，timed_out 标志使 finally 跳过重复 shutdown
-    assert stub.shutdown_waits == [False]
-
-
-# ---- _parse_parallel 超时防护测试（iter-127） ----
-
+    # 超时分支 shutdown(wait=False, cancel_futures=True)，提前 return 跳过 finally
+    # 超时分支 shutdown(wait=False, cancel_futures=True) 后 return，finally 中 shutdown(wait=True) 幂等
+    assert stub.shutdown_waits == [(False, True), (True, False)]
 
 def test_parse_parallel_timeout_warns_on_slow_worker(
     tmp_path: Path,
@@ -958,15 +866,14 @@ def test_parse_parallel_timeout_warns_on_slow_worker(
         (tmp_path / f"mod_{i}.py").write_text(f"x = {i}\n", encoding="utf-8")
     py_files = sorted(tmp_path.glob("*.py"))
 
-    cancel_calls: list[bool] = []
-    shutdown_calls: list[bool] = []
+    shutdown_calls: list[tuple[bool, bool]] = []
+
 
     class _FakeFuture:
         def done(self) -> bool:
             return False
-
         def cancel(self) -> bool:
-            cancel_calls.append(True)
+            return True
             return True
 
         def result(
@@ -987,8 +894,8 @@ def test_parse_parallel_timeout_warns_on_slow_worker(
         def submit(self, fn: object, *args: object) -> _FakeFuture:
             return _FakeFuture()
 
-        def shutdown(self, wait: bool = True) -> None:
-            shutdown_calls.append(wait)
+        def shutdown(self, wait: bool = True, cancel_futures: bool = False) -> None:
+            shutdown_calls.append((wait, cancel_futures))
 
     monkeypatch.setattr(analysis, "ProcessPoolExecutor", _FakePool)
 
@@ -1009,14 +916,13 @@ def test_parse_parallel_timeout_warns_on_slow_worker(
     timeout_logs = [r for r in caplog.records if "超时" in r.message]
     assert len(timeout_logs) == 1
     assert "AST 并行解析" in timeout_logs[0].message
-    # 5 个 future 都被 cancel（done() 返回 False）
-    assert len(cancel_calls) == 5
+    # 超时分支 shutdown(wait=False, cancel_futures=True) 触发，finally 中 shutdown(wait=True) 幂等
+    assert (False, True) in shutdown_calls
     # 超时后 imports/submodules/errors 为空（fake as_completed 抛异常未返回结果）
     assert all_imports_ord == {}
     assert all_stdlib_ord == {}
     assert all_submodules == {}
     assert all_errors == []
-
 
 def test_parse_parallel_normal_completes_without_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """正常完成的并行解析不触发超时，结果完整."""
@@ -1042,13 +948,11 @@ def test_parse_parallel_normal_completes_without_timeout(tmp_path: Path, monkeyp
     assert all_imports_ord == {}
     assert all_errors == []
 
-
 def test_parse_parallel_timeout_constant_default() -> None:
     """``_PARSE_TOTAL_TIMEOUT`` 默认 300s."""
     from fspack.analyzer import _PARSE_TOTAL_TIMEOUT
 
     assert _PARSE_TOTAL_TIMEOUT == 300.0
-
 
 def test_parse_parallel_uses_initializer(
     tmp_path: Path,
@@ -1090,7 +994,7 @@ def test_parse_parallel_uses_initializer(
         def submit(self, fn: object, *args: object) -> _FakeFuture:
             return _FakeFuture()
 
-        def shutdown(self, wait: bool = True) -> None:
+        def shutdown(self, wait: bool = True, cancel_futures: bool = False) -> None:
             pass
 
     monkeypatch.setattr(analysis, "ProcessPoolExecutor", _Pool)
@@ -1099,7 +1003,6 @@ def test_parse_parallel_uses_initializer(
 
     assert captured.get("initializer") is _init_parse_worker
     assert captured.get("initargs") == (_STDLIB,)
-
 
 def test_parse_parallel_interleave_and_submit(
     tmp_path: Path,
@@ -1146,7 +1049,7 @@ def test_parse_parallel_interleave_and_submit(
             submit_calls.append(str(args[0]) if args else "")
             return _FakeFuture()
 
-        def shutdown(self, wait: bool = True) -> None:
+        def shutdown(self, wait: bool = True, cancel_futures: bool = False) -> None:
             pass
 
     monkeypatch.setattr(analysis, "ProcessPoolExecutor", _Pool)
@@ -1155,7 +1058,6 @@ def test_parse_parallel_interleave_and_submit(
 
     # 20 个文件每个 submit 一次（submit 替代 map+chunksize，无需 interleave 重排）
     assert len(submit_calls) == 20
-
 
 def test_parse_parallel_partial_timeout_aggregates_completed_results(
     tmp_path: Path,
@@ -1222,7 +1124,7 @@ def test_parse_parallel_partial_timeout_aggregates_completed_results(
         def submit(self, fn: object, *args: object) -> object:
             return futures_chain.pop(0)
 
-        def shutdown(self, wait: bool = True) -> None:
+        def shutdown(self, wait: bool = True, cancel_futures: bool = False) -> None:
             pass
 
     monkeypatch.setattr(analysis, "ProcessPoolExecutor", _FakePool)

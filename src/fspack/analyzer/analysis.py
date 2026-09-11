@@ -252,8 +252,8 @@ def _parse_file_worker(
     """
     try:
         tree = ast.parse(Path(py).read_bytes())
-    except (SyntaxError, OSError, ValueError, RecursionError, MemoryError) as e:
-        # ValueError：源码含 NUL 字节；RecursionError/MemoryError：深度嵌套源码
+    except (SyntaxError, OSError, ValueError, RecursionError) as e:
+        # ValueError：源码含 NUL 字节；RecursionError：深度嵌套源码
         # 爆解析栈（3.9+ 抛 RecursionError，3.8 的 C 栈溢出表现为 MemoryError）
         return [], [], {}, [(py, str(e))]
     tops, subs = collect_imports_and_submodules(tree)
@@ -299,8 +299,7 @@ def _parse_serial(
     for py in py_files:
         try:
             tree = ast.parse(py.read_bytes())
-        except (SyntaxError, OSError, ValueError, RecursionError, MemoryError) as e:
-            # MemoryError：3.8 上深度嵌套源码的 C 栈溢出表现（3.9+ 为 RecursionError）
+        except (SyntaxError, OSError, ValueError, RecursionError) as e:
             all_errors.append((str(py), str(e)))
             continue
         tops, subs = collect_imports_and_submodules(tree)
@@ -338,12 +337,9 @@ def _parse_parallel(
     **超时防护**（iter-127）：``as_completed(timeout=)`` 设整体超时
     :data:`_PARSE_TOTAL_TIMEOUT`（300s）。超时抛 ``TimeoutError``，
     已处理的结果保留（依赖分析可能不完整但不会无限阻塞），warning 提示用户。
-    超时分支对未完成 future 逐个 ``cancel`` 后 ``shutdown(wait=False)``
-    立即返回——若依赖 ``with`` 块退出隐式 ``shutdown(wait=True)`` 会无限
-    等待卡死的 worker。Python 3.8 无 ``shutdown(cancel_futures=)``（3.9+），
-    故手动逐个 cancel（已运行的无法取消，仅避免新任务启动），并用标志变量
-    保证 ``finally`` 不重复 shutdown。超时不回退串行（若 ast.parse 真卡死，
-    串行同样会卡死）。
+    超时分支调用 ``shutdown(wait=False, cancel_futures=True)`` 立即返回——
+    若依赖 ``with`` 块退出隐式 ``shutdown(wait=True)`` 会无限等待卡死的 worker。
+    超时不回退串行（若 ast.parse 真卡死，串行同样会卡死）。
 
     **worker 崩溃容错**：``future.result()`` 抛 ``BrokenProcessPool``
     （worker OOM/段错误）时 warning 后提前结束循环——已聚合的结果保留，
@@ -353,14 +349,11 @@ def _parse_parallel(
     按完成顺序 yield，卡死的 worker 不影响其他已完成 worker 的结果聚合。
     """
     cpu_count = os.cpu_count() or 4
-    # 显式 pool + try/finally：超时分支需要 shutdown(wait=False) 立即返回，
-    # with 块退出固定 shutdown(wait=True) 会无限等待卡死的 worker
     pool = ProcessPoolExecutor(
         max_workers=cpu_count,
         initializer=_init_parse_worker,
         initargs=(_STDLIB,),
     )
-    timed_out = False
     try:
         futures = [pool.submit(_parse_file_worker, str(p)) for p in py_files]
         completed = 0
@@ -384,7 +377,6 @@ def _parse_parallel(
                 all_errors.extend(errors)
                 completed += 1
         except FuturesTimeoutError:
-            timed_out = True
             pending = len(futures) - completed
             _logger.warning(
                 "AST 并行解析超时（%ds），%d/%d 个文件未完成，依赖分析可能不完整",
@@ -392,16 +384,12 @@ def _parse_parallel(
                 pending,
                 len(futures),
             )
-            # 取消未完成的 future（已运行的无法取消，避免新任务启动）。
-            # Python 3.8 无 shutdown(cancel_futures=)，须手动逐个 cancel
-            for f in futures:
-                if not f.done():
-                    f.cancel()
-            # 立即关闭池不再等待卡死的 worker；timed_out 标志使 finally 跳过重复 shutdown
-            pool.shutdown(wait=False)
+            # 取消未完成 future 并立即关闭池（已运行的无法取消，仅避免新任务启动）
+            pool.shutdown(wait=False, cancel_futures=True)
+            return
     finally:
-        if not timed_out:
-            pool.shutdown(wait=True)
+        # 超时分支已提前 shutdown 并 return，此处仅正常退出路径执行
+        pool.shutdown(wait=True)
 
 
 def _data_dir_prefixes(root: Path, data_dirs: tuple[Path, ...]) -> tuple[tuple[str, ...], ...]:

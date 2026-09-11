@@ -29,9 +29,7 @@ import time
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any
-
-from fspack._compat import override
+from typing import Any, override
 
 __all__ = [
     "JsonFormatter",
@@ -49,7 +47,6 @@ _TEXT_FMT = "%(asctime)s [%(levelname)-8s] %(name)s: %(message)s"
 _STANDARD_ATTRS = frozenset(
     set(logging.LogRecord(name="", level=0, pathname="", lineno=0, msg="", args=(), exc_info=None).__dict__.keys())
 )
-
 
 class LogFormat(Enum):
     """日志文件格式.
@@ -75,7 +72,6 @@ class LogFormat(Enum):
         except ValueError as exc:
             raise ValueError(f"未知日志格式: {value!r}，可选: text/json") from exc
 
-
 class TextFormatter(logging.Formatter):
     """纯文本日志 Formatter.
 
@@ -86,7 +82,6 @@ class TextFormatter(logging.Formatter):
     def __init__(self) -> None:
         """初始化文本 Formatter，使用固定格式与 ISO 时间戳."""
         super().__init__(fmt=_TEXT_FMT, datefmt="%Y-%m-%d %H:%M:%S")
-
 
 class JsonFormatter(logging.Formatter):
     """JSON 结构化日志 Formatter.
@@ -99,7 +94,7 @@ class JsonFormatter(logging.Formatter):
     """
 
     @override
-    def formatTime(self, record: logging.LogRecord, datefmt: str | None = None) -> str:  # noqa: ARG002
+    def formatTime(self, record: logging.LogRecord, datefmt: str | None = None) -> str:
         """覆盖时间格式化：ISO 8601 + 毫秒（``%f`` 在 Windows 不可用，手动拼接）.
 
         ``datefmt`` 参数为父类 :meth:`logging.Formatter.formatTime` 签名兼容保留，
@@ -138,7 +133,6 @@ class JsonFormatter(logging.Formatter):
         except (TypeError, ValueError):
             return repr(value)
 
-
 @dataclass(frozen=True)
 class LogFileHandler:
     """日志文件 handler 包装，记录 handler 与文件路径便于清理."""
@@ -146,7 +140,6 @@ class LogFileHandler:
     handler: logging.FileHandler
     path: Path
     previous_root_level: int
-
 
 def setup_log_file(path: Path, fmt: LogFormat = LogFormat.TEXT) -> LogFileHandler:
     """创建日志文件 handler 并附加到 root logger.
@@ -176,7 +169,6 @@ def setup_log_file(path: Path, fmt: LogFormat = LogFormat.TEXT) -> LogFileHandle
     root.addHandler(handler)
     _logger.info("日志文件已启用: %s（格式: %s）", path, fmt.value)
     return LogFileHandler(handler=handler, path=path, previous_root_level=previous_level)
-
 
 def teardown_log_file(wrapper: LogFileHandler | None) -> None:
     """从 root logger 移除并关闭日志文件 handler.

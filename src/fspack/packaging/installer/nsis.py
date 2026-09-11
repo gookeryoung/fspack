@@ -13,8 +13,8 @@ from __future__ import annotations
 import logging
 import subprocess  # noqa: F401  # 保留 patch 路径 fspack.packaging.installer.nsis.subprocess.run
 from pathlib import Path
+from typing import override
 
-from fspack._compat import override
 from fspack.config import ProjectInfo
 from fspack.console import console
 from fspack.exceptions import InstallerError
@@ -60,7 +60,6 @@ _NSIS_UCRT_CHECK_BLOCK = """\
 # UCRT 依赖二进制标记（PE 导入表 dll 名为 ASCII 明文，子串检测零漏报）
 _UCRT_MARKER = b"api-ms-win-crt-"
 
-
 def dist_needs_ucrt(dist_dir: Path) -> bool:
     """dist 内 PE 是否依赖 UCRT（api-ms-win-crt-* 导入），决定 NSIS 是否生成检测段.
 
@@ -70,7 +69,6 @@ def dist_needs_ucrt(dist_dir: Path) -> bool:
     ``fsp p`` 打包路径）。
     """
     return any(_UCRT_MARKER in path.read_bytes() for path in iter_pe_files(dist_dir))
-
 
 _NSIS_TEMPLATE = """\
 !include "MUI2.nsh"
@@ -133,7 +131,6 @@ Section "Uninstall"
 {uninstall_registry_block}
 SectionEnd
 """
-
 
 class NsisInstaller(Installer):
     """Windows NSIS 安装包生成器。"""
@@ -216,7 +213,6 @@ class NsisInstaller(Installer):
             console.rich.print(tk.summary())
         return result
 
-
 def generate_nsis_script(project: ProjectInfo, dist_dir: Path, release_dir: Path) -> Path:
     """生成 NSIS 安装脚本到 dist_dir/installer.nsi，返回脚本路径。
 
@@ -246,7 +242,6 @@ def generate_nsis_script(project: ProjectInfo, dist_dir: Path, release_dir: Path
     _logger.info("已生成 NSIS 脚本: %s", nsi)
     return nsi
 
-
 def _build_shortcut_block(project: ProjectInfo) -> str:
     """生成开始菜单与桌面快捷方式创建指令。
 
@@ -262,12 +257,10 @@ def _build_shortcut_block(project: ProjectInfo) -> str:
     ]
     return "\n".join(lines)
 
-
 def _build_uninstall_shortcut_block(project: ProjectInfo) -> str:
     """生成卸载时清理快捷方式指令（所有应用类型均清理）。"""
     name = project.name
     return f'  RMDir /r "$SMPROGRAMS\\{name}"\n  Delete "$DESKTOP\\{name}.lnk"'
-
 
 def _build_registry_block(project: ProjectInfo) -> str:
     """生成添加/删除程序注册表条目，使应用出现在 Windows 设置的应用列表中。"""
@@ -287,12 +280,10 @@ def _build_registry_block(project: ProjectInfo) -> str:
         f'  WriteRegDWORD HKLM "{key}" "NoRepair" 1'
     )
 
-
 def _build_uninstall_registry_block(project: ProjectInfo) -> str:
     """生成卸载时删除注册表条目的指令。"""
     key = f"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{project.name}"
     return f'  DeleteRegKey HKLM "{key}"'
-
 
 def compile_installer(nsi_path: Path, out_setup: Path) -> Path:
     """调用 makensis 编译 .nsi 为安装包，返回 out_setup 路径.
@@ -309,7 +300,6 @@ def compile_installer(nsi_path: Path, out_setup: Path) -> Path:
         produces=out_setup,
     )
     return out_setup
-
 
 def sign_exe_file(
     exe_path: Path,
@@ -342,7 +332,6 @@ def sign_exe_file(
         not_found_msg="未找到 signtool，请安装 Windows SDK 并将 signtool 加入 PATH",
         fail_prefix=f"signtool 签名失败 {exe_path.name}",
     )
-
 
 def sign_exe_files(
     dist_dir: Path,

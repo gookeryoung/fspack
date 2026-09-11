@@ -29,7 +29,6 @@ from fspack.analyzer.analysis import (  # noqa: F401 — facade re-export（测�
     analyze_dependencies,
 )
 from fspack.analyzer.ast_scan import (
-    STDLIB_FALLBACK,
     _qml_module_to_qt_sub,
     collect_imports,
     collect_imports_and_submodules,
@@ -39,7 +38,6 @@ from fspack.analyzer.ast_scan import (
 from fspack.analyzer.fingerprint import source_fingerprint
 
 __all__ = [
-    "STDLIB_FALLBACK",
     "_qml_module_to_qt_sub",
     "analyze_dependencies",
     "collect_imports",

@@ -16,11 +16,11 @@
 
 from __future__ import annotations
 
-from fspack._compat import override
+from typing import override
+
 from fspack.slim.base import SlimSpec
 
 __all__ = ["DefaultSlimSpec"]
-
 
 class DefaultSlimSpec(SlimSpec):
     """默认精简规则：兜底，``match`` 始终返回 ``True``。
@@ -35,7 +35,7 @@ class DefaultSlimSpec(SlimSpec):
 
     @classmethod
     @override
-    def match(cls, whl_pkg: str) -> bool:  # noqa: ARG003 # 抽象方法签名要求，兜底匹配不区分包名
+    def match(cls, whl_pkg: str) -> bool:  # 抽象方法签名要求，兜底匹配不区分包名
         """兜底匹配：始终返回 ``True``."""
         return True
 

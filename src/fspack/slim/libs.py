@@ -16,7 +16,8 @@
 
 from __future__ import annotations
 
-from fspack._compat import override
+from typing import override
+
 from fspack.slim.base import SlimSpec
 
 __all__ = [
@@ -27,7 +28,6 @@ __all__ = [
     "ScipySlimSpec",
     "SklearnSlimSpec",
 ]
-
 
 class NumpySlimSpec(SlimSpec):
     """numpy 精简规则：剥离已弃用构建工具与 PyInstaller hook 子目录。
@@ -100,7 +100,6 @@ class NumpySlimSpec(SlimSpec):
         # 复用已 split 的 parts，避免 _default_classify 内部重复 split
         return cls._default_classify(entry, top_pkg, keep_subs, cls._EXTRA_EXCLUDES, parts=parts)
 
-
 class LxmlSlimSpec(SlimSpec):
     """lxml 精简规则：剥离 C 头文件目录。
 
@@ -134,11 +133,9 @@ class LxmlSlimSpec(SlimSpec):
         """lxml 条目分类，委托 :meth:`_default_classify` + 库专属剥离集合."""
         return cls._default_classify(entry, top_pkg, keep_subs, cls._EXTRA_EXCLUDES)
 
-
 # 嵌套测试目录名已提升到 SlimSpec.NESTED_TEST_DIRS，所有走 _default_classify
 # 的 spec 自动剥离任意层级的 tests 目录（含跨包 mpl_toolkits/tests/、
 # scipy/<sub>/tests/、pandas/<sub>/tests/ 等），无需各 spec 显式声明。
-
 
 class MatplotlibSlimSpec(SlimSpec):
     """matplotlib 精简规则：剥离 sphinxext 与跨包/嵌套 tests 目录。
@@ -188,7 +185,6 @@ class MatplotlibSlimSpec(SlimSpec):
         """
         return cls._default_classify(entry, top_pkg, keep_subs, cls._EXTRA_EXCLUDES, frozenset(), True)
 
-
 class ScipySlimSpec(SlimSpec):
     """scipy 精简规则：剥离各子模块下的嵌套 tests 目录。
 
@@ -217,7 +213,6 @@ class ScipySlimSpec(SlimSpec):
     ) -> tuple[str, str | None]:
         """scipy 条目分类，委托 :meth:`_default_classify`（嵌套 tests 由基类自动剥离）."""
         return cls._default_classify(entry, top_pkg, keep_subs)
-
 
 class SklearnSlimSpec(SlimSpec):
     """scikit-learn 精简规则：剥离 datasets 下的描述文件与示例图片。
@@ -271,7 +266,6 @@ class SklearnSlimSpec(SlimSpec):
         ):
             return ("exclude", None)
         return cls._default_classify(entry, top_pkg, keep_subs)
-
 
 class PyarrowSlimSpec(SlimSpec):
     """pyarrow 精简规则：剥离 C++ 头文件目录，顶层 C 扩展始终保留。

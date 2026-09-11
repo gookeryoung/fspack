@@ -28,8 +28,8 @@ import logging
 import shutil
 import subprocess  # noqa: F401  # 保留 patch 路径 fspack.packaging.installer.macos.subprocess.run
 from pathlib import Path
+from typing import override
 
-from fspack._compat import override
 from fspack.config import ProjectInfo
 from fspack.console import console
 from fspack.exceptions import InstallerError
@@ -58,7 +58,6 @@ _logger = logging.getLogger("fspack.packaging.installer")
 # macOS 安装目标位置（拖拽到 /Applications 即安装）
 _MACOS_INSTALL_LOCATION = "/Applications"
 
-
 def _bundle_identifier(info: ProjectInfo) -> str:
     """返回 macOS bundle identifier：``com.fspack.<name>``.
 
@@ -66,7 +65,6 @@ def _bundle_identifier(info: ProjectInfo) -> str:
     避免用户未配置时出错。后续可扩展为读取 ``[tool.fspack] bundle_id``。
     """
     return f"com.fspack.{info.name}"
-
 
 def _run_macos_tool(cmd: list[str], *, error_hint: str) -> None:
     """执行 macOS 专属工具（pkgbuild/hdiutil/codesign），失败抛 InstallerError.
@@ -84,7 +82,6 @@ def _run_macos_tool(cmd: list[str], *, error_hint: str) -> None:
         fail_prefix=f"{cmd[0]} 执行失败",
     )
 
-
 def _codesign_adhoc(path: Path) -> None:
     """对 ``path`` 做 ad-hoc 签名（``codesign --force --sign -``）.
 
@@ -95,7 +92,6 @@ def _codesign_adhoc(path: Path) -> None:
         ["codesign", "--force", "--sign", "-", str(path)],
         error_hint="请安装 Xcode Command Line Tools",
     )
-
 
 class MacInstaller(Installer):
     """macOS 安装包生成器：.pkg 安装包 + .dmg 磁盘镜像。"""
@@ -164,7 +160,6 @@ class MacInstaller(Installer):
             console.rich.print(tk.summary())
         return result
 
-
 def build_pkg(
     dist_dir: Path,
     info: ProjectInfo,
@@ -212,7 +207,6 @@ def build_pkg(
 
     _logger.info("已生成 .pkg 安装包: %s", pkg_path)
     return pkg_path
-
 
 def build_dmg(
     dist_dir: Path,
@@ -273,9 +267,7 @@ def build_dmg(
     _logger.info("已生成 .dmg 磁盘镜像: %s", dmg_path)
     return dmg_path
 
-
 # ---- 单格式编排（pkg / dmg）----
-
 
 def build_pkg_release(req: ReleaseRequest, *, codesign: bool = False) -> Path:
     """编排：可选 build → 校验可执行文件 → 构造 .pkg 安装包，返回 .pkg 路径。"""
@@ -296,7 +288,6 @@ def build_pkg_release(req: ReleaseRequest, *, codesign: bool = False) -> Path:
         console.rich.print(tk.summary())
     return result
 
-
 def build_dmg_release(req: ReleaseRequest, *, codesign: bool = False) -> Path:
     """编排：可选 build → 校验可执行文件 → 构造 .dmg 磁盘镜像，返回 .dmg 路径。"""
     own_tracker = req.tracker is None
@@ -315,7 +306,6 @@ def build_dmg_release(req: ReleaseRequest, *, codesign: bool = False) -> Path:
     if own_tracker:
         console.rich.print(tk.summary())
     return result
-
 
 def build_mac_installer(req: ReleaseRequest, *, codesign: bool = False) -> Path:
     """编排：可选 build → .pkg 安装包 → .dmg 磁盘镜像，返回 .dmg 路径。"""

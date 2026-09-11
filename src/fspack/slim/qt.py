@@ -28,8 +28,8 @@ AST 无法发现），无需用户显式声明或 ``--keep-module``。
 from __future__ import annotations
 
 from pathlib import Path
+from typing import override
 
-from fspack._compat import override
 from fspack.slim.base import SlimSpec, normalize_name
 from fspack.slim.qt_closure import (
     _QT_ABI_DLL_DEPS,
@@ -68,7 +68,6 @@ QT_PACKAGES = frozenset({"pyside2", "pyside6", "pyqt5", "pyqt6"})
 # QtWebEngine 顶层文件名小写集合：zip 条目大小写不保证与发布名一致
 # （部分 wheel 打包工具保留原始大小写变体），比较前统一 lower。
 _WEBENGINE_TOP_FILES_LOWER = frozenset(f.lower() for f in _QT_WEBENGINE_TOP_FILES)
-
 
 class QtSlimSpec(SlimSpec):
     """Qt 库精简规则：PySide2/PySide6/PyQt5/PyQt6 共享同一规则。

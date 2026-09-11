@@ -19,9 +19,8 @@ from __future__ import annotations
 import abc
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, override
 
-from fspack._compat import override
 from fspack.config import MirrorConfig, is_offline
 from fspack.exceptions import EmbedError
 from fspack.packaging.runtime.extract import extract_tar_safe, extract_zip_safe
@@ -43,7 +42,6 @@ _logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 _runtime_mod_holder: list[Any] = [None]
 
-
 def _R(fn_name: str, fallback_fn: Any) -> Any:
     """从 ``fspack.packaging.runtime`` 取函数属性，取不到时回退 fallback_fn."""
     mod = _runtime_mod_holder[0]
@@ -57,11 +55,9 @@ def _R(fn_name: str, fallback_fn: Any) -> Any:
             return fallback_fn
     return getattr(mod, fn_name, fallback_fn)
 
-
 # ---------------------------------------------------------------------------
 # 基类
 # ---------------------------------------------------------------------------
-
 
 class RuntimeDownloader(abc.ABC):
     """Python 运行时下载与解压基类.
@@ -180,11 +176,9 @@ class RuntimeDownloader(abc.ABC):
         runtime_dir.mkdir(parents=True, exist_ok=True)
         cls.extract_archive(archive_path, runtime_dir)
 
-
 # ---------------------------------------------------------------------------
 # 子类
 # ---------------------------------------------------------------------------
-
 
 class EmbedRuntime(RuntimeDownloader):
     """Windows embed python 下载器。"""
@@ -194,7 +188,7 @@ class EmbedRuntime(RuntimeDownloader):
 
     @classmethod
     @override
-    def archive_name(cls, version: str, **kwargs: object) -> str:  # noqa: ARG003
+    def archive_name(cls, version: str, **kwargs: object) -> str:
         return embed_zip_name(version)
 
     @classmethod
@@ -216,10 +210,9 @@ class EmbedRuntime(RuntimeDownloader):
 
     @classmethod
     @override
-    def post_extract(cls, runtime_dir: Path, version: str) -> None:  # noqa: ARG003
+    def post_extract(cls, runtime_dir: Path, version: str) -> None:
         """解压后钩子（site-packages 已移至 dist 层级，无操作）."""
         return None
-
 
 class StandaloneRuntime(RuntimeDownloader):
     """python-build-standalone 下载器（Linux/macOS/Windows+t）。
@@ -271,11 +264,9 @@ class StandaloneRuntime(RuntimeDownloader):
     def extract_archive(cls, archive_path: Path, runtime_dir: Path) -> None:
         extract_tar_safe(archive_path, runtime_dir, label="python-build-standalone tarball")
 
-
 # ---------------------------------------------------------------------------
 # 函数式 API（委托给类；ensure_* 通过 _R 解析 download_*/extract_* 便于测试 patch）
 # ---------------------------------------------------------------------------
-
 
 def download_embed(
     version: str,
@@ -288,11 +279,9 @@ def download_embed(
     """从镜像下载 embed zip 到缓存目录，已存在则直接复用."""
     return EmbedRuntime.download(version, cache_dir, stage=stage, expected_hash=expected_hash, mirror=mirror)
 
-
 def extract_embed(zip_path: Path, runtime_dir: Path) -> None:
     """解压 embed zip 到 runtime_dir。"""
     EmbedRuntime.extract(zip_path, runtime_dir)
-
 
 def ensure_embed(  # noqa: PLR0913
     version: str,
@@ -329,7 +318,6 @@ def ensure_embed(  # noqa: PLR0913
     EmbedRuntime.post_extract(runtime_dir, version)
     return runtime_dir
 
-
 def download_standalone(  # noqa: PLR0913
     version: str,
     release_tag: str,
@@ -355,11 +343,9 @@ def download_standalone(  # noqa: PLR0913
         windows=windows,
     )
 
-
 def extract_standalone(tar_path: Path, runtime_dir: Path) -> None:
     """解压 tar.gz 到 runtime_dir，解压后 runtime_dir/python/ 为 Python 根目录。"""
     StandaloneRuntime.extract(tar_path, runtime_dir)
-
 
 def ensure_standalone(  # noqa: PLR0913
     version: str,

@@ -33,12 +33,12 @@ from __future__ import annotations
 
 import logging
 import re
+import tomllib
 from dataclasses import replace
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, cast
 
-from fspack._compat import tomllib
 from fspack.config.app_type import (  # noqa: F401
     _GUI_HINTS,
     _WEB_HINTS,
@@ -75,7 +75,6 @@ _logger = logging.getLogger(__name__)
 # LRU 淘汰最久未用，避免长期运行内存膨胀。
 _PROJECT_CACHE_MAXSIZE = 64
 
-
 # [tool.fspack] 构建默认值键名与 BuildDefaults 字段的映射
 _BUILD_DEFAULT_KEYS: dict[str, str] = {
     "nuitka": "nuitka",
@@ -97,7 +96,6 @@ _BUILD_DEFAULT_KEYS: dict[str, str] = {
     "no_win7_dll": "no_win7_dll",
     "open_browser": "open_browser",
 }
-
 
 def parse_project(project_dir: Path, py_version: str | None = None) -> ProjectInfo:
     """解析 pyproject.toml 并识别入口，返回项目元信息.
@@ -127,7 +125,6 @@ def parse_project(project_dir: Path, py_version: str | None = None) -> ProjectIn
     # 文件被 touch 但内容未改也会失效，但这是可接受的过度失效（缓存重建成本低）
     mtime_ns = pp.stat().st_mtime_ns
     return _parse_project_cached(project_dir, py_version, mtime_ns)
-
 
 @lru_cache(maxsize=_PROJECT_CACHE_MAXSIZE)
 def _parse_project_cached(
@@ -268,7 +265,6 @@ def _parse_project_cached(
         optional_dependencies=optional_deps,
     )
 
-
 def clear_project_cache() -> None:
     """清空 :func:`parse_project` 的双层解析缓存.
 
@@ -293,7 +289,6 @@ def clear_project_cache() -> None:
 
     _clear_project_info_cache()
 
-
 def _parse_author(authors: object) -> str:
     """从 PEP 621 ``[project].authors`` 提取首位作者名，用于 VS_VERSIONINFO 资源段.
 
@@ -314,11 +309,9 @@ def _parse_author(authors: object) -> str:
         return first
     return ""
 
-
 def _parse_exclude_dirs(value: object) -> tuple[str, ...]:
     """解析 ``[tool.fspack] exclude`` 配置为排除模式元组（空元素报错）."""
     return _parse_string_list_cfg(value, "exclude", reject_empty=True)
-
 
 def _parse_data_dirs(value: object) -> tuple[str, ...]:
     """解析 ``[tool.fspack] data-dirs`` 配置为目录路径元组（空元素报错）。
@@ -328,7 +321,6 @@ def _parse_data_dirs(value: object) -> tuple[str, ...]:
     元数据/文档排除与 ``.py`` 剥离。空列表表示无数据资源目录（默认行为不变）。
     """
     return _parse_string_list_cfg(value, "data-dirs", reject_empty=True)
-
 
 def _parse_web_static_dirs(value: object) -> tuple[str, ...]:
     """解析 ``[tool.fspack] web-static-dirs`` 配置为目录路径元组（空元素报错）。
@@ -340,7 +332,6 @@ def _parse_web_static_dirs(value: object) -> tuple[str, ...]:
     表示无前端构建产物（仅 ``AppType.WEB`` 项目使用）。
     """
     return _parse_string_list_cfg(value, "web-static-dirs", reject_empty=True)
-
 
 def _parse_entry_app_types(value: object, entry_names: tuple[str, ...]) -> dict[str, AppType]:
     """解析 ``[tool.fspack] entry-app-types``：入口名 → 应用类型显式覆盖.
@@ -374,7 +365,6 @@ def _parse_entry_app_types(value: object, entry_names: tuple[str, ...]) -> dict[
         result[name] = type_map[type_str]
     return result
 
-
 def _parse_optional_dependencies(value: object) -> dict[str, tuple[str, ...]]:
     """解析 ``[project.optional-dependencies]`` 为 ``{extra_name: deps}`` 字典.
 
@@ -405,7 +395,6 @@ def _parse_optional_dependencies(value: object) -> dict[str, tuple[str, ...]]:
             )
         result[extra_name] = tuple(dep_list)
     return result
-
 
 def _parse_build_defaults(fspack_cfg: dict[str, Any]) -> BuildDefaults:  # noqa: PLR0912
     """从 ``[tool.fspack]`` 解析构建默认值.
@@ -467,7 +456,6 @@ def _parse_build_defaults(fspack_cfg: dict[str, Any]) -> BuildDefaults:  # noqa:
             raise ProjectError(f"[tool.fspack] sign-deb-key 必须是非空字符串，得到 {sign_deb_key!r}")
         kwargs["sign_deb_key"] = sign_deb_key.strip()
     return BuildDefaults(**cast(Any, kwargs))
-
 
 def expand_extras(
     base_deps: tuple[str, ...],
@@ -558,7 +546,6 @@ def expand_extras(
         # enabled_extras 已校验过存在性
         _expand_dep_list(optional_deps[extra], frozenset({extra}))
     return tuple(merged)
-
 
 def _resolve_icon(project_dir: Path, icon_rel: object) -> Path | None:
     """解析 ``[tool.fspack] icon`` 配置为绝对路径。

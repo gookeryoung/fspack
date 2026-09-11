@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import zipfile
 from pathlib import Path
+from typing import override
 
 import pytest
 
-from fspack._compat import override
 from fspack.config import DEFAULT_SLIM_RULES, SlimRules
 from fspack.exceptions import DependencyError
 from fspack.slim import classify_entry, slim_unpack
@@ -2702,9 +2702,9 @@ class TestSlimSpecRegistry:
             @override
             def classify_entry(
                 cls,
-                entry: str,  # noqa: ARG003 # 测试桩，签名要求
-                top_pkg: str,  # noqa: ARG003 # 测试桩，签名要求
-                keep_subs: set[str],  # noqa: ARG003 # 测试桩，签名要求
+                entry: str,  # 测试桩，签名要求
+                top_pkg: str,  # 测试桩，签名要求
+                keep_subs: set[str],  # 测试桩，签名要求
             ) -> tuple[str, str | None]:
                 return ("shared", None)
 
