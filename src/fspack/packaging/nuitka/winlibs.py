@@ -427,6 +427,10 @@ class NuitkaWinlibs:
         else:
             try:
                 with zipfile.ZipFile(archive) as zf:
+                    from fspack.packaging.runtime.extract import _validate_zip_member
+
+                    for info in zf.infolist():
+                        _validate_zip_member(info)
                     zf.extractall(gcc_dir)
             except (OSError, zipfile.BadZipFile) as e:
                 raise NuitkaError(f"winlibs-mingw 解压失败 {archive}: {e}") from e

@@ -35,7 +35,8 @@ from typing import TYPE_CHECKING
 
 from fspack.config import KNOWN_STANDALONE_VERSIONS
 from fspack.config.versions import _split_t_suffix
-from fspack.exceptions import NuitkaError
+from fspack.exceptions import EmbedError, NuitkaError
+from fspack.packaging.runtime.extract import _validate_tar_member
 from fspack.platform import Platform
 from fspack.progress import StageRecorder
 
@@ -310,11 +311,12 @@ class NuitkaStandalone:
         _logger.info("解压 standalone python 到 %s", build_python_dir)
         try:
             with tarfile.open(archive_path, "r:gz") as tf:
-                # Python 3.12+ 显式指定 data 过滤器（PEP 706）：消除 DeprecationWarning，
-                # 并阻止绝对路径/路径穿越等恶意条目（tarball 来自网络下载）。
-                # 低版本无 filter 参数，回退原行为。
+                # PEP 706 filter="data" + 手动预检双重防护
+                # Python 3.13 filter="data" 实测会静默规范化绝对路径而非拒绝
+                for member in tf.getmembers():
+                    _validate_tar_member(member)
                 tf.extractall(build_python_dir, filter="data")  # pragma: no cover
-        except (tarfile.TarError, OSError) as e:
+        except (tarfile.TarError, OSError, EmbedError) as e:
             raise NuitkaError(f"standalone python tarball 损坏: {archive_path}") from e
 
         # 解压后结构：build_python_dir/cpython-<base>+<tag>-x86_64-pc-windows-msvc[-freethreaded]-install_only/python/python.exe

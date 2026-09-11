@@ -248,6 +248,10 @@ class TkinterBundler:
 
     @staticmethod
     def _unpack_tkinter_zip(zip_path: Path, runtime_dir: Path) -> None:
-        """解压 tkinter zip 到 runtime 目录。"""
+        """解压 tkinter zip 到 runtime 目录（条目安全预检 + extractall）。"""
+        from fspack.packaging.runtime.extract import _validate_zip_member
+
         with zipfile.ZipFile(zip_path, "r") as zf:
+            for info in zf.infolist():
+                _validate_zip_member(info)
             zf.extractall(runtime_dir)

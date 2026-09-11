@@ -23,6 +23,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import shutil
+import stat
 import tarfile
 import zipfile
 from pathlib import Path
@@ -47,6 +48,56 @@ CCACHE_URLS: dict[Platform, str] = {
     Platform.LINUX: f"{_CCACHE_BASE}/ccache-{CCACHE_VERSION}-linux-x86_64.tar.xz",
     Platform.WINDOWS: f"{_CCACHE_BASE}/ccache-{CCACHE_VERSION}-windows-x86_64.zip",
 }
+
+
+def _validate_tar_member(member: tarfile.TarInfo) -> None:
+    """tar 条目安全预检：拒绝绝对路径、盘符、路径穿越、设备文件与危险符号链接.
+
+    参照 :mod:`fspack.packaging.runtime.extract` 同名函数——
+    Python 3.13 ``extractall(filter="data")`` 实测会把绝对路径静默规范化为相对
+    路径解压而非拒绝，仅靠 PEP 706 filter 不够，必须逐条目手动预检。
+    """
+    name = member.name.replace("\\", "/")
+    if name.startswith("/"):
+        raise tarfile.TarError(f"tar 条目含绝对路径: {member.name}")
+    if len(name) >= 2 and name[1] == ":":
+        raise tarfile.TarError(f"tar 条目含盘符路径: {member.name}")
+    if ".." in name.split("/"):
+        raise tarfile.TarError(f"tar 条目含路径穿越: {member.name}")
+    if member.issym() or member.islnk():
+        linkname = member.linkname.replace("\\", "/")
+        if linkname.startswith("/"):
+            raise tarfile.TarError(f"tar 条目含绝对路径链接: {member.name}")
+        if len(linkname) >= 2 and linkname[1] == ":":
+            raise tarfile.TarError(f"tar 条目含盘符链接: {member.name}")
+        base = name.rsplit("/", 1)[0] if "/" in name else ""
+        combined = f"{base}/{linkname}" if base else linkname
+        stack: list[str] = []
+        for seg in combined.split("/"):
+            if seg in {"", "."}:
+                continue
+            if seg == "..":
+                if not stack:
+                    raise tarfile.TarError(f"tar 条目含路径穿越链接: {member.name}")
+                stack.pop()
+            else:
+                stack.append(seg)
+    if member.isdev():
+        raise tarfile.TarError(f"tar 条目含设备文件: {member.name}")
+
+
+def _validate_zip_member(info: zipfile.ZipInfo) -> None:
+    """zip 条目安全预检：拒绝绝对路径、盘符、路径穿越与符号链接."""
+    name = info.filename.replace("\\", "/")
+    if name.startswith("/"):
+        raise zipfile.BadZipFile(f"zip 条目含绝对路径: {info.filename}")
+    if len(name) >= 2 and name[1] == ":":
+        raise zipfile.BadZipFile(f"zip 条目含盘符路径: {info.filename}")
+    if ".." in name.split("/"):
+        raise zipfile.BadZipFile(f"zip 条目含路径穿越: {info.filename}")
+    mode = info.external_attr >> 16
+    if mode and stat.S_ISLNK(mode):
+        raise zipfile.BadZipFile(f"zip 条目含符号链接: {info.filename}")
 
 
 class NuitkaCcache:
@@ -156,7 +207,10 @@ class NuitkaCcache:
             archive = ccache_dir / "ccache.tar.xz"
             downloader.download(url, archive, label="ccache")
             with tarfile.open(archive, "r:xz") as tf:
-                # PEP 706: 3.12+ 需 filter="data" 防路径穿越
+                # PEP 706 filter="data" + 手动预检双重防护
+                # Python 3.13 filter="data" 实测会静默规范化绝对路径而非拒绝
+                for member in tf.getmembers():
+                    _validate_tar_member(member)
                 tf.extractall(ccache_dir, filter="data")
             archive.unlink()
             # 归档内 ccache 在 ccache-<ver>-linux-x86_64/ccache，移动到根目录
@@ -170,6 +224,8 @@ class NuitkaCcache:
             archive = ccache_dir / "ccache.zip"
             downloader.download(url, archive, label="ccache")
             with zipfile.ZipFile(archive) as zf:
+                for info in zf.infolist():
+                    _validate_zip_member(info)
                 zf.extractall(ccache_dir)
             archive.unlink()
             # 归档内 ccache.exe 在 ccache-<ver>-windows-x86_64/ccache.exe，移动到根目录

@@ -56,7 +56,7 @@ def _machine_id() -> str:
     回退到 ``uuid.getnode()``（MAC 地址哈希化），避免空值导致碰撞。
     """
     raw = platform.node() or str(uuid.getnode())
-    return hashlib.md5(raw.encode()).hexdigest()[:8]
+    return hashlib.md5(raw.encode(), usedforsecurity=False).hexdigest()[:8]
 
 
 def _collect_machine_info() -> dict[str, Any]:

@@ -152,54 +152,56 @@ class NativeServer:
 
     def install_dependencies(self) -> None:
         """安装前端依赖."""
-        cmd = self.package_cmd
-
-        origin_dir = Path.cwd()
-        os.chdir(self.DIR_FRONTEND)
         try:
-            subprocess.run([cmd, "install"], shell=True, check=True)
+            subprocess.run(
+                [*self.package_cmd, "install"],
+                cwd=self.DIR_FRONTEND,
+                check=True,
+            )
         except (subprocess.CalledProcessError, OSError):
             print("安装前端依赖失败")
-        finally:
-            os.chdir(origin_dir)
 
     def build(self) -> None:
         """构建前端."""
-        cmd = self.package_cmd
-
-        origin_dir = Path.cwd()
-        os.chdir(self.DIR_FRONTEND)
         try:
-            subprocess.run([cmd, "run", "build"], shell=True, check=True)
+            subprocess.run(
+                [*self.package_cmd, "run", "build"],
+                cwd=self.DIR_FRONTEND,
+                check=True,
+            )
         except (subprocess.CalledProcessError, OSError):
             print("打包前端失败, 删除前端发布文件...")
             shutil.rmtree(self.DIR_FRONTEND_DIST, ignore_errors=True)
             return
-        finally:
-            os.chdir(origin_dir)
 
     def development(self) -> None:
         """启动前端开发服务."""
-        cmd = self.package_cmd
-
-        origin_dir = Path.cwd()
-        os.chdir(self.DIR_FRONTEND)
         try:
-            subprocess.run([cmd, "run", "dev"], shell=True, check=True)
+            subprocess.run(
+                [*self.package_cmd, "run", "dev"],
+                cwd=self.DIR_FRONTEND,
+                check=True,
+            )
         except (subprocess.CalledProcessError, OSError):
             print("启动前端开发服务失败")
-        finally:
-            os.chdir(origin_dir)
 
     @cached_property
-    def package_cmd(self) -> str:
-        """获取包管理器命令."""
-        suffix = ".cmd" if WIN else ""
-        for cmd in ["pnpm", "yarn", "npm"]:
-            if shutil.which(cmd):
-                print(f"使用 {cmd} 构建前端")
-                return f"{cmd}{suffix}"
-        msg = "未找到包管理器"
+    def package_cmd(self) -> list[str]:
+        """获取包管理器命令（list 形式，无 shell 依赖）.
+
+        Windows 上 .cmd/.bat 脚本需要通过 ``cmd.exe /c`` 包装才能被
+        ``subprocess`` 直接执行（``CreateProcess`` 不识别 .cmd 扩展名）。
+        非 Windows 平台直接返回可执行文件路径。
+        """
+        for name in ("pnpm", "yarn", "npm"):
+            path = shutil.which(name)
+            if path:
+                print(f"使用 {name} 构建前端")
+                # Windows .cmd/.bat 需 cmd.exe /c 包装
+                if WIN and path.lower().endswith((".cmd", ".bat")):
+                    return ["cmd.exe", "/c", path]
+                return [path]
+        msg = "未找到包管理器 (pnpm/yarn/npm)"
         raise RuntimeError(msg)
 
 

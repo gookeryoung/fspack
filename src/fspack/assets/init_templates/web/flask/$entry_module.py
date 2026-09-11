@@ -1,5 +1,7 @@
 """$project_name 入口：Flask Web 服务示例."""
 
+import os
+
 from flask import Flask, jsonify
 
 app = Flask(__name__)
@@ -19,8 +21,9 @@ def hello(name: str) -> object:
 
 def main() -> None:
     """启动 Flask 开发服务器."""
+    debug = os.environ.get("FLASK_DEBUG", "").lower() in {"1", "true", "yes"}
     print("$project_name: 启动 Flask 服务 http://127.0.0.1:5000")
-    app.run(host="127.0.0.1", port=5000, debug=True)
+    app.run(host="127.0.0.1", port=5000, debug=debug)
 
 
 if __name__ == "__main__":
