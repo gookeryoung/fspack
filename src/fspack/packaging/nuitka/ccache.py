@@ -23,13 +23,12 @@ from __future__ import annotations
 import contextlib
 import logging
 import shutil
-import stat
-import tarfile
-import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fspack.config import is_offline
+from fspack.exceptions import EmbedError
+from fspack.packaging.runtime.extract import extract_tar_safe, extract_zip_safe
 from fspack.platform import Platform
 from fspack.progress import StageRecorder
 
@@ -48,56 +47,6 @@ CCACHE_URLS: dict[Platform, str] = {
     Platform.LINUX: f"{_CCACHE_BASE}/ccache-{CCACHE_VERSION}-linux-x86_64.tar.xz",
     Platform.WINDOWS: f"{_CCACHE_BASE}/ccache-{CCACHE_VERSION}-windows-x86_64.zip",
 }
-
-
-def _validate_tar_member(member: tarfile.TarInfo) -> None:
-    """tar 条目安全预检：拒绝绝对路径、盘符、路径穿越、设备文件与危险符号链接.
-
-    参照 :mod:`fspack.packaging.runtime.extract` 同名函数——
-    Python 3.13 ``extractall(filter="data")`` 实测会把绝对路径静默规范化为相对
-    路径解压而非拒绝，仅靠 PEP 706 filter 不够，必须逐条目手动预检。
-    """
-    name = member.name.replace("\\", "/")
-    if name.startswith("/"):
-        raise tarfile.TarError(f"tar 条目含绝对路径: {member.name}")
-    if len(name) >= 2 and name[1] == ":":
-        raise tarfile.TarError(f"tar 条目含盘符路径: {member.name}")
-    if ".." in name.split("/"):
-        raise tarfile.TarError(f"tar 条目含路径穿越: {member.name}")
-    if member.issym() or member.islnk():
-        linkname = member.linkname.replace("\\", "/")
-        if linkname.startswith("/"):
-            raise tarfile.TarError(f"tar 条目含绝对路径链接: {member.name}")
-        if len(linkname) >= 2 and linkname[1] == ":":
-            raise tarfile.TarError(f"tar 条目含盘符链接: {member.name}")
-        base = name.rsplit("/", 1)[0] if "/" in name else ""
-        combined = f"{base}/{linkname}" if base else linkname
-        stack: list[str] = []
-        for seg in combined.split("/"):
-            if seg in {"", "."}:
-                continue
-            if seg == "..":
-                if not stack:
-                    raise tarfile.TarError(f"tar 条目含路径穿越链接: {member.name}")
-                stack.pop()
-            else:
-                stack.append(seg)
-    if member.isdev():
-        raise tarfile.TarError(f"tar 条目含设备文件: {member.name}")
-
-
-def _validate_zip_member(info: zipfile.ZipInfo) -> None:
-    """zip 条目安全预检：拒绝绝对路径、盘符、路径穿越与符号链接."""
-    name = info.filename.replace("\\", "/")
-    if name.startswith("/"):
-        raise zipfile.BadZipFile(f"zip 条目含绝对路径: {info.filename}")
-    if len(name) >= 2 and name[1] == ":":
-        raise zipfile.BadZipFile(f"zip 条目含盘符路径: {info.filename}")
-    if ".." in name.split("/"):
-        raise zipfile.BadZipFile(f"zip 条目含路径穿越: {info.filename}")
-    mode = info.external_attr >> 16
-    if mode and stat.S_ISLNK(mode):
-        raise zipfile.BadZipFile(f"zip 条目含符号链接: {info.filename}")
 
 
 class NuitkaCcache:
@@ -178,7 +127,7 @@ class NuitkaCcache:
         _logger.info("下载 ccache %s 到 %s", CCACHE_VERSION, ccache_dir)
         try:
             cls._download_and_extract_ccache(url, ccache_dir, target)
-        except (OSError, tarfile.TarError, zipfile.BadZipFile) as e:
+        except (OSError, EmbedError) as e:
             _logger.warning("ccache 下载失败，回退到无缓存模式: %s", e)
             return None
         if not ccache_exe.is_file():
@@ -198,6 +147,10 @@ class NuitkaCcache:
         Linux 归档为 ``.tar.xz``，内含 ``ccache-<ver>-linux-x86_64/ccache``；
         Windows 归档为 ``.zip``，内含 ``ccache.exe``。
         解压后仅提取 ccache 可执行文件到 ``ccache_dir`` 根目录（扁平布局）。
+
+        解压逻辑委托给 :func:`fspack.packaging.runtime.extract.extract_tar_safe` /
+        :func:`fspack.packaging.runtime.extract.extract_zip_safe`，由统一的安全解压
+        函数负责条目预检 + PEP 706 filter 双重防护。
         """
         from fspack.packaging.net import Downloader
 
@@ -206,13 +159,8 @@ class NuitkaCcache:
         if target is Platform.LINUX:
             archive = ccache_dir / "ccache.tar.xz"
             downloader.download(url, archive, label="ccache")
-            with tarfile.open(archive, "r:xz") as tf:
-                # PEP 706 filter="data" + 手动预检双重防护
-                # Python 3.13 filter="data" 实测会静默规范化绝对路径而非拒绝
-                for member in tf.getmembers():
-                    _validate_tar_member(member)
-                # 安全：双重防护机制见上文注释
-                tf.extractall(ccache_dir, filter="data")
+            # 安全：委托 extract_tar_safe 执行条目预检 + filter="data" 双重防护
+            extract_tar_safe(archive, ccache_dir, "ccache", mode="r:xz")
             archive.unlink()
             # 归档内 ccache 在 ccache-<ver>-linux-x86_64/ccache，移动到根目录
             extracted = list(ccache_dir.glob("ccache-*/ccache"))
@@ -224,11 +172,8 @@ class NuitkaCcache:
         else:
             archive = ccache_dir / "ccache.zip"
             downloader.download(url, archive, label="ccache")
-            with zipfile.ZipFile(archive) as zf:
-                for info in zf.infolist():
-                    _validate_zip_member(info)
-                # 安全：条目已通过 _validate_zip_member 预检
-                zf.extractall(ccache_dir)
+            # 安全：委托 extract_zip_safe 执行条目预检
+            extract_zip_safe(archive, ccache_dir, "ccache")
             archive.unlink()
             # 归档内 ccache.exe 在 ccache-<ver>-windows-x86_64/ccache.exe，移动到根目录
             extracted = list(ccache_dir.glob("ccache-*/ccache.exe"))

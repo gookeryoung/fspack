@@ -13,6 +13,7 @@ import tarfile
 import zipfile
 import zlib
 from pathlib import Path
+from typing import Literal
 
 from fspack.exceptions import EmbedError
 
@@ -111,8 +112,14 @@ def extract_zip_safe(archive_path: Path, runtime_dir: Path, label: str) -> None:
         raise
 
 
-def extract_tar_safe(archive_path: Path, runtime_dir: Path, label: str) -> None:
-    """tar.gz 安全解压：先逐条目预检，再 extractall（3.12+ 传 filter="data"）.
+def extract_tar_safe(
+    archive_path: Path,
+    runtime_dir: Path,
+    label: str,
+    *,
+    mode: Literal["r:gz", "r:xz", "r:*", "r:bz2"] = "r:gz",
+) -> None:
+    """tar 安全解压：先逐条目预检，再 extractall（3.12+ 传 filter="data"）.
 
     预检（:func:`_validate_tar_member`）在**所有** Python 版本执行，不能只在
     低版本预检而 3.12+ 依赖 PEP 706 ``data`` filter：Python 3.13 实测 data
@@ -131,9 +138,16 @@ def extract_tar_safe(archive_path: Path, runtime_dir: Path, label: str) -> None:
     ``zlib.error``（"Error -3 while decompressing data" 等，3.8 及 CRC 损坏典型），
     两者均非 ``TarError`` 亦非 ``OSError``，漏捕会让损坏归档留在缓存且以原始
     traceback 崩溃 CLI（下载中断产生半成品文件的典型症状）。
+
+    Args:
+        archive_path: 归档文件路径。
+        runtime_dir: 解压目标目录。
+        label: 归档标签（用于日志与错误消息）。
+        mode: tarfile.open 模式（``"r:gz"`` 默认 gzip，``"r:xz"`` 支持 xz，
+            ``"r:*"`` 自动检测）。keyword-only 参数防止误传。
     """
     try:
-        with tarfile.open(archive_path, "r:gz") as tf:
+        with tarfile.open(archive_path, mode) as tf:
             for member in tf.getmembers():
                 _validate_tar_member(member)
             # 安全：手动校验 + filter="data" 双重防护（PEP 706）
