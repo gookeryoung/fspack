@@ -255,7 +255,20 @@ def iter_with_progress[T](
 
     生成器函数：``with progress:`` 块在生成器迭代过程中保持活跃，
     在 ``StopIteration`` 或异常时通过 ``with`` 的 ``__exit__`` 正确停止进度条。
+
+    非 TTY 环境（stdout 被重定向，如 CI/pytest）或 item 数 <= 1 时跳过
+    rich Progress（其 Live/Console 生命周期开销可显著高于实际遍历逻辑），
+    退化为简单 for 循环。
     """
+    total = len(items)
+    use_progress = console.rich.is_terminal and total > 1
+    if not use_progress:
+        # 无进度条开销的快速路径
+        for item in items:
+            yield item
+            if stage:
+                stage.processed()
+        return
     progress = Progress(
         SpinnerColumn(),
         TextColumn("[bold blue]{task.description}"),
@@ -265,7 +278,6 @@ def iter_with_progress[T](
         console=console.rich,
         transient=True,
     )
-    total = len(items)
     with progress:
         task_id = progress.add_task(description, total=total)
         for item in items:
@@ -293,11 +305,25 @@ def parallel_map_with_progress[T, R](
     ``max_workers`` 默认 ``min(8, len(items))``：上限 8 避免过多线程增加
     调度开销，下限随任务数自适应。返回结果按**完成顺序**而非输入顺序，
     调用方不应依赖位置对应（如需按输入顺序应改用 ``pool.map``）。
+
+    非 TTY 环境（stdout 被重定向，如 CI/pytest）跳过 rich Progress，
+    其 Live/Console 生命周期开销在小迭代场景下可能远高于实际并行执行时间。
     """
     total = len(items)
     if total == 0:
         return []
     workers = max_workers or min(8, total)
+    results: list[R] = []
+    use_progress = console.rich.is_terminal and total > 1
+    if not use_progress:
+        # 无进度条开销的快速路径
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(fn, item) for item in items]
+            for future in as_completed(futures):
+                results.append(future.result())
+                if stage:
+                    stage.processed()
+        return results
     progress = Progress(
         SpinnerColumn(),
         TextColumn("[bold blue]{task.description}"),
@@ -307,7 +333,6 @@ def parallel_map_with_progress[T, R](
         console=console.rich,
         transient=True,
     )
-    results: list[R] = []
     with progress, ThreadPoolExecutor(max_workers=workers) as pool:
         task_id = progress.add_task(description, total=total)
         futures = [pool.submit(fn, item) for item in items]

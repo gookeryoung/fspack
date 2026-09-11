@@ -185,14 +185,18 @@ def _iter_py_entries(current: Path, root: Path, data_dirs: tuple[Path, ...] = ()
     条目按名称排序（含子目录），保证遍历顺序跨平台确定性——``os.walk``
     不保证目录遍历顺序，导致旧实现在不同文件系统上指纹不一致。
     """
-    root_resolved = root.resolve()
-    prefixes: list[tuple[str, ...]] = []
-    for dp in data_dirs:
-        try:
-            prefixes.append(dp.relative_to(root_resolved).parts)
-        except ValueError:
-            continue
-    yield from _iter_entries_tree(current, (), tuple(prefixes))
+    prefixes: tuple[tuple[str, ...], ...] = ()
+    if data_dirs:
+        # data_dirs 非空时才 resolve root（否则 resolve 结果永不被使用）
+        root_resolved = root.resolve()
+        prefix_list: list[tuple[str, ...]] = []
+        for dp in data_dirs:
+            try:
+                prefix_list.append(dp.relative_to(root_resolved).parts)
+            except ValueError:
+                continue
+        prefixes = tuple(prefix_list)
+    yield from _iter_entries_tree(current, (), prefixes)
 
 
 def _iter_entries_tree(

@@ -15,6 +15,7 @@ import enum
 import fnmatch
 import functools
 import logging
+import os
 import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -372,13 +373,25 @@ class ProjectInfo:
         文件未变动时直接命中 lru_cache，避免重复 TOML 解析 + AST 扫描。
         文件不存在时 ``mtime_ns=0``，交给 :func:`parse_project` 抛
         :class:`ProjectError`（lru_cache 不缓存异常）。
+
+        路径规范化：绝对路径且不含 ``.``/``..`` 组件时跳过
+        :meth:`Path.resolve`（Windows 上 ``resolve`` 触发 ``GetFinalPathNameByHandleW``
+        Win32 API 调用，耗时 ~20-50µs），直接用
+        :func:`os.path.normpath` + :meth:`Path.is_absolute` 保证键一致。
+        仅相对路径或含 ``.``/``..`` 时才做 ``resolve``。
         """
-        resolved = Path(project_dir).resolve()
+        p = Path(project_dir)
+        if p.is_absolute() and "." not in p.parts and ".." not in p.parts:
+            # 绝对路径且已规范化，跳过 resolve 避免昂贵的 Win32 realpath 调用
+            resolved_str = os.path.normpath(str(p))
+        else:
+            resolved_str = str(p.resolve())
+        resolved = Path(resolved_str)
         try:
             mtime_ns = (resolved / "pyproject.toml").stat().st_mtime_ns
         except OSError:
             mtime_ns = 0
-        return _project_info_from_dir_cached(str(resolved), py_version, mtime_ns)
+        return _project_info_from_dir_cached(resolved_str, py_version, mtime_ns)
 
     @property
     def exe_name(self) -> str:

@@ -441,6 +441,7 @@ def test_prepare_windows_t_runtime_cache_hit(tmp_path: Path, monkeypatch: pytest
     assert site_packages == ctx.cfg.dist_dir / "site-packages"
 
 
+@pytest.mark.slow()
 def test_prepare_windows_t_runtime_download_extract_flatten(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """runtime 未就绪时下载 standalone freethreaded tarball 并扁平化 python/ 子目录."""
     from fspack.packaging.pipeline import runtime_stage

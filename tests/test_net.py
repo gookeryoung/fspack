@@ -127,6 +127,7 @@ class TestDownloaderDownload:
             downloader.download("https://x/d", dest)
         assert not dest.exists()
 
+    @pytest.mark.slow()
     def test_truncated_body_raises_incomplete_read(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """响应体截断（written < Content-Length 且连接正常关闭）重试耗尽后失败.
 
