@@ -32,6 +32,7 @@ installer）重复读取与 AST 扫描。缓存键含 ``mtime_ns``，pyproject.t
 from __future__ import annotations
 
 import logging
+import os
 import re
 import tomllib
 from dataclasses import replace
@@ -118,7 +119,12 @@ def parse_project(project_dir: Path, py_version: str | None = None) -> ProjectIn
     ``fsp p`` 流程内多次调用重复读取与 AST 扫描。pyproject.toml 修改后 mtime
     变化，下次调用自动获取新值。
     """
-    project_dir = Path(project_dir).resolve()
+    p = Path(project_dir)
+    if p.is_absolute() and "." not in p.parts and ".." not in p.parts:
+        # 绝对路径且已规范化，跳过 resolve 避免昂贵的 Win32 realpath 调用
+        project_dir = Path(os.path.normpath(str(p)))
+    else:
+        project_dir = p.resolve()
     pp = project_dir / "pyproject.toml"
     if not pp.is_file():
         raise ProjectError(f"未找到 pyproject.toml: {pp}")
