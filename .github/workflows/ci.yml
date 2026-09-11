@@ -97,11 +97,11 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
 
-      - name: Set up Python 3.11
-        run: uv python install 3.11
+      - name: Set up Python 3.13
+        run: uv python install 3.13
 
       - name: Sync dependencies
-        run: uv sync --frozen --extra test --python 3.11
+        run: uv sync --frozen --extra test --python 3.13
 
       # 基线缓存：按平台 + Python 版本分组，避免硬件差异导致误报
       # key 含 v2 后缀：rounds=10→20 调整后基线数据不兼容，用 v2 让旧缓存失效
@@ -109,9 +109,9 @@ jobs:
         uses: actions/cache@v5
         with:
           path: .benchmarks/
-          key: benchmark-ubuntu-3.11-v2-${{ github.run_id }}
+          key: benchmark-ubuntu-3.13-v2-${{ github.run_id }}
           restore-keys: |
-            benchmark-ubuntu-3.11-v2-
+            benchmark-ubuntu-3.13-v2-
 
       - name: Run benchmark tests
         run: |
