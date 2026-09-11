@@ -1,15 +1,15 @@
 {
   "schema": "fspack/run-profile/1",
-  "created": "2026-08-25T13:10:07",
+  "created": "2026-09-11T18:13:01",
   "project": {
     "name": "fspack",
-    "version": "0.5.4"
+    "version": "0.6.1"
   },
-  "python": "3.13.13",
+  "python": "3.14.6",
   "platform": "windows",
   "entry": "fsp",
   "debug": false,
-  "wall_time": 0.0483,
+  "wall_time": 0.091,
   "returncode": 0,
   "stages": [
     {
@@ -17,16 +17,16 @@
       "elapsed": 0.0001
     },
     {
-      "name": "加载 runtime\\python313.dll",
-      "elapsed": 0.0013
+      "name": "加载 runtime\\python314.dll",
+      "elapsed": 0.0018
     },
     {
       "name": "loader 总",
-      "elapsed": 0.0014
+      "elapsed": 0.0019
     },
     {
       "name": "C 层初始化(实测)",
-      "elapsed": 0.0105
+      "elapsed": 0.0124
     },
     {
       "name": "环境准备",
@@ -34,43 +34,43 @@
     },
     {
       "name": "解释器初始化(约)",
-      "elapsed": 0.0052
+      "elapsed": 0.0062
     },
     {
       "name": "用户入口执行",
-      "elapsed": 0.0254
+      "elapsed": 0.0415
     }
   ],
   "top_imports": [
     {
       "name": "runpy",
-      "elapsed": 0.0009
+      "elapsed": 0.001
     }
   ],
   "entry_imports": [
     {
       "name": "fspack",
-      "elapsed": 0.0004
+      "elapsed": 0.0021
     },
     {
       "name": "argparse",
-      "elapsed": 0.0086
+      "elapsed": 0.0077
     },
     {
       "name": "pathlib",
-      "elapsed": 0.0035
+      "elapsed": 0.0029
     },
     {
       "name": "typing",
-      "elapsed": 0.0025
+      "elapsed": 0.0022
     },
     {
       "name": "fspack.cli_parser",
-      "elapsed": 0.001
+      "elapsed": 0.0039
     },
     {
       "name": "fspack.exceptions",
-      "elapsed": 0.0002
+      "elapsed": 0.0008
     },
     {
       "name": "locale",
@@ -78,20 +78,40 @@
     },
     {
       "name": "shutil",
-      "elapsed": 0.0026
+      "elapsed": 0.0039
+    },
+    {
+      "name": "_colorize",
+      "elapsed": 0.0094
     },
     {
       "name": "textwrap",
-      "elapsed": 0.0007
+      "elapsed": 0.0006
     }
   ],
   "top_self": [
     {
+      "name": "_colorize",
+      "elapsed": 0.003
+    },
+    {
+      "name": "fspack.cli_parser",
+      "elapsed": 0.0027
+    },
+    {
       "name": "typing",
-      "elapsed": 0.0025
+      "elapsed": 0.0022
+    },
+    {
+      "name": "inspect",
+      "elapsed": 0.0021
     },
     {
       "name": "encodings",
+      "elapsed": 0.0021
+    },
+    {
+      "name": "fspack",
       "elapsed": 0.0018
     },
     {
@@ -100,31 +120,20 @@
     },
     {
       "name": "enum",
-      "elapsed": 0.0015
+      "elapsed": 0.0012
     },
     {
       "name": "locale",
       "elapsed": 0.0011
     },
     {
-      "name": "fspack.cli_parser",
-      "elapsed": 0.001
-    },
-    {
-      "name": "functools",
+      "name": "dis",
       "elapsed": 0.0009
-    },
-    {
-      "name": "collections",
-      "elapsed": 0.0009
-    },
-    {
-      "name": "shutil",
-      "elapsed": 0.0009
-    },
-    {
-      "name": "textwrap",
-      "elapsed": 0.0007
     }
-  ]
+  ],
+  "gap_breakdown": {
+    "head_ms": 0.0332,
+    "tail_ms": 0.0017,
+    "blind_ms": 0.0
+  }
 }

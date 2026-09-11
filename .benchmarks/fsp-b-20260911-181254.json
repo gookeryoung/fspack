@@ -1,0 +1,186 @@
+{
+  "schema": "fspack/build-profile/1",
+  "created": "2026-09-11T18:12:54",
+  "project": {
+    "name": "fspack",
+    "version": "0.6.1"
+  },
+  "python": "3.14.6",
+  "platform": "windows",
+  "wall_time": 0.4608,
+  "cpu_time": 0.625,
+  "memory_peak": 11361953,
+  "cpu_ratio": 1.3563,
+  "stages": [
+    {
+      "name": "解析项目",
+      "elapsed": 0.0179,
+      "bytes_downloaded": 0,
+      "bytes_saved": 0,
+      "cache_hit": 0,
+      "items": 0,
+      "skipped": 0,
+      "detail": "fspack 0.6.1 (cli)"
+    },
+    {
+      "name": "下载运行时",
+      "elapsed": 0.0,
+      "bytes_downloaded": 0,
+      "bytes_saved": 0,
+      "cache_hit": 1,
+      "items": 0,
+      "skipped": 0,
+      "detail": "runtime 已就绪"
+    },
+    {
+      "name": "解压运行时",
+      "elapsed": 0.0,
+      "bytes_downloaded": 0,
+      "bytes_saved": 0,
+      "cache_hit": 1,
+      "items": 0,
+      "skipped": 0,
+      "detail": "runtime 已就绪"
+    },
+    {
+      "name": "Win7 组件替换",
+      "elapsed": 0.0075,
+      "bytes_downloaded": 0,
+      "bytes_saved": 0,
+      "cache_hit": 1,
+      "items": 0,
+      "skipped": 0,
+      "detail": "win7 重编译版 3.14.6"
+    },
+    {
+      "name": "精简标准库",
+      "elapsed": 0.0446,
+      "bytes_downloaded": 0,
+      "bytes_saved": 0,
+      "cache_hit": 0,
+      "items": 0,
+      "skipped": 0,
+      "detail": "已精简，跳过"
+    },
+    {
+      "name": "分析依赖",
+      "elapsed": 0.004,
+      "bytes_downloaded": 0,
+      "bytes_saved": 0,
+      "cache_hit": 1,
+      "items": 0,
+      "skipped": 0,
+      "detail": "缓存命中，AST 3 个第三方"
+    },
+    {
+      "name": "下载依赖",
+      "elapsed": 0.0013,
+      "bytes_downloaded": 0,
+      "bytes_saved": 0,
+      "cache_hit": 0,
+      "items": 0,
+      "skipped": 2,
+      "detail": "已存在跳过"
+    },
+    {
+      "name": "复制源码",
+      "elapsed": 0.0774,
+      "bytes_downloaded": 0,
+      "bytes_saved": 0,
+      "cache_hit": 0,
+      "items": 0,
+      "skipped": 0,
+      "detail": ""
+    },
+    {
+      "name": "预编译字节码",
+      "elapsed": 0.004,
+      "bytes_downloaded": 0,
+      "bytes_saved": 0,
+      "cache_hit": 1,
+      "items": 0,
+      "skipped": 0,
+      "detail": "缓存命中，跳过编译"
+    },
+    {
+      "name": "标准库 zip 化",
+      "elapsed": 0.0,
+      "bytes_downloaded": 0,
+      "bytes_saved": 0,
+      "cache_hit": 0,
+      "items": 0,
+      "skipped": 0,
+      "detail": "仅 Linux/macOS，跳过"
+    },
+    {
+      "name": "精简 runtime",
+      "elapsed": 0.0,
+      "bytes_downloaded": 0,
+      "bytes_saved": 0,
+      "cache_hit": 0,
+      "items": 0,
+      "skipped": 0,
+      "detail": "embed python 无调试符号，跳过"
+    },
+    {
+      "name": "解析图标",
+      "elapsed": 0.0025,
+      "bytes_downloaded": 0,
+      "bytes_saved": 0,
+      "cache_hit": 0,
+      "items": 0,
+      "skipped": 0,
+      "detail": "favicon.ico"
+    },
+    {
+      "name": "生成 C loader",
+      "elapsed": 0.0073,
+      "bytes_downloaded": 0,
+      "bytes_saved": 0,
+      "cache_hit": 2,
+      "items": 2,
+      "skipped": 0,
+      "detail": "缓存命中"
+    },
+    {
+      "name": "Win7 loader 校验",
+      "elapsed": 0.0015,
+      "bytes_downloaded": 0,
+      "bytes_saved": 0,
+      "cache_hit": 0,
+      "items": 0,
+      "skipped": 0,
+      "detail": "2 个 exe 通过"
+    },
+    {
+      "name": "生成 SBOM",
+      "elapsed": 0.0248,
+      "bytes_downloaded": 0,
+      "bytes_saved": 0,
+      "cache_hit": 0,
+      "items": 1,
+      "skipped": 0,
+      "detail": "fspack-0.6.1-sbom.json"
+    },
+    {
+      "name": "生成产物清单",
+      "elapsed": 0.1079,
+      "bytes_downloaded": 0,
+      "bytes_saved": 0,
+      "cache_hit": 0,
+      "items": 1,
+      "skipped": 0,
+      "detail": "fspack-0.6.1-manifest.json"
+    },
+    {
+      "name": "Win7 兼容扫描",
+      "elapsed": 0.0606,
+      "bytes_downloaded": 0,
+      "bytes_saved": 0,
+      "cache_hit": 0,
+      "items": 36,
+      "skipped": 0,
+      "detail": "36 个文件通过"
+    }
+  ]
+}
