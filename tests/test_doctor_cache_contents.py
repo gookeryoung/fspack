@@ -390,21 +390,21 @@ def test_check_embed_contents_skips_subdir(tmp_path: Path) -> None:
 
 
 def test_check_embed_contents_stat_race_skips_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """枚举后 stat 失败的竞态文件不计入（第二次 stat 抛 OSError）.
+    """枚举后 stat 失败的竞态文件不计入（唯一 stat 抛 OSError）.
 
-    故障注入：``Path.stat`` 按调用次数翻转——``is_file`` 内部首次 stat 正常，
-    :func:`_match_files` 的体积统计二次 stat 抛错，模拟枚举后被删除/锁定的竞态。
+    故障注入：``Path.stat`` 对目标 zip 抛 PermissionError，
+    模拟枚举后被删除/锁定的竞态。实现侧单次 stat 同时完成存在性检查与
+    体积获取（Python 3.14+ :meth:`Path.is_file` 不再经过 :meth:`Path.stat`，
+    双重调用会割裂竞态处理）。
     """
     embed = tmp_path / "embed"
     embed.mkdir()
     zip_path = embed / "python-3.11.9-embed-amd64.zip"
     zip_path.write_bytes(b"x")
     real_stat = Path.stat
-    calls: dict[Path, int] = {}
 
     def _flaky_stat(self: Path, **kwargs: object) -> object:
-        calls[self] = calls.get(self, 0) + 1
-        if calls[self] == 2:
+        if self == zip_path:
             raise PermissionError("simulated race")
         return real_stat(self, **kwargs)  # type: ignore[arg-type,return-value]
 

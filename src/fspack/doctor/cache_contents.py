@@ -30,6 +30,7 @@ winlibs 额外区分：检测到 MSVC 时未缓存亦为 OK（scons 优先用 MS
 from __future__ import annotations
 
 import re
+import stat as statmod
 from collections.abc import Callable
 from pathlib import Path
 
@@ -87,15 +88,16 @@ def _match_files(cache_dir: Path, pattern: re.Pattern[str]) -> list[tuple[str, i
     if not cache_dir.is_dir():
         return matched
     for path in sorted(cache_dir.iterdir()):
-        if not path.is_file():
-            continue
         m = pattern.match(path.name)
         if m is None:
             continue  # 非预期文件名（README 等），跳过
         try:
-            matched.append((m.group(1), path.stat().st_size))
+            st = path.stat()
         except OSError:
-            continue  # 枚举后被删除的竞态：不计入
+            continue  # 枚举后被删除/锁定的竞态：不计入
+        if not statmod.S_ISREG(st.st_mode):
+            continue  # 子目录/特殊文件跳过
+        matched.append((m.group(1), st.st_size))
     return matched
 
 
