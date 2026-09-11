@@ -22,6 +22,7 @@ from fspack.slim.base import SlimSpec
 
 __all__ = ["DefaultSlimSpec"]
 
+
 class DefaultSlimSpec(SlimSpec):
     """默认精简规则：兜底，``match`` 始终返回 ``True``。
 

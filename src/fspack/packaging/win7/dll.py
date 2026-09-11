@@ -78,8 +78,10 @@ WIN7_EMBED_SHA256: dict[str, str] = {
 # 公开常量：win7.scan 全量扫描复用同一 shim 做覆盖校验。
 WIN7_SHIM_DLL_PATH = Path(__file__).parent.parent.parent / "assets" / "runtime" / "api-ms-win-core-path-l1-1-0.dll"
 
+
 class Win7DllError(FspackError):
     """win7 python3XX.dll 获取或校验失败（清单未收录、zip 损坏、导入表违规等）。"""
+
 
 def needs_win7_dll(py_version: str) -> bool:
     """该版本官方 python3XX.dll 是否含 Win8+ 静态导入、需替换为重编译版.
@@ -99,13 +101,16 @@ def needs_win7_dll(py_version: str) -> bool:
     parts = py_version.split(".")
     return (int(parts[0]), int(parts[1])) >= (3, 12)
 
+
 def win7_dll_name(version: str) -> str:
     """返回该版本的 python3XX.dll 文件名（如 ``3.12.10`` → ``python312.dll``）."""
     return f"{embed_dirname(version)}.dll"
 
+
 def win7_zip_url(version: str) -> str:
     """返回 win7 embed zip 的下载 URL（GitHub releases download 路径）."""
     return f"{WIN7_PYTHON_BASE_URL}/releases/download/v{version}/{embed_zip_name(version)}"
+
 
 def win7_zip_cache_name(version: str) -> str:
     """返回 win7 embed zip 的本地缓存文件名.
@@ -114,6 +119,7 @@ def win7_zip_cache_name(version: str) -> str:
     加 ``-win7`` 后缀避免与官方 zip 在同一缓存目录互相覆盖。
     """
     return embed_zip_name(version).replace(".zip", "-win7.zip")
+
 
 class Win7EmbedRuntime(RuntimeDownloader):
     """win7 重编译版 embed python 下载器（全量提取覆盖 runtime，保证组件同源）."""
@@ -140,10 +146,12 @@ class Win7EmbedRuntime(RuntimeDownloader):
     def extract_archive(cls, archive_path: Path, runtime_dir: Path) -> None:
         extract_win7_dll(archive_path, runtime_dir, _dll_member_version(archive_path))
 
+
 def _dll_member_version(archive_path: Path) -> str:
     """从缓存文件名 ``python-3.12.10-embed-amd64-win7.zip`` 解析版本号."""
     stem = archive_path.name.split("-")[1]
     return stem
+
 
 def download_win7_embed(version: str, cache_dir: Path, *, stage: StageRecorder | None = None) -> Path:
     """按清单 sha256 下载 win7 embed zip 到缓存目录，已缓存且哈希匹配则复用.
@@ -168,6 +176,7 @@ def download_win7_embed(version: str, cache_dir: Path, *, stage: StageRecorder |
         )
     return Win7EmbedRuntime.download(version, cache_dir, stage=stage, expected_hash=expected)
 
+
 def extract_win7_dll(zip_path: Path, dest_dir: Path, version: str) -> Path:
     """全量提取 win7 embed zip 到 dest_dir（覆盖官方组件），返回 python3XX.dll 路径.
 
@@ -186,6 +195,7 @@ def extract_win7_dll(zip_path: Path, dest_dir: Path, version: str) -> Path:
     _logger.info("全量提取 win7 组件到 %s（%s 就绪）", dest_dir, dll.name)
     return dll
 
+
 def _check_dll(dll: Path) -> Win7CheckResult:
     """校验 dll 导入表 Win7 兼容性（含内置 shim 导出覆盖），违规抛 Win7DllError."""
     try:
@@ -196,6 +206,7 @@ def _check_dll(dll: Path) -> Win7CheckResult:
         detail = "；".join(f"{v.target}（{v.reason}）" for v in result.violations)
         raise Win7DllError(f"{dll.name} 导入表含 Win8+ 依赖，不能用于 Win7: {detail}")
     return result
+
 
 def ensure_win7_dll(
     version: str,
@@ -253,6 +264,7 @@ def ensure_win7_dll(
     marker.write_text(version, encoding="ascii")
     _logger.info("win7 组件全量替换完成并校验通过: %s（需 shim: %s）", dll, ", ".join(result.shim_dlls) or "无")
     return dll
+
 
 def is_win7_runtime(runtime_dir: Path) -> bool:
     """判断 runtime 目录是否已被 win7 重编译版组件整套替换（标记文件存在）.

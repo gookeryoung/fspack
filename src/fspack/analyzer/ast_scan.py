@@ -20,7 +20,6 @@ import sys
 from pathlib import Path
 
 __all__ = [
-
     "_qml_module_to_qt_sub",
     "collect_imports",
     "collect_imports_and_submodules",
@@ -67,6 +66,7 @@ _QML_MODULE_TO_QT_SUB: dict[str, str] = {
 # 不匹配 ``import "."``/``import "scripts.js" as Scripts``（相对/JS 导入）
 _QML_IMPORT_RE = re.compile(r"^\s*import\s+(Qt[\w.]+)(?:\s+\d+(?:\.\d+)*)?\s*$")
 
+
 def _qml_module_to_qt_sub(qml_module: str) -> str | None:
     """QML 模块名 → Qt 子模块名（归一化名）.
 
@@ -81,6 +81,7 @@ def _qml_module_to_qt_sub(qml_module: str) -> str | None:
     if qml_module in _QML_MODULE_TO_QT_SUB:
         return _QML_MODULE_TO_QT_SUB[qml_module]
     return qml_module[2:]
+
 
 def parse_qml_imports(qml_file: Path) -> set[str]:
     """解析 QML 文件中的 import 语句，返回 Qt 子模块名（归一化名）集合.
@@ -108,7 +109,9 @@ def parse_qml_imports(qml_file: Path) -> set[str]:
                 subs.add(qt_sub)
     return subs
 
+
 _STDLIB: frozenset[str] = sys.stdlib_module_names
+
 
 def collect_imports_and_submodules(tree: ast.AST) -> tuple[list[str], dict[str, frozenset[str]]]:
     """单次 ``ast.walk`` 同时收集顶层导入与子模块导入。
@@ -144,6 +147,7 @@ def collect_imports_and_submodules(tree: ast.AST) -> tuple[list[str], dict[str, 
                         sub_result.setdefault(parts[0], []).append(alias.name)
     return list(top_ord.keys()), {pkg: frozenset(subs) for pkg, subs in sub_result.items()}
 
+
 def collect_imports(tree: ast.AST) -> list[str]:
     """收集 AST 中所有 import 的顶层模块名，去重保序.
 
@@ -158,6 +162,7 @@ def collect_imports(tree: ast.AST) -> list[str]:
         elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
             ord_dict.setdefault(node.module.split(".")[0], None)
     return list(ord_dict.keys())
+
 
 def collect_submodule_imports(tree: ast.AST) -> dict[str, frozenset[str]]:
     """收集 AST 中子模块级 import，返回 {顶层包: frozenset[子模块名]}。

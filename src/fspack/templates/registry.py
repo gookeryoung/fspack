@@ -47,6 +47,7 @@ _TEMPLATE_SKIP_DIRS: frozenset[str] = frozenset(
 )
 _TEMPLATE_SKIP_SUFFIXES: frozenset[str] = frozenset({".pyc", ".pyo", ".pyd"})
 
+
 @dataclass(frozen=True)
 class TemplateFile:
     """模板文件：相对路径 + 内容模板（``string.Template`` 语法）.
@@ -61,6 +62,7 @@ class TemplateFile:
 
     rel_path: str
     content: str
+
 
 @dataclass(frozen=True)
 class Template:
@@ -99,13 +101,16 @@ class Template:
     requires_python: str = ">=3.13"
     roles: frozenset[str] = _DEFAULT_ROLES
 
+
 def _init_templates_root() -> Path:
     """返回 ``assets/init_templates/`` 目录的绝对路径（``fsp init`` 内联模板）."""
     return Path(__file__).resolve().parent.parent / "assets" / "init_templates"
 
+
 def _doctor_templates_root() -> Path:
     """返回 ``assets/templates/`` 目录的绝对路径（``fsp doctor`` 富示例模板）."""
     return Path(__file__).resolve().parent.parent / "assets" / "templates"
+
 
 def _roles_from_data(data: dict[str, object]) -> frozenset[str]:
     """从 ``template.toml`` 解析的字典中提取 ``roles`` 字段.
@@ -117,6 +122,7 @@ def _roles_from_data(data: dict[str, object]) -> frozenset[str]:
     if not isinstance(raw, list):
         return _DEFAULT_ROLES
     return frozenset(str(r) for r in raw if isinstance(r, str))
+
 
 def _load_template(tpl_dir: Path) -> Template | None:
     """从 init 模板目录加载单个模板（含 ``template.toml`` + 占位符源文件）.
@@ -211,6 +217,7 @@ def _load_template(tpl_dir: Path) -> Template | None:
         roles=_roles_from_data(data),
     )
 
+
 def _load_doctor_template(tpl_dir: Path) -> Template | None:
     """从 doctor 富示例模板目录加载单个模板（含 ``pyproject.toml``，无占位符）.
 
@@ -257,6 +264,7 @@ def _load_doctor_template(tpl_dir: Path) -> Template | None:
         roles=frozenset({"doctor"}),
     )
 
+
 def _scan_category_dir(root: Path, loader: object) -> list[Template]:
     """扫描分类目录下的所有模板，用指定加载器加载.
 
@@ -277,6 +285,7 @@ def _scan_category_dir(root: Path, loader: object) -> list[Template]:
             if tpl is not None:
                 templates.append(tpl)
     return templates
+
 
 @functools.lru_cache(maxsize=1)
 def _load_all() -> tuple[Template, ...]:
@@ -299,9 +308,11 @@ def _load_all() -> tuple[Template, ...]:
     )
     return tuple(all_templates)
 
+
 def clear_template_cache() -> None:
     """清空模板注册表缓存（测试注入自定义根目录/替换资产后强制重扫）."""
     _load_all.cache_clear()
+
 
 def list_templates(role: str | None = None) -> tuple[Template, ...]:
     """返回所有已注册模板，按 (category, id) 字母序排序.
@@ -316,6 +327,7 @@ def list_templates(role: str | None = None) -> tuple[Template, ...]:
         return tuple(sorted(all_templates, key=lambda t: (t.category, t.id)))
     filtered = [t for t in all_templates if role in t.roles]
     return tuple(sorted(filtered, key=lambda t: (t.category, t.id)))
+
 
 def get_template(template_id: str, role: str | None = None) -> Template | None:
     """按 id 查询模板，未找到返回 ``None``.

@@ -69,6 +69,7 @@ QT_PACKAGES = frozenset({"pyside2", "pyside6", "pyqt5", "pyqt6"})
 # （部分 wheel 打包工具保留原始大小写变体），比较前统一 lower。
 _WEBENGINE_TOP_FILES_LOWER = frozenset(f.lower() for f in _QT_WEBENGINE_TOP_FILES)
 
+
 class QtSlimSpec(SlimSpec):
     """Qt 库精简规则：PySide2/PySide6/PyQt5/PyQt6 共享同一规则。
 
