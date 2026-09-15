@@ -77,12 +77,15 @@ def _build_pe64(  # noqa: PLR0912 — PE 构造需按描述符/名字/INT/IAT/Hi
             hintname_rvas[(dll, i)] = emit(struct.pack("<H", 0) + func.encode() + b"\x00")
 
     def thunk_bytes(dll: str, funcs: list[str | int], table: dict[tuple[str, int], int]) -> bytes:
-        return b"".join(
-            struct.pack("<Q", 0x8000000000000000 | func)
-            if isinstance(func, int)
-            else struct.pack("<Q", table[(dll, i)])
-            for i, func in enumerate(funcs)
-        ) + b"\x00" * 8
+        return (
+            b"".join(
+                struct.pack("<Q", 0x8000000000000000 | func)
+                if isinstance(func, int)
+                else struct.pack("<Q", table[(dll, i)])
+                for i, func in enumerate(funcs)
+            )
+            + b"\x00" * 8
+        )
 
     for dll, funcs in imports.items():
         vals = thunk_bytes(dll, funcs, hintname_rvas)
@@ -91,9 +94,7 @@ def _build_pe64(  # noqa: PLR0912 — PE 构造需按描述符/名字/INT/IAT/Hi
         off = ft_rvas[dll] - _SEC_BASE
         sec[off : off + len(vals)] = vals
     for idx, dll in enumerate(imports):
-        struct.pack_into(
-            "<IIIII", sec, desc_off + idx * 20, int_rvas[dll], 0, 0, name_rvas[dll], ft_rvas[dll]
-        )
+        struct.pack_into("<IIIII", sec, desc_off + idx * 20, int_rvas[dll], 0, 0, name_rvas[dll], ft_rvas[dll])
 
     # -- 延迟加载导入（DataDirectory[13]，描述符 32 字节，grAttrs=dlattrRva）--
     ddesc_rva = 0
@@ -251,9 +252,7 @@ class TestPatchBytes:
 
     def test_string_region_padded_with_nul(self) -> None:
         data = _build_pe64(_KERNEL32_IMPORTS)
-        refs = {
-            r.offset: r for r in patch._import_name_refs(data) if r.func == "GetSystemTimePreciseAsFileTime"
-        }
+        refs = {r.offset: r for r in patch._import_name_refs(data) if r.func == "GetSystemTimePreciseAsFileTime"}
         assert len(refs) == 1
         offset, ref = next(iter(refs.items()))
         patched, _ = patch_bytes(data)
@@ -270,9 +269,7 @@ class TestPatchBytes:
         assert len(before - after) == 1, "只有 Precise 一条的名字发生变化"
 
     def test_delay_load_imports_patched(self, tmp_path: Path) -> None:
-        data = _build_pe64(
-            _KERNEL32_SAFE_IMPORTS, delay_imports={"KERNEL32.dll": ["GetSystemTimePreciseAsFileTime"]}
-        )
+        data = _build_pe64(_KERNEL32_SAFE_IMPORTS, delay_imports={"KERNEL32.dll": ["GetSystemTimePreciseAsFileTime"]})
         patched, renamed = patch_bytes(data)
         assert len(renamed) == 1
         assert check_win7_imports(_write(tmp_path, patched)).ok
@@ -415,7 +412,9 @@ class TestCLI:
 # ---------------------------------------------------------------------------
 
 _PYDANTIC_CORE_CANDIDATES = [
-    Path(r"C:\Users\zhou\AppData\Roaming\Python\Python313\site-packages\pydantic_core\_pydantic_core.cp313-win_amd64.pyd"),
+    Path(
+        r"C:\Users\zhou\AppData\Roaming\Python\Python313\site-packages\pydantic_core\_pydantic_core.cp313-win_amd64.pyd"
+    ),
 ]
 
 

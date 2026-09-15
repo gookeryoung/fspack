@@ -107,9 +107,7 @@ for _rule in RENAMED_IMPORTS:
     )
 
 # (src_dll 小写, src_func) -> 规则，O(1) 查询
-_RENAME_INDEX: dict[tuple[str, str], RenameRule] = {
-    (r.src_dll.lower(), r.src_func): r for r in RENAMED_IMPORTS
-}
+_RENAME_INDEX: dict[tuple[str, str], RenameRule] = {(r.src_dll.lower(), r.src_func): r for r in RENAMED_IMPORTS}
 
 
 class PEPatchError(RuntimeError):
@@ -204,7 +202,9 @@ def _pe_layout(data: bytes) -> tuple[int, _PeLayout]:
         raise PEPatchError(f"未知 PE 可选头魔数: {magic:#x}")
     if dd_offset + 16 * 14 > len(data):  # 至少要到 DataDirectory[13]（延迟导入）
         raise PEPatchError("数据目录越界")
-    image_base = _u32(data, image_base_off) if magic == _PE32_MAGIC else struct.unpack_from("<Q", data, image_base_off)[0]
+    image_base = (
+        _u32(data, image_base_off) if magic == _PE32_MAGIC else struct.unpack_from("<Q", data, image_base_off)[0]
+    )
 
     sec_offset = opt_offset + opt_size
     sections: list[tuple[int, int, int]] = []
@@ -251,7 +251,9 @@ def _collect_name_refs(
         if not value & layout.ord_flag:
             name_off = layout.rva2off(value & 0x7FFFFFFF) + 2  # 跳过 2 字节 hint
             func, capacity = _read_cstr_span(data, name_off)
-            refs.append(_NameRef(dll_raw=dll_raw, dll_lower=dll_raw.lower(), func=func, offset=name_off, capacity=capacity))
+            refs.append(
+                _NameRef(dll_raw=dll_raw, dll_lower=dll_raw.lower(), func=func, offset=name_off, capacity=capacity)
+            )
         cursor += layout.thunk_size
     return refs
 
@@ -334,9 +336,7 @@ def patch_bytes(data: bytes) -> tuple[bytes, tuple[tuple[str, str, str], ...]]:
     for offset, (ref, rule) in sorted(hits.items()):
         dst = rule.dst_func.encode("ascii") + b"\x00"
         if len(dst) > ref.capacity:  # 规则表已保证，双保险
-            raise PEPatchError(
-                f"{ref.dll_raw}!{ref.func} 替换名超出原字符串容量（{len(dst)} > {ref.capacity}）"
-            )
+            raise PEPatchError(f"{ref.dll_raw}!{ref.func} 替换名超出原字符串容量（{len(dst)} > {ref.capacity}）")
         buf[offset : offset + ref.capacity] = dst + b"\x00" * (ref.capacity - len(dst))
         renamed.append((ref.dll_raw, rule.src_func, rule.dst_func))
         _logger.info("导入改名: %s!%s → %s（@文件偏移 0x%X）", ref.dll_raw, rule.src_func, rule.dst_func, offset)
