@@ -30,12 +30,13 @@ class TestALLSHIMS:
             assert spec.dll_path.is_file(), f"{spec.dll_name} 二进制缺失"
             assert spec.src_path.is_file(), f"{spec.src_name} 源码缺失"
 
-    def test_registry_contains_three_shims(self) -> None:
+    def test_registry_contains_two_compiled_shims(self) -> None:
+        """注册表只含 synch / bcryptprimitives 两个编译型 shim（path 为二进制入库，
+        kernel32-shim 已随导入表原地改名方案移除）。"""
         dll_names = {s.dll_name for s in shim_build.ALL_SHIMS}
         assert dll_names == {
             "api-ms-win-core-synch-l1-2-0.dll",
             "bcryptprimitives.dll",
-            "api-ms-win-core-kernel32-shim.dll",
         }
 
 

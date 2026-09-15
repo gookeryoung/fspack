@@ -573,11 +573,14 @@ def _execute_build(  # noqa: PLR0912, PLR0913
         if _post_build_pool is not None:
             _post_build_pool.shutdown(wait=True)
 
-    # Win7 兼容扫描（软门禁，默认启用，--no-win7-scan 关闭）：dist 下全部
-    # .dll/.pyd/.exe 导入表检查，扫描后自动注入内置 Win7 shim（api-ms-win-core-path
-    # + bcryptprimitives.ProcessPrng）到 dist 根目录，剩余违规由报告提示。
+    # Win7 兼容修复+扫描（软门禁，默认启用，--no-win7-scan 关闭）：先对 dist
+    # 下全部 PE 执行导入表原地改名（kernel32 Win8+ API → Win7 原生等价函数，
+    # 如 pydantic-core 2.18+ / libpq 的 GetSystemTimePreciseAsFileTime），随后
+    # 全量导入表扫描复核、注入内置 Win7 shim（api-ms-win-core-path +
+    # bcryptprimitives.ProcessPrng）到 dist 根目录，剩余违规由报告提示。
     # 仅 Windows 目标（Linux/macOS 产物不运行于 Win7）。
     if target is Platform.WINDOWS and not opts.no_win7_scan:
+        from fspack.packaging.win7.patch import patch_dist_win7
         from fspack.packaging.win7.scan import (
             inject_win7_shims,
             scan_dist_win7,
@@ -585,7 +588,11 @@ def _execute_build(  # noqa: PLR0912, PLR0913
         )
 
         with tracker.stage("Win7 兼容扫描") as st:
+            # 改名必须在扫描之前：报告反映改写后的最终兼容状态
+            patched = patch_dist_win7(cfg.dist_dir)
             report = scan_dist_win7(cfg.dist_dir)
+            if patched:
+                report = replace(report, patched=patched)
             # 扫描后自动注入 shim DLL（根目录级别，PE loader 优先从同目录加载）
             injected = inject_win7_shims(cfg.dist_dir)
             if injected:
@@ -593,6 +600,8 @@ def _execute_build(  # noqa: PLR0912, PLR0913
             report_path = write_win7_report(report, cfg.dist_dir)
             st.processed(report.scanned)
             details: list[str] = []
+            if patched:
+                details.append(f"改名: {len(patched)} 个文件")
             if injected:
                 details.append(f"shim: {', '.join(injected)}")
             if report.violations:

@@ -109,12 +109,11 @@ ALL_SHIMS: tuple[ShimSpec, ...] = (
         libs=("bcrypt",),
         cflags=_NO_CRT_CFLAGS,
     ),
-    ShimSpec(
-        src_name="api-ms-win-core-kernel32-shim.c",
-        dll_name="api-ms-win-core-kernel32-shim.dll",
-        cflags=_NO_CRT_CFLAGS,
-    ),
 )
+# 说明：曾有的 api-ms-win-core-kernel32-shim.dll（GetSystemTimePreciseAsFileTime
+# polyfill）已移除——kernel32 shim 依赖"把导入重定向到新 DLL"，而 x64 代码按
+# 固定 RVA 引用 IAT 槽位，导入表重建必然挪动 IAT 使全部调用点悬空（结构性
+# 不可行）。该场景改由 win7.patch 的导入表原地改名方案覆盖。
 
 # 私有别名（内部引用走私有名，公开 API 用 ALL_SHIMS）
 _ALL_SHIMS = ALL_SHIMS
@@ -262,7 +261,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     """CLI 入口：重建指定 / 全部 shim DLL."""
     parser = argparse.ArgumentParser(
         prog="python -m fspack.packaging.win7.shim_build",
-        description="编译 Win7 shim DLL（synch / bcryptprimitives / kernel32-shim）到 assets/runtime/",
+        description="编译 Win7 shim DLL（synch / bcryptprimitives）到 assets/runtime/",
     )
     parser.add_argument("--force", "-f", action="store_true", help="强制重建所有 shim（即使已存在）")
     parser.add_argument(

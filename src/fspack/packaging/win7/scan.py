@@ -18,6 +18,10 @@ P1 产物门禁补全的三道防线（配合 win7_dll 的 python3XX.dll 门禁�
   （Win10+ ProcessPrng，Rust 1.78+ wheel 硬链接）。
   注入是**根目录级别**的（不侵入 site-packages），PE loader 优先从同目录
   加载，遮蔽系统缺失的 Win10+ DLL。
+- kernel32 的 Win8+ 函数导入（pydantic-core 2.18+ / libpq 等，KnownDLL
+  无法遮蔽）由 :func:`fspack.packaging.win7.patch.patch_dist_win7` 在扫描
+  **之前**原地改名为 Win7 原生等价函数，扫描阶段只做复核——报告中的
+  违规即改写后仍不兼容的剩余项。
 
 报告包含：违规文件与 API 明细、需 shim 文件数、已注入 shim 列表、
 api-ms-win-crt-* 依赖提示（Win7 SP1 需 KB2999226 UCRT）。
@@ -72,7 +76,8 @@ class Win7ScanReport:
     scanned 为成功解析的 PE 数；skipped 为扩展名匹配但解析失败（非 PE/
     截断）的文件名；violations 为存在违规的文件结果（ok=False）；
     injected_shims 为本次注入的 shim DLL 文件名（dist 根目录下已存在的
-    shim 也包含在内）。
+    shim 也包含在内）；patched 为扫描前导入表原地改名的文件记录
+    （(相对路径, ("KERNEL32.dll!旧名→新名", ...)) 元组）。
     """
 
     scanned: int = 0
@@ -81,6 +86,7 @@ class Win7ScanReport:
     shim_files: int = 0
     ucrt_files: int = 0
     injected_shims: tuple[str, ...] = ()
+    patched: tuple[tuple[str, tuple[str, ...]], ...] = ()
     dist_dir: Path | None = None
 
     @property
@@ -247,6 +253,11 @@ def render_win7_report(report: Win7ScanReport) -> str:
         lines.append(f"[违规] {rel}")
         lines.extend(f"  {v.target} — {v.reason}" for v in result.violations)
     lines.append("")
+    if report.patched:
+        lines.append(f"[已改写] 导入表 Win8+ API 原地改名（→ Win7 原生等价函数）: {len(report.patched)} 个文件")
+        for rel, records in report.patched:
+            lines.append(f"  {rel}")
+            lines.extend(f"    {record}" for record in records)
     if report.injected_shims:
         lines.append(f"[已注入] Win7 shim DLL: {', '.join(report.injected_shims)}")
     if report.shim_files:
