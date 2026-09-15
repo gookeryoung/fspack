@@ -6,6 +6,9 @@ project-excludes = [
   "src/fspack/assets/templates/**",
   "src/fspack/assets/init_templates",
   "src/fspack/assets/init_templates/**",
+  "_*.py",           # 根目录临时调试脚本
+  "_*.pyd",          # 临时 PE 测试文件
+  "_*.txt",          # 临时输出文件
 ]
 project-includes = ["**/*.ipynb", "**/*.py*"]
 python-version = "3.13"

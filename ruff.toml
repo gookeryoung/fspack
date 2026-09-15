@@ -1,4 +1,8 @@
-extend-exclude = ["template", "docs", "examples", "src/fspack/assets/templates", "src/fspack/assets/init_templates"]
+extend-exclude = [
+    "template", "docs", "examples",
+    "src/fspack/assets/templates", "src/fspack/assets/init_templates",
+    "_*.py", "_*.pyd", "_*.txt",  # 根目录临时调试脚本
+]
 line-length    = 120
 target-version = "py313"
 

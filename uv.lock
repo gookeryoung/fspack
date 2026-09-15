@@ -191,6 +191,7 @@ version = "0.6.3"
 source = { editable = "." }
 dependencies = [
     { name = "certifi" },
+    { name = "pefile" },
     { name = "rich" },
 ]
 
@@ -237,6 +238,7 @@ requires-dist = [
     { name = "certifi", specifier = ">=2023.7.22" },
     { name = "fspack", extras = ["lint", "test"], marker = "extra == 'dev'" },
     { name = "myst-parser", marker = "extra == 'docs'", specifier = ">=3.0" },
+    { name = "pefile", specifier = ">=2024.8.26" },
     { name = "pillow", marker = "extra == 'image'", specifier = ">=9.4.0" },
     { name = "prek", marker = "extra == 'dev'", specifier = ">=0.4.5" },
     { name = "pyrefly", marker = "extra == 'lint'", specifier = ">=1.1.1" },
@@ -405,6 +407,15 @@ source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }
 sdist = { url = "https://mirrors.aliyun.com/pypi/packages/d7/f1/e7a6dd94a8d4a5626c03e4e99c87f241ba9e350cd9e6d75123f992427270/packaging-26.2.tar.gz", hash = "sha256:ff452ff5a3e828ce110190feff1178bb1f2ea2281fa2075aadb987c2fb221661" }
 wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/df/b2/87e62e8c3e2f4b32e5fe99e0b86d576da1312593b39f47d8ceef365e95ed/packaging-26.2-py3-none-any.whl", hash = "sha256:5fc45236b9446107ff2415ce77c807cee2862cb6fac22b8a73826d0693b0980e" },
+]
+
+[[package]]
+name = "pefile"
+version = "2024.8.26"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/03/4f/2750f7f6f025a1507cd3b7218691671eecfd0bbebebe8b39aa0fe1d360b8/pefile-2024.8.26.tar.gz", hash = "sha256:3ff6c5d8b43e8c37bb6e6dd5085658d658a7a0bdcd20b6a07b1fcfc1c4e9d632" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/54/16/12b82f791c7f50ddec566873d5bdd245baa1491bac11d15ffb98aecc8f8b/pefile-2024.8.26-py3-none-any.whl", hash = "sha256:76f8b485dcd3b1bb8166f1128d395fa3d87af26360c2358fb75b80019b957c6f" },
 ]
 
 [[package]]

@@ -109,6 +109,11 @@ ALL_SHIMS: tuple[ShimSpec, ...] = (
         libs=("bcrypt",),
         cflags=_NO_CRT_CFLAGS,
     ),
+    ShimSpec(
+        src_name="api-ms-win-core-kernel32-shim.c",
+        dll_name="api-ms-win-core-kernel32-shim.dll",
+        cflags=_NO_CRT_CFLAGS,
+    ),
 )
 
 # 私有别名（内部引用走私有名，公开 API 用 ALL_SHIMS）
@@ -246,30 +251,31 @@ def ensure_all_shims() -> dict[str, Path | None]:
 
 
 def _named_specs(names: Sequence[str]) -> list[ShimSpec]:
-    """按 dll_name 或 src_name 过滤 ALL_SHIMS（不区分大小写、支持逗号分隔）。"""
+    """按 dll_name 或 src_name 过滤 ALL_SHIMS（不区分大小写、支持逗号分隔、子串匹配）。"""
     targets = {n.strip().lower() for raw in names for n in raw.split(",") if n.strip()}
     if not targets:
         return list(_ALL_SHIMS)
-    return [s for s in _ALL_SHIMS if s.dll_name.lower() in targets or s.src_name.lower() in targets]
+    return [s for s in _ALL_SHIMS if any(t in s.dll_name.lower() or t in s.src_name.lower() for t in targets)]
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI 入口：重建指定 / 全部 shim DLL."""
     parser = argparse.ArgumentParser(
         prog="python -m fspack.packaging.win7.shim_build",
-        description="编译 Win7 shim DLL（synch / bcryptprimitives）到 assets/runtime/",
+        description="编译 Win7 shim DLL（synch / bcryptprimitives / kernel32-shim）到 assets/runtime/",
     )
     parser.add_argument("--force", "-f", action="store_true", help="强制重建所有 shim（即使已存在）")
     parser.add_argument(
         "--only",
         type=str,
         default="",
-        help="只编译指定 shim，逗号分隔（如 synch,bcrypt），默认全部",
+        help="只编译指定 shim，逗号分隔子串匹配（如 synch,bcrypt,kernel32），默认全部",
     )
     args = parser.parse_args(argv)
     specs = _named_specs(args.only.split(",")) if args.only else list(_ALL_SHIMS)
     if not specs:
-        print("没有匹配的 shim，可选: synch, bcryptprimitives")
+        all_names = ", ".join(s.dll_name for s in _ALL_SHIMS)
+        print(f"没有匹配的 shim，可选子串: {all_names}")
         return 1
     try:
         result = build_all_shims(specs, force=args.force)

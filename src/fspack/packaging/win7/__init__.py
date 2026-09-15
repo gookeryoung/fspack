@@ -1,4 +1,4 @@
-"""Win7 兼容性 facade：check / dll / scan / shim_build 子模块重导出.
+"""Win7 兼容性 facade：check / dll / patch / scan / shim_build 子模块重导出.
 
 子模块（按职责拆分）：
 
@@ -6,10 +6,13 @@
   （CLI：``python -m fspack.packaging.win7.check``）
 - :mod:`fspack.packaging.win7.dll`：Win7 重编译版 python3XX.dll 清单驱动
   下载与双重校验（sha256 + 导入表）
+- :mod:`fspack.packaging.win7.patch`：PE 导入表重定向——把 kernel32 的 Win8+
+  API（如 GetSystemTimePreciseAsFileTime）改写为从 shim DLL 导入
+  （CLI：``python -m fspack.packaging.win7.patch``）
 - :mod:`fspack.packaging.win7.scan`：dist 产物 Win7 兼容门禁（loader exe
   硬门禁 + dist 全量扫描报告）
 - :mod:`fspack.packaging.win7.shim_build`：就地编译 Win7 C shim DLL
-  （synch / bcryptprimitives），构建期兜底缺失二进制
+  （synch / bcryptprimitives / kernel32-shim），构建期兜底缺失二进制
 """
 
 from __future__ import annotations
@@ -35,6 +38,15 @@ from fspack.packaging.win7.dll import (
     win7_zip_cache_name,
     win7_zip_url,
 )
+from fspack.packaging.win7.patch import (
+    REDIRECTED_IMPORTS,
+    SHIM_DLL_NAME,
+    PatchResult,
+    PEPatchError,
+    ShimImport,
+    build_patched_pe,
+    patch_file,
+)
 from fspack.packaging.win7.scan import (
     Win7ScanError,
     Win7ScanReport,
@@ -58,11 +70,16 @@ from fspack.packaging.win7.shim_build import (
 
 __all__ = [
     "ALL_SHIMS",
+    "REDIRECTED_IMPORTS",
+    "SHIM_DLL_NAME",
     "SHIM_SRC_DIR",
     "WIN7_EMBED_SHA256",
     "WIN7_SHIM_DLL_PATH",
+    "PEPatchError",
+    "PatchResult",
     "PeParseError",
     "ShimBuildError",
+    "ShimImport",
     "ShimSpec",
     "Win7ApiViolation",
     "Win7CheckResult",
@@ -71,6 +88,7 @@ __all__ = [
     "Win7ScanError",
     "Win7ScanReport",
     "build_all_shims",
+    "build_patched_pe",
     "build_shim",
     "check_win7_imports",
     "download_win7_embed",
@@ -84,6 +102,7 @@ __all__ = [
     "iter_pe_files",
     "main",
     "needs_win7_dll",
+    "patch_file",
     "render_win7_report",
     "scan_dist_win7",
     "win7_dll_name",
