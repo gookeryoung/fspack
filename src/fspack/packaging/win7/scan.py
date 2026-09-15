@@ -12,8 +12,10 @@ P1 产物门禁补全的三道防线（配合 win7_dll 的 python3XX.dll 门禁�
   （``dist/release/win7-compat-report.txt``）供人工决策。python3XX.dll
   已由 :func:`fspack.packaging.win7.dll.ensure_win7_dll` 单独硬门禁。
 - :func:`inject_win7_shims`：扫描后自动将内置 shim DLL 注入 dist 根目录。
-  当前支持两类 shim：``api-ms-win-core-path-l1-1-0.dll``（Win8+ PathCch*）
-  和 ``bcryptprimitives.dll``（Win10+ ProcessPrng，Rust 1.78+ wheel 硬链接）。
+  当前支持三类 shim：``api-ms-win-core-path-l1-1-0.dll``（Win8+ PathCch*）、
+  ``api-ms-win-core-synch-l1-2-0.dll``（Win8+ WaitOnAddress + Sleep/SleepEx
+  转发到 kernel32，源自 cndb 的 stub.c）、``bcryptprimitives.dll``
+  （Win10+ ProcessPrng，Rust 1.78+ wheel 硬链接）。
   注入是**根目录级别**的（不侵入 site-packages），PE loader 优先从同目录
   加载，遮蔽系统缺失的 Win10+ DLL。
 
@@ -174,11 +176,15 @@ def enforce_win7_loaders(exes: list[Path] | tuple[Path, ...], *, shim: Path | No
 def inject_win7_shims(dist_dir: Path) -> tuple[str, ...]:
     """扫描 dist PE 导入表，自动注入内置 Win7 兼容 shim DLL 到 dist 根目录.
 
-    覆盖两类已知 Win7 不兼容场景：
+    覆盖三类已知 Win7 不兼容场景：
 
     1. **api-ms-win-core-path-l1-1-0.dll**（Win8+ PathCch* 系列）：Python 3.9+
        的 embed runtime 与部分依赖静态导入，Win7 上缺失；
-    2. **bcryptprimitives.dll**（Win10+ ProcessPrng）：Rust 1.78（2024-05）
+    2. **api-ms-win-core-synch-l1-2-0.dll**（Win8+ WaitOnAddress/WakeByAddress*/
+       Sleep/SleepEx）：Rust wheel（pydantic-core 等）静态导入，Win7 上整个
+       API set DLL 不存在；shim 用 CONDITION_VARIABLE polyfill 实现
+       WaitOnAddress，并转发 Sleep/SleepEx 到 kernel32（源自 cndb 的 stub.c）；
+    3. **bcryptprimitives.dll**（Win10+ ProcessPrng）：Rust 1.78（2024-05）
        将 Windows 默认 target 最低 OS 提升到 Win10，之后编译的 Rust 扩展
        wheel（pydantic-core/bcrypt/cryptography/watchfiles 等）硬链接
        ProcessPrng，导致 Win7 加载失败（WinError 127）。

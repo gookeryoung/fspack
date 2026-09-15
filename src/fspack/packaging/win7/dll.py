@@ -84,11 +84,22 @@ WIN7_SHIM_DLL_PATH = Path(__file__).parent.parent.parent / "assets" / "runtime" 
 # 编译的二进制硬链接 ProcessPrng（Win10+ bcryptprimitives.dll 导出）。
 WIN7_BCRYPTPRIMITIVES_SHIM_PATH = Path(__file__).parent.parent.parent / "assets" / "runtime" / "bcryptprimitives.dll"
 
+# api-ms-win-core-synch-l1-2-0 shim（随 fspack 分发，源自 cndb 项目的 stub.c）。
+# 解决 Rust wheel（pydantic-core 等）和 Python 3.9+ embed runtime 静态导入
+# WaitOnAddress / WakeByAddress*（Win8+ API set）导致 Win7 无法加载的问题。
+# shim 源码见 assets/runtime/api-ms-win-core-synch-l1-2-0.c，通过
+# CONDITION_VARIABLE polyfill 实现 WaitOnAddress，并把 Sleep/SleepEx 转发
+# 到 kernel32（Python embed runtime 也经此 DLL 解析 Sleep）。
+WIN7_SYNCH_SHIM_DLL_PATH = (
+    Path(__file__).parent.parent.parent / "assets" / "runtime" / "api-ms-win-core-synch-l1-2-0.dll"
+)
+
 # 全部 Win7 shim 映射表：{DLL 名（小写）: fspack assets/runtime 下的源路径}
 # scan.py 的 inject_win7_shims 遍历 dist PE 导入表，发现 shimmable DLL 就从这里查路径
 # 注入到 dist 根目录（PE loader 优先从同目录加载，遮蔽系统缺失的 Win10+ DLL）。
 WIN7_SYSTEM_SHIMS: dict[str, Path] = {
     "api-ms-win-core-path-l1-1-0.dll": WIN7_SHIM_DLL_PATH,
+    "api-ms-win-core-synch-l1-2-0.dll": WIN7_SYNCH_SHIM_DLL_PATH,
     "bcryptprimitives.dll": WIN7_BCRYPTPRIMITIVES_SHIM_PATH,
 }
 

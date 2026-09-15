@@ -288,7 +288,20 @@ def test_crt_apiset_note(tmp_path: Path) -> None:
     assert any("UCRT" in note for note in result.notes)
 
 
-@pytest.mark.parametrize("dll_name", ["api-ms-win-core-synch-l1-2-0.dll", "ext-ms-win-x-y.dll"])
+def test_synch_apiset_requires_shim(tmp_path: Path) -> None:
+    """api-ms-win-core-synch-l1-2-0 应判"需 shim"而非违规（内置 synch shim）."""
+    dll = _write(
+        tmp_path,
+        "a.dll",
+        _build_pe({"api-ms-win-core-synch-l1-2-0.dll": ["WaitOnAddress", "WakeByAddressSingle"]}),
+    )
+    result = check_win7_imports(dll)
+    assert result.ok
+    assert result.shim_dlls == ("api-ms-win-core-synch-l1-2-0.dll",)
+    assert any("synch" in note for note in result.notes)
+
+
+@pytest.mark.parametrize("dll_name", ["ext-ms-win-x-y.dll"])
 def test_unknown_apiset_blocked(tmp_path: Path, dll_name: str) -> None:
     """未知 api-ms-*/ext-ms-* API Set 应判违规（无 shim 可用）."""
     dll = _write(tmp_path, "a.dll", _build_pe({dll_name: ["WaitOnAddress"]}))

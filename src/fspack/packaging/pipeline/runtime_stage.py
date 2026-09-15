@@ -46,6 +46,7 @@ from fspack.packaging.runtime import (
     zip_stdlib as _default_zip_stdlib,
 )
 from fspack.packaging.win7.dll import ensure_win7_dll, is_win7_runtime, needs_win7_dll
+from fspack.packaging.win7.shim_build import ensure_all_shims
 from fspack.platform import Platform
 
 from .context import BuildContext
@@ -121,6 +122,12 @@ def _prepare_runtime(ctx: BuildContext) -> Path:
     # ``--no-win7-dll``：产物仅面向 Win8+/Win10+ 时跳过全部 Win7 兼容注入，
     # 避免网络受限环境因 GitHub 下载失败阻断构建（产物不支持 Win7）。
     if not ctx.opts.no_win7_dll:
+        # 第一步：确保 assets/runtime 下 3 个 shim DLL 存在（缺失时尝试就地编译）。
+        # 正常 clone 仓库已随包分发二进制；浅克隆/CI 环境可能缺失，这里兜底。
+        _shim_results = ensure_all_shims()
+        _missing = [d for d, p in _shim_results.items() if p is None]
+        if _missing:
+            _logger.warning("Win7 shim DLL 缺失且无法就地编译: %s（会在 dist 注入时再报一次）", ", ".join(_missing))
         if target is Platform.WINDOWS and needs_win7_dll(ctx.info.py_version):
             with ctx.tracker.stage("Win7 组件替换") as st:
                 _replace_win7_dll(ctx, st)

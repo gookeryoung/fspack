@@ -13,7 +13,8 @@
 本模块即"只替换 python3XX.dll"方案的构建期门禁，判定维度：
 
 - 函数级：kernel32/kernelbase 导入按 Win8+ 黑名单拦截；
-- DLL 级：``api-ms-win-core-path-*`` 判定需随包 shim（可校验 shim 导出覆盖）；
+- DLL 级：``api-ms-win-core-path-*`` 和 ``api-ms-win-core-synch-l1-2-0.dll``
+  判定需随包 shim（path 可校验 shim 导出覆盖）；
   ``api-ms-win-crt-*`` 需系统 UCRT（Win7 SP1 需 KB2999226）；其余 ``api-ms-*``/
   ``ext-ms-*`` 未知 API Set 与 ``SHCORE.dll``/``combase.dll`` 判违规。
 
@@ -83,6 +84,17 @@ _WIN8_SYSTEM_DLLS = frozenset({"shcore.dll", "combase.dll"})
 _SHIMMABLE_SYSTEM_DLLS: dict[str, str] = {
     "bcryptprimitives.dll": "Win10+ bcrypt 原语库，随包注入 ProcessPrng shim",
 }
+
+# 可 shim 的 API Set DLL（小写全名集合），与 path shim 平级处理——PE 导入表
+# 命中时标记为"需 shim"而非违规。path shim 额外做函数级覆盖校验（参数 --shim
+# 传入 shim DLL 路径时比对导出），synch shim 固定导出 5 个函数（cndb 的
+# stub.c 编译产物，见 assets/runtime/api-ms-win-core-synch-l1-2-0.c），
+# 编译期已保证覆盖，故不做函数级校验。
+_SHIMMABLE_APISETS: frozenset[str] = frozenset(
+    {
+        "api-ms-win-core-synch-l1-2-0.dll",
+    }
+)
 
 
 class PeParseError(Exception):
@@ -332,6 +344,11 @@ def check_win7_imports(path: Path, *, shim: Path | None = None) -> Win7CheckResu
         if low.startswith("api-ms-win-core-path-"):
             shim_dlls.append(dll)
             path_set_funcs.extend(f for f in funcs if not f.startswith("#"))
+        elif low in _SHIMMABLE_APISETS:
+            # 可 shim 的 API Set（如 api-ms-win-core-synch-l1-2-0）
+            # synch shim 固定导出 5 个函数，编译期保证覆盖，不做函数级校验
+            shim_dlls.append(dll)
+            notes.append(f"{dll}: API Set，随包注入 Win7 polyfill shim")
         elif low.startswith("api-ms-win-crt-"):
             crt_dlls.append(dll)
         elif low.startswith(("api-ms-", "ext-ms-")):
