@@ -86,16 +86,28 @@ class ShimSpec:
 SHIM_SRC_DIR: Path = _SHIM_DIR
 
 # shim 注册表（公开给外部模块遍历，见 win7/__init__.py re-export）。
+#
+# 编译参数说明：
+#   -nostdlib  禁止 MinGW 默认链接 msvcrt.dll / libmingwex —— shim 只转发
+#              Win32 API，引入 CRT 会导致 Win7 上因 msvcrt 版本不匹配
+#              而无法加载（见 issue: fspack shim 在 Win7 无法运行）。
+#   -e DllMain  指定 DllMain 为入口符号（-nostdlib 移除了 CRT startup，
+#              原 DllMainCRTStartup 不再存在）。
+#   synch shim 的 .c 源码里已内联 memcmp（static _memcmp_impl），无需
+#   libmingwex 提供任何 C 运行时函数。
+_NO_CRT_CFLAGS = ("-nostdlib", "-e", "DllMain")
+
 ALL_SHIMS: tuple[ShimSpec, ...] = (
     ShimSpec(
         src_name="api-ms-win-core-synch-l1-2-0.c",
         dll_name="api-ms-win-core-synch-l1-2-0.dll",
-        cflags=("-Wl,--allow-multiple-definition",),
+        cflags=_NO_CRT_CFLAGS,
     ),
     ShimSpec(
         src_name="bcryptprimitives.c",
         dll_name="bcryptprimitives.dll",
         libs=("bcrypt",),
+        cflags=_NO_CRT_CFLAGS,
     ),
 )
 

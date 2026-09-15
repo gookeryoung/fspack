@@ -25,8 +25,20 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#include <string.h>
 #include <stdint.h>
+
+// -- 无 CRT 依赖的 memcmp 内联实现 ---------------------------------------
+// 使用 -nostdlib 编译时 libmingwex 不参与链接，必须自带 memcmp；
+// 仅 WaitOnAddress 一处调用，性能不敏感。
+static int _memcmp_impl(const void *s1, const void *s2, size_t n) {
+    const unsigned char *a = (const unsigned char *)s1;
+    const unsigned char *b = (const unsigned char *)s2;
+    for (size_t i = 0; i < n; i++) {
+        if (a[i] != b[i]) return (int)a[i] - (int)b[i];
+    }
+    return 0;
+}
+#define memcmp _memcmp_impl
 
 #undef WaitOnAddress
 #undef WakeByAddressSingle
