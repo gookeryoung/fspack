@@ -78,6 +78,20 @@ WIN7_EMBED_SHA256: dict[str, str] = {
 # 公开常量：win7.scan 全量扫描复用同一 shim 做覆盖校验。
 WIN7_SHIM_DLL_PATH = Path(__file__).parent.parent.parent / "assets" / "runtime" / "api-ms-win-core-path-l1-1-0.dll"
 
+# bcryptprimitives.ProcessPrng shim（随 fspack 分发），供 Rust 1.78+ 编译的
+# wheel（pydantic-core/bcrypt/cryptography/watchfiles 等）在 Win7 上加载。
+# Rust 1.78（2024-05）将 Windows 默认 target 最低 OS 提升到 Win10，之后
+# 编译的二进制硬链接 ProcessPrng（Win10+ bcryptprimitives.dll 导出）。
+WIN7_BCRYPTPRIMITIVES_SHIM_PATH = Path(__file__).parent.parent.parent / "assets" / "runtime" / "bcryptprimitives.dll"
+
+# 全部 Win7 shim 映射表：{DLL 名（小写）: fspack assets/runtime 下的源路径}
+# scan.py 的 inject_win7_shims 遍历 dist PE 导入表，发现 shimmable DLL 就从这里查路径
+# 注入到 dist 根目录（PE loader 优先从同目录加载，遮蔽系统缺失的 Win10+ DLL）。
+WIN7_SYSTEM_SHIMS: dict[str, Path] = {
+    "api-ms-win-core-path-l1-1-0.dll": WIN7_SHIM_DLL_PATH,
+    "bcryptprimitives.dll": WIN7_BCRYPTPRIMITIVES_SHIM_PATH,
+}
+
 
 class Win7DllError(FspackError):
     """win7 python3XX.dll 获取或校验失败（清单未收录、zip 损坏、导入表违规等）。"""

@@ -37,7 +37,13 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-__all__ = ["PeParseError", "Win7ApiViolation", "Win7CheckResult", "check_win7_imports", "main"]
+__all__ = [
+    "PeParseError",
+    "Win7ApiViolation",
+    "Win7CheckResult",
+    "check_win7_imports",
+    "main",
+]
 
 # ---------------------------------------------------------------------------
 # Win7 SP1 不可用、Win8/8.1+ 才有的 KERNEL32 导出（静态导入即阻塞加载）
@@ -63,8 +69,20 @@ _WIN8_KERNEL32_APIS: dict[str, str] = {
 # 需按函数名黑名单校验的 KnownDLL（小写）
 _FUNCTION_CHECKED_DLLS = frozenset({"kernel32.dll", "kernelbase.dll"})
 
-# 整个 DLL 层面即 Win8+ 的系统库（小写全名）
+# 整个 DLL 层面即 Win8+ 的系统库（小写全名，且**无可用 shim**）
+# 这些 DLL 在 Win7 上不存在且无法用同名 DLL 遮蔽（loader 从系统 KnownDLL
+# 列表解析，或 shim 不可行），静态导入即硬违规
 _WIN8_SYSTEM_DLLS = frozenset({"shcore.dll", "combase.dll"})
+
+# Win8+ 系统 DLL 但**有内置 shim 可修复**（小写全名 → 中文说明）
+# Rust 1.78（2024-05）将 Windows 默认 target 最低 OS 提升到 Win10，之后用
+# Rust 1.78+ 编译的 wheel（pydantic-core、bcrypt、cryptography、watchfiles）
+# 硬链接 bcryptprimitives.ProcessPrng（Win10+ API），导致 Win7 上 DLL 加载
+# 失败（WinError 127: 找不到指定的程序）。本 shim 把 ProcessPrng 转发到
+# bcrypt.BCryptGenRandom，随 fspack 分发到 assets/runtime/。
+_SHIMMABLE_SYSTEM_DLLS: dict[str, str] = {
+    "bcryptprimitives.dll": "Win10+ bcrypt 原语库，随包注入 ProcessPrng shim",
+}
 
 
 class PeParseError(Exception):
@@ -182,7 +200,11 @@ def _parse_pe_inner(data: bytes) -> _PeInfo:
     sec_offset = opt_offset + opt_size
     for i in range(num_sections):
         base = sec_offset + i * 40
-        va, raw_size, raw_ptr = _u32(data, base + 12), _u32(data, base + 16), _u32(data, base + 20)
+        va, raw_size, raw_ptr = (
+            _u32(data, base + 12),
+            _u32(data, base + 16),
+            _u32(data, base + 20),
+        )
         sections.append((va, raw_size, raw_ptr))
 
     def rva2off(rva: int) -> int:
@@ -239,9 +261,19 @@ def _read_imports(
 def _read_exports(data: bytes, rva2off: Callable[[int], int], export_rva: int) -> tuple[str, ...]:
     """读取导出目录按名导出的函数名元组（shim 覆盖校验用）."""
     directory = rva2off(export_rva)
-    _chars, _ts, _maj, _min, _name, _base, _nfuncs, num_names, _funcs, names_rva, _ords = struct.unpack_from(
-        "<IIHHIIIIIII", data, directory
-    )
+    (
+        _chars,
+        _ts,
+        _maj,
+        _min,
+        _name,
+        _base,
+        _nfuncs,
+        num_names,
+        _funcs,
+        names_rva,
+        _ords,
+    ) = struct.unpack_from("<IIHHIIIIIII", data, directory)
     names_offset = rva2off(names_rva)
     names: list[str] = []
     for i in range(min(num_names, _MAX_EXPORT_NAMES)):
@@ -253,6 +285,22 @@ def _read_exports(data: bytes, rva2off: Callable[[int], int], export_rva: int) -
 # ---------------------------------------------------------------------------
 # Win7 兼容性判定
 # ---------------------------------------------------------------------------
+
+
+def _check_kernel_dll_funcs(
+    dll: str,
+    funcs: list[str],
+    violations: list[Win7ApiViolation],
+) -> list[str]:
+    """检查 kernel32/kernelbase 导入的函数黑名单，返回需追加到 notes 的条目."""
+    notes: list[str] = []
+    for func in sorted(set(funcs)):
+        if func.startswith("#"):
+            notes.append(f"{dll}: 存在按序号导入 {func}，无法按名校验")
+        elif func in _WIN8_KERNEL32_APIS:
+            level = _WIN8_KERNEL32_APIS[func]
+            violations.append(Win7ApiViolation(f"{dll}!{func}", f"{level} API，Win7 SP1 不存在"))
+    return notes
 
 
 def check_win7_imports(path: Path, *, shim: Path | None = None) -> Win7CheckResult:
@@ -290,13 +338,12 @@ def check_win7_imports(path: Path, *, shim: Path | None = None) -> Win7CheckResu
             violations.append(Win7ApiViolation(dll, "未知 API Set，Win7 可能缺失且无 shim"))
         elif low in _WIN8_SYSTEM_DLLS:
             violations.append(Win7ApiViolation(dll, "Win8+ 系统库，Win7 不存在"))
+        elif low in _SHIMMABLE_SYSTEM_DLLS:
+            # Win8+ 系统 DLL 但 fspack 有内置 shim（如 bcryptprimitives.dll → ProcessPrng shim）
+            shim_dlls.append(dll)
+            notes.append(_SHIMMABLE_SYSTEM_DLLS[low])
         elif low in _FUNCTION_CHECKED_DLLS:
-            for func in sorted(set(funcs)):
-                if func.startswith("#"):
-                    notes.append(f"{dll}: 存在按序号导入 {func}，无法按名校验")
-                elif func in _WIN8_KERNEL32_APIS:
-                    level = _WIN8_KERNEL32_APIS[func]
-                    violations.append(Win7ApiViolation(f"{dll}!{func}", f"{level} API，Win7 SP1 不存在"))
+            notes.extend(_check_kernel_dll_funcs(dll, funcs, violations))
 
     shim_missing: tuple[str, ...] = ()
     if crt_dlls:
@@ -344,8 +391,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         prog="python -m fspack.packaging.win7.check",
         description="校验 PE 导入表不含 Win7 SP1 缺失的 Win8+ 静态导入（只替换 python3XX.dll 方案的门禁）",
     )
-    parser.add_argument("files", nargs="+", type=Path, help="待校验的 PE 文件（python3XX.dll/.pyd/.exe）")
-    parser.add_argument("--shim", type=Path, default=None, help="shim DLL 路径，用于校验 PathCch* 导出覆盖")
+    parser.add_argument(
+        "files",
+        nargs="+",
+        type=Path,
+        help="待校验的 PE 文件（python3XX.dll/.pyd/.exe）",
+    )
+    parser.add_argument(
+        "--shim",
+        type=Path,
+        default=None,
+        help="shim DLL 路径，用于校验 PathCch* 导出覆盖",
+    )
     parser.add_argument("--json", action="store_true", help="以 JSON 输出结果（供管线集成）")
     args = parser.parse_args(argv)
 

@@ -110,7 +110,7 @@ def test_render_report_tips_lines(tmp_path: Path) -> None:
     (tmp_path / "broken.dll").write_bytes(b"x" * 16)
     report = scan_dist_win7(tmp_path)
     text = render_win7_report(report)
-    assert "1 个文件需 api-ms-win-core-path shim" in text
+    assert "1 个文件依赖 Win8+ 系统库" in text
     assert "1 个文件依赖 api-ms-win-crt-*" in text
     assert "跳过非 PE 文件: broken.dll" in text
 

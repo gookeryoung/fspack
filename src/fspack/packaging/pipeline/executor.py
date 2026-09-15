@@ -392,7 +392,13 @@ def _execute_build(  # noqa: PLR0912, PLR0913
         merged_links = tuple(dict.fromkeys((*info.find_links, *find_links)))
         if merged_extra != info.extra_index_urls or merged_links != info.find_links:
             info = replace(info, extra_index_urls=merged_extra, find_links=merged_links)
-        _logger.info("项目: %s %s (%s) 目标: %s", info.name, info.version, info.app_type.value, target.value)
+        _logger.info(
+            "项目: %s %s (%s) 目标: %s",
+            info.name,
+            info.version,
+            info.app_type.value,
+            target.value,
+        )
         detail = f"{info.name} {info.version} ({info.app_type.value})"
         if opts.extras:
             extras_str = ", ".join(sorted(opts.extras))
@@ -434,7 +440,12 @@ def _execute_build(  # noqa: PLR0912, PLR0913
         # tkinter 补充到 runtime/Lib/tkinter/，需将 Lib 加入 _pth 使其可 import
         # （_pth 默认含 ..\site-packages 与 ..\src，不含 Lib 本身）
         extra_pth_paths = ("Lib",) if has_tkinter else ()
-        write_pth(cfg.dist_dir, info.py_version, extra_paths=extra_pth_paths, enable_site=not opts.no_site)
+        write_pth(
+            cfg.dist_dir,
+            info.py_version,
+            extra_paths=extra_pth_paths,
+            enable_site=not opts.no_site,
+        )
 
     # .pth 文件优化：no_site=True 时 site.py 不加载，.pth 文件不会被
     # 处理，保留它们仅占空间且可能误导。剥离 site-packages 下所有 .pth 文件，
@@ -563,25 +574,37 @@ def _execute_build(  # noqa: PLR0912, PLR0913
             _post_build_pool.shutdown(wait=True)
 
     # Win7 兼容扫描（软门禁，默认启用，--no-win7-scan 关闭）：dist 下全部
-    # .dll/.pyd/.exe 导入表检查，第三方依赖与 Nuitka 产物违规无法自动修复，
-    # 不阻断构建，生成文本报告到 dist/release/win7-compat-report.txt。
+    # .dll/.pyd/.exe 导入表检查，扫描后自动注入内置 Win7 shim（api-ms-win-core-path
+    # + bcryptprimitives.ProcessPrng）到 dist 根目录，剩余违规由报告提示。
     # 仅 Windows 目标（Linux/macOS 产物不运行于 Win7）。
     if target is Platform.WINDOWS and not opts.no_win7_scan:
-        from fspack.packaging.win7.scan import scan_dist_win7, write_win7_report
+        from fspack.packaging.win7.scan import (
+            inject_win7_shims,
+            scan_dist_win7,
+            write_win7_report,
+        )
 
         with tracker.stage("Win7 兼容扫描") as st:
             report = scan_dist_win7(cfg.dist_dir)
+            # 扫描后自动注入 shim DLL（根目录级别，PE loader 优先从同目录加载）
+            injected = inject_win7_shims(cfg.dist_dir)
+            if injected:
+                report = replace(report, injected_shims=injected)
             report_path = write_win7_report(report, cfg.dist_dir)
             st.processed(report.scanned)
+            details: list[str] = []
+            if injected:
+                details.append(f"shim: {', '.join(injected)}")
             if report.violations:
-                st.set_detail(f"{len(report.violations)} 个文件违规，见 {report_path.name}")
+                details.append(f"{len(report.violations)} 个文件违规")
                 _logger.warning(
                     "Win7 兼容扫描发现 %d 个违规文件（不阻断构建），详见 %s",
                     len(report.violations),
                     report_path,
                 )
             else:
-                st.set_detail(f"{report.scanned} 个文件通过")
+                details.append(f"{report.scanned} 个文件通过")
+            st.set_detail("；".join(details))
 
     # 延迟导入：console 触发 fspack.console 加载（含 rich.console/rich.logging/
     # rich.theme ~17ms）。仅在构建完成输出 summary 时加载。注意 _execute_build

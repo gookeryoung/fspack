@@ -1,6 +1,6 @@
-"""dist 产物 Win7 兼容门禁：loader exe 硬门禁 + dist 全量扫描报告.
+"""dist 产物 Win7 兼容门禁：loader exe 硬门禁 + dist 全量扫描报告 + shim 自动注入.
 
-P1 产物门禁补全的两道防线（配合 win7_dll 的 python3XX.dll 门禁形成完整链路）：
+P1 产物门禁补全的三道防线（配合 win7_dll 的 python3XX.dll 门禁形成完整链路）：
 
 - :func:`enforce_win7_loaders`：loader exe 导入表校验，违规抛
   :class:`Win7ScanError` 阻断构建。loader 由 fspack 内置 C 源码 + mingw
@@ -11,25 +11,36 @@ P1 产物门禁补全的两道防线（配合 win7_dll 的 python3XX.dll 门禁�
   无法自动修复（只能更换依赖版本），故不阻断构建，聚合渲染为文本报告
   （``dist/release/win7-compat-report.txt``）供人工决策。python3XX.dll
   已由 :func:`fspack.packaging.win7.dll.ensure_win7_dll` 单独硬门禁。
+- :func:`inject_win7_shims`：扫描后自动将内置 shim DLL 注入 dist 根目录。
+  当前支持两类 shim：``api-ms-win-core-path-l1-1-0.dll``（Win8+ PathCch*）
+  和 ``bcryptprimitives.dll``（Win10+ ProcessPrng，Rust 1.78+ wheel 硬链接）。
+  注入是**根目录级别**的（不侵入 site-packages），PE loader 优先从同目录
+  加载，遮蔽系统缺失的 Win10+ DLL。
 
-报告包含：违规文件与 API 明细、需 shim 文件数（fspack 已内置注入）、
+报告包含：违规文件与 API 明细、需 shim 文件数、已注入 shim 列表、
 api-ms-win-crt-* 依赖提示（Win7 SP1 需 KB2999226 UCRT）。
 """
 
 from __future__ import annotations
 
 import logging
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
 from fspack.exceptions import FspackError
-from fspack.packaging.win7.check import PeParseError, Win7CheckResult, check_win7_imports
-from fspack.packaging.win7.dll import WIN7_SHIM_DLL_PATH
+from fspack.packaging.win7.check import (
+    PeParseError,
+    Win7CheckResult,
+    check_win7_imports,
+)
+from fspack.packaging.win7.dll import WIN7_SHIM_DLL_PATH, WIN7_SYSTEM_SHIMS
 
 __all__ = [
     "Win7ScanError",
     "Win7ScanReport",
     "enforce_win7_loaders",
+    "inject_win7_shims",
     "iter_pe_files",
     "render_win7_report",
     "scan_dist_win7",
@@ -57,7 +68,9 @@ class Win7ScanReport:
     """dist 全量 Win7 扫描汇总（不阻断构建，供报告渲染）.
 
     scanned 为成功解析的 PE 数；skipped 为扩展名匹配但解析失败（非 PE/
-    截断）的文件名；violations 为存在违规的文件结果（ok=False）。
+    截断）的文件名；violations 为存在违规的文件结果（ok=False）；
+    injected_shims 为本次注入的 shim DLL 文件名（dist 根目录下已存在的
+    shim 也包含在内）。
     """
 
     scanned: int = 0
@@ -65,6 +78,7 @@ class Win7ScanReport:
     violations: tuple[Win7CheckResult, ...] = ()
     shim_files: int = 0
     ucrt_files: int = 0
+    injected_shims: tuple[str, ...] = ()
     dist_dir: Path | None = None
 
     @property
@@ -157,6 +171,61 @@ def enforce_win7_loaders(exes: list[Path] | tuple[Path, ...], *, shim: Path | No
         )
 
 
+def inject_win7_shims(dist_dir: Path) -> tuple[str, ...]:
+    """扫描 dist PE 导入表，自动注入内置 Win7 兼容 shim DLL 到 dist 根目录.
+
+    覆盖两类已知 Win7 不兼容场景：
+
+    1. **api-ms-win-core-path-l1-1-0.dll**（Win8+ PathCch* 系列）：Python 3.9+
+       的 embed runtime 与部分依赖静态导入，Win7 上缺失；
+    2. **bcryptprimitives.dll**（Win10+ ProcessPrng）：Rust 1.78（2024-05）
+       将 Windows 默认 target 最低 OS 提升到 Win10，之后编译的 Rust 扩展
+       wheel（pydantic-core/bcrypt/cryptography/watchfiles 等）硬链接
+       ProcessPrng，导致 Win7 加载失败（WinError 127）。
+
+    注入策略：遍历 dist 全部 PE 导入表，收集缺失 shim 的 DLL 名集合，
+    从 :data:`fspack.packaging.win7.dll.WIN7_SYSTEM_SHIMS` 查源路径，
+    复制到 dist 根目录（PE loader 优先从同目录加载，遮蔽系统缺失 DLL）。
+
+    Returns:
+        本次注入的 shim DLL 文件名元组（不含已存在跳过的）。返回空元组
+        表示 dist 中无 PE 需 shim。
+
+    Raises:
+        OSError: 源 shim DLL 缺失或目标目录写入失败（硬错误，阻断构建）。
+    """
+    # 扫描 dist PE 导入表，收集需要 shim 的 DLL 名
+    needed: set[str] = set()
+    for path in iter_pe_files(dist_dir):
+        try:
+            result = check_win7_imports(path)
+        except PeParseError:
+            continue
+        for shim_dll in result.shim_dlls:
+            low = shim_dll.lower()
+            if low in WIN7_SYSTEM_SHIMS:
+                needed.add(low)
+
+    if not needed:
+        _logger.info("dist 下无 PE 需 Win7 shim，跳过注入")
+        return ()
+
+    injected: list[str] = []
+    for dll_name in sorted(needed):
+        src = WIN7_SYSTEM_SHIMS[dll_name]
+        if not src.is_file():
+            raise OSError(f"Win7 shim 源文件缺失: {src}（dll: {dll_name}）")
+        dest = dist_dir / dll_name
+        if dest.is_file():
+            _logger.info("Win7 shim 已存在，跳过: %s", dest)
+            continue
+        shutil.copy2(src, dest)
+        _logger.info("注入 Win7 shim: %s（%d bytes）", dest, src.stat().st_size)
+        injected.append(dll_name)
+
+    return tuple(injected)
+
+
 def render_win7_report(report: Win7ScanReport) -> str:
     """把扫描汇总渲染为多行中文文本报告."""
     lines = [
@@ -172,8 +241,10 @@ def render_win7_report(report: Win7ScanReport) -> str:
         lines.append(f"[违规] {rel}")
         lines.extend(f"  {v.target} — {v.reason}" for v in result.violations)
     lines.append("")
+    if report.injected_shims:
+        lines.append(f"[已注入] Win7 shim DLL: {', '.join(report.injected_shims)}")
     if report.shim_files:
-        lines.append(f"[提示] {report.shim_files} 个文件需 api-ms-win-core-path shim（fspack 已内置注入）")
+        lines.append(f"[提示] {report.shim_files} 个文件依赖 Win8+ 系统库（shim 已自动注入，见上方）")
     if report.ucrt_files:
         lines.append(f"[提示] {report.ucrt_files} 个文件依赖 api-ms-win-crt-*（Win7 SP1 需 KB2999226 UCRT）")
     if report.skipped:
