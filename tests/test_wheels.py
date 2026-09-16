@@ -2949,3 +2949,62 @@ def test_download_online_uv_download_fails_falls_back_to_pip(tmp_path: Path, mon
     assert "uv" in call_log
     assert "pip" in call_log
     assert "Saved numpy.whl" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# wheel 缓存按包名去重（Fix 1）
+# ---------------------------------------------------------------------------
+
+
+def test_dedup_wheels_by_pkg_keeps_higher_version(tmp_path: Path) -> None:
+    """wheel 缓存目录里同包名多个版本时去重取最高版本."""
+    from fspack.packaging.wheels.downloader import _dedup_wheels_by_pkg
+
+    old_ver = "pydantic_settings-2.2.1-py3-none-any.whl"
+    new_ver = "pydantic_settings-2.8.1-py3-none-any.whl"
+    # 另有无关包
+    other = "numpy-1.26.0-cp311-cp311-win_amd64.whl"
+    result = _dedup_wheels_by_pkg([old_ver, new_ver, other])
+    assert old_ver not in result
+    assert new_ver in result
+    assert other in result
+    assert len(result) == 2
+
+
+def test_dedup_wheels_by_pkg_single_version_noop(tmp_path: Path) -> None:
+    """同包名只有一个版本时原样返回."""
+    from fspack.packaging.wheels.downloader import _dedup_wheels_by_pkg
+
+    wheels = ["numpy-1.26.0-cp311-cp311-win_amd64.whl"]
+    assert _dedup_wheels_by_pkg(wheels) == wheels
+
+
+def test_dedup_wheels_by_pkg_pep503_normalize(tmp_path: Path) -> None:
+    """wheel 文件名用不同风格（下划线/点）时按 PEP 503 归一化去重."""
+    from fspack.packaging.wheels.downloader import _dedup_wheels_by_pkg
+
+    whl1 = "PyYAML-6.0-cp311-cp311-win_amd64.whl"
+    whl2 = "pyyaml-6.0.1-cp311-cp311-win_amd64.whl"
+    result = _dedup_wheels_by_pkg([whl1, whl2])
+    assert len(result) == 1
+    assert result[0] == whl2  # 6.0.1 > 6.0
+
+
+def test_parse_wheel_names_fallback_dedups_cache_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_parse_wheel_names 回退到目录扫描时，缓存目录里同包多版本 wheel 应去重."""
+    from fspack.packaging.wheels.downloader import _parse_wheel_names
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    # 同一包两个版本共存（缓存残留）
+    (cache / "pydantic_settings-2.2.1-py3-none-any.whl").write_bytes(b"a")
+    (cache / "pydantic_settings-2.8.1-py3-none-any.whl").write_bytes(b"b")
+    (cache / "numpy-1.26.0-cp311-cp311-win_amd64.whl").write_bytes(b"c")
+
+    names, is_fallback = _parse_wheel_names("no saved lines", cache)
+    assert is_fallback
+    # 只能有一个 pydantic_settings（取 2.8.1）+ 一个 numpy
+    assert len(names) == 2
+    assert "pydantic_settings-2.8.1-py3-none-any.whl" in names
+    assert "pydantic_settings-2.2.1-py3-none-any.whl" not in names
+    assert "numpy-1.26.0-cp311-cp311-win_amd64.whl" in names

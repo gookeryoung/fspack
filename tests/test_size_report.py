@@ -408,3 +408,77 @@ def test_cli_build_without_no_size_report_defaults_false(tmp_path: Path, monkeyp
     monkeypatch.setattr("fspack.builder.build", fake_build)
     cli.main(["b", str(tmp_path)])
     assert captured["options"].no_size_report is False
+
+
+# ---------------------------------------------------------------------------
+# 体积报告按包名去重（Fix 3）
+# ---------------------------------------------------------------------------
+
+
+def test_dedup_packages_by_pkg_keeps_higher_version() -> None:
+    """同包多版本只保留版本最高的那个."""
+    from fspack.packaging.size_report import PackageSize, _dedup_packages_by_pkg
+
+    old = PackageSize(name="pydantic_settings", version="2.2.1", size=100, file_count=10)
+    new = PackageSize(name="pydantic_settings", version="2.8.1", size=100, file_count=10)
+    other = PackageSize(name="requests", version="2.31.0", size=50, file_count=5)
+
+    result = _dedup_packages_by_pkg([old, new, other])
+    assert len(result) == 2
+    names = {p.name for p in result}
+    assert "requests" in names
+    # pydantic_settings 只应保留 2.8.1
+    pydantic_entries = [p for p in result if p.name == "pydantic_settings"]
+    assert len(pydantic_entries) == 1
+    assert pydantic_entries[0].version == "2.8.1"
+
+
+def test_dedup_packages_by_pkg_pep503_normalize() -> None:
+    """包名风格不同时按 PEP 503 归一化去重."""
+    from fspack.packaging.size_report import PackageSize, _dedup_packages_by_pkg
+
+    a = PackageSize(name="PyYAML", version="6.0", size=50, file_count=5)
+    b = PackageSize(name="pyyaml", version="6.0.1", size=50, file_count=5)
+    result = _dedup_packages_by_pkg([a, b])
+    assert len(result) == 1
+    assert result[0].version == "6.0.1"
+
+
+def test_dedup_packages_by_pkg_no_duplicates_noop() -> None:
+    """没有同包多版本时原样返回."""
+    from fspack.packaging.size_report import PackageSize, _dedup_packages_by_pkg
+
+    pkgs = [PackageSize(name="requests", version="2.31.0", size=50, file_count=5)]
+    assert _dedup_packages_by_pkg(pkgs) == pkgs
+
+
+def test_collect_size_report_dedups_multiple_dist_infos(tmp_path: Path) -> None:
+    """site-packages 里同包名有两个 dist-info 时 Top N 里只能出现一次."""
+    # 建 dist 目录结构
+    dist = tmp_path / "dist"
+    (dist / "runtime").mkdir(parents=True)
+    (dist / "src").mkdir(parents=True)
+    sp = dist / "site-packages"
+    sp.mkdir()
+    # 两个 dist-info，同包名不同版本
+    (sp / "pydantic_settings-2.2.1.dist-info").mkdir()
+    (sp / "pydantic_settings-2.8.1.dist-info").mkdir()
+    (sp / "requests-2.31.0.dist-info").mkdir()
+    # 每个 dist-info 都放一个小文件（模拟存在）
+    for d in sp.glob("*.dist-info"):
+        (d / "METADATA").write_bytes(b"x" * 100)
+    # 同包源码目录（共享）
+    src_dir = sp / "pydantic_settings"
+    src_dir.mkdir()
+    (src_dir / "__init__.py").write_bytes(b"y" * 1000)
+    req_src = sp / "requests"
+    req_src.mkdir()
+    (req_src / "__init__.py").write_bytes(b"z" * 500)
+
+    from fspack.packaging.size_report import collect_size_report
+
+    report = collect_size_report(dist, top_n=20)
+    top_names = [p.name for p in report.top_packages]
+    assert top_names.count("pydantic_settings") == 1, f"同包名多版本 dist-info 未被去重: {top_names}"
+    entry = next(p for p in report.top_packages if p.name == "pydantic_settings")
+    assert entry.version == "2.8.1", f"去重后应保留版本最高者，实际 {entry.version}"

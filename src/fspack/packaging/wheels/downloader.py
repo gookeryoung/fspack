@@ -284,13 +284,57 @@ def _parse_wheel_names(stdout: str, cache_dir: Path) -> tuple[list[str], bool]:
         (wheel 文件名列表, 是否回退到目录扫描). 回退扫描时不可作为 deps_key 缓存，
         否则下次命中缓存会返回错误依赖列表（如 requests 命中却返回 pygame wheel）。
 
+    回退到目录扫描时按 PEP 503 规范化包名分组，每包只保留**版本最高**的 wheel
+    （用 ``packaging.version.Version`` 做 PEP 440 比较）。wheel 缓存目录是
+    跨项目持久化的，不同项目可能曾下载过同包名的不同版本——直接 glob 全部返回
+    会把旧版本误带入本次构建，导致 site-packages 里同时存在多个 dist-info。
     """
     wheel_names = _parse_pip_download_wheels(stdout)
     if wheel_names:
         return wheel_names, False
     _logger.warning("pip download 输出解析失败，回退到目录扫描")
     # 目录扫描可能包含其他项目遗留的 wheel，不可作为本 deps_key 的缓存
-    return sorted(f.name for f in cache_dir.glob("*.whl")), True
+    wheels = sorted(f.name for f in cache_dir.glob("*.whl"))
+    # 按规范化包名分组，每包只保留版本最高者（防止缓存里同包多版本被误带入）
+    return _dedup_wheels_by_pkg(wheels), True
+
+
+def _dedup_wheels_by_pkg(wheel_names: list[str]) -> list[str]:
+    """wheel 文件名列表按包名去重，每包只保留版本最高的 wheel.
+
+    用 ``packaging.version.Version`` 做 PEP 440 比较。pip 运行时 packaging 必然
+    已安装（pip 的硬依赖），但 fspack 本身未声明为顶层依赖，故惰性导入。
+    解析 wheel 文件名失败（非标准格式）时回退到原顺序保留全部。
+    """
+    from fspack.packaging.site_packages import normalize_pkg_name
+    from fspack.slim.spec import WheelInfo
+
+    # packaging 仅 pip 运行时可用，lazy import 避免 fspack 顶层依赖膨胀
+    try:
+        from packaging.version import Version as _V
+    except ImportError:  # pragma: no cover - pip 必然可用
+        _logger.warning("packaging 不可用，wheel 去重降级为原样返回")
+        return wheel_names
+
+    best: dict[str, tuple[_V, str]] = {}
+    for name in wheel_names:
+        info = WheelInfo.from_filename(name)
+        if info is None:
+            # 无法解析的 wheel 保持原样（best effort）
+            continue
+        norm = normalize_pkg_name(info.name)
+        try:
+            ver = _V(info.version)
+        except Exception:  # pragma: no cover - 版本字符串异常
+            continue
+        cur = best.get(norm)
+        if cur is None or ver > cur[0]:
+            best[norm] = (ver, name)
+    result = sorted(path for _, path in best.values())
+    dropped = len(wheel_names) - len(result)
+    if dropped:
+        _logger.info("wheel 缓存按包名去重: %d → %d（剔除 %d 个旧版本）", len(wheel_names), len(result), dropped)
+    return result
 
 
 def _record_wheel_stage(stage: StageRecorder, wheels: list[Path], before: set[str]) -> None:

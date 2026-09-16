@@ -3353,3 +3353,84 @@ class TestCommonExcludeSubdirsExtended:
     def test_qt_docs_excluded(self) -> None:
         """Qt spec docs 目录剥离（COMMON_EXCLUDE_SUBDIRS 覆盖 Qt，与 _QT_EXCLUDE_SUBDIRS 的 doc 冗余但无害）."""
         assert classify_entry("PySide2/docs/index.md", "PySide2") == ("exclude", None)
+
+
+# ---------------------------------------------------------------------------
+# 解压前清理旧 dist-info（Fix 2）
+# ---------------------------------------------------------------------------
+
+
+class TestPrunePreviousDistInfos:
+    """_prune_previous_dist_infos 在解压前清理 site-packages 中同包名的旧 dist-info."""
+
+    def test_prunes_stale_dist_info_for_matching_wheel(self, tmp_path: Path) -> None:
+        """待解压 wheel 的包名在 site-packages 已有旧 dist-info 时应清理."""
+        from fspack.slim.unpack import _prune_previous_dist_infos
+
+        sp = tmp_path
+        # 旧 dist-info 残留
+        old_dist = sp / "pydantic_settings-2.2.1.dist-info"
+        old_dist.mkdir()
+        (old_dist / "METADATA").write_text("old")
+        # 同一包名的新 wheel
+        new_wheel = Path("pydantic_settings-2.8.1-py3-none-any.whl")
+        _prune_previous_dist_infos(sp, [new_wheel])
+        # 旧 dist-info 应被删除
+        assert not old_dist.exists()
+
+    def test_keeps_dist_info_for_unrelated_pkg(self, tmp_path: Path) -> None:
+        """wheel 列表不含该包名时，site-packages 里的 dist-info 保留（幂等）."""
+        from fspack.slim.unpack import _prune_previous_dist_infos
+
+        sp = tmp_path
+        unrelated = sp / "requests-2.31.0.dist-info"
+        unrelated.mkdir()
+        (unrelated / "METADATA").write_text("ok")
+        wheel = Path("pydantic_settings-2.8.1-py3-none-any.whl")
+        _prune_previous_dist_infos(sp, [wheel])
+        assert unrelated.exists()
+
+    def test_handles_egg_info_and_dist_info_equivalently(self, tmp_path: Path) -> None:
+        """.egg-info 与 .dist-info 同属包元数据目录，均应清理."""
+        from fspack.slim.unpack import _prune_previous_dist_infos
+
+        sp = tmp_path
+        egg = sp / "pydantic_settings-2.2.1.egg-info"
+        egg.mkdir()
+        (egg / "PKG-INFO").write_text("old")
+        wheel = Path("pydantic_settings-2.8.1-py3-none-any.whl")
+        _prune_previous_dist_infos(sp, [wheel])
+        assert not egg.exists()
+
+    def test_no_op_when_no_matching_dist_info(self, tmp_path: Path) -> None:
+        """site-packages 里没有待解压包的 dist-info 时什么也不做."""
+        from fspack.slim.unpack import _prune_previous_dist_infos
+
+        sp = tmp_path
+        other = sp / "requests-2.31.0.dist-info"
+        other.mkdir()
+        wheel = Path("pydantic_settings-2.8.1-py3-none-any.whl")
+        _prune_previous_dist_infos(sp, [wheel])
+        assert other.exists()  # 不影响无关包
+
+    def test_no_op_wheels_empty(self, tmp_path: Path) -> None:
+        """wheel 列表为空时直接返回."""
+        from fspack.slim.unpack import _prune_previous_dist_infos
+
+        sp = tmp_path
+        _prune_previous_dist_infos(sp, [])  # 不抛异常即可
+        _prune_previous_dist_infos(sp, [Path("bad-filename.whl")])  # WheelInfo.from_filename 解析失败跳过
+
+    def test_prunes_multiple_dist_infos_for_same_pkg(self, tmp_path: Path) -> None:
+        """site-packages 里同包多版本 dist-info 共存时全部清理."""
+        from fspack.slim.unpack import _prune_previous_dist_infos
+
+        sp = tmp_path
+        (sp / "pydantic_settings-2.2.1.dist-info").mkdir()
+        (sp / "pydantic_settings-2.5.0.dist-info").mkdir()
+        (sp / "requests-2.31.0.dist-info").mkdir()  # 无关
+        wheel = Path("pydantic_settings-2.8.1-py3-none-any.whl")
+        _prune_previous_dist_infos(sp, [wheel])
+        assert not (sp / "pydantic_settings-2.2.1.dist-info").exists()
+        assert not (sp / "pydantic_settings-2.5.0.dist-info").exists()
+        assert (sp / "requests-2.31.0.dist-info").exists()

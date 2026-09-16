@@ -263,6 +263,35 @@ def _build_name_index(site_packages: Path) -> dict[str, list[Path]]:
     return index
 
 
+def _dedup_packages_by_pkg(packages: list[PackageSize]) -> list[PackageSize]:
+    """按 PEP 503 规范化包名去重，同包名多版本时保留版本最高者.
+
+    多个 dist-info 共享同一份源码目录（如 pydantic_settings 2.2.1 与 2.8.1
+    共存于 site-packages），各自 Report 的体积是重复的——取版本最高者即可
+    真实反映该包占用。``packaging.version.Version`` 做 PEP 440 比较，pip
+    运行时必然可用；lazy import 避免 fspack 顶层依赖膨胀。
+    """
+    try:
+        from packaging.version import Version as _V
+    except ImportError:  # pragma: no cover - pip 必然可用
+        return packages
+    best: dict[str, tuple[_V, PackageSize]] = {}
+    for pkg in packages:
+        norm = normalize_pkg_name(pkg.name)
+        try:
+            ver = _V(pkg.version)
+        except Exception:  # pragma: no cover - 版本字符串异常
+            continue
+        cur = best.get(norm)
+        if cur is None or ver > cur[0]:
+            best[norm] = (ver, pkg)
+    if len(best) == len(packages):
+        return packages
+    dropped = len(packages) - len(best)
+    _logger.info("体积报告按包名去重: %d → %d（剔除 %d 个同包多版本条目）", len(packages), len(best), dropped)
+    return [p for _, p in best.values()]
+
+
 def collect_size_report(dist_dir: Path, *, top_n: int = _TOP_N_PACKAGES) -> SizeReport:
     """扫描 dist 目录，返回结构化体积报告.
 
@@ -315,6 +344,9 @@ def collect_size_report(dist_dir: Path, *, top_n: int = _TOP_N_PACKAGES) -> Size
             if pkg_size > 0:
                 pkg_name, pkg_ver = _parse_dist_info_name(d)
                 packages.append(PackageSize(name=pkg_name, version=pkg_ver, size=pkg_size, file_count=pkg_files))
+        # 防御性去重：同一规范化包名出现多个 dist-info 时（如重复构建残留），
+        # 只保留版本最高者——多个 dist-info 共享同一份源码目录，体积累加是虚的。
+        packages = _dedup_packages_by_pkg(packages)
         packages.sort(key=lambda p: p.size, reverse=True)
 
     categories.append(SizeCategory(name="site-packages", size=sp_size, file_count=sp_files))

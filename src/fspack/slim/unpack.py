@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 import zipfile
 from collections.abc import Sequence
 from pathlib import Path
@@ -235,6 +236,54 @@ def _unpack_wheel_dispatch(
     return _unpack_one_wheel(whl, dest, whl_pkg, merged, slim_rules)
 
 
+def _prune_previous_dist_infos(site_packages_dir: Path, wheels: Sequence[Path]) -> None:
+    """解压前清理 site-packages 中与本次 wheel 同包名的全部旧 dist-info.
+
+    常见场景：wheel 缓存目录持久化跨项目，pydantic-settings 2.2.1 来自项目 A，
+    项目 B 解析出 2.8.1——两者 wheel 同时在缓存里，解压时两个 dist-info 共存。
+    或者同一项目多次构建、解析到的版本变化（手动 pyproject 升级 / fspack
+    版本升级导致依赖求解策略变化），site-packages 里残留上一版的 dist-info。
+
+    解压 wheel 前删掉与任一待解压 wheel 同包名的所有 dist-info（包括
+    .egg-info），让本次 wheel 的 dist-info 成为 site-packages 里该包名的
+    **唯一** dist-info。这样 size_report 不会把同一包的多版本 dist-info
+    分别统计为 Top N 独立条目，运行时 import 也不会因多个 dist-info 干扰
+    版本判定。
+
+    幂等：同包名无已存在 dist-info 时直接跳过。删除失败（权限/句柄占用）
+    仅 warning 继续，不阻断解压（Windows 杀软偶发）。
+    """
+    wheel_pkgs: set[str] = set()
+    for whl in wheels:
+        info = WheelInfo.from_filename(whl.name)
+        if info is None:
+            continue
+        wheel_pkgs.add(normalize_name(info.name))
+    if not wheel_pkgs or not site_packages_dir.is_dir():
+        return
+    removed: list[str] = []
+    for entry in site_packages_dir.iterdir():
+        if not entry.is_dir():
+            continue
+        stem = entry.name
+        # 识别 .dist-info / .egg-info 元数据目录
+        for suffix in (".dist-info", ".egg-info"):
+            if stem.endswith(suffix):
+                pkg_part = stem[: -len(suffix)]
+                # dist-info 命名约定: <name>-<version>.dist-info，从右分离 version
+                parts = pkg_part.rsplit("-", 1)
+                pkg_name = parts[0] if len(parts) == 2 else pkg_part
+                if normalize_name(pkg_name) in wheel_pkgs:
+                    try:
+                        shutil.rmtree(entry)
+                        removed.append(entry.name)
+                    except OSError as e:
+                        _logger.warning("清理旧 dist-info 失败 %s: %s", entry, e)
+                break
+    if removed:
+        _logger.info("清理 %d 个旧 dist-info: %s", len(removed), removed)
+
+
 def slim_unpack(  # noqa: PLR0913
     wheels: Sequence[Path],
     site_packages_dir: Path,
@@ -266,6 +315,12 @@ def slim_unpack(  # noqa: PLR0913
     解压，GIL 在 I/O 等待时释放）。PySide6 拆分 wheel（3 wheel）等场景显著提速。
     """
     site_packages_dir.mkdir(parents=True, exist_ok=True)
+
+    # 重复构建残留清理：site-packages 中可能存在同包名的旧 dist-info
+    # （如 wheel 缓存里有 pydantic-settings 2.2.1 和 2.8.1 两个 wheel，
+    # 或上次构建解析出的版本与本次不同）。解压前按 wheel 包名删掉全部已存在的
+    # dist-info，避免同一包多版本 dist-info 共存导致 size_report 体积重复统计。
+    _prune_previous_dist_infos(site_packages_dir, wheels)
 
     merged: dict[str, set[str]] = {}
     if submodule_usage:
