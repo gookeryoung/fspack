@@ -28,8 +28,8 @@ import logging
 import shutil
 import subprocess  # noqa: F401  # 保留 patch 路径 fspack.packaging.installer.macos.subprocess.run
 from pathlib import Path
-from typing import override
 
+from fspack._compat import override
 from fspack.config import ProjectInfo
 from fspack.console import console
 from fspack.exceptions import InstallerError

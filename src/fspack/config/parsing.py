@@ -34,12 +34,12 @@ from __future__ import annotations
 import logging
 import os
 import re
-import tomllib
 from dataclasses import replace
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, cast
 
+from fspack._compat import tomllib
 from fspack.config.app_type import (  # noqa: F401
     _GUI_HINTS,
     _WEB_HINTS,
