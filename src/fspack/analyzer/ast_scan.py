@@ -110,7 +110,22 @@ def parse_qml_imports(qml_file: Path) -> set[str]:
     return subs
 
 
-_STDLIB: frozenset[str] = sys.stdlib_module_names
+# 标准库顶层模块集合：Python 3.10+ 直接用 sys.stdlib_module_names；
+# 3.8/3.9 无此属性，用 sysconfig 扫描标准库目录 + sys.builtin_module_names 兜底
+if hasattr(sys, "stdlib_module_names"):
+    _STDLIB: frozenset[str] = sys.stdlib_module_names
+else:
+    import sysconfig as _sysconfig
+
+    _stdlib_modules: set[str] = set(sys.builtin_module_names)
+    _stdlib_path = _sysconfig.get_paths().get("stdlib", "")
+    if _stdlib_path:
+        for _entry in Path(_stdlib_path).iterdir():
+            if _entry.is_file() and _entry.suffix == ".py":
+                _stdlib_modules.add(_entry.stem)
+            elif _entry.is_dir() and not _entry.name.startswith("_"):
+                _stdlib_modules.add(_entry.name)
+    _STDLIB = frozenset(_stdlib_modules)
 
 
 def collect_imports_and_submodules(tree: ast.AST) -> tuple[list[str], dict[str, frozenset[str]]]:

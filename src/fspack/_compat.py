@@ -30,7 +30,7 @@ __all__ = ["StrEnum", "UTC", "override", "tomllib"]
 if sys.version_info >= (3, 11):
     import tomllib  # type: ignore[import-not-found]
 else:
-    import tomli as tomllib  # type: ignore[import-not-found,no-redef]
+    import tomli as tomllib  # type: ignore[import-not-found,no-redef]  # pragma: no cover
 
 
 # ---------------------------------------------------------------------------
@@ -38,7 +38,7 @@ else:
 # ---------------------------------------------------------------------------
 if sys.version_info >= (3, 11):
     from enum import StrEnum  # type: ignore[import-not-found]
-else:
+else:  # pragma: no cover
 
     class StrEnum(str, Enum):
         """Python 3.10 及以下的 StrEnum 回退实现."""
@@ -52,7 +52,7 @@ else:
 if sys.version_info >= (3, 11):
     from datetime import UTC  # type: ignore[import-not-found]
 else:
-    UTC = timezone.utc
+    UTC = timezone.utc  # pragma: no cover
 
 
 # ---------------------------------------------------------------------------
@@ -61,4 +61,4 @@ else:
 if sys.version_info >= (3, 12):
     from typing import override  # type: ignore[import-not-found]
 else:
-    from typing_extensions import override  # type: ignore[import-not-found,no-redef]
+    from typing_extensions import override  # type: ignore[import-not-found,no-redef]  # pragma: no cover

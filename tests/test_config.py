@@ -1195,6 +1195,14 @@ def test_parse_project_scripts_invalid_spec_type_raises(tmp_path: Path) -> None:
         _parse_project_scripts(tmp_path, {"app": 123})  # type: ignore[dict-item]
 
 
+def test_parse_project_scripts_empty_module_part_raises(tmp_path: Path) -> None:
+    """入口规范只有冒号或冒号前空白时 module_part 为空，报模块名无效."""
+    from fspack.config import _parse_project_scripts
+
+    with pytest.raises(ProjectError, match="模块名无效"):
+        _parse_project_scripts(tmp_path, {"app": ":"})
+
+
 # --- parse_project 端到端：[project.scripts] 集成测试 ---
 
 
@@ -2022,6 +2030,20 @@ def test_parse_project_cache_error_not_cached(tmp_path: Path) -> None:
     # 修复后再次调用应成功（异常未被缓存）
     pp.write_text('[project]\nname = "app"\nversion = "0.1"\n')
     info = parse_project(tmp_path)
+    assert info.name == "app"
+
+
+def test_from_dir_with_dotdot_resolves(tmp_path: Path) -> None:
+    """ProjectInfo.from_dir 对含 ``..`` 的路径走 resolve 分支而非 normpath.
+
+    覆盖 models.py 路径规范化的 else 分支（line 388）。
+    """
+    clear_project_cache()
+    _make_minimal_project(tmp_path)
+    # 构造含 .. 的路径（绝对但未规范化，触发 else 分支）
+    weird_path = tmp_path / "nonexistent" / ".."
+    assert ".." in weird_path.parts
+    info = ProjectInfo.from_dir(weird_path)
     assert info.name == "app"
 
 

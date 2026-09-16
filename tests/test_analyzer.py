@@ -77,6 +77,34 @@ def test_collect_submodule_imports_empty() -> None:
     assert collect_submodule_imports(_tree("x = 1\n")) == {}
 
 
+def test_stdlib_fallback_py38(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Python 3.8/3.9 无 sys.stdlib_module_names，fallback 扫描标准库目录.
+
+    模拟低版本环境删除 ``sys.stdlib_module_names`` 后 reload 模块，
+    验证 :data:`_STDLIB` 仍正确包含常见标准库模块。
+    """
+    import importlib
+    import sys
+
+    from fspack.analyzer import ast_scan
+
+    # 彻底删除 sys.stdlib_module_names，模拟 3.8/3.9 不存在该属性
+    monkeypatch.delattr(sys, "stdlib_module_names", raising=False)
+    try:
+        # 强制 reload 让模块级常量走 fallback 分支
+        reloaded = importlib.reload(ast_scan)
+        _STDLIB = reloaded._STDLIB
+        assert "os" in _STDLIB
+        assert "json" in _STDLIB
+        assert "sys" in _STDLIB
+        assert "time" in _STDLIB
+        assert "fspack" not in _STDLIB
+    finally:
+        # monkeypatch 恢复 stdlib_module_names 后再 reload，确保模块回到原始状态
+        monkeypatch.undo()
+        importlib.reload(ast_scan)
+
+
 def test_analyze_dependencies_classification(tmp_path: Path) -> None:
     pkg = tmp_path / "pkg"
     pkg.mkdir()

@@ -2,8 +2,6 @@
 authors = [{ name = "gookeryoung", email = "gooker_young@qq.com" }]
 classifiers = [
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -23,7 +21,7 @@ description     = "极速 Python 项目打包器。"
 license         = "MIT"
 name            = "fspack"
 readme          = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 version         = "0.6.4"
 
 [project.optional-dependencies]
