@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import zipfile
 from pathlib import Path
-from typing import override
 
 import pytest
 
+from fspack._compat import override
 from fspack.config import DEFAULT_SLIM_RULES, SlimRules
 from fspack.exceptions import DependencyError
 from fspack.slim import classify_entry, slim_unpack

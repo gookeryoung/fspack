@@ -28,8 +28,8 @@ AST 无法发现），无需用户显式声明或 ``--keep-module``。
 from __future__ import annotations
 
 from pathlib import Path
-from typing import override
 
+from fspack._compat import override
 from fspack.slim.base import SlimSpec, normalize_name
 from fspack.slim.qt_closure import (
     _QT_ABI_DLL_DEPS,

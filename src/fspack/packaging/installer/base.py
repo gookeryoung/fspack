@@ -25,6 +25,7 @@ import subprocess
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
+from typing import TypeVar
 
 from fspack.config import ProjectInfo
 from fspack.console import console
@@ -38,6 +39,8 @@ __all__ = ["Installer", "_run_stage", "_run_tool"]
 
 _logger = logging.getLogger(__name__)
 
+T = TypeVar("T")
+
 
 # 安装包工具单命令超时（秒）：makensis/hdiutil 打包大体积 dist（数百 MB）
 # 可达数分钟，900s 裕量覆盖；超时抛 InstallerError 终止，避免工具卡死
@@ -45,7 +48,7 @@ _logger = logging.getLogger(__name__)
 _INSTALLER_TOOL_TIMEOUT = 900.0
 
 
-def _run_stage[T](
+def _run_stage(
     tracker: BuildTracker,
     name: str,
     fn: Callable[[], T],

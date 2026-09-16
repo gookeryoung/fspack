@@ -40,10 +40,11 @@ import logging
 import re
 import uuid
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from fspack._compat import UTC
 from fspack.config import ProjectInfo
 from fspack.fsutil import atomic_write_text
 from fspack.packaging.site_packages import find_site_packages

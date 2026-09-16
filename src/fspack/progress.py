@@ -245,7 +245,7 @@ def spinner(label: str) -> Iterator[None]:
         status.stop()
 
 
-def iter_with_progress[T](
+def iter_with_progress(
     items: Sequence[T],
     description: str,
     *,
@@ -287,7 +287,7 @@ def iter_with_progress[T](
                 stage.processed()
 
 
-def parallel_map_with_progress[T, R](
+def parallel_map_with_progress(
     items: Sequence[T],
     fn: Callable[[T], R],
     description: str,

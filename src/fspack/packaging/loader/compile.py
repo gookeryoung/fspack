@@ -19,8 +19,9 @@ import logging
 import shutil
 import subprocess
 from pathlib import Path
-from typing import TYPE_CHECKING, override
+from typing import TYPE_CHECKING
 
+from fspack._compat import override
 from fspack.config import AppType
 from fspack.exceptions import LoaderError
 from fspack.packaging.loader.cache_keys import (
@@ -116,9 +117,9 @@ class LoaderCompiler(abc.ABC):
     @classmethod
     def _prepare_resources(
         cls,
-        icon: Path | None,  # noqa: ARG003
-        version_info: LoaderVersionInfo | None,  # noqa: ARG003
-        work_dir: Path,  # noqa: ARG003
+        icon: Path | None,
+        version_info: LoaderVersionInfo | None,
+        work_dir: Path,
     ) -> Path | None:
         """编译资源（icon/版本信息/manifest）为 .o 文件，返回路径。
 
@@ -134,7 +135,7 @@ class LoaderCompiler(abc.ABC):
         return shutil.which(cls.compiler_name) is not None
 
     @classmethod
-    def compile(  # noqa: PLR0913
+    def compile(
         cls,
         source: str,
         out_exe: Path,
@@ -420,7 +421,7 @@ def generate_loader_source(
     return source
 
 
-def compile_loader(  # noqa: PLR0913
+def compile_loader(
     source: str,
     out_exe: Path,
     app_type: AppType,

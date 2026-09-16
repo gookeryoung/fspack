@@ -14,8 +14,9 @@ facade 从子模块 import 函数并 re-export 数据类保持 ``fspack.doctor.X
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import StrEnum
 from pathlib import Path
+
+from fspack._compat import StrEnum
 
 __all__ = [
     "CacheHealthReport",

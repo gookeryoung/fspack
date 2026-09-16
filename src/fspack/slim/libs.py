@@ -16,8 +16,7 @@
 
 from __future__ import annotations
 
-from typing import override
-
+from fspack._compat import override
 from fspack.slim.base import SlimSpec
 
 __all__ = [

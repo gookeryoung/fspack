@@ -19,8 +19,9 @@ from __future__ import annotations
 import abc
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, override
+from typing import TYPE_CHECKING, Any
 
+from fspack._compat import override
 from fspack.config import MirrorConfig, is_offline
 from fspack.exceptions import EmbedError
 from fspack.packaging.runtime.extract import extract_tar_safe, extract_zip_safe
@@ -99,7 +100,7 @@ class RuntimeDownloader(abc.ABC):
         return f"{cls.runtime_label} {version}"
 
     @classmethod
-    def post_extract(cls, runtime_dir: Path, version: str) -> None:  # noqa: ARG003
+    def post_extract(cls, runtime_dir: Path, version: str) -> None:
         """解压后钩子，默认无操作。EmbedRuntime 覆盖（创建 site-packages 历史职责占位）。"""
         return None  # pragma: no cover
 
@@ -293,7 +294,7 @@ def extract_embed(zip_path: Path, runtime_dir: Path) -> None:
     EmbedRuntime.extract(zip_path, runtime_dir)
 
 
-def ensure_embed(  # noqa: PLR0913
+def ensure_embed(
     version: str,
     mirror: MirrorConfig,
     cache_dir: Path,
@@ -329,7 +330,7 @@ def ensure_embed(  # noqa: PLR0913
     return runtime_dir
 
 
-def download_standalone(  # noqa: PLR0913
+def download_standalone(
     version: str,
     release_tag: str,
     cache_dir: Path,
@@ -360,7 +361,7 @@ def extract_standalone(tar_path: Path, runtime_dir: Path) -> None:
     StandaloneRuntime.extract(tar_path, runtime_dir)
 
 
-def ensure_standalone(  # noqa: PLR0913
+def ensure_standalone(
     version: str,
     release_tag: str,
     cache_dir: Path,

@@ -29,7 +29,9 @@ import time
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, override
+from typing import Any
+
+from fspack._compat import override
 
 __all__ = [
     "JsonFormatter",
