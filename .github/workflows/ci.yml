@@ -57,6 +57,10 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
+          # 缓存写冲突修复：每个 OS 只允许一个 writer
+          # ubuntu 由 lint job 独占写入，test 矩阵全部只读
+          # windows/macos 无独立 lint job，由 Python 3.10 行负责写入
+          save-cache: ${{ matrix.os != 'ubuntu-latest' && matrix.python-version == '3.10' }}
 
       - name: Set up Python ${{ matrix.python-version }}
         run: uv python install ${{ matrix.python-version }}
@@ -96,6 +100,8 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
+          # benchmark 与 lint 同跑 ubuntu，避免缓存写冲突，只读不写
+          save-cache: false
 
       - name: Set up Python 3.13
         run: uv python install 3.13
