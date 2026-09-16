@@ -13,8 +13,8 @@ from __future__ import annotations
 import logging
 import subprocess  # noqa: F401  # 保留 patch 路径 fspack.packaging.installer.nsis.subprocess.run
 from pathlib import Path
-from typing import override
 
+from fspack._compat import override
 from fspack.config import ProjectInfo
 from fspack.console import console
 from fspack.exceptions import InstallerError

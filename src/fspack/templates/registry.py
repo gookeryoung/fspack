@@ -23,9 +23,10 @@ from __future__ import annotations
 
 import functools
 import logging
-import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+
+from fspack._compat import tomllib
 
 __all__ = ["Template", "TemplateFile", "clear_template_cache", "get_template", "list_templates"]
 

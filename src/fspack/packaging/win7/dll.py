@@ -27,8 +27,9 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, override
+from typing import TYPE_CHECKING
 
+from fspack._compat import override
 from fspack.config.versions import _split_t_suffix
 from fspack.exceptions import EmbedError, FspackError
 from fspack.packaging.runtime.download import RuntimeDownloader
@@ -153,12 +154,12 @@ class Win7EmbedRuntime(RuntimeDownloader):
 
     @classmethod
     @override
-    def archive_name(cls, version: str, **kwargs: object) -> str:
+    def archive_name(cls, version: str, **kwargs: object) -> str:  # noqa: ARG003
         return win7_zip_cache_name(version)
 
     @classmethod
     @override
-    def download_url(cls, version: str, **kwargs: object) -> str:
+    def download_url(cls, version: str, **kwargs: object) -> str:  # noqa: ARG003
         return win7_zip_url(version)
 
     @classmethod
