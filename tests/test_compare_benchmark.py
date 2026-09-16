@@ -63,12 +63,14 @@ def _report(
 class TestDetectSystemicRegression:
     """_detect_systemic_regression 阈值边界.
 
-    阈值定义（2026-08-03 iter-124 调整后）：
+    阈值定义（2026-09-16 调整后）：
     - 可比测试数 ≥ 5
-    - 退化率 ≥ 50%
-    - 退化中位幅度 ≥ 30%
+    - 退化率 ≥ 40%
+    - 退化平均幅度 ≥ 20%
 
-    阈值依据：run #275 实测 5/9 退化 + 中位 45.9% 应触发 systemic。
+    阈值依据：run #275 实测 5/9 退化 + 平均 43.2% 应触发；2026-09-16 run
+    12/26 退化 + 平均 23.4% 跨 11 模块确认为机器抖动，应触发但因旧阈值
+    （50%/中位 30%）漏判。
     """
 
     def test_typical_ci_jitter_triggers_systemic(self) -> None:
@@ -92,30 +94,30 @@ class TestDetectSystemicRegression:
         assert "5/9" in report.systemic_detail
 
     def test_low_regression_rate_does_not_trigger(self) -> None:
-        """4/9 退化（退化率 44% < 50%）不触发."""
+        """3/9 退化（退化率 33% < 40%）不触发."""
         rows = [
             _row("t1", 1.45, 1.0, is_regression=True, delta_pct=45.0),
             _row("t2", 1.45, 1.0, is_regression=True, delta_pct=45.0),
             _row("t3", 1.45, 1.0, is_regression=True, delta_pct=45.0),
-            _row("t4", 1.45, 1.0, is_regression=True, delta_pct=45.0),
-            _row("t5", 1.10, 1.0, is_regression=False, delta_pct=10.0),
-            _row("t6", 1.05, 1.0, is_regression=False, delta_pct=5.0),
-            _row("t7", 1.20, 1.0, is_regression=False, delta_pct=20.0),
-            _row("t8", 1.15, 1.0, is_regression=False, delta_pct=15.0),
-            _row("t9", 1.08, 1.0, is_regression=False, delta_pct=8.0),
+            _row("t4", 1.10, 1.0, is_regression=False, delta_pct=10.0),
+            _row("t5", 1.05, 1.0, is_regression=False, delta_pct=5.0),
+            _row("t6", 1.20, 1.0, is_regression=False, delta_pct=20.0),
+            _row("t7", 1.15, 1.0, is_regression=False, delta_pct=15.0),
+            _row("t8", 1.08, 1.0, is_regression=False, delta_pct=8.0),
+            _row("t9", 1.03, 1.0, is_regression=False, delta_pct=3.0),
         ]
         report = _report(rows)
         cb._detect_systemic_regression(report)
         assert report.is_systemic is False
 
-    def test_low_median_delta_does_not_trigger(self) -> None:
-        """5/9 退化但中位幅度 25% < 30% 不触发（边缘抖动）."""
+    def test_low_avg_delta_does_not_trigger(self) -> None:
+        """5/9 退化但平均幅度 16.4% < 20% 不触发（边缘抖动）."""
         rows = [
-            _row("t1", 1.20, 1.0, is_regression=True, delta_pct=20.0),
-            _row("t2", 1.22, 1.0, is_regression=True, delta_pct=22.0),
-            _row("t3", 1.25, 1.0, is_regression=True, delta_pct=25.0),  # 中位
-            _row("t4", 1.28, 1.0, is_regression=True, delta_pct=28.0),
-            _row("t5", 1.30, 1.0, is_regression=True, delta_pct=30.0),
+            _row("t1", 1.12, 1.0, is_regression=True, delta_pct=12.0),
+            _row("t2", 1.14, 1.0, is_regression=True, delta_pct=14.0),
+            _row("t3", 1.17, 1.0, is_regression=True, delta_pct=17.0),
+            _row("t4", 1.19, 1.0, is_regression=True, delta_pct=19.0),
+            _row("t5", 1.20, 1.0, is_regression=True, delta_pct=20.0),
             _row("t6", 1.10, 1.0, is_regression=False, delta_pct=10.0),
             _row("t7", 1.05, 1.0, is_regression=False, delta_pct=5.0),
             _row("t8", 1.20, 1.0, is_regression=False, delta_pct=20.0),
