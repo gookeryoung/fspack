@@ -13,8 +13,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 from fspack.fsutil import atomic_write_text
 from fspack.jsoncache import load_json_dict

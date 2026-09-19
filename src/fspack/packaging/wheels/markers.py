@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Sequence
+from collections.abc import Sequence
 
 from fspack.config.versions import _split_t_suffix
 

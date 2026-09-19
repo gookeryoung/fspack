@@ -24,9 +24,9 @@ from __future__ import annotations
 
 import logging
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
 
 from fspack.config import is_offline
 from fspack.exceptions import DependencyError

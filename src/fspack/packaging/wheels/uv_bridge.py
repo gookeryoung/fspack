@@ -26,8 +26,9 @@ import logging
 import re
 import shutil
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING
 
 from fspack.config.versions import _split_t_suffix
 from fspack.exceptions import DependencyError
