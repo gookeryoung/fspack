@@ -77,7 +77,7 @@ def test_inject_win7_compat_dll_warns_when_source_missing(
 
 
 def test_build_injects_win7_compat_dll_for_py39_plus(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Python 3.11.9 + Windows 目标构建后 runtime 含 api-ms-win-core-path-l1-1-0.dll."""
+    """Python 3.11.9 + Windows 目标构建后 runtime 含 3 个 Win7 shim DLL."""
     proj = tmp_path / "app"
     proj.mkdir()
     (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
@@ -85,11 +85,14 @@ def test_build_injects_win7_compat_dll_for_py39_plus(tmp_path: Path, monkeypatch
 
     setup_embed_mocks(tmp_path, monkeypatch, "3.11.9")
     build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
-    assert (proj / "dist" / "runtime" / "api-ms-win-core-path-l1-1-0.dll").is_file()
+    # 3 个已知 Win7 shim 全部注入 runtime/
+    runtime_shim = proj / "dist" / "runtime"
+    for shim in ("api-ms-win-core-path-l1-1-0.dll", "api-ms-win-core-synch-l1-2-0.dll", "bcryptprimitives.dll"):
+        assert (runtime_shim / shim).is_file(), f"缺少 Win7 shim: {shim}"
 
 
-def test_build_skips_win7_compat_dll_for_py38_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Python 3.8.10 + Windows 目标构建后 runtime 不含兼容 DLL（3.8 官方支持 Win7）."""
+def test_build_injects_win7_shims_even_for_py38(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Python 3.8.10 + Windows 目标也注入全部 Win7 shim（site-packages 中 Rust wheel 可能需要）."""
     proj = tmp_path / "app"
     proj.mkdir()
     (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
@@ -97,7 +100,9 @@ def test_build_skips_win7_compat_dll_for_py38_runtime(tmp_path: Path, monkeypatc
 
     setup_embed_mocks(tmp_path, monkeypatch, "3.8.10")
     build(proj, get_mirror("huawei"), "3.8.10", target=Platform.WINDOWS)
-    assert not (proj / "dist" / "runtime" / "api-ms-win-core-path-l1-1-0.dll").exists()
+    runtime_shim = proj / "dist" / "runtime"
+    for shim in ("api-ms-win-core-path-l1-1-0.dll", "api-ms-win-core-synch-l1-2-0.dll", "bcryptprimitives.dll"):
+        assert (runtime_shim / shim).is_file(), f"缺少 Win7 shim: {shim}"
 
 
 def test_build_skips_win7_compat_dll_for_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -268,7 +273,7 @@ def test_prepare_runtime_replaces_dll_on_windows_312(tmp_path: Path, monkeypatch
 
     monkeypatch.setattr(runtime_stage, "ensure_win7_dll", fake_ensure)
     inject_calls: list[Path] = []
-    monkeypatch.setattr(runtime_stage, "_inject_win7_compat_dll", inject_calls.append)
+    monkeypatch.setattr(runtime_stage, "_inject_all_win7_shims", lambda d, **kw: inject_calls.append(d) or ())
     from fspack.config import win7_dll_cache_dir
 
     result = runtime_stage._prepare_runtime(ctx)
@@ -291,7 +296,7 @@ def test_prepare_runtime_skips_dll_replace_on_311(tmp_path: Path, monkeypatch: p
     called = {"ensure": False}
     monkeypatch.setattr(runtime_stage, "ensure_win7_dll", lambda *a, **k: called.__setitem__("ensure", True))
     inject_calls: list[Path] = []
-    monkeypatch.setattr(runtime_stage, "_inject_win7_compat_dll", inject_calls.append)
+    monkeypatch.setattr(runtime_stage, "_inject_all_win7_shims", lambda d, **kw: inject_calls.append(d) or ())
     runtime_stage._prepare_runtime(ctx)
     assert not called["ensure"]
     assert inject_calls == [runtime_dir]
@@ -311,7 +316,9 @@ def test_prepare_runtime_skips_dll_replace_on_linux(tmp_path: Path, monkeypatch:
     monkeypatch.setattr("fspack.packaging.pipeline.stages.extract_standalone", lambda *a, **k: None)
     called = {"ensure": False, "inject": False}
     monkeypatch.setattr(runtime_stage, "ensure_win7_dll", lambda *a, **k: called.__setitem__("ensure", True))
-    monkeypatch.setattr(runtime_stage, "_inject_win7_compat_dll", lambda *a, **k: called.__setitem__("inject", True))
+    monkeypatch.setattr(
+        runtime_stage, "_inject_all_win7_shims", lambda *a, **k: called.__setitem__("inject", True) or ()
+    )
     runtime_stage._prepare_runtime(ctx)
     assert not called["ensure"]
     assert not called["inject"]
@@ -433,7 +440,6 @@ def test_prepare_windows_t_runtime_cache_hit(tmp_path: Path, monkeypatch: pytest
     monkeypatch.setattr(runtime_stage, "_default_download_standalone", fake_download)
     monkeypatch.setattr(runtime_stage, "_default_extract_standalone", fake_extract)
     monkeypatch.setattr(runtime_stage, "needs_win7_dll", lambda v: False)
-    monkeypatch.setattr(runtime_stage, "_needs_win7_compat_dll", lambda v: False)
 
     site_packages = runtime_stage._prepare_windows_t_runtime(ctx)
     assert download_calls == []  # runtime 已就绪，不下载
@@ -469,7 +475,6 @@ def test_prepare_windows_t_runtime_download_extract_flatten(tmp_path: Path, monk
     monkeypatch.setattr(runtime_stage, "_default_download_standalone", fake_download)
     monkeypatch.setattr(runtime_stage, "_default_extract_standalone", fake_extract)
     monkeypatch.setattr(runtime_stage, "needs_win7_dll", lambda v: False)
-    monkeypatch.setattr(runtime_stage, "_needs_win7_compat_dll", lambda v: False)
 
     site_packages = runtime_stage._prepare_windows_t_runtime(ctx)
     assert site_packages == ctx.cfg.dist_dir / "site-packages"
@@ -494,7 +499,6 @@ def test_prepare_runtime_dispatches_to_windows_t_branch(tmp_path: Path, monkeypa
 
     monkeypatch.setattr(runtime_stage, "_prepare_windows_t_runtime", fake_prepare_t)
     monkeypatch.setattr(runtime_stage, "needs_win7_dll", lambda v: False)
-    monkeypatch.setattr(runtime_stage, "_needs_win7_compat_dll", lambda v: False)
 
     runtime_stage._prepare_runtime(ctx)
     assert called.get("t_branch") is True

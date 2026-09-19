@@ -43,11 +43,13 @@ if TYPE_CHECKING:
 __all__ = [
     "WIN7_EMBED_SHA256",
     "WIN7_SHIM_DLL_PATH",
+    "WIN7_SYSTEM_SHIMS",
     "Win7DllError",
     "Win7EmbedRuntime",
     "download_win7_embed",
     "ensure_win7_dll",
     "extract_win7_dll",
+    "inject_win7_shims",
     "is_win7_runtime",
     "needs_win7_dll",
     "win7_dll_name",
@@ -96,13 +98,43 @@ WIN7_SYNCH_SHIM_DLL_PATH = (
 )
 
 # 全部 Win7 shim 映射表：{DLL 名（小写）: fspack assets/runtime 下的源路径}
-# scan.py 的 inject_win7_shims 遍历 dist PE 导入表，发现 shimmable DLL 就从这里查路径
-# 注入到 dist 根目录（PE loader 优先从同目录加载，遮蔽系统缺失的 Win10+ DLL）。
+# shim DLL 统一注入到 dist/runtime/ 目录（loader 用 SetDllDirectory(runtime\)
+# 替换了默认 DLL 搜索路径，python3XX.dll 及其传递依赖只从 runtime/ 找）。
 WIN7_SYSTEM_SHIMS: dict[str, Path] = {
     "api-ms-win-core-path-l1-1-0.dll": WIN7_SHIM_DLL_PATH,
     "api-ms-win-core-synch-l1-2-0.dll": WIN7_SYNCH_SHIM_DLL_PATH,
     "bcryptprimitives.dll": WIN7_BCRYPTPRIMITIVES_SHIM_PATH,
 }
+
+
+def inject_win7_shims(dest_dir: Path, *, shims: dict[str, Path] | None = None) -> tuple[str, ...]:
+    """把 Win7 兼容 shim DLL 复制到 dest_dir，返回本次注入的文件名元组.
+
+    默认注入全部 :data:`WIN7_SYSTEM_SHIMS`（3 个已知 shim）；传 ``shims`` 可
+    只注入指定子集。DLL 已存在于 dest_dir 时跳过（幂等）；源文件缺失时抛
+    :class:`FileNotFoundError`（硬错误，阻断构建）。
+
+    **注入位置约定：** 应传入 ``dist/runtime/`` 目录，而非 dist 根。fspack
+    loader 在启动时调用 ``SetDllDirectoryW(runtime_dir)`` 把 DLL 搜索路径
+    指向 runtime/，python3XX.dll 及 site-packages 中的 .pyd 查找传递依赖
+    时只在 runtime/ 中搜索——dist 根目录的 shim DLL 不会被找到。
+    """
+    import shutil
+
+    shims = shims if shims is not None else WIN7_SYSTEM_SHIMS
+    injected: list[str] = []
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    for dll_name, src_path in sorted(shims.items()):
+        dest = dest_dir / dll_name
+        if dest.is_file():
+            _logger.info("Win7 shim 已存在，跳过: %s", dest)
+            continue
+        if not src_path.is_file():
+            raise FileNotFoundError(f"Win7 shim 源文件缺失: {src_path}（dll: {dll_name}）")
+        shutil.copy2(src_path, dest)
+        _logger.info("注入 Win7 shim: %s (%d bytes)", dest, src_path.stat().st_size)
+        injected.append(dll_name)
+    return tuple(injected)
 
 
 class Win7DllError(FspackError):

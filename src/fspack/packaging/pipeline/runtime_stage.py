@@ -21,8 +21,6 @@ from typing import TYPE_CHECKING, Any
 from fspack.config import standalone_cache_dir, win7_dll_cache_dir
 from fspack.exceptions import EmbedError
 from fspack.packaging.pyc import (
-    _inject_win7_compat_dll,
-    _needs_win7_compat_dll,
     _trim_standalone_runtime,
     _trim_stdlib,
 )
@@ -45,7 +43,14 @@ from fspack.packaging.runtime import (
 from fspack.packaging.runtime import (
     zip_stdlib as _default_zip_stdlib,
 )
-from fspack.packaging.win7.dll import ensure_win7_dll, is_win7_runtime, needs_win7_dll
+from fspack.packaging.win7.dll import (
+    ensure_win7_dll,
+    is_win7_runtime,
+    needs_win7_dll,
+)
+from fspack.packaging.win7.dll import (
+    inject_win7_shims as _inject_all_win7_shims,
+)
 from fspack.packaging.win7.shim_build import ensure_all_shims
 from fspack.platform import Platform
 
@@ -113,9 +118,12 @@ def _prepare_runtime(ctx: BuildContext) -> Path:
         site_packages = _prepare_windows_runtime(ctx)
     site_packages.mkdir(parents=True, exist_ok=True)
 
-    # Win7 兼容性：Python 3.9+ 官方不再支持 Win7，注入 api-ms-win-core-path-l1-1-0.dll
-    # 使 embed python 3.9+ 在 Win7 SP1 / Server 2008 R2 SP1 上也能运行。
-    # 仅 Windows 目标需要（Linux/macOS standalone 不存在此问题）。
+    # Win7 兼容性：Python 3.9+ 官方不再支持 Win7，需注入 shim DLL 遮蔽系统缺失的
+    # Win8+/Win10+ API Set DLL。
+    # 全部 shim 统一注入到 dist/runtime/ —— fspack loader 用 SetDllDirectoryW
+    # (runtime_dir) 替换了默认 DLL 搜索路径，python3XX.dll 及其传递依赖
+    # （含 site-packages 中的 .pyd）只在 runtime/ 中搜索，dist 根目录的 shim
+    # 不会被找到。
     # 3.12+ 官方 python3XX.dll 另含 kernel32 的 Win8+ 静态导入，shim 无法解决，
     # 须整套替换为重编译版组件（dll+pyd+exe 同源，仅换 dll 会与官方 pyd ABI
     # 混搭不兼容；清单驱动下载 + 双重校验，见 win7_dll 模块）。
@@ -127,12 +135,16 @@ def _prepare_runtime(ctx: BuildContext) -> Path:
         _shim_results = ensure_all_shims()
         _missing = [d for d, p in _shim_results.items() if p is None]
         if _missing:
-            _logger.warning("Win7 shim DLL 缺失且无法就地编译: %s（会在 dist 注入时再报一次）", ", ".join(_missing))
+            _logger.warning("Win7 shim DLL 缺失且无法就地编译: %s（会在注入时再报一次）", ", ".join(_missing))
         if target is Platform.WINDOWS and needs_win7_dll(ctx.info.py_version):
             with ctx.tracker.stage("Win7 组件替换") as st:
                 _replace_win7_dll(ctx, st)
-        if target is Platform.WINDOWS and _needs_win7_compat_dll(ctx.info.py_version):
-            _inject_win7_compat_dll(ctx.runtime_dir)
+        if target is Platform.WINDOWS and not ctx.info.py_version.endswith("t"):
+            # Python 3.9+ embed runtime 静态导入 api-ms-win-core-path（Win7 缺失）；
+            # Rust 编译的 .pyd 可能导入 synch / bcryptprimitives。三个 shim 统一
+            # 注入 runtime/，无条件全量（每个仅数百 KB，按需判断收益微小）。
+            # 自由线程版本（py_version 末尾 t 后缀）仅支持 Win10+，不注入。
+            _inject_all_win7_shims(ctx.runtime_dir)
 
     # 标准库精简：剥离运行时无用模块。
     # Windows 标准版 embed zip 走 zip 重写（保守档默认删 pydoc_data 等文档数据，

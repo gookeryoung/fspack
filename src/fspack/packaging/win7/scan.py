@@ -11,13 +11,16 @@ P1 产物门禁补全的三道防线（配合 win7_dll 的 python3XX.dll 门禁�
   无法自动修复（只能更换依赖版本），故不阻断构建，聚合渲染为文本报告
   （``dist/release/win7-compat-report.txt``）供人工决策。python3XX.dll
   已由 :func:`fspack.packaging.win7.dll.ensure_win7_dll` 单独硬门禁。
-- :func:`inject_win7_shims`：扫描后自动将内置 shim DLL 注入 dist 根目录。
-  当前支持三类 shim：``api-ms-win-core-path-l1-1-0.dll``（Win8+ PathCch*）、
-  ``api-ms-win-core-synch-l1-2-0.dll``（Win8+ WaitOnAddress + Sleep/SleepEx
-  转发到 kernel32，源自 cndb 的 stub.c）、``bcryptprimitives.dll``
+- :func:`inject_win7_shims`：扫描后自动将内置 shim DLL 注入 ``runtime/``
+  目录。当前支持三类 shim：``api-ms-win-core-path-l1-1-0.dll``（Win8+
+  PathCch*）、``api-ms-win-core-synch-l1-2-0.dll``（Win8+ WaitOnAddress +
+  Sleep/SleepEx 转发到 kernel32，源自 cndb 的 stub.c）、``bcryptprimitives.dll``
   （Win10+ ProcessPrng，Rust 1.78+ wheel 硬链接）。
-  注入是**根目录级别**的（不侵入 site-packages），PE loader 优先从同目录
-  加载，遮蔽系统缺失的 Win10+ DLL。
+  注入目标为 ``dist/runtime/``（fspack loader 用 ``SetDllDirectoryW``
+  把 DLL 搜索路径指向 runtime/，python3XX.dll 及其传递依赖只从 runtime/
+  查找——dist 根目录的 shim 不会生效）。runtime_stage 会在 runtime 准备
+  阶段无条件注入全部 3 个 shim，本函数作为 executor 阶段的补充，按扫描
+  结果按需注入。
 - kernel32 的 Win8+ 函数导入（pydantic-core 2.18+ / libpq 等，KnownDLL
   无法遮蔽）由 :func:`fspack.packaging.win7.patch.patch_dist_win7` 在扫描
   **之前**原地改名为 Win7 原生等价函数，扫描阶段只做复核——报告中的
@@ -180,7 +183,7 @@ def enforce_win7_loaders(exes: list[Path] | tuple[Path, ...], *, shim: Path | No
 
 
 def inject_win7_shims(dist_dir: Path) -> tuple[str, ...]:
-    """扫描 dist PE 导入表，自动注入内置 Win7 兼容 shim DLL 到 dist 根目录.
+    """扫描 dist PE 导入表，自动注入内置 Win7 兼容 shim DLL 到 runtime 目录.
 
     覆盖三类已知 Win7 不兼容场景：
 
@@ -195,17 +198,27 @@ def inject_win7_shims(dist_dir: Path) -> tuple[str, ...]:
        wheel（pydantic-core/bcrypt/cryptography/watchfiles 等）硬链接
        ProcessPrng，导致 Win7 加载失败（WinError 127）。
 
-    注入策略：遍历 dist 全部 PE 导入表，收集缺失 shim 的 DLL 名集合，
-    从 :data:`fspack.packaging.win7.dll.WIN7_SYSTEM_SHIMS` 查源路径，
-    复制到 dist 根目录（PE loader 优先从同目录加载，遮蔽系统缺失 DLL）。
+    **注入位置：** 目标为 ``dist_dir / "runtime"`` 而非 dist 根。fspack
+    loader 调用 ``SetDllDirectoryW(runtime_dir)`` 替换默认 DLL 搜索路径后，
+    python3XX.dll 及其传递依赖（含 site-packages 中 .pyd）只在 runtime/ 中
+    查找——dist 根目录的 shim 不会被找到。runtime 级别的注入由
+    :func:`fspack.packaging.win7.dll.inject_win7_shims` 在 runtime 准备阶段
+    无条件完成（所有 3 个 shim），本函数作为 executor 阶段的补充：先扫描
+    dist 全量 PE 再按需注入，确保 site-packages 中后来解压的 Rust wheel
+    所需 shim 不遗漏。
 
     Returns:
         本次注入的 shim DLL 文件名元组（不含已存在跳过的）。返回空元组
-        表示 dist 中无 PE 需 shim。
+        表示 dist 中无 PE 需 shim 或所有 shim 已在 runtime 中存在。
 
     Raises:
         OSError: 源 shim DLL 缺失或目标目录写入失败（硬错误，阻断构建）。
     """
+    runtime_dir = dist_dir / "runtime"
+    if not runtime_dir.is_dir():
+        _logger.warning("runtime 目录不存在 %s，跳过 Win7 shim 注入（dist 结构异常）", runtime_dir)
+        return ()
+
     # 扫描 dist PE 导入表，收集需要 shim 的 DLL 名
     needed: set[str] = set()
     for path in iter_pe_files(dist_dir):
@@ -219,7 +232,7 @@ def inject_win7_shims(dist_dir: Path) -> tuple[str, ...]:
                 needed.add(low)
 
     if not needed:
-        _logger.info("dist 下无 PE 需 Win7 shim，跳过注入")
+        _logger.info("dist 下无 PE 需额外 Win7 shim，跳过注入")
         return ()
 
     injected: list[str] = []
@@ -227,12 +240,12 @@ def inject_win7_shims(dist_dir: Path) -> tuple[str, ...]:
         src = WIN7_SYSTEM_SHIMS[dll_name]
         if not src.is_file():
             raise OSError(f"Win7 shim 源文件缺失: {src}（dll: {dll_name}）")
-        dest = dist_dir / dll_name
+        dest = runtime_dir / dll_name
         if dest.is_file():
-            _logger.info("Win7 shim 已存在，跳过: %s", dest)
+            _logger.info("Win7 shim 已在 runtime/ 中存在，跳过: %s", dest)
             continue
         shutil.copy2(src, dest)
-        _logger.info("注入 Win7 shim: %s（%d bytes）", dest, src.stat().st_size)
+        _logger.info("注入 Win7 shim 到 runtime/: %s（%d bytes）", dest, src.stat().st_size)
         injected.append(dll_name)
 
     return tuple(injected)
