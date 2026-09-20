@@ -1610,6 +1610,86 @@ def test_download_online_uv_sdist_fallback(tmp_path: Path, monkeypatch: pytest.M
     assert f"Saved {whl_name}" in result.stdout
 
 
+def test_download_online_uv_parallel_falls_back_to_pip_full_resolve(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """uv 解析成功但并行下载因镜像滞后失败，降级为宽松 specifier 走 pip 完整解析."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setattr("fspack.packaging.wheels.resolver._find_uv", lambda: "/usr/bin/uv")
+    monkeypatch.setattr("fspack.packaging.wheels.resolver._uv_supports_download", lambda uv_path: False)
+    monkeypatch.setattr(
+        "fspack.packaging.wheels.resolver._resolve_with_uv",
+        lambda ctx, pkgs, **kw: "psycopg==3.3.6\n",
+    )
+    # 并行下载失败（镜像上 psycopg 最高 3.3.5，找不到 3.3.6）
+    err_msg = (
+        "ERROR: Could not find a version that satisfies the requirement psycopg==3.3.6 "
+        "(from versions: 3.3.0, 3.3.1, 3.3.2, 3.3.3, 3.3.4, 3.3.5)\n"
+        "ERROR: No matching distribution found for psycopg==3.3.6"
+    )
+    monkeypatch.setattr(
+        "fspack.packaging.wheels.resolver._download_resolved_parallel",
+        lambda resolved, ctx: (_ for _ in ()).throw(DependencyError(f"依赖下载失败:\n{err_msg}")),
+    )
+    call_count = {"pip_full": 0}
+    whl_name = "psycopg-3.3.5-py3-none-any.whl"
+
+    class _Result:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run_pip(cmd: list[str], label: str, *, suppress_error: bool = False, stream: bool = False) -> _Result:
+        # _run_pip 签名（cmd, label, *, suppress_error=False, stream=False）
+        # _pip_full_resolve 首次 pip download（宽松 specifier, stream=True）
+        call_count["pip_full"] += 1
+        (cache / whl_name).write_bytes(b"psycopg")
+        r = _Result()
+        r.stdout = f"Saved {whl_name}\n"
+        return r
+
+    # --no-index 离线解析失败（缓存为空）触发回退到在线
+    def fake_no_index_fail(cmd: list[str], **kw: Any) -> CompletedStub:
+        raise subprocess.CalledProcessError(1, cmd, stderr="not in cache")
+
+    monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_no_index_fail)
+    monkeypatch.setattr("fspack.packaging.wheels.downloader._run_pip", fake_run_pip)
+    base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache), "--only-binary=:all:"]
+    result = _download_online(["psycopg>=3.1.0"], _make_ctx(base_args, cache))
+    # 降级后走 _pip_full_resolve，里面有 1 次 pip download（sdist 回退未触发）
+    assert call_count["pip_full"] >= 1
+    assert f"Saved {whl_name}" in result.stdout
+
+
+def test_download_online_uv_parallel_fallback_preserves_other_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """uv 并行下载失败但非镜像滞后（非 Could not find a version），应直接抛出不降级."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    monkeypatch.setattr("fspack.packaging.wheels.resolver._find_uv", lambda: "/usr/bin/uv")
+    monkeypatch.setattr("fspack.packaging.wheels.resolver._uv_supports_download", lambda uv_path: False)
+    monkeypatch.setattr(
+        "fspack.packaging.wheels.resolver._resolve_with_uv",
+        lambda ctx, pkgs, **kw: "numpy==1.24.0\n",
+    )
+    # 网络超时（非版本不存在）
+    monkeypatch.setattr(
+        "fspack.packaging.wheels.resolver._download_resolved_parallel",
+        lambda resolved, ctx: (_ for _ in ()).throw(DependencyError("依赖下载失败:\nConnection timed out")),
+    )
+
+    # --no-index 离线解析失败触发回退到在线
+    def fake_no_index_fail(cmd: list[str], **kw: Any) -> CompletedStub:
+        raise subprocess.CalledProcessError(1, cmd, stderr="not in cache")
+
+    monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_no_index_fail)
+    base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
+    with pytest.raises(DependencyError, match="Connection timed out"):
+        _download_online(["numpy>=1.0"], _make_ctx(base_args, cache))
+
+
 # ---------- _download_resolved_parallel / _download_one_resolved / _merge_parallel_results ----------
 
 

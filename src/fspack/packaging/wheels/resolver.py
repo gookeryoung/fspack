@@ -183,9 +183,6 @@ def _download_online(
     t 后缀且无 abi 参数，按标准 abi 解析出的精确版本可能无 cp3XXt wheel，
     pip 完整解析按 ``--abi cp3XXt`` 约束重新选版本才能命中 freethreaded wheel。
     """
-    # 惰性导入打破循环依赖：downloader 顶层导入本模块，本模块不能顶层导入 downloader
-    from fspack.packaging.wheels.downloader import _run_pip
-
     # free-threaded 版本（py_version 末尾 't'）跳过 uv 解析，直接 pip 完整解析：
     # uv 无 abi 参数且不识别 t 后缀版本，按标准 cp3XX 解析出的精确版本可能无
     # cp3XXt wheel（如 numpy 2.5.x 仅发布 cp314t，cp313t 最新为 2.4.6），
@@ -235,9 +232,44 @@ def _download_online(
         if not uv_can_download:
             # uv 不支持 pip download 子命令：置回 None 让并行下载走 pip 路径
             ctx.uv_path = None
-        return _download_resolved_parallel(resolved, ctx)
+        try:
+            return _download_resolved_parallel(resolved, ctx)
+        except DependencyError as e:
+            # uv 解析的精确版本在镜像上不可用（镜像滞后），降级为宽松 specifier
+            # 走 pip download 完整解析，让 pip 自动选择镜像上实际可用的版本。
+            # 常见场景：uv 从 PyPI 官方索引解析到 X.Y.Z，但用户配置的镜像还未
+            # 同步——pip download --only-binary=:all: 找不到任何 wheel 就会报
+            # "Could not find a version"。sdist 回退同样救不了（pip wheel 用同一
+            # 镜像也找不到该版本）。降级是当前场景唯一有效出路。
+            if "Could not find a version that satisfies the requirement" not in str(e):
+                raise
+            _logger.warning(
+                "uv 解析的精确版本在镜像上不可用，降级为宽松 specifier 走 pip 完整解析: %s",
+                str(e).strip()[:400],
+            )
+            # 降级后 uv 已无用：pip 完整解析自己处理版本选择，无需再用 uv
+            ctx.uv_path = None
+            return _pip_full_resolve(filtered, ctx)
 
-    # uv 不可用或解析失败：回退到 pip 完整解析+下载
+    # uv 不可用或解析失败：回退到 pip 完整解析+下载（带 sdist 回退）
+    return _pip_full_resolve(filtered, ctx)
+
+
+def _pip_full_resolve(filtered: list[str], ctx: DownloadContext) -> subprocess.CompletedProcess[str]:
+    """pip download 完整解析 + sdist 回退，统一供 uv 不可用和降级两条路径复用.
+
+    与 ``_download_resolved_parallel`` 并行下载不同，pip 完整解析走单次
+    ``pip download`` 让 pip 自己解析依赖图并下载所有 wheel。sdist 回退
+    解析缺失的包并用 ``pip wheel --no-deps`` 从 sdist 构建纯 Python wheel，
+    构建成功后重试下载。
+
+    两处调用：
+    - uv 不可用 / uv 解析失败（首次路径）
+    - uv 解析的精确版本在镜像上不可用（降级路径，见 ``_download_online``）
+    """
+    # 惰性导入打破循环依赖：downloader 顶层导入本模块，本模块不能顶层导入 downloader
+    from fspack.packaging.wheels.downloader import _run_pip
+
     try:
         result = _run_pip(
             [*ctx.base_args, "-i", ctx.pypi_index, *ctx.extra_args, *filtered],
