@@ -60,7 +60,7 @@ intersphinx_mapping = {
 }
 
 # -- 全局选项 ---------------------------------------------------------------
-language = "zh_CN"
+language = "en"
 master_doc = "index"
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 source_suffix = {

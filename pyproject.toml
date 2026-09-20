@@ -1,13 +1,23 @@
 [project]
 authors = [{ name = "gookeryoung", email = "gooker_young@qq.com" }]
 classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Build Tools",
     "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Installation/Setup",
+    "Topic :: Utilities",
 ]
 
 dependencies    = [
@@ -17,7 +27,7 @@ dependencies    = [
     "tomli>=2.0; python_version<'3.11'",
     "typing_extensions>=4.4; python_version<'3.12'",
 ]
-description     = "极速 Python 项目打包器。"
+description     = "One-command Python packaging tool — build executables and installers."
 license         = "MIT"
 name            = "fspack"
 readme          = "README.md"
@@ -36,7 +46,7 @@ fspack = "fspack.cli:main"
 fsp    = "fspack.cli:main"
 
 [project.urls]
-Documentation = "https://fspack.readthedocs.io/zh-cn/latest/"
+Documentation = "https://fspack.readthedocs.io/en/latest/"
 Issues        = "https://github.com/gookeryoung/fspack/issues"
 Repository    = "https://github.com/gookeryoung/fspack"
 
@@ -62,6 +72,7 @@ exclude = [
     ".*",        # 所有.开头的隐藏文件/目录
     "templates", # GitHub Actions 打包模板
     "Makefile",  # 开发辅助脚本
+    "scripts",   # 开发工具脚本
 ]
 
 [tool.fspack]
