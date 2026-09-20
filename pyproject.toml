@@ -22,7 +22,7 @@ license         = "MIT"
 name            = "fspack"
 readme          = "README.md"
 requires-python = ">=3.10"
-version         = "0.6.6"
+version         = "0.6.7"
 
 [project.optional-dependencies]
 dev   = ["fspack[lint,test]", "prek>=0.4.5", "tox-uv>=1.13.1", "tox>=4.25.0"]
