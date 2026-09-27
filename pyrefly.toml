@@ -1,15 +1,5 @@
-preset = "strict"
-project-excludes = [
-  ".venv/**",
-  "template/**",
-  "src/fspack/assets/templates",
-  "src/fspack/assets/templates/**",
-  "src/fspack/assets/init_templates",
-  "src/fspack/assets/init_templates/**",
-  "_*.py",           # 根目录临时调试脚本
-  "_*.pyd",          # 临时 PE 测试文件
-  "_*.txt",          # 临时输出文件
-]
+preset           = "strict"
+project-excludes = [".venv/**", "template/**", "assets/**"]
 project-includes = ["**/*.ipynb", "**/*.py*"]
-python-version = "3.13"
-search-path = ["src", "."]
+python-version   = "3.13"
+search-path      = ["src", "."]

@@ -1,8 +1,4 @@
-extend-exclude = [
-    "template", "docs", "examples",
-    "src/fspack/assets/templates", "src/fspack/assets/init_templates",
-    "_*.py", "_*.pyd", "_*.txt",  # 根目录临时调试脚本
-]
+extend-exclude = ["docs", "examples", "template"]
 line-length    = 120
 target-version = "py313"
 
@@ -17,7 +13,7 @@ ignore = [
     "RUF003",  # ambiguous unicode characters in comment
     "RUF012",  # mutable class attributes (intentional for config)
     "SIM108",  # use ternary operator
-    "UP047",   # generic function type parameters (PEP 695) — 项目需兼容 3.8+
+    "UP045",
 ]
 select = [
     "ARG", # flake8-unused-arguments
@@ -35,8 +31,4 @@ select = [
 ]
 
 [lint.per-file-ignores]
-"**/tests/**" = ["ARG001", "ARG002", "ARG003", "ARG005"]
-"src/fspack/packaging/loader/compile.py" = ["ARG003", "PLR0913"]
-"src/fspack/packaging/runtime/download.py" = ["ARG003", "PLR0913"]
-"src/fspack/slim/default.py" = ["ARG003"]
-
+"**/tests/**" = ["ARG001", "ARG002", "ARG005"]

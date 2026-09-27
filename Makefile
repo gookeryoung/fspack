@@ -3,8 +3,9 @@
 
 PACKAGE := fspack
 COV_THRESHOLD := 95
+PYTEST_JOBS := 8  # pytest-xdist 并行进程数；Windows 默认 8 避免句柄耗尽
 
-.PHONY: help sync build b clean c test cov lint typecheck typecheck-ci check doc changelog tox pub bump patch minor major push shims rebuild-shims
+.PHONY: help sync build b clean c test cov lint typecheck typecheck-ci check doc tox pub bump patch minor major push
 
 help: ## 显示帮助信息
 	@uv run python -c "import re,sys;ms=[(m.group(1),m.group(2).strip()) for f in sys.argv[1:] for l in open(f,encoding='utf-8') if (m:=re.match(r'^([a-zA-Z][\w -]*):.*?##\s*(.*)',l))];[print(f'  {n:<14} {d}') for n,d in ms]" $(MAKEFILE_LIST)
@@ -22,10 +23,11 @@ clean c: ## 清理构建产物与缓存
 	find src tests -type f -name "*.py[oc]" -delete
 
 test: ## 运行测试（不含覆盖率）
-	uv run pytest -m "not slow"
+	uv run pytest -m "not slow" -n $(PYTEST_JOBS)
 
-cov: ## 运行测试并检查覆盖率
-	uv run pytest -m "not slow" --cov=$(PACKAGE) --cov-fail-under=$(COV_THRESHOLD) -n auto
+cov: ## 运行测试并生成 HTML 覆盖率报告
+	uv run pytest --cov --cov-report=term --cov-fail-under=$(COV_THRESHOLD) --cov-report=html -n $(PYTEST_JOBS)
+	@uv run python -c "print('Coverage report: htmlcov/index.html')"
 
 lint: ## 代码风格检查 (ruff)
 	uv run ruff check .
@@ -42,12 +44,6 @@ check: lint typecheck typecheck-ci cov ## 运行全套门禁 (lint + typecheck +
 doc: ## 构建 Sphinx 文档
 	uv run sphinx-build -b html docs docs/_build/html
 
-changelog: ## 从 docs/changelog.rst 生成 CHANGELOG.md
-	uv run python scripts/rst_to_changelog.py -o CHANGELOG.md
-
-record-demo: ## 录制真实终端工作流 → docs/assets/demo.cast（asciinema v2 NDJSON）
-	uv run python scripts/record_demo.py
-
 
 tox: ## 多版本测试 (tox)
 	uvx tox -p auto
@@ -61,13 +57,8 @@ patch minor major:
 	@:
 
 pub:  ## 推送到pypi
-	uvx twine upload ./dist/**
+	uvx twine upload dist/*.whl dist/*.tar.gz
 
 push: ## 推送代码到所有远程仓库
 	@uv run python -c "import subprocess as sp; [print(f'\u63a8\u9001 {r}...',flush=True) or (sp.run(['git','push',r],check=True) and sp.run(['git','push',r,'--tags'],check=True)) for r in sp.check_output(['git','remote'],text=True).split()]"
-
-shims: ## 编译 Win7 shim DLL（synch / bcryptprimitives）到 assets/runtime/
-	uv run python -m fspack.packaging.win7.shim_build --force
-
-rebuild-shims: shims ## 别名（--force 强制重建）
 
