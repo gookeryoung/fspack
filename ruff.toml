@@ -35,3 +35,5 @@ select = [
 "src/fspack/packaging/loader/compile.py" = ["ARG003", "PLR0913"]     # 抽象方法签名/平台占位参数、loader 编译 API 参数多
 "src/fspack/packaging/runtime/download.py" = ["ARG003", "PLR0913"]   # RuntimeDownloader 抽象签名未被子类覆盖、公开下载 API 参数多
 "src/fspack/slim/default.py" = ["ARG003"]                             # 抽象方法 match 兜底实现不区分包名
+"src/fspack/progress.py" = ["UP047"]                                 # 保持 Python 3.10 兼容，不用 PEP 695 泛型语法
+"src/fspack/packaging/installer/base.py" = ["UP047"]                 # 保持 Python 3.10 兼容，不用 PEP 695 泛型语法
