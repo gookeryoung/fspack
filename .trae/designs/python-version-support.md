@@ -37,6 +37,7 @@
 ## 工具链版本策略
 
 - ruff `target-version = "py38"`（`ruff.toml`，`[x]`）——影响规则集，必须与最低版本一致。
+- tox `envlist = py38, py39, py310, py311, py312, py313, py314`（`tox.ini`，`[x]`）——本地多版本验证入口，与 CI 矩阵保持一致；py38/py39 依赖经 uv.lock marker fork 解析（sphinx/Pillow）。
 - pyrefly `python-version = "3.13"`（`pyrefly.toml`，`[x]`）——类型检查语义基线，与运行兼容解耦；运行兼容由 CI 矩阵保障。
 - pyrefly 锁定 `>=1.1.1,<1.2`——1.2+ 收紧 strict 规则（implicit-any 等）属工具链升级范畴，与版本兼容无关，锁旧版保持 typecheck 行为稳定。
 - pytest-benchmark 与 xdist：pytest.ini 的 addopts 禁止注入 xdist 选项（benchmark job 冲突），xdist 分组在 Makefile target 控制。
