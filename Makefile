@@ -23,10 +23,10 @@ clean c: ## 清理构建产物与缓存
 	find src tests -type f -name "*.py[oc]" -delete
 
 test: ## 运行测试（不含覆盖率）
-	uv run pytest -m "not slow" -n $(PYTEST_JOBS)
+	uv run pytest -m "not slow" -n $(PYTEST_JOBS) --dist loadfile
 
 cov: ## 运行测试并生成 HTML 覆盖率报告
-	uv run pytest --cov --cov-report=term --cov-fail-under=$(COV_THRESHOLD) --cov-report=html -n $(PYTEST_JOBS)
+	uv run pytest --cov --cov-report=term --cov-fail-under=$(COV_THRESHOLD) --cov-report=html -n $(PYTEST_JOBS) --dist loadfile
 	@uv run python -c "print('Coverage report: htmlcov/index.html')"
 
 lint: ## 代码风格检查 (ruff)
