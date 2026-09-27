@@ -56,13 +56,10 @@ class TestFindMingwGcc:
 
     def test_falls_back_on_windows_native_gcc(self) -> None:
         # 测试当 mingw 前缀不存在但 host gcc 存在时，Windows 上回退 gcc
-        with (
-            mock.patch(
-                "shutil.which",
-                side_effect=lambda n: None if n == "x86_64-w64-mingw32-gcc" else (n if n == "gcc" else None),
-            ),
-            mock.patch.object(sys, "platform", "win32"),
-        ):
+        with mock.patch(
+            "shutil.which",
+            side_effect=lambda n: None if n == "x86_64-w64-mingw32-gcc" else (n if n == "gcc" else None),
+        ), mock.patch.object(sys, "platform", "win32"):
             result = shim_build._find_mingw_gcc()
         assert result == "gcc"
 
@@ -87,9 +84,8 @@ class TestEnsureAllShims:
             src_name="not-a-real-source.c",
             dll_name="missing.dll",
         )
-        with (
-            mock.patch("fspack.packaging.win7.shim_build._find_mingw_gcc", return_value=None),
-            mock.patch.object(shim_build, "SHIM_SRC_DIR", tmp_path),
+        with mock.patch("fspack.packaging.win7.shim_build._find_mingw_gcc", return_value=None), mock.patch.object(
+            shim_build, "SHIM_SRC_DIR", tmp_path
         ):
             shim_build._ALL_SHIMS = (test_spec,)
             result = shim_build.ensure_all_shims()

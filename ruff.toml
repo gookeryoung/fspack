@@ -1,12 +1,13 @@
 extend-exclude = ["docs", "examples", "template", "src/fspack/assets"]
 line-length    = 120
-target-version = "py313"
+target-version = "py38"
 
 [lint]
 ignore = [
     "E501",    # line too long (handled by formatter)
     "PLC0415", # import should be at top-level (intentional for lazy imports)
     "PLR0915", # too many statements (intentional for complex methods)
+    "PLR0917", # too many positional arguments (intentional, same rationale as PLR0913)
     "PLR2004", # magic value comparison
     "RUF001",  # ambiguous unicode characters in string
     "RUF002",  # ambiguous unicode characters in docstring

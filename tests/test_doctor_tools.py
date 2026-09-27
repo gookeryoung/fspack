@@ -56,9 +56,8 @@ def test_check_tool_version_success() -> None:
         stdout = "gcc (Ubuntu 11.4.0) 11.4.0\nCopyright (C) 2021\n"
         stderr = ""
 
-    with (
-        patch("fspack.doctor.shutil.which", return_value="/usr/bin/gcc"),
-        patch("fspack.doctor.subprocess.run", return_value=_FakeCompleted()),
+    with patch("fspack.doctor.shutil.which", return_value="/usr/bin/gcc"), patch(
+        "fspack.doctor.subprocess.run", return_value=_FakeCompleted()
     ):
         result = _check_tool_version("gcc", ["gcc", "--version"])
     assert result.status is CheckStatus.OK
@@ -93,12 +92,9 @@ def test_check_tool_version_not_found_warn_only() -> None:
 
 def test_check_tool_version_timeout() -> None:
     """工具执行超时返回 ERROR（不阻塞测试，patch 抛 TimeoutExpired）."""
-    with (
-        patch("fspack.doctor.shutil.which", return_value="/usr/bin/gcc"),
-        patch(
-            "fspack.doctor.subprocess.run",
-            side_effect=subprocess.TimeoutExpired(cmd=["gcc"], timeout=5),
-        ),
+    with patch("fspack.doctor.shutil.which", return_value="/usr/bin/gcc"), patch(
+        "fspack.doctor.subprocess.run",
+        side_effect=subprocess.TimeoutExpired(cmd=["gcc"], timeout=5),
     ):
         result = _check_tool_version("gcc", ["gcc", "--version"], error_suggestion="超时")
     assert result.status is CheckStatus.ERROR
@@ -107,9 +103,8 @@ def test_check_tool_version_timeout() -> None:
 
 def test_check_tool_version_oserror() -> None:
     """工具执行 OSError 返回 ERROR."""
-    with (
-        patch("fspack.doctor.shutil.which", return_value="/usr/bin/gcc"),
-        patch("fspack.doctor.subprocess.run", side_effect=OSError("permission denied")),
+    with patch("fspack.doctor.shutil.which", return_value="/usr/bin/gcc"), patch(
+        "fspack.doctor.subprocess.run", side_effect=OSError("permission denied")
     ):
         result = _check_tool_version("gcc", ["gcc", "--version"], error_suggestion="权限")
     assert result.status is CheckStatus.ERROR
@@ -124,9 +119,8 @@ def test_check_tool_version_nonzero_returncode() -> None:
         stdout = ""
         stderr = "Error: invalid option\nsecond line\n"
 
-    with (
-        patch("fspack.doctor.shutil.which", return_value="/usr/bin/gcc"),
-        patch("fspack.doctor.subprocess.run", return_value=_FakeFailed()),
+    with patch("fspack.doctor.shutil.which", return_value="/usr/bin/gcc"), patch(
+        "fspack.doctor.subprocess.run", return_value=_FakeFailed()
     ):
         result = _check_tool_version("gcc", ["gcc", "--version"], error_suggestion="失败")
     assert result.status is CheckStatus.ERROR
@@ -142,9 +136,8 @@ def test_check_tool_version_no_parse_version() -> None:
         stdout = "wine-8.0\nsome extra\n"
         stderr = ""
 
-    with (
-        patch("fspack.doctor.shutil.which", return_value="/usr/bin/wine"),
-        patch("fspack.doctor.subprocess.run", return_value=_FakeOk()),
+    with patch("fspack.doctor.shutil.which", return_value="/usr/bin/wine"), patch(
+        "fspack.doctor.subprocess.run", return_value=_FakeOk()
     ):
         result = _check_tool_version(
             "wine",
@@ -163,9 +156,8 @@ def test_check_tool_version_empty_stdout() -> None:
         stdout = ""
         stderr = ""
 
-    with (
-        patch("fspack.doctor.shutil.which", return_value="/usr/bin/gcc"),
-        patch("fspack.doctor.subprocess.run", return_value=_EmptyStdout()),
+    with patch("fspack.doctor.shutil.which", return_value="/usr/bin/gcc"), patch(
+        "fspack.doctor.subprocess.run", return_value=_EmptyStdout()
     ):
         result = _check_tool_version("gcc", ["gcc", "--version"])
     assert result.status is CheckStatus.OK
@@ -202,12 +194,10 @@ def test_check_pillow_version_too_low(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_check_pillow_not_installed(monkeypatch: pytest.MonkeyPatch) -> None:
     """Pillow 未安装返回 ERROR."""
-
-    def _raise_import(name: str, *args: object, **kwargs: object) -> None:
-        raise ImportError(name)
-
+    # sys.modules 中值为 None 时 ``import PIL`` 抛 ImportError（标准导入机制行为），
+    # 不可 patch builtins.__import__：pytest 在 call/teardown 阶段的 lazy import
+    # （typing/faulthandler 等）会一并被拦截导致 INTERNALERROR
     monkeypatch.setitem(__import__("sys").modules, "PIL", None)
-    monkeypatch.setattr("builtins.__import__", _raise_import)
     result = _check_pillow()
     assert result.status is CheckStatus.ERROR
     assert result.detail == "未安装"
@@ -237,9 +227,8 @@ def test_check_pip_via_pip_command() -> None:
         stdout = "pip 24.0 from /usr/lib/python3/dist-packages/pip (python 3.11)\n"
         stderr = ""
 
-    with (
-        patch("fspack.doctor.shutil.which", return_value="/usr/bin/pip"),
-        patch("fspack.doctor.subprocess.run", return_value=_FakePip()),
+    with patch("fspack.doctor.shutil.which", return_value="/usr/bin/pip"), patch(
+        "fspack.doctor.subprocess.run", return_value=_FakePip()
     ):
         result = _check_pip()
     assert result.status is CheckStatus.OK
@@ -257,9 +246,8 @@ def test_check_pip_via_python_module() -> None:
     def _which(name: str) -> None:
         return None
 
-    with (
-        patch("fspack.doctor.shutil.which", side_effect=_which),
-        patch("fspack.doctor.subprocess.run", return_value=_FakePipModule()),
+    with patch("fspack.doctor.shutil.which", side_effect=_which), patch(
+        "fspack.doctor.subprocess.run", return_value=_FakePipModule()
     ):
         result = _check_pip()
     assert result.status is CheckStatus.OK
@@ -277,10 +265,9 @@ def test_check_pip_via_pip3_command() -> None:
     def _which(name: str) -> str | None:
         return "/usr/bin/pip3" if name == "pip3" else None
 
-    with (
-        patch("fspack.doctor.shutil.which", side_effect=_which),
-        patch("fspack.doctor.subprocess.run", return_value=_FakePip3()) as mock_run,
-    ):
+    with patch("fspack.doctor.shutil.which", side_effect=_which), patch(
+        "fspack.doctor.subprocess.run", return_value=_FakePip3()
+    ) as mock_run:
         result = _check_pip()
     assert result.status is CheckStatus.OK
     assert "pip 24.1" in result.detail
@@ -299,9 +286,8 @@ def test_check_pip_not_found() -> None:
     def _which(name: str) -> None:
         return None
 
-    with (
-        patch("fspack.doctor.shutil.which", side_effect=_which),
-        patch("fspack.doctor.subprocess.run", return_value=_FakeFail()),
+    with patch("fspack.doctor.shutil.which", side_effect=_which), patch(
+        "fspack.doctor.subprocess.run", return_value=_FakeFail()
     ):
         result = _check_pip()
     assert result.status is CheckStatus.ERROR
@@ -315,9 +301,8 @@ def test_check_pip_python_module_oserror() -> None:
     def _which(name: str) -> None:
         return None
 
-    with (
-        patch("fspack.doctor.shutil.which", side_effect=_which),
-        patch("fspack.doctor.subprocess.run", side_effect=OSError("denied")),
+    with patch("fspack.doctor.shutil.which", side_effect=_which), patch(
+        "fspack.doctor.subprocess.run", side_effect=OSError("denied")
     ):
         result = _check_pip()
     assert result.status is CheckStatus.ERROR

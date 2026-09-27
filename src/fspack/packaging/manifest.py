@@ -140,7 +140,7 @@ def collect_manifest(dist_dir: Path, info: ProjectInfo) -> dict[str, Any]:
             None if dir_entry.is_symlink() else executor.submit(_sha256_file, Path(dir_entry.path))
             for _, dir_entry in collected
         ]
-        for (rel, dir_entry), future in zip(collected, futures, strict=False):
+        for (rel, dir_entry), future in zip(collected, futures):
             try:
                 size = dir_entry.stat(follow_symlinks=False).st_size
             except OSError:

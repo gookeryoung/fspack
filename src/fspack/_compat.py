@@ -36,7 +36,7 @@ from datetime import timezone
 try:
     from datetime import UTC  # pragma: no cover
 except ImportError:  # Python < 3.11
-    UTC = timezone.utc  # type: ignore[misc,assignment]  # noqa: UP017
+    UTC = timezone.utc  # type: ignore[misc,assignment]
 
 # ---------------------------------------------------------------------------
 # StrEnum：Python 3.11+ 标准库 enum.StrEnum，低版本回退 str+Enum 混合基类
@@ -51,8 +51,11 @@ else:
         from enum import StrEnum  # pragma: no cover
     except ImportError:  # Python < 3.11
 
-        class StrEnum(str, Enum):  # noqa: UP042
+        class StrEnum(str, Enum):
             """Python < 3.11 的 enum.StrEnum 兼容实现."""
+
+            # 对齐 3.11 StrEnum 语义：str(member) 返回枚举值而非 "ClassName.MEMBER"
+            __str__ = str.__str__
 
 
 # ---------------------------------------------------------------------------
@@ -61,4 +64,4 @@ else:
 try:
     from typing import override  # type: ignore[import-not-found,no-redef]  # pragma: no cover
 except ImportError:  # Python < 3.12
-    from typing_extensions import override  # type: ignore[import-not-found,no-redef]  # noqa: UP035
+    from typing_extensions import override  # type: ignore[import-not-found,no-redef]

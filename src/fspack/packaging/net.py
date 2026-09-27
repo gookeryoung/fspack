@@ -71,7 +71,9 @@ def _is_retryable_network_error(exc: BaseException) -> bool:
     # IncompleteRead（响应体未读完即断开）
     if isinstance(exc, (ConnectionResetError, http.client.RemoteDisconnected, http.client.IncompleteRead)):
         return True
-    return isinstance(exc, socket.timeout)
+    # 3.8 中 socket.timeout 与 TimeoutError 是两个类（3.10 起为同一类），
+    # 两者均代表读写超时，统一视为可重试
+    return isinstance(exc, (socket.timeout, TimeoutError))
 
 
 def _retry_wait_seconds(failed_attempts: int) -> float:

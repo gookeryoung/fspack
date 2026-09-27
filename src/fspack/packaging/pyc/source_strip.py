@@ -129,8 +129,16 @@ def _strip_py_sources(  # noqa: PLR0913
 def _is_in_data_dirs(path: Path, data_dirs: tuple[Path, ...]) -> bool:
     """判断 ``path`` 是否位于任一 ``data_dirs`` 目录树内（含 data-dir 自身）.
 
+    用 ``relative_to`` + ``ValueError`` 兼容 Python 3.8（无 ``Path.is_relative_to``），
+    与 ``analyzer.fingerprint._is_in_data_dirs`` 保持一致。
     ``data_dirs`` 为空时直接返回 ``False``（热路径短路）。
     """
     if not data_dirs:
         return False
-    return any(path.is_relative_to(d) for d in data_dirs)
+    for d in data_dirs:
+        try:
+            path.relative_to(d)
+            return True
+        except ValueError:
+            continue
+    return False

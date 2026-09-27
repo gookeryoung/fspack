@@ -4,7 +4,7 @@
 
 [![PyPI](https://img.shields.io/pypi/v/fspack)](https://pypi.org/project/fspack/)
 [![CI](https://github.com/gookeryoung/fspack/actions/workflows/ci.yml/badge.svg)](https://github.com/gookeryoung/fspack/actions/workflows/ci.yml)
-![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)
+![Python](https://img.shields.io/badge/python-3.8%2B-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Coverage](https://img.shields.io/badge/coverage-%E2%89%A595%25-brightgreen.svg)
 [![Release](https://img.shields.io/github/v/release/gookeryoung/fspack?include_prereleases&sort=semver)](https://github.com/gookeryoung/fspack/releases)

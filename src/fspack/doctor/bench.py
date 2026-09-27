@@ -56,7 +56,10 @@ def _machine_id() -> str:
     回退到 ``uuid.getnode()``（MAC 地址哈希化），避免空值导致碰撞。
     """
     raw = platform.node() or str(uuid.getnode())
-    return hashlib.md5(raw.encode(), usedforsecurity=False).hexdigest()[:8]
+    # 3.8 的 hashlib.md5 无 usedforsecurity 参数，3.9+ 显式声明非安全用途以通过 FIPS 审计
+    if sys.version_info >= (3, 9):
+        return hashlib.md5(raw.encode(), usedforsecurity=False).hexdigest()[:8]
+    return hashlib.md5(raw.encode()).hexdigest()[:8]
 
 
 def _collect_machine_info() -> dict[str, Any]:

@@ -203,7 +203,9 @@ def test_build_dep_cache_hit_skips_ast_analysis(tmp_path: Path, monkeypatch: pyt
 
     # 第二次构建：缓存命中
     analyze_called = False
-    original_from_src = cast(Callable[..., DependencyReport], DependencyReport.from_src.__func__)
+    # cast 类型参数用字符串前向引用：3.8 的 collections.abc.Callable 不支持下标，
+    # 非字符串形式会在运行时求值 TypeError（cast(str_type, ...) 不求值）
+    original_from_src = cast("Callable[..., DependencyReport]", DependencyReport.from_src.__func__)
 
     def tracking_from_src(cls: Any, *args: Any, **kwargs: Any) -> DependencyReport:
         nonlocal analyze_called

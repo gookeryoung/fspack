@@ -426,7 +426,7 @@ def _parse_build_defaults(fspack_cfg: dict[str, Any]) -> BuildDefaults:  # noqa:
     ``nuitka_packages``/``extras``/``lazy_imports`` 键，其余键忽略（如 ``icon``/``entries``/``exclude``）。
     类型不匹配时报错，避免静默忽略错误配置。
     """
-    kwargs: dict[str, bool | int | str | None | tuple[str, ...]] = {}
+    kwargs: dict[str, bool | int | str | tuple[str, ...] | None] = {}
     for cfg_key, field_name in _BUILD_DEFAULT_KEYS.items():
         raw = fspack_cfg.get(cfg_key)
         if raw is None:

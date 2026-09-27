@@ -252,7 +252,7 @@ def _parse_file_worker(
     """
     try:
         tree = ast.parse(Path(py).read_bytes())
-    except (SyntaxError, OSError, ValueError, RecursionError) as e:
+    except (SyntaxError, OSError, ValueError, RecursionError, MemoryError) as e:
         # ValueError：源码含 NUL 字节；RecursionError：深度嵌套源码
         # 爆解析栈（3.9+ 抛 RecursionError，3.8 的 C 栈溢出表现为 MemoryError）
         return [], [], {}, [(py, str(e))]
@@ -287,10 +287,10 @@ def _parse_serial(
     代替 ``set.update``，避免每文件哈希表扩容开销（500+ 文件场景 set 扩容
     达 log2(n) 次）。去重统一在主循环末尾做一次 dict 保序去重。
 
-    AST 解析失败（SyntaxError/OSError/ValueError/RecursionError）记录到
+    AST 解析失败（SyntaxError/OSError/ValueError/RecursionError/MemoryError）记录到
     ``all_errors``：不再静默跳过，记录 ``(绝对路径 str, 错误信息)`` 元组供
     主进程格式化报告。ValueError 为源码含 NUL 字节，RecursionError 为深度
-    嵌套源码爆 ``ast.parse`` 递归栈。
+    嵌套源码爆 ``ast.parse`` 递归栈（3.9+；3.8 的 C 栈溢出表现为 MemoryError）。
 
     用 :meth:`Path.read_bytes` + :func:`ast.parse(bytes)`，避免 Python 层
     ``decode("utf-8")`` 中间步骤——``ast.parse`` 内部用 C 实现解码，比
@@ -299,7 +299,7 @@ def _parse_serial(
     for py in py_files:
         try:
             tree = ast.parse(py.read_bytes())
-        except (SyntaxError, OSError, ValueError, RecursionError) as e:
+        except (SyntaxError, OSError, ValueError, RecursionError, MemoryError) as e:
             all_errors.append((str(py), str(e)))
             continue
         tops, subs = collect_imports_and_submodules(tree)
