@@ -11,16 +11,19 @@ from __future__ import annotations
 
 import pytest
 
-from fspack.config import MirrorConfig
-
 __all__ = ["mirror"]
 
 
 @pytest.fixture
-def mirror() -> MirrorConfig:
+def mirror():
     """测试用 :class:`MirrorConfig` 常量 fixture.
 
     所有测试共用同一镜像配置（``name="t"``、``python_base="https://x/py"``、
     ``pypi_index="https://x/s"``），避免每个测试文件重复定义 ``_MIRROR`` 常量。
+
+    fspack 延迟到函数内导入：xdist worker 中 conftest 加载早于 pytest-cov
+    启动 coverage，顶层导入会触发 module-not-measured 警告。
     """
+    from fspack.config import MirrorConfig
+
     return MirrorConfig(name="t", python_base="https://x/py", pypi_index="https://x/s")
