@@ -3,7 +3,7 @@ __pycache__/
 *.py[oc]
 build/
 dist/
-/wheels/
+wheels/
 *.egg-info
 
 # Virtual environments
@@ -32,4 +32,3 @@ coverage.xml
 
 # Sphinx 文档构建输出
 docs/_build/
-.trae/
