@@ -48,7 +48,7 @@ T = TypeVar("T")
 _INSTALLER_TOOL_TIMEOUT = 900.0
 
 
-def _run_stage(
+def _run_stage[T](
     tracker: BuildTracker,
     name: str,
     fn: Callable[[], T],

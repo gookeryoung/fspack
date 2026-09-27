@@ -1,4 +1,4 @@
-extend-exclude = ["docs", "examples", "template"]
+extend-exclude = ["docs", "examples", "template", "src/fspack/assets"]
 line-length    = 120
 target-version = "py313"
 
@@ -31,4 +31,7 @@ select = [
 ]
 
 [lint.per-file-ignores]
-"**/tests/**" = ["ARG001", "ARG002", "ARG005"]
+"**/tests/**" = ["ARG001", "ARG002", "ARG003", "ARG005"]
+"src/fspack/packaging/loader/compile.py" = ["ARG003", "PLR0913"]     # 抽象方法签名/平台占位参数、loader 编译 API 参数多
+"src/fspack/packaging/runtime/download.py" = ["ARG003", "PLR0913"]   # RuntimeDownloader 抽象签名未被子类覆盖、公开下载 API 参数多
+"src/fspack/slim/default.py" = ["ARG003"]                             # 抽象方法 match 兜底实现不区分包名
