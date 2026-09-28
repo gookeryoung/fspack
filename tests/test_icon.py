@@ -324,9 +324,10 @@ def _rgba_pixel(img: Any, xy: tuple[int, int]) -> tuple[int, int, int, int]:
 
     辅助函数：Pillow ``getpixel`` 的 stub 返回类型为 ``float | None``，
     但 RGBA 图片实际返回 ``tuple[int, int, int, int]``。用 ``cast`` 收窄类型
-    供测试断言使用（Pillow stub 限制，类型系统无法表达）。
+    供测试断言使用（Pillow stub 限制，类型系统无法表达）。``cast`` 的类型
+    参数是运行时求值点，py38 不支持内建泛型下标，须用字符串前向引用形式。
     """
-    return cast(tuple[int, int, int, int], img.getpixel(xy))
+    return cast("tuple[int, int, int, int]", img.getpixel(xy))
 
 
 @_skip_no_pil
