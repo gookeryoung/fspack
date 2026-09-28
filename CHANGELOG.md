@@ -7,17 +7,187 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.8] - 2026-09-28
+
+### Added
+- 最低支持 Python 版本放宽至 3.8，`requires-python`、classifiers、CI 测试矩阵与 tox envlist 同步覆盖 3.8–3.14
+
+### Fixed
+- 修复 `_compat.py` 缺失 Python 3.10 兼容回退导致 CI 失败
+- 修复 benchmark job 与 pytest 配置注入 xdist 选项的冲突
+- 修复 xdist worker 的 module-not-measured 覆盖率警告
+- tox envlist 补齐 py38/py39 与最低支持版本对齐
+- 删除 pytest 配置中无效的 timeout 项
+
+### Documentation
+- 新增 git 提交规范、web 全栈开发规范及开发流程文档
+
+## [0.6.7] - 2026-09-20
+
+### Build
+- 更新依赖包镜像源地址
+
+## [0.6.6] - 2026-09-19
+
+### Fixed
+- 修复 cndb 项目打包错误
+- 分析 Win DLL 打包目录结构并修正打包处理
+
+## [0.6.5] - 2026-09-16
+
+### Added
+- 扩展 Python 版本支持与 tox 多版本测试
+
+### Changed
+- 移除对 Python 3.8/3.9 的支持
+
+### Fixed
+- 分析并修复 CI/CD 性能退化与 tox 测试错误
+- 分析 PyInstaller 打包重复库问题
+- 修复 GitHub Actions 缓存写入冲突问题
+
+## [0.6.4] - 2026-09-15
+
+### Added
+- 新增 kernel32 shim 支持 Win8+ API 兼容（Win7 目标）
+
+### Changed
+- 移除 kernel32-shim 改用原地改名方案
+
+### Fixed
+- 修复 Win7 下 shim 无法加载的问题
+
+## [0.6.3] - 2026-09-15
+
+### Added
+- Win7 新增 synch API Set shim 与就地编译能力
+- Rust 1.78+ wheel 自动注入 Win7 shim
+
+### Changed
+- 统一归档解压逻辑并复用安全解压工具
+
+## [0.6.2] - 2026-09-11
+
+### Changed
+- 清理无用代码，更新项目配置与打包性能日志
+
+### Fixed
+- parse_project 缓存键增加文件 size，兜底文件系统 mtime 精度不足
+- 修复依赖扫描发现的漏洞问题并增加安全标记
+- 修复测试异常与打包性能退化问题
+
+## [0.6.1] - 2026-09-11
+
+### Added
+- 新增 `fsp doctor --bench-compare` 基准对比 CLI 入口，`compare_benchmark.py` 整合进 doctor 子包
+
+### Fixed
+- doctor 跳过非 dict 根格式的基准文件
+- 修复测试用例中 mock 的函数路径错误
+
+## [0.6.0] - 2026-09-11
+
+### Changed
+- 维护性版本发布，fspack 自依赖版本对齐 0.5.14
+
+## [0.5.14] - 2026-09-11
+
+### Added
+- 更新 copier 模板版本到 v0.9.6
+
+### Changed
+- 最低支持 Python 版本升级至 3.13 并清理冗余兼容代码
+- 统一使用 collections.abc 导入抽象类型
+
+### Fixed
+- doctor cache_contents 修复竞态检测与文件类型判断逻辑
+
+### Build
+- 更新 CI 配置的 Python 版本至 3.13
+
+## [0.5.13] - 2026-09-01
+
+### Changed
+- 简化 config/parsing 与测试代码并优化错误提示格式
+
+### Fixed
+- 修复 Windows multiprocessing spawn 子进程启动失败问题
+
+## [0.5.12] - 2026-08-31
+
+### Changed
+- 统一目录排除逻辑，修复 venv 多版本兼容与进程池守卫
+
+### Fixed
+- console 消息体 rich markup 转义，修复错误提示中方括号被吞
+
+## [0.5.11] - 2026-08-30
+
+### Changed
+- webview_app 模板 Python 代码整合为单文件 app.py
+
+## [0.5.10] - 2026-08-26
+
+### Added
+- `fsp d --bench` 新增 -P/-PO/-PC 基准剖析日志，与 fsp b/r 的 profile 体系对齐
+- 新增 sci_stack 科学计算综合示例模板
+
+### Changed
+- 移除 `fsp d --bench` 冗余参数，-P/-PO/-PC 并入 `--test`，阶段耗时报告与性能分析由 -P 承接
+- 精简回退冗余依赖：移除 tenacity 改用标准库退避重试，certifi 缺失改为明确报错，parsing.py 复用 `_compat` 的 tomllib 回退
+- certifi 依赖显式声明到 pyproject，并将 `_util` 包铺平为 fspack 顶层模块
+- 拆分 test_doctor/test_builder/test_nuitka 巨石测试为域文件，共享桩迁入 `_stubs`
+- 模板体系精简整合，doctor 13→8、init 24→18
+
+## [0.5.9] - 2026-08-26
+
+### Added
+- NSIS 纳入缓存管理，支持本地归档识别（zip/7z）与按需下载
+- Nuitka Windows 构建新增 compiler 选项（msvc/mingw）
+
 ### Removed
 - 移除 NSIS 下载与缓存管理（`nsis_tool` 模块及 `nsis` 缓存目录、doctor 对应盘点项），makensis 仅做 PATH 检查并在缺失时提示用户自行安装
+
+### Fixed
+- compiler=mingw 时补传 --mingw64 顶掉 MSVC，experimental 单传不选择 mingw
+- `build(log_file=)` 在 root 日志级别高于 INFO 时降级，修复 API 调用日志文件恒空
+- Win7 legacy 控制台 rich 显示乱码，检测无 VT 的真实 tty 后启用 ascii_only 渲染
+- Qt 精简保留 PyQt5/PyQt6 私有 sip 运行时，修复打包后运行报找不到 sip
+
+## [0.5.8] - 2026-08-26
+
+### Added
+- winlibs 工具链支持 .7z 归档，下载优先 7z 省一半流量，解压用系统 7-Zip
+- doctor 新增压缩包缓存内容盘点诊断项
+
+### Fixed
+- doctor nuitka 缓存盘点纳入 wheels 下的 sdist 归档，避免放置归档却显示未缓存
+- doctor winlibs 盘点识别 .7z 归档并区分版本匹配，不匹配时提示所需确切归档名
+- 修复 GUI 导入钩子的无限递归问题
+- 隔离离线 nuitka 测试的 wheel 缓存目录
+
+### Build
+- cov 目标启用 pytest-xdist 并行（-n 8）加速测试
+
+## [0.5.7] - 2026-08-26
+
+### Added
+- Nuitka 支持本地 sdist 安装
+
+## [0.5.6] - 2026-08-26
+
+### Added
+- 打包新增 7z 便携包格式，调用系统 7-Zip 实现 LZMA2 超高压缩与多线程并行
+- init 模板选择改为两步向导（项目类型到具体模板），方向键导航替代数字菜单，高亮项动态显示描述与依赖
 
 ### Fixed
 - 修复 make tox 多版本测试两类失败：help 串裸 `%` 转义（py314 构建 parser 即崩、全版本 `fsp b -h` 崩）与 doctor 测试固定宽度 fixture 往返缩水（COLUMNS/LINES 环境下宽度逐测试 -1 变负导致 rich 输出全空）
 - runner_profile 集成测试打点值放大 20 倍，免疫真实子进程收尾耗时波动（py39 在 tox 并行负载下收尾实测 157ms 使 gap 占比超 30% 触发未细分行导致断言 flaky）
 
 ### Documentation
-- README 精简为快速上手与核心用法，命令参考/配置参考/离线打包/分发指南拆分至 `docs/`（cli/configuration/offline/distribution），回填 v0.5.0 至 v0.5.5 更新日志
+- README 精简为快速上手与核心用法，命令参考/配置参考/离线打包/分发指南拆分至 `docs/`（cli/configuration/offline/distribution）
 
-## [0.5.5] - TBD
+## [0.5.5] - 2026-08-25
 
 ### Added
 - `fsp b`/`fsp r` `--profile` 增加性能日志落盘与历史对比；剖析支持多次运行统计（`-PR N` 取 wall_ms 中位数实际样本）与 GUI 界面就绪自终止（Qt/tkinter 主循环首帧上屏即打点）
@@ -36,7 +206,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Nuitka 编译检测 Win7 重编译版 runtime 并跳过无效编译；Nuitka 与 Win7 重编译版 runtime 互斥配置在构建入口归一化
 - `.deb` 架构固定 amd64 与 Linux 目标 runtime 一致，修复 macOS arm64 CI 误标 arm64
 
-## [0.5.4] - TBD
+## [0.5.4] - 2026-08-24
 
 ### Added
 - loader 错误提示完善、启动提速与可选 splash 启动画面
@@ -53,7 +223,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Build
 - 简化 sdist 打包排除规则；pyside2 模板 Python 版本约束调整至 <3.11 并固定 `.python-version`
 
-## [0.5.3] - TBD
+## [0.5.3] - 2026-08-24
 
 ### Added
 - `fsp r` 新增 `--profile` 启动耗时剖析汇总（loader/环境准备/import 各阶段对齐表格）
@@ -62,7 +232,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Performance
 - 结合启动剖析优化自身启动，glob/logging 延迟导入并修复剖析锚点
 
-## [0.5.2] - TBD
+## [0.5.2] - 2026-08-23
 
 ### Added
 - 新增 `--no-win7-dll` 选项跳过 Win7 兼容 DLL 注入
@@ -70,12 +240,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - 入口声明默认使用 `[project.scripts]`，已声明时无需再定义 `[tool.fspack.entries]`
 
-## [0.5.1] - TBD
+## [0.5.1] - 2026-08-21
 
 ### Fixed
 - 修复 Python 3.12+ tar 解压跳过安全预检导致恶意条目漏拒
 
-## [0.5.0] - TBD
+## [0.5.0] - 2026-08-21
 
 ### Added
 - 支持 Python 3.13t/3.14t 自由线程版本打包（ABI 标签 `cp3XYt`、运行时目录 `python3XYt`、Win7 目标明确报错）
@@ -100,7 +270,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Build
 - 移除覆盖度低的简单示例模板（`cli_helloworld`/`cli_office`/`pygame_cli`），测试改用 `tk_app`（无依赖）与 `web_app`（flask 依赖）等现存模板，同步更新 README 示例清单与集成文档中的模板路径
 
-## [0.4.15] - TBD
+## [0.4.15] - 2026-08-18
 
 ### Added
 - `fsp b` 自动识别 web 项目结构并在打包前构建前端，产物仅含前端构建结果、源码不再进入 dist
@@ -127,7 +297,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Build
 - 调整示例项目配置，修复 CI 无 mingw 环境下 loader 测试失败与 wheel 下载基线测试 mock 签名，统一代码格式化
 
-## [0.4.14] - TBD
+## [0.4.14] - 2026-08-14
 
 ### Added
 - `fsp cache` 扩展为多 cache 类型健康检查与清理，覆盖 `~/.fspack/cache/` 下全部 7 个子目录（wheels/embed/standalone/nuitka/loaders/ccache/tkinter）。新增 `--target <name>` 限定单 cache 类型，`--stale` 启用过期文件清理。各扫描器识别三类问题：损坏文件（zip/tar 结构非法、PE 头缺失、空文件，扫描期自动删除）、过期文件（版本不在 `KNOWN_*_VERSIONS` 的旧 zip/tar/子目录，需 `--stale` 显式清理）、孤儿文件（wheels 专用：未被 deps 引用的 wheel）。默认扫描全部 cache 类型，逐个渲染详细报告
@@ -135,22 +305,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - loader 缓存健康检查在非 Windows 平台漏检损坏 exe
 
-## [0.4.13] - TBD
+## [0.4.13] - 2026-08-13
 
 ### Fixed
 - 修复应用清单版本号格式错误
 
-## [0.4.12] - TBD
+## [0.4.12] - 2026-08-13
 
 ### Fixed
 - loader 资源编译修复——补全 Windows 资源脚本中 StringFileInfo 的 END 配对，资源编译失败时跳过缓存写入
 
-## [0.4.11] - TBD
+## [0.4.11] - 2026-08-13
 
 ### Documentation
 - 新增安全与分发章节
 
-## [0.4.10] - TBD
+## [0.4.10] - 2026-08-13
 
 ### Added
 - Windows loader exe 自动嵌入 PE 资源段（VS_VERSIONINFO + application manifest），降低 Defender 等杀软启发式误报。版本信息从 `pyproject.toml` 的 `[project].description` 与 `[project].authors[0].name` 提取填充 CompanyName/FileDescription/ProductName 等字段；manifest 声明 asInvoker、PerMonitorV2 DPI 感知、Win7-11 supportedOS；资源段变化纳入 loader 缓存键触发重编。README 新增「安全与分发」章节，补充代码签名（signtool）使用与误报申诉指引
@@ -158,7 +328,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - 重构资源编译逻辑，统一资源编译入口与测试用例，调整导入顺序并替换内置 xml 转义实现
 
-## [0.4.9] - TBD
+## [0.4.9] - 2026-08-13
 
 ### Changed
 - 调整 Qt DLL 加载的环境变量设置逻辑
@@ -166,7 +336,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Build
 - 移除未使用的 pytest-asyncio 依赖
 
-## [0.4.8] - TBD
+## [0.4.8] - 2026-08-12
 
 ### Added
 - wheel 下载实时速度显示——单包下载流式输出 pip 进度条，`_DownloadMonitor` 监控 `cache_dir` 文件大小变化显示实时下载速度
@@ -174,7 +344,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - 单包下载加事件日志，避免静默下载被误判为卡住
 
-## [0.4.7] - TBD
+## [0.4.7] - 2026-08-12
 
 ### Fixed
 - 清理 data-dirs 下 compileall 生成的 `__pycache__`
@@ -182,7 +352,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Performance
 - 并行化 pyc 编译与 SBOM/manifest 生成，修复 tracemalloc 内存峰值采集 bug
 
-## [0.4.6] - TBD
+## [0.4.6] - 2026-08-12
 
 ### Changed
 - 模板加载增加缓存文件与目录的跳过过滤
@@ -191,12 +361,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 消除命令因未捕获异常抛出原始 traceback 的严重缺陷
 - 完善配置和源码文件读取的错误处理
 
-## [0.4.5] - TBD
+## [0.4.5] - 2026-08-12
 
 ### Fixed
 - 模板加载遇非 UTF-8 文件跳过而非崩溃
 
-## [0.4.4] - TBD
+## [0.4.4] - 2026-08-12
 
 ### Added
 - 新增 `manifest` 子命令，init/doctor 子命令拆分与配置缓存优化
@@ -211,7 +381,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Build
 - sdist 隐藏文件改为 `.*` 全局排除 + 三白名单 force-include
 
-## [0.4.3] - TBD
+## [0.4.3] - 2026-08-11
 
 ### Added
 - `data-dirs` 配置支持排除数据资源目录的依赖扫描和指纹计算
@@ -223,7 +393,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - PySide2 模板限制 Python<3.10，避免 3.10+ 无 wheel 导致下载失败
 - tkinter 打包检测缓存损坏并自动重建
 
-## [0.4.2] - TBD
+## [0.4.2] - 2026-08-11
 
 ### Added
 - 新增前后端分离 Web 打包功能（`AppType.WEB` + `web-static-dirs` 配置 + 项目模板）
@@ -234,12 +404,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - 修正前后端分离模板的静态资源目录配置
 
-## [0.4.1] - TBD
+## [0.4.1] - 2026-08-11
 
 ### Added
 - 新增 `data-dirs` 配置以保留数据资源目录
 
-## [0.4.0] - TBD
+## [0.4.0] - 2026-08-11
 
 ### Added
 - 多入口默认入口选择改为 GUI 优先、同类型按字母排序
@@ -251,7 +421,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 修复 `_validate_tar_member` 误拒 terminfo 合法别名链接导致 Linux 打包失败
 - 修复 `.gitignore` 的 `wheels/` 规则误匹配 `src/fspack/packaging/wheels/` 子包导致 PyPI 发布包缺失 wheels 模块
 
-## [0.3.26] - TBD
+## [0.3.26] - 2026-08-07
 
 ### Changed
 - 预编译拆分为两次 `compileall` 调用适配不同优化级别，拆分 `_precompile_pyc` 并新增 stamp 键逻辑测试
@@ -260,17 +430,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 豁免 `numpy/_core/tests/_natype.py` 与 `_locales.py` 不被嵌套 tests 规则剥离，修复 scipy 项目打包后 `import scipy` 触发 numpy.testing 导入失败
 - 修复 python-build-standalone tarball 相对路径符号链接被误拒
 
-## [0.3.25] - TBD
+## [0.3.25] - 2026-08-07
 
 ### Changed
 - 修复 QML 项目 SVG 与控件加载失败问题
 
-## [0.3.24] - TBD
+## [0.3.24] - 2026-08-07
 
 ### Fixed
 - 修复 QML 项目 SVG 加载失败，自动绑定 QtSvg 依赖并补全 Widgets 强制保留逻辑
 
-## [0.3.23] - TBD
+## [0.3.23] - 2026-08-07
 
 ### Fixed
 - slim): QML 项目自动绑定 QtSvg 支持。QML 无 `import QtSvg` 语法但 `Image { source: "*.svg" }` 通过 imageformats 插件加载 SVG，fspack 检测到 `Qml` 在闭包中时自动加入 `Svg` 子模块，使 `Qt5Svg.dll`/`Qt6Svg.dll` 与 `plugins/imageformats/qsvg.dll` 都保留，无需用户显式声明；非 QML 项目不用 SVG 时剥离 `qsvg.dll` 与 `Qt5Svg.dll`，消除"插件保留但依赖 DLL 被剥离"的矛盾
@@ -278,7 +448,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Build
 - 默认镜像源切换至阿里云
 
-## [0.3.22] - TBD
+## [0.3.22] - 2026-08-07
 
 ### Added
 - 新增 `fsp cache` 子命令与缓存健康检查工具
@@ -292,7 +462,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Tests
 - 新增打包速度、entry wrapper 启动、wheel 下载、Nuitka 编译等性能基线测试
 
-## [0.3.21] - TBD
+## [0.3.21] - 2026-08-04
 
 ### Added
 - `fsp init` 新增 `--python-version` 参数与 Win7 fastapi 守卫
@@ -303,12 +473,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Build
 - 放宽 benchmark gate systemic 检测阈值，修复机器抖动误阻断
 
-## [0.3.20] - TBD
+## [0.3.20] - 2026-08-02
 
 ### Performance
 - 延迟导入重模块与进度模块，优化 builder 热路径加载性能
 
-## [0.3.19] - TBD
+## [0.3.19] - 2026-08-02
 
 ### Performance
 - CLI 启动懒加载与结构解耦优化，`import fspack.cli` 提速 67%
@@ -316,7 +486,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Documentation
 - 更新文档特性说明与排版，批量移除代码注释中的迭代版本标记
 
-## [0.3.18] - TBD
+## [0.3.18] - 2026-08-02
 
 ### Added
 - 安全加固——依赖哈希校验、SBOM 生成、Windows/Linux 代码签名
@@ -335,7 +505,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Build
 - `fsp doctor` 新增别名 `d`，更新 benchmark 基线快照
 
-## [0.3.17] - TBD
+## [0.3.17] - 2026-07-29
 
 ### Fixed
 - extras 信息在构建与打包汇总表中体现
@@ -343,12 +513,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Performance
 - 优化打包性能与内存使用，增强信息提示
 
-## [0.3.16] - TBD
+## [0.3.16] - 2026-07-29
 
 ### Build
 - benchmark gate 新增系统性退化检测，机器负载波动不阻断 CI
 
-## [0.3.15] - TBD
+## [0.3.15] - 2026-07-29
 
 ### Added
 - 新增 `[project.optional-dependencies]` 可选依赖分组支持（PEP 621）。`fsp b`/`fsp p` 新增 `--extra <name>` CLI 参数（可多次指定）启用分组，等价 `pip install pkg[extra]` 语义；`[tool.fspack] extras` 配置默认启用分组；CLI `--extra` 完全覆盖配置默认（集合语义，非合并）；自引用 `my-pkg[extra]` 递归展开（含循环保护），第三方 `pkg[extra]` 原样透传 pip；扩展后依赖纳入依赖分析缓存键，extras 变化触发缓存失效；未知分组名报错并列出可选分组
@@ -359,7 +529,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Build
 - benchmark gate 对比策略从「与上一次基线对比」改为「与历史最佳基准对比」。新增 `scripts/compare_benchmark.py` 扫描 `.benchmarks/` 下所有历史 JSON，按测试名找最小 median 作为最佳基准，当前运行与最佳对比，median 超过最佳 25% 视为退化（exit 1）。与上一次基线对比相比，最佳基准过滤了 GitHub Actions 共享机器性能波动导致的慢运行，减少误报
 
-## [0.3.14] - TBD
+## [0.3.14] - 2026-07-29
 
 ### Fixed
 - `fsp init` 模板 `requires-python` 增加 Python 上限版本约束 `<3.12`（PySide2 模板保持已有的 `<3.11` 不变），避免生成的项目在 3.12+ 环境因依赖兼容性问题无法安装
@@ -367,17 +537,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Build
 - `pyproject.toml` 移除 templates 文件排除规则
 
-## [0.3.13] - TBD
+## [0.3.13] - 2026-07-29
 
 ### Fixed
 - NSIS 卸载旧版不生效，用 `_?=` 参数让 ExecWait 等待卸载真正完成
 
-## [0.3.12] - TBD
+## [0.3.12] - 2026-07-29
 
 ### Added
 - NSIS 安装包支持升级安装，`.onInit` 检测注册表已安装版本；同版本直接覆盖不打扰，不同版本弹出对话框询问"是否先卸载再安装"，确认后静默调用旧版 `uninstall.exe /S _?=$INSTDIR` 等待真正卸载完成再继续（`_?=` 参数阻止卸载器自我复制到 `%TEMP%`，否则 `ExecWait` 不等待）；`InstallDirRegKey` 读取上次安装路径作为默认目录，避免重复选择
 
-## [0.3.11] - TBD
+## [0.3.11] - 2026-07-29
 
 ### Added
 - 支持 `[project.scripts]` 入口识别与 flat/src layout 自动识别
@@ -386,7 +556,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Tests
 - 修复 Windows 无符号链接权限与 Rich Table 窄终端换行导致的测试失败，补充 `[project.scripts]` 入口识别典型场景测试
 
-## [0.3.10] - TBD
+## [0.3.10] - 2026-07-29
 
 ### Added
 - 新增 `fsp doctor` 环境诊断子命令，整合 examples 为 assets/templates 并支持 `--test` 模板可调用性验证与 `--bench` 基准测试
@@ -423,7 +593,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI 三 job 增强（Windows 矩阵 + slow-e2e cron + benchmark 门禁），actions 升级 v5/v6 消除 Node.js 20 警告，benchmark 退化门禁改为监控模式
 - 删除废弃的 pyqt5_cli_pyall 模板与 GitHub Actions 工作流模板，简化 PyQt/PySide 模板配置
 
-## [0.3.9] - TBD
+## [0.3.9] - 2026-07-28
 
 ### Fixed
 - icon 转换使用 `bitmap_format=png` 保留完整 8-bit alpha 通道
@@ -431,7 +601,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Build
 - sdist 排除 `.benchmarks`/`.github`/`.trae` 等 11 项开发内部目录，新增项目 favicon.ico 资源
 
-## [0.3.8] - TBD
+## [0.3.8] - 2026-07-27
 
 ### Added
 - 新增 `--recursive`/`-R` 递归打包模式，`fsp b -R [project]`/`fsp p -R [project]` 递归扫描 project 目录下所有含 `pyproject.toml` 的子项目依次构建/打包；跳过 `.venv`/`dist`/`build`/`.git` 等开发期目录；单项目失败不中断后续项目，最后汇总成功/失败列表并通过退出码（0=全部成功，1=有失败）传播结果，便于 CI 检测
@@ -444,7 +614,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Build
 - 新增 py313 康威生命游戏示例，清理旧示例文件
 
-## [0.3.7] - TBD
+## [0.3.7] - 2026-07-27
 
 ### Added
 - 新增 scikit-learn 精简规则，剥离 datasets/descr/ 描述文件与 datasets/images/ 示例图片（保留 data/ 运行时必需），fit/predict/transform 等算法 API 不受影响
@@ -463,7 +633,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Tests
 - 新增 4 个端到端 slow 测试覆盖 PySide2 QML、Nuitka 编译与 slim-include 规则
 
-## [0.3.6] - TBD
+## [0.3.6] - 2026-07-27
 
 ### Added
 - 新增 `[tool.fspack] slim-include`/`slim-exclude` wheel 精简用户自定义规则，支持 fnmatch glob 模式强制保留/剥离特定文件；优先级 `slim-include` > `slim-exclude` > spec 自动分类；用于覆盖 AST 闭包误判、强制剥离 `opengl32sw.dll`/`translations` 等不需要的文件
@@ -480,12 +650,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Documentation
 - 完善 wheel 精简用户规则文档与代码注释
 
-## [0.3.5] - TBD
+## [0.3.5] - 2026-07-26
 
 ### Build
 - 切换到 Python 3.11，支持 Win7
 
-## [0.3.4] - TBD
+## [0.3.4] - 2026-07-26
 
 ### Fixed
 - Nuitka 编译后 Win7 无法运行，注入 MinGW 运行时 DLL 并限制 `_WIN32_WINNT=0x0601`
@@ -493,7 +663,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Build
 - 更新 fspack 依赖到 0.3.3 并移除 nuitka/ccache 配置
 
-## [0.3.3] - TBD
+## [0.3.3] - 2026-07-26
 
 ### Added
 - Qt 库精简智能识别 FFmpeg/QML ABI/opengl32sw/lib/cmake/metatypes/QtAsyncio 等可剥离资源
@@ -501,7 +671,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - 修复 standalone python 缺 Win7 兼容 DLL 导致 fspack 自身打包后在 Win7 上无法运行 nuitka 编译
 
-## [0.3.2] - TBD
+## [0.3.2] - 2026-07-26
 
 ### Added
 - 新增 `--extra-index-url`/`--find-links` 私有包源支持，可多次指定；与 `[tool.fspack] extra-index-urls`/`find-links` 配置合并（CLI 追加在后、去重保留首次出现），透传给 pip/uv 的 `--extra-index-url`/`--find-links`；私有包源纳入依赖解析缓存键，切换源后强制重新解析；sdist 回退路径（`pip wheel`）同步透传私有包源
@@ -522,7 +692,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `pyproject.toml` 增加 Nuitka 打包依赖白名单
 - 新增 Python 3.14 complex CLI 示例项目，示例项目增加 Python 版本标识覆盖多版本场景
 
-## [0.3.1] - TBD
+## [0.3.1] - 2026-07-26
 
 ### Added
 - 新增 `[tool.fspack]` 配置支持，可声明 `exclude` 排除目录与 `nuitka`/`pyc_strip`/`no_site`/`pyc_optimize` 等构建默认值
@@ -544,7 +714,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Build
 - 测试 mock makensis 调用修复 Linux CI 无 NSIS 时 4 个测试失败，自身打包排除 templates 目录
 
-## [0.3.0] - TBD
+## [0.3.0] - 2026-07-26
 
 ### Added
 - 新增 `--nuitka` 编译模式，用户源码编译为 .pyd 本机执行（速度提升 30-50%）；按 Python 版本锁定 Nuitka 版本（3.8/3.9→2.5.1，3.10+→4.1.3），自动装到本地缓存 `~/.fspack/cache/nuitka/` 不污染 dist/runtime；Windows 用缓存的 standalone python 运行编译，避免 embed python 触发 reExecute fork bomb；入口文件保留 .py 兼容 `runpy.run_path()`；stamp 缓存命中跳过整个阶段；缺 pip 时 ensurepip/uv 两轮自救
@@ -565,13 +735,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - test): Linux e2e 测试增加平台跳过条件，Windows 上的 mingw gcc 缺 `dlfcn.h` 无法交叉编译 Linux loader
 - 转义 CLI help 字符串中的 `%` 避免 argparse 格式化崩溃
 
-## [0.2.6] - TBD
+## [0.2.6] - 2026-07-24
 
 ### Fixed
 - linux): wrapper 显式添加 site-packages 到 sys.path
 - ci): CI 环境下禁用 rich legacy_windows 渲染
 
-## [0.2.5] - TBD
+## [0.2.5] - 2026-07-24
 
 ### Fixed
 - ci): 修复 CI 自打包三处失败
@@ -579,7 +749,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Build
 - 更新 fspack 依赖版本到 0.2.4
 
-## [0.2.4] - TBD
+## [0.2.4] - 2026-07-24
 
 ### Fixed
 - ci): release.yml 在 uv sync 后显式安装 pip，修复 fspack download_wheels 失败
@@ -587,7 +757,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Build
 - 更新 fspack 依赖包版本到 0.2.3
 
-## [0.2.3] - TBD
+## [0.2.3] - 2026-07-24
 
 ### Changed
 - 删除 slim/__init__.py 中无用的 import zipfile 及相关注释
@@ -599,7 +769,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - release.yml 增加 Windows/Linux 原生平台自打包 job，发布构建版到 GitHub Release
 - 同步 .python-version 至 3.13 并更新 uv.lock
 
-## [0.2.2] - TBD
+## [0.2.2] - 2026-07-24
 
 ### Added
 - 发行包文件名 Python 版本标签使用完整版本号（如 py3.13.14）而非 major.minor
@@ -615,7 +785,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Build
 - 更新 3.13 embed 版本映射为 3.13.14，升级 Python 版本到 3.13
 
-## [0.2.1] - TBD
+## [0.2.1] - 2026-07-24
 
 ### Fixed
 - 修复 CI Linux 上交叉构建守卫导致预编译测试失败
@@ -626,7 +796,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Build
 - python): 调整 Python 版本要求为 3.11
 
-## [0.2.0] - TBD
+## [0.2.0] - 2026-07-24
 
 ### Added
 - 新增标准库精简与字节码预编译阶段，构建汇总体现精简解压
@@ -645,12 +815,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Build
 - 默认镜像源切换至清华源，更新 Python 版本要求与开发依赖分组
 
-## [0.1.9] - TBD
+## [0.1.9] - 2026-07-23
 
 ### Changed
 - analyzer): 新增开发期目录排除规则，添加对应测试
 
-## [0.1.8] - TBD
+## [0.1.8] - 2026-07-23
 
 ### Added
 - 新增 tkinter 内置库打包，从 python-build-standalone Windows 构建提取 tkinter 组件，并新增 tk_app 示例验证
@@ -674,7 +844,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Build
 - 修复 ruff/pyrefly 配置漂移，批量更新项目配置与文档
 
-## [0.1.7] - TBD
+## [0.1.7] - 2026-07-22
 
 ### Added
 - NSIS 安装包默认为所有应用类型生成桌面快捷方式与开始菜单程序快捷方式
@@ -688,7 +858,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Build
 - 增加自身打包配置
 
-## [0.1.6] - TBD
+## [0.1.6] - 2026-07-22
 
 ### Added
 - 用 uv pip compile 在线解析依赖图，避免 pip resolution-too-deep
@@ -699,12 +869,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - uv 路径加 sdist 回退，处理无 wheel 的包（如 win-unicode-console），重试用 -i index 而非 --no-index
 - 修复 _stream_subprocess 在 bufsize=0 时 stderr 无 read1 方法导致崩溃
 
-## [0.1.5] - TBD
+## [0.1.5] - 2026-07-22
 
 ### Fixed
 - 修复依赖下载时 python_version 环境标记未过滤和无 wheel 包无法下载的问题
 
-## [0.1.4] - TBD
+## [0.1.4] - 2026-07-22
 
 ### Fixed
 - cli_office): 改进 PDF 文件生成的错误处理
@@ -713,7 +883,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - vscode): 新增 Python 格式化器与保存动作配置
 - 将 fspack 依赖版本更新至 0.1.3
 
-## [0.1.3] - TBD
+## [0.1.3] - 2026-07-15
 
 ### Added
 - 实现 exe 图标自定义功能，支持 CLI 指定与配置文件配置
@@ -728,12 +898,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Build
 - 调整 lint 配置与示例代码，整理代码格式与清理冗余文件，更新 copier 模板版本到 v0.8.5
 
-## [0.1.2] - TBD
+## [0.1.2] - 2026-07-15
 
 ### Build
 - 维护性版本发布，仅更新 uv.lock 依赖锁文件
 
-## [0.1.1] - TBD
+## [0.1.1] - 2026-07-15
 
 ### Added
 - 新增单项目多入口打包功能，支持 cli/gui/web 混合类型
@@ -749,7 +919,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Build
 - pyproject): 新增 fsp 作为 fspack 的别名命令
 
-## [0.1.0] - TBD
+## [0.1.0] - 2026-07-12
 
 ### Added
 - 实现 fspack P1 CLI 与 C loader 垂直切片，新增 fsp p 子命令生成 NSIS 安装包（P2）

@@ -1,11 +1,133 @@
 更新日志
 =========
 
-v0.5.6（未发布）
-------------------
+v0.6.8
+------
 
+- feat: 最低支持 Python 版本放宽至 3.8（``requires-python``、classifiers、CI 测试矩阵与 tox envlist 同步覆盖 3.8–3.14）
+- fix: 修复 ``_compat.py`` 缺失 Python 3.10 兼容回退导致 CI 失败
+- fix: 修复 benchmark job 与 pytest 配置注入 xdist 选项的冲突
+- fix: 修复 xdist worker 的 module-not-measured 覆盖率警告；tox envlist 补齐 py38/py39；删除 pytest 配置中无效的 timeout 项
+- docs: 新增 git 提交规范、web 全栈开发规范及开发流程文档
+
+v0.6.7
+------
+
+- chore: 更新依赖包镜像源地址
+
+v0.6.6
+------
+
+- fix: 修复 cndb 项目打包错误
+- fix: 分析 Win DLL 打包目录结构并修正打包处理
+
+v0.6.5
+------
+
+- feat: 扩展 Python 版本支持与 tox 多版本测试
+- fix: 分析并修复 CI/CD 性能退化与 tox 测试错误；分析 PyInstaller 打包重复库问题
+- ci: 修复缓存写入冲突问题；移除对 Python 3.8/3.9 的支持
+
+v0.6.4
+------
+
+- feat: 新增 kernel32 shim 支持 Win8+ API 兼容（Win7 目标），后改用原地改名方案移除独立 shim
+- fix: 修复 Win7 下 shim 无法加载的问题
+
+v0.6.3
+------
+
+- feat: Win7 新增 synch API Set shim 与就地编译能力
+- feat: Rust 1.78+ wheel 自动注入 Win7 shim
+- refactor: 统一归档解压逻辑并复用安全解压工具
+
+v0.6.2
+------
+
+- fix: parse_project 缓存键增加文件 size，兜底文件系统 mtime 精度不足
+- fix: 修复依赖扫描发现的漏洞问题并增加安全标记
+- fix: 修复测试异常与打包性能退化；清理无用代码并更新项目配置与打包性能日志
+
+v0.6.1
+------
+
+- feat: 新增 ``fsp doctor --bench-compare`` 基准对比 CLI 入口，compare_benchmark.py 整合进 doctor 子包
+- fix: doctor 跳过非 dict 根格式的基准文件
+- test: 修复测试用例中 mock 的函数路径错误
+
+v0.6.0
+------
+
+- chore: 维护性版本发布，fspack 自依赖版本对齐 0.5.14
+
+v0.5.14
+-------
+
+- chore: 最低支持 Python 版本升级至 3.13 并清理冗余兼容代码
+- refactor: 统一使用 collections.abc 导入抽象类型
+- fix: doctor cache_contents 修复竞态检测与文件类型判断逻辑
+- ci: 更新 CI 配置的 Python 版本至 3.13
+- chore: 更新 copier 模板版本到 v0.9.6
+
+v0.5.13
+-------
+
+- fix: 修复 Windows multiprocessing spawn 子进程启动失败问题
+- refactor: 简化 config/parsing 与测试代码并优化错误提示格式
+
+v0.5.12
+-------
+
+- fix: console 消息体 rich markup 转义，修复错误提示中方括号被吞
+- refactor: 统一目录排除逻辑，修复 venv 多版本兼容与进程池守卫
+
+v0.5.11
+-------
+
+- refactor: webview_app 模板 Python 代码整合为单文件 app.py
+
+v0.5.10
+-------
+
+- feat: ``fsp d --bench`` 新增 -P/-PO/-PC 基准剖析日志，与 fsp b/r 的 profile 体系对齐
+- refactor: 移除 ``fsp d --bench`` 冗余参数，-P/-PO/-PC 并入 ``--test``，阶段耗时报告与性能分析由 -P 承接
+- refactor: 精简回退冗余依赖：移除 tenacity 改用标准库退避重试，certifi 缺失改为明确报错，parsing.py 复用 ``_compat`` 的 tomllib 回退
+- refactor: certifi 依赖显式声明到 pyproject，并将 ``_util`` 包铺平为 fspack 顶层模块
+- refactor: 拆分 test_doctor/test_builder/test_nuitka 巨石测试为域文件，共享桩迁入 ``_stubs``
+- refactor: 模板体系精简整合，doctor 13→8、init 24→18，新增 sci_stack 科学计算综合示例
+
+v0.5.9
+------
+
+- feat: NSIS 纳入缓存管理，支持本地归档识别（zip/7z）与按需下载
+- feat: Nuitka Windows 构建新增 compiler 选项（msvc/mingw）
 - refactor: 移除 NSIS 下载与缓存管理（``nsis_tool`` 模块及 ``nsis`` 缓存目录、doctor 对应盘点项），makensis 仅做 PATH 检查并在缺失时提示用户自行安装
-- docs: README 精简为快速上手与核心用法，命令参考/配置参考/离线打包/分发指南拆分至 ``docs/``（cli/configuration/offline/distribution），回填 v0.5.0 至 v0.5.5 更新日志
+- fix: compiler=mingw 时补传 --mingw64 顶掉 MSVC，experimental 单传不选择 mingw
+- fix: ``build(log_file=)`` 在 root 日志级别高于 INFO 时降级，修复 API 调用日志文件恒空
+- fix: Win7 legacy 控制台 rich 显示乱码，检测无 VT 的真实 tty 后启用 ascii_only 渲染
+- fix: Qt 精简保留 PyQt5/PyQt6 私有 sip 运行时，修复打包后运行报找不到 sip
+
+v0.5.8
+------
+
+- feat: winlibs 工具链支持 .7z 归档，下载优先 7z 省一半流量，解压用系统 7-Zip
+- feat: doctor 新增压缩包缓存内容盘点诊断项
+- fix: doctor nuitka 缓存盘点纳入 wheels 下的 sdist 归档，避免放置归档却显示未缓存
+- fix: doctor winlibs 盘点识别 .7z 归档并区分版本匹配，不匹配时提示所需确切归档名
+- fix: 修复 GUI 导入钩子的无限递归问题
+- build: cov 目标启用 pytest-xdist 并行（-n 8）加速测试
+
+v0.5.7
+------
+
+- feat: Nuitka 支持本地 sdist 安装
+
+v0.5.6
+------
+
+- feat: 打包新增 7z 便携包格式，调用系统 7-Zip 实现 LZMA2 超高压缩与多线程并行
+- feat: init 模板选择改为两步向导（项目类型到具体模板），方向键导航替代数字菜单，高亮项动态显示描述与依赖
+- docs: README 精简为快速上手与核心用法，命令/配置/离线/分发细节拆分至 ``docs/``
 - fix: 修复 make tox 多版本测试两类失败：help 串裸 ``%`` 转义（py314 构建 parser 即崩、全版本 ``fsp b -h`` 崩）与 doctor 测试固定宽度 fixture 往返缩水（COLUMNS/LINES 环境下宽度逐测试 -1 变负导致 rich 输出全空）
 - fix: runner_profile 集成测试打点值放大 20 倍，免疫真实子进程收尾耗时波动（py39 在 tox 并行负载下收尾实测 157ms 使 gap 占比超 30% 触发未细分行导致断言 flaky）
 
