@@ -34,7 +34,7 @@ fsp p                    # 产出 dist/release/your-app-setup.exe
 
 点击上方封面，在 asciinema.org 上观看 `fsp init` → `fsp b` → `fsp p`
 真实工作流录制。原始录制文件见 [demo.cast](docs/assets/demo.cast)
-（asciinema v2 NDJSON）。想自己录制？参见 [scripts/record_demo.py](scripts/record_demo.py)。
+（asciinema v2 NDJSON）。
 
 ## 从模板开始：fsp init
 
@@ -58,7 +58,7 @@ fsp init --list                      # 查看所有可用模板
 | 双击就能跑 | 内置便携运行时，用户机无需装 Python；Windows 安装包含快捷方式与卸载器 |
 | 首次启动快 | 默认预编译字节码，`--nuitka` 可本机编译提速 30-50% |
 | 多入口项目 | 一个项目生成多个 exe（cli/gui/web），共享运行时与依赖 |
-| 国内网络友好 | 默认清华镜像，`--mirror` 一键切换阿里/华为源 |
+| 国内网络友好 | 默认阿里云镜像，`--mirror` 一键切换华为/清华源 |
 | 递归打包 | `-R` 递归扫描子项目（monorepo 友好），单项目失败不中断，最后汇总结果 |
 | 离线打包 | `FSPACK_OFFLINE=1` 仅从本地缓存读取，缓存未命中即报错，不卡死不重试 |
 
@@ -153,14 +153,16 @@ fsp r --entry gui         # 运行 gui 入口
 | `fsp clean` | `fsp c` | 清理 dist/ 目录 |
 | `fsp package` | `fsp p` | 生成安装包（Windows NSIS / Linux .deb + tar.gz） |
 | `fsp init` | `fsp i` | 从模板创建新项目（18 个模板可选） |
-| `fsp doctor` | — | 环境诊断：检查打包工具可用性与配置 |
+| `fsp doctor` | `fsp d` | 环境诊断：检查打包工具可用性与配置 |
+| `fsp manifest` | `fsp m` | 产物清单生成与差异对比（generate/diff） |
 | `fsp cache` | — | 缓存健康检查与清理（损坏/过期/孤儿文件） |
 
 ```text
 fsp b [project] [--mirror] [--py-version] [--target] [--nuitka] [-R] [--dry-run] [--profile] ...
 fsp r [project] [--entry <name>] [--debug] [--profile] [-- <args>...]
-fsp p [project] [--no-build] [--format <auto|zip|nsis|tar.gz|deb|all>] [-R]
+fsp p [project] [--no-build] [--format <auto|zip|nsis|tar.gz|deb|pkg|dmg|all>] [-R]
 fsp init [name] [--template <id>] [--list]
+fsp manifest generate|diff    # 产物清单生成与差异对比（diff --exit-code 便于 CI）
 fsp doctor                # 环境诊断（--test 用内置模板验证可打包性）
 fsp cache status|clean    # 缓存健康检查与清理
 ```
@@ -200,10 +202,10 @@ Windows 产物可在 **Win7 SP1** 上运行（Python 3.9–3.14）：fspack 自�
 
 ## CI/CD 集成
 
-提供 [`pack-check.yml`](templates/pack-check.yml)（PR 验证打包）与
-[`release-pack.yml`](templates/release-pack.yml)（Release 发布安装包）两个 GitHub
-Actions 模板：复制到 `.github/workflows/`，配置 `PROJECT_NAME`/`EXPECTED_OUTPUT`
-变量即可。完整方案见 [CI/CD 集成指南](docs/integration.md)。
+fspack 自身在 `git push v*.*.*` tag 时用各平台原生 runner 打包并发布到 GitHub
+Release（见 [release.yml](.github/workflows/release.yml)）。自己的项目可参照该
+workflow 搭建打包验证与 Release 发布流水线，完整方案见
+[CI/CD 集成指南](docs/integration.md)。
 
 ## 产物布局
 

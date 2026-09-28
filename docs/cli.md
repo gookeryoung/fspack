@@ -9,9 +9,10 @@
 | `fsp build` | `fsp b` | 打包项目，生成可执行文件与运行时 |
 | `fsp run` | `fsp r` | 运行已打包项目（Linux 原生，`.exe` 自动用 wine） |
 | `fsp clean` | `fsp c` | 清理 dist/ 目录 |
-| `fsp package` | `fsp p` | 生成安装包（Windows NSIS / Linux .deb + tar.gz） |
+| `fsp package` | `fsp p` | 生成安装包（Windows NSIS / Linux .deb + tar.gz / macOS pkg + dmg） |
 | `fsp init` | `fsp i` | 从模板创建新项目（18 个模板可选） |
-| `fsp doctor` | — | 环境诊断：检查打包工具可用性与配置 |
+| `fsp doctor` | `fsp d` | 环境诊断：检查打包工具可用性与配置 |
+| `fsp manifest` | `fsp m` | 产物清单生成与差异对比（generate/diff） |
 | `fsp cache` | — | 缓存健康检查与清理（损坏/过期/孤儿文件） |
 
 ## fsp build
@@ -29,7 +30,7 @@ fsp b [project] [--mirror <name>] [--py-version <ver>] [--target <platform>]
 |------|------|
 | `project` | 项目目录，默认当前目录 |
 | `--mirror` | 镜像源（aliyun/huawei/tsinghua），默认 aliyun |
-| `--py-version` | Python 版本，默认 3.11.9（Windows）/ 3.11.10（Linux/macOS） |
+| `--py-version` | Python 版本，默认 3.11.9（Windows）/ 3.11.15（Linux/macOS） |
 | `--target` | 目标平台（windows/linux/macos），默认当前平台；macOS 目标仅支持 macOS 构建机 |
 | `--keep-module` | 显式保留子模块（如 `PySide2.QtGui`），可重复 |
 | `--icon` | exe 图标（.ico/.png/.jpg），覆盖配置与自动搜索 |
@@ -113,6 +114,18 @@ fsp init [project_name] [--template <id>] [--list] [--description <desc>] [--dir
 
 18 个模板按分类：CLI(4) / GUI(4) / 游戏(1) / 科学(3) / Web(3) / 配置(3)。详见 `fsp init --list`。
 
+## fsp manifest
+
+```text
+fsp manifest generate [project] [--py-version <ver>] [-o <output>]
+fsp manifest diff <old.json> <new.json> [--exit-code]
+```
+
+| 子命令 | 说明 |
+|--------|------|
+| `generate`（别名 `g`） | 扫描项目 dist 目录生成 manifest JSON，默认写入 `dist/release/<name>-<version>-manifest.json`；`-o/--output` 指定输出路径 |
+| `diff`（别名 `d`） | 对比两份 manifest JSON 的差异（新增/删除/修改 + 分类汇总）；`--exit-code` 有差异时以退出码 1 退出，便于 CI 门禁判断产物变更 |
+
 ## fsp doctor
 
 ```text
@@ -147,7 +160,7 @@ fsp doctor                # 环境诊断：检查打包工具与配置
 ## fsp cache
 
 ```text
-fsp cache status [--target <name>]      # 扫描缓存目录健康状态
+fsp cache status [--target <name>] [--verify]  # 扫描缓存目录健康状态
 fsp cache clean  [--dry-run] [--stale] [--target <name>]  # 清理损坏与过期文件
 ```
 
@@ -161,6 +174,7 @@ fsp cache clean  [--dry-run] [--stale] [--target <name>]  # 清理损坏与过�
 | 选项 | 说明 |
 |------|------|
 | `--target <name>` | 限定单 cache 类型（wheels/embed/standalone/nuitka/loaders/ccache/tkinter） |
+| `--verify` | status 专用：全量校验 zip 归档完整性（embed/tkinter 逐文件 CRC 校验，慢但可发现数据区损坏；默认仅快检中心目录） |
 | `--dry-run` | 仅预览将删除的文件，不实际删除（clean 专用） |
 | `--stale` | 额外清理过期文件（默认仅清理损坏文件与 wheels 的 stale/orphan） |
 

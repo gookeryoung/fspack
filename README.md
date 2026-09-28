@@ -48,7 +48,6 @@ double-click to run — no Python installation required on the user's machine.
 **Click the thumbnail above** to play a real recording of `fsp init` →
 `fsp b` → `fsp p`. The raw recording is in
 [docs/assets/demo.cast](docs/assets/demo.cast) (asciinema v2 NDJSON).
-Want to make your own? See [scripts/record_demo.py](scripts/record_demo.py).
 
 ## 🚀 Start From a Template
 
@@ -140,16 +139,18 @@ Global options: `-V/--version` shows version, `-v/--verbose` enables DEBUG loggi
 | `fsp build` | `fsp b` | Build project — produce executables and runtime |
 | `fsp run` | `fsp r` | Run packaged app (native on Linux, wine on Windows) |
 | `fsp clean` | `fsp c` | Clean dist/ directory |
-| `fsp package` | `fsp p` | Create installers (Windows NSIS / Linux .deb + tar.gz) |
+| `fsp package` | `fsp p` | Create installers (Windows NSIS / Linux .deb + tar.gz / macOS pkg + dmg) |
 | `fsp init` | `fsp i` | Scaffold new project from templates (18 available) |
-| `fsp doctor` | — | Environment diagnostics — check toolchain availability |
+| `fsp doctor` | `fsp d` | Environment diagnostics — check toolchain availability |
+| `fsp manifest` | `fsp m` | Artifact manifest generation and diff (generate/diff) |
 | `fsp cache` | — | Cache health check and cleanup (corrupted/stale/orphaned) |
 
 ```text
 fsp b [project] [--mirror] [--py-version] [--target] [--nuitka] [-R] [--dry-run] [--profile] ...
 fsp r [project] [--entry <name>] [--debug] [--profile] [-- <args>...]
-fsp p [project] [--no-build] [--format <auto|zip|nsis|tar.gz|deb|all>] [-R]
+fsp p [project] [--no-build] [--format <auto|zip|nsis|tar.gz|deb|pkg|dmg|all>] [-R]
 fsp init [name] [--template <id>] [--list]
+fsp manifest generate|diff    # Artifact manifest generation and diff (--exit-code for CI)
 fsp doctor                # Environment diagnostics (--test validates built-in templates)
 fsp cache status|clean    # Cache health check and cleanup
 ```
@@ -191,12 +192,11 @@ Supports Python 3.9–3.14. See [Distribution Guide](docs/distribution.md).
 
 ## 🔧 CI/CD Integration
 
-Two GitHub Actions workflow templates provided:
-- [`pack-check.yml`](templates/pack-check.yml) — PR validation build
-- [`release-pack.yml`](templates/release-pack.yml) — Release packaging
-
-Copy to `.github/workflows/`, set `PROJECT_NAME` / `EXPECTED_OUTPUT` variables, done.
-Full guide: [CI/CD Integration](docs/integration.md).
+fspack itself packages and publishes to GitHub Release with platform-native
+runners when a `v*.*.*` tag is pushed (see
+[release.yml](.github/workflows/release.yml)). For your own projects, follow
+that workflow to set up packaging verification and release pipelines — full
+guide: [CI/CD Integration](docs/integration.md).
 
 ## 📂 Output Layout
 

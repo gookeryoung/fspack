@@ -1,6 +1,6 @@
 # 性能基线对比与更新指南
 
-fspack 性能基线体系用 `pytest-benchmark` 建立可量化基线，配合 `scripts/compare_benchmark.py`
+fspack 性能基线体系用 `pytest-benchmark` 建立可量化基线，配合 `fsp doctor --bench-compare`
 按基线类别分组对比，检测性能退化。CI 在 `push to main` 时自动运行基线测试并与
 历史最佳基准对比，退化超阈值则阻断 CI。
 
@@ -214,28 +214,31 @@ CI benchmark job（`.github/workflows/ci.yml`）仅在 `push to main` 时触发�
 
 1. 运行 5 个基线测试文件（26 个测试），`--benchmark-min-rounds=20 --benchmark-warmup=on`
 2. 保存结果到 `.benchmarks/`（按平台 + Python 版本缓存）
-3. 调用 `scripts/compare_benchmark.py` 与历史最佳基准对比
+3. 调用 `fsp doctor --bench-compare --bench-threshold 25` 与历史最佳基准对比
 4. 退化超阈值则 exit 1 阻断 CI；系统性退化（机器抖动）不阻断
 
 ## 对比工具用法
 
-`scripts/compare_benchmark.py` 扫描 `.benchmarks/` 下所有历史 JSON，按测试名
+`fsp doctor --bench-compare` 扫描 `.benchmarks/` 下所有历史 JSON，按测试名
 找最小 median 作为最佳基准，当前运行与最佳对比。
 
 ### 基本用法
 
 ```bash
 # 默认：按类别阈值对比，未匹配类别用全局 25%
-uv run python scripts/compare_benchmark.py
+uv run fsp doctor --bench-compare
 
 # 自定义全局阈值（用于未匹配类别的测试）
-uv run python scripts/compare_benchmark.py --threshold 20
+uv run fsp doctor --bench-compare --bench-threshold 20
+
+# 指定基线 JSON 存储目录（默认 .benchmarks/）
+uv run fsp doctor --bench-compare --bench-dir .benchmarks/
 
 # 列出基线类别与阈值
-uv run python scripts/compare_benchmark.py --list-categories
+uv run fsp doctor --bench-compare --bench-list-categories
 
-# 禁用类别分组，仅用全局阈值（兼容旧行为）
-uv run python scripts/compare_benchmark.py --no-categories --threshold 25
+# 禁用类别分组，仅用全局阈值
+uv run fsp doctor --bench-compare --bench-no-categories --bench-threshold 25
 ```
 
 ### 输出格式
@@ -285,11 +288,11 @@ CI benchmark job 失败时，先下载 `benchmark-results` artifact 检查 JSON 
 
 ```bash
 # 查看当前运行的 median 与历史最佳的对比
-uv run python scripts/compare_benchmark.py --bench-dir .benchmarks/
+uv run fsp doctor --bench-compare --bench-dir .benchmarks/
 ```
 
 如果多个不相关测试同步大幅退化（如 AST 分析 + wheel 下载 + 启动时间同时退化
-30%+），很可能是机器负载波动。脚本会自动检测并输出系统性退化警告，不阻断 CI。
+30%+），很可能是机器负载波动。对比工具会自动检测并输出系统性退化警告，不阻断 CI。
 
 ### 2. 定位退化代码
 
@@ -349,7 +352,8 @@ uv run pytest tests/test_perf_baseline.py tests/test_build_perf_baseline.py \
 
 1. 在对应测试文件中添加 `test_<场景>_baseline` 测试函数，标注 `@pytest.mark.slow`
 2. 若测试名符合现有类别模式（如 `test_*_compile_baseline` 匹配 nuitka_compile），
-   自动归入该类别，无需改 `compare_benchmark.py`
-3. 若属于新类别，在 `_DEFAULT_CATEGORIES` 中添加新类别条目，设定合理阈值
+   自动归入该类别，无需改对比配置
+3. 若属于新类别，在 `fspack/doctor/benchmark_compare.py` 的 `DEFAULT_CATEGORIES`
+   中添加新类别条目，设定合理阈值
 4. 阈值依据：先运行 10+ 轮测量 StdDev，阈值设为 `max(2 * StdDev%, 10%)`
 5. 同步更新本文档的基线测试清单与类别阈值表

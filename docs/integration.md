@@ -1,7 +1,7 @@
 # CI/CD 集成指南
 
 fspack 可集成到其他 Python 项目的 CI/CD 工作流，实现自动打包与打包成功验证。
-本文介绍三种集成模式、测试反馈机制，并提供可复用的 GitHub Actions workflow 模板。
+本文介绍三种集成模式、测试反馈机制，并说明如何参照 fspack 自身的 workflow 搭建。
 
 ## fspack 自身的发布流程
 
@@ -44,11 +44,11 @@ checkout 项目代码 → 安装 fspack + 编译器 → fsp b 打包 → 测试�
 
 ## 三种集成模式
 
-| 模式 | 触发时机 | 目的 | 模板文件 |
-|------|---------|------|---------|
-| A. 验证打包 | push/PR | 确保改动不破坏打包 | `templates/pack-check.yml` |
-| B. 发布产物 | tag push | 生成可分发安装包附到 Release | `templates/release-pack.yml` |
-| C. 矩阵打包 | release 分支 | 同时产出 Windows + Linux 安装包 | `templates/release-pack.yml` |
+| 模式 | 触发时机 | 目的 |
+|------|---------|------|
+| A. 验证打包 | push/PR | 确保改动不破坏打包 |
+| B. 发布产物 | tag push | 生成可分发安装包附到 Release |
+| C. 矩阵打包 | release 分支 | 同时产出 Windows + Linux 安装包 |
 
 ## 测试打包成功的反馈机制
 
@@ -126,15 +126,11 @@ fspack r . --entry gui --debug 2>&1 | grep -q "预期输出"
 
 ## 快速上手
 
-### 1. 复制 workflow 模板
+### 1. 参照 fspack 自身 workflow 搭建
 
-```bash
-# 复制 PR 验模板
-cp templates/pack-check.yml your-project/.github/workflows/
-
-# 复制 Release 发布模板
-cp templates/release-pack.yml your-project/.github/workflows/
-```
+直接参照 fspack 自身的
+[release.yml](https://github.com/gookeryoung/fspack/blob/main/.github/workflows/release.yml)
+按需裁剪：PR 验证保留构建与断言两层，Release 发布补上 tag 触发与产物上传。
 
 ### 2. 配置 GitHub Variables
 
@@ -159,7 +155,7 @@ git push origin v0.1.0
 
 ## 缓存策略
 
-`~/.fspack/cache/` 含三类缓存（embed python ~10MB、wheel 缓存、loader 缓存），缓存命中后构建从分钟级降到秒级：
+`~/.fspack/cache/` 含 7 类缓存（wheels/embed/standalone/nuitka/loaders/ccache/tkinter），缓存命中后构建从分钟级降到秒级：
 
 ```yaml
 - name: Cache fspack assets
@@ -201,7 +197,7 @@ done
 4. **wineboot --init**：首次运行需初始化 prefix，否则 wine 报错
 5. **GUI 应用 wine 缺系统 DLL**：PySide6/PyQt5 的 Qt DLL 可能依赖 `icuuc.dll` 等 Windows 10+ 系统 DLL，wine 默认不提供。CI 中检测到 `DLL load failed` 时应 skip 运行断言（仅验证构建成功），参考 fspack 自身 slow 测试的 skip 逻辑
 6. **缓存 key 含 target**：Windows embed python 与 Linux python-build-standalone 不通用，缓存键必须含 target 隔离
-7. **fspack 版本固定**：建议其他项目 `uv pip install fspack==0.1.0` 固定版本，避免 fspack 升级破坏 CI
+7. **fspack 版本固定**：建议其他项目 `uv pip install fspack==0.6.8` 固定版本，避免 fspack 升级破坏 CI
 
 ## 完整示例
 
@@ -232,15 +228,10 @@ done
     }
 ```
 
-## 模板文件
-
-- [`templates/pack-check.yml`](https://github.com/gooker_young/fspack/blob/main/templates/pack-check.yml) — PR 验证打包模板
-- [`templates/release-pack.yml`](https://github.com/gooker_young/fspack/blob/main/templates/release-pack.yml) — Release 发布安装包模板
-
 ## 参考资源
 
 - [GitHub Actions 文档](https://docs.github.com/actions)
 - [actions/upload-artifact](https://github.com/actions/upload-artifact)
 - [actions/cache](https://github.com/actions/cache)
 - [setup-uv](https://github.com/astral-sh/setup-uv)
-- [fspack 自身 CI 配置](https://github.com/gooker_young/fspack/blob/main/.github/workflows/ci.yml)
+- [fspack 自身 CI 配置](https://github.com/gookeryoung/fspack/blob/main/.github/workflows/ci.yml)

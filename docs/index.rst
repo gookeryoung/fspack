@@ -13,7 +13,7 @@ One-command Python packaging — build executables and installers.
    :target: https://pypi.org/project/fspack/
 .. image:: https://github.com/gookeryoung/fspack/actions/workflows/ci.yml/badge.svg
    :target: https://github.com/gookeryoung/fspack/actions/workflows/ci.yml
-.. image:: https://img.shields.io/badge/python-3.10%2B-blue.svg
+.. image:: https://img.shields.io/badge/python-3.8%2B-blue.svg
 .. image:: https://img.shields.io/badge/license-MIT-green.svg
 .. image:: https://img.shields.io/badge/coverage-%E2%89%A595%25-brightgreen.svg
 
