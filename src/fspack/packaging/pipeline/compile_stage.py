@@ -1,8 +1,9 @@
 """编译与产物构建阶段：用户源码编译 + entry loader 生成 + 二进制依赖分析 + 图标解析.
 
 - :func:`_compile_user_sources`：Nuitka 编译（可选）+ 字节码预编译 + pyc_strip 源码剥离
-- :func:`_build_entry_loaders` / :func:`_build_one_loader` / :func:`_loader_exe_path`：
-  多入口 C loader 并行编译（ThreadPoolExecutor，上限 _MAX_LOADER_WORKERS）
+- :func:`_build_entry_loaders` / :func:`_write_entry_files` / :func:`_compile_entry_loader` /
+  :func:`_loader_exe_path`：多入口 C loader 配置分类去重 + 代表并行编译
+  （ThreadPoolExecutor，上限 _MAX_LOADER_WORKERS），同配置入口复制代表产物
 - :func:`_analyze_binary_dependencies`：PE/ELF/Mach-O 依赖图 BFS 剥离无引用二进制
 - :func:`_resolve_project_icon`：4 层优先级（CLI > 配置 > favicon > 默认）icon 解析
 """
@@ -11,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import tempfile
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor as _DefaultThreadPoolExecutor
@@ -174,10 +176,18 @@ def _build_entry_loaders(ctx: BuildContext, resolved_icon: Path | None, has_tkin
     避免 ``dist/build/`` 残留 ``loader.c``/``icon.rc``/``icon.ico``/``icon.o`` 中间文件
     被打包进发行包。loader 缓存命中路径不创建工作目录，无副作用。
 
-    **并行编译**（iter-133）：多入口场景用 :class:`ThreadPoolExecutor` 并行编译
-    每个 entry loader（mingw/gcc/clang 子进程释放 GIL，线程足够并行）。
+    **配置分类去重**：单次构建内 loader 源码/平台/icon 全局一致，
+    ``(app_type, version_info)`` 与 loader 持久缓存键（``sha256(source + app_type +
+    platform + icon_hash + version_info_hash)``）一一等价——同组入口的 loader 产物
+    逐字节相同，只编译组内首个入口（代表），其余从代表 exe 复制。Windows 目标因
+    ``version_info.exe_filename`` 按入口名区分，每组仅一入口（行为不变）；Linux/macOS
+    目标 ``version_info=None``，同 ``app_type`` 多入口共享一次编译，消除此前并行同键
+    全部缓存 miss 导致的重复编译。
+
+    **并行编译**（iter-133）：多个配置类用 :class:`ThreadPoolExecutor` 并行编译
+    代表入口 loader（mingw/gcc/clang 子进程释放 GIL，线程足够并行）。
     ``max_workers = min(cpu_count, :data:`_MAX_LOADER_WORKERS`)`` 平衡并行收益与
-    Windows 资源限制。共享 ``TemporaryDirectory``，每个入口分配独立子目录
+    Windows 资源限制。共享 ``TemporaryDirectory``，每个代表入口分配独立子目录
     （``<tmp>/<entry_name>``）避免 ``loader.c``/``icon.rc``/``icon.o`` 文件冲突。
 
     **线程安全**：``exes``/``st.processed()`` 仅在主线程（``future.result()`` 迭代）
@@ -187,10 +197,9 @@ def _build_entry_loaders(ctx: BuildContext, resolved_icon: Path | None, has_tkin
 
     **异常传播**：worker 内 ``compile_loader`` 抛异常（如 ``LoaderError``）时
     ``future.result()`` 重抛，``with ThreadPoolExecutor`` 的 ``__exit__`` 调
-    ``shutdown(wait=True)`` 等待在途任务后传播。
+    ``shutdown(wait=True)`` 等待在途任务后传播；任一代表失败时不执行同组复制。
     """
     target = ctx.cfg.target
-    exes: list[Path] = []
     with ctx.tracker.stage("生成 C loader") as st:
         # splash 启动画面：--splash 构建选项（默认关闭），仅 Windows 生效，
         # 画布标题用应用名（嵌入源码参与 loader 缓存键）
@@ -201,41 +210,64 @@ def _build_entry_loaders(ctx: BuildContext, resolved_icon: Path | None, has_tkin
             splash_title=ctx.info.name,
         )
         entries = ctx.info.all_entries
-        # 单入口无需并行（线程池开销无收益）
-        if len(entries) <= 1:
+        # 每个入口都写 wrapper 与 .entry 文件（与 loader 编译无关，去重不影响入口
+        # 文件生成），同时收集 (app_type, version_info) 编译配置用于分类。
+        # LoaderVersionInfo 为 frozen dataclass（可哈希），直接作分组键一部分。
+        groups: dict[tuple[AppType, LoaderVersionInfo | None], list[EntryPoint]] = {}
+        for ep in entries:
+            app_type, version_info = _write_entry_files(ctx, ep, has_tkinter)
+            groups.setdefault((app_type, version_info), []).append(ep)
+        representatives = [members[0] for members in groups.values()]
+        exes = [_loader_exe_path(ctx, ep, target) for ep in entries]
+
+        def _copy_group_members(members: list[EntryPoint]) -> None:
+            """同组其余入口从代表 exe 复制（产物逐字节相同）."""
+            rep = members[0]
+            rep_exe = _loader_exe_path(ctx, rep, target)
+            for dup in members[1:]:
+                shutil.copy2(rep_exe, _loader_exe_path(ctx, dup, target))
+                _logger.info("入口 %s 与 %s 共享同一 loader 配置，复制编译产物", dup.name, rep.name)
+
+        # 单配置类（单入口，或多入口全同配置）无需并行（线程池开销无收益）
+        if len(representatives) <= 1:
             with tempfile.TemporaryDirectory(prefix="fspack_loader_") as tmp:
-                _build_one_loader(ctx, entries[0], source, Path(tmp), resolved_icon, has_tkinter, st)
-                exes.append(_loader_exe_path(ctx, entries[0], target))
+                for (app_type, version_info), members in groups.items():
+                    _compile_entry_loader(ctx, members[0], source, Path(tmp), resolved_icon, app_type, version_info, st)
+                    _copy_group_members(members)
             st.processed(len(exes))
             return exes
 
         cpu = os.cpu_count() or 1
         max_workers = min(cpu, _MAX_LOADER_WORKERS)
-        _logger.info("并行编译 %d 个 entry loader（max_workers=%d）", len(entries), max_workers)
+        _logger.info(
+            "并行编译 %d 个 loader 配置类（%d 个入口，max_workers=%d）", len(representatives), len(entries), max_workers
+        )
         ThreadPoolExecutor_dispatch: Any = _S("ThreadPoolExecutor", _DefaultThreadPoolExecutor)
         # 临时工作目录：编译完成（或异常）后自动清理，不污染 dist/
-        # 共享 TemporaryDirectory，每入口独立子目录避免 loader.c/icon.rc/icon.o 冲突
+        # 共享 TemporaryDirectory，每代表入口独立子目录避免 loader.c/icon.rc/icon.o 冲突
         with tempfile.TemporaryDirectory(prefix="fspack_loader_") as tmp:
             build_dir = Path(tmp)
 
-            def _build_one(ep: EntryPoint) -> Path:
-                """单入口编译 worker：生成包装器 + .entry + 编译 loader，返回 exe 路径."""
-                work_subdir = build_dir / ep.name
+            def _compile_rep(
+                app_type: AppType, version_info: LoaderVersionInfo | None, members: list[EntryPoint]
+            ) -> None:
+                """单配置类编译 worker：编译组内代表入口的 loader."""
+                rep = members[0]
+                work_subdir = build_dir / rep.name
                 work_subdir.mkdir(parents=True, exist_ok=True)
-                _build_one_loader(ctx, ep, source, work_subdir, resolved_icon, has_tkinter, st)
-                return _loader_exe_path(ctx, ep, target)
+                _compile_entry_loader(ctx, rep, source, work_subdir, resolved_icon, app_type, version_info, st)
 
             with ThreadPoolExecutor_dispatch(max_workers=max_workers) as pool:
-                futures = [pool.submit(_build_one, ep) for ep in entries]
-                # 按 submit 顺序取 result，保持 exes 顺序与 entries 一致。
+                futures = [pool.submit(_compile_rep, key[0], key[1], members) for key, members in groups.items()]
+                # 按 submit 顺序取 result，保持配置类处理顺序与分组一致。
                 # future.result() 重抛 worker 异常（如 LoaderError）：首个异常
                 # 不立即抛出，先等待其余 future 完成并逐个记录其异常（多入口
-                # 并行编译时常见多个入口同时失败，静默丢弃会丢失诊断信息），
+                # 并行编译时常见多个配置类同时失败，静默丢弃会丢失诊断信息），
                 # 最终重抛首个异常由 with 块 __exit__ 的 shutdown 传播
                 first_exc: BaseException | None = None
                 for future in futures:
                     try:
-                        exes.append(future.result())
+                        future.result()
                     except Exception as exc:
                         if first_exc is None:
                             first_exc = exc
@@ -243,25 +275,22 @@ def _build_entry_loaders(ctx: BuildContext, resolved_icon: Path | None, has_tkin
                             _logger.warning("其余 entry loader 编译异常: %s", exc)
                 if first_exc is not None:
                     raise first_exc
+                # 代表全部编译成功后执行同组复制（任一代表失败时上面已抛出，不复制）
+                for members in groups.values():
+                    _copy_group_members(members)
         st.processed(len(exes))
     return exes
 
 
-def _build_one_loader(  # noqa: PLR0913
-    ctx: BuildContext,
-    ep: EntryPoint,
-    source: str,
-    work_dir: Path,
-    resolved_icon: Path | None,
-    has_tkinter: bool,
-    stage: StageRecorder,
-) -> None:
-    """为单个入口生成包装器、``.entry`` 文件并编译 loader.
+def _write_entry_files(
+    ctx: BuildContext, ep: EntryPoint, has_tkinter: bool
+) -> tuple[AppType, LoaderVersionInfo | None]:
+    """为单个入口生成包装器与 ``.entry`` 文件，返回 ``(app_type, version_info)`` 编译配置.
 
-    抽取自 :func:`_build_entry_loaders` 供串行与并行路径复用。``work_dir`` 由调用方
-    分配（并行模式下为 ``<tmp>/<entry_name>`` 子目录，避免多入口文件冲突）。
+    抽取自原 ``_build_one_loader``：入口文件生成与 loader 编译分离后，包装器/
+    ``.entry`` 对每个入口必须写出（与配置分类去重无关），编译配置供
+    :func:`_build_entry_loaders` 分类分组。
     """
-    compile_loader_dispatch = _S("compile_loader", _default_compile_loader)
     entry_rel = ep.entry_rel(ctx.info.src_dir)
     result = EntryWrapper.dotted_module_name(ctx.info.src_dir, ep.file)
     module_dotted = result[0] if result is not None else None
@@ -297,7 +326,6 @@ def _build_one_loader(  # noqa: PLR0913
     else:
         # 单入口模式：写 .entry（向后兼容）
         (ctx.cfg.dist_dir / ".entry").write_text(wrapper_name, encoding="utf-8")
-    exe = _loader_exe_path(ctx, ep, ctx.cfg.target)
     # Windows 目标构造版本信息元数据，嵌入 exe 资源段（VS_VERSIONINFO + manifest），
     # 降低 Defender 等杀软对 mingw 小型 exe 的启发式误报。Linux/macOS 无 PE 资源段，
     # 传 None 保持 loader 缓存按 (source, app_type, platform) 跨项目共享。
@@ -312,10 +340,30 @@ def _build_one_loader(  # noqa: PLR0913
         if ctx.cfg.target is Platform.WINDOWS
         else None
     )
+    return ep.app_type, version_info
+
+
+def _compile_entry_loader(  # noqa: PLR0913
+    ctx: BuildContext,
+    ep: EntryPoint,
+    source: str,
+    work_dir: Path,
+    resolved_icon: Path | None,
+    app_type: AppType,
+    version_info: LoaderVersionInfo | None,
+    stage: StageRecorder,
+) -> None:
+    """编译单个代表入口的 loader（配置类内其余入口由调用方从代表 exe 复制）.
+
+    ``work_dir`` 由调用方分配（并行模式下为 ``<tmp>/<entry_name>`` 子目录，避免
+    多入口文件冲突）。
+    """
+    compile_loader_dispatch = _S("compile_loader", _default_compile_loader)
+    exe = _loader_exe_path(ctx, ep, ctx.cfg.target)
     compile_loader_dispatch(
         source,
         exe,
-        ep.app_type,
+        app_type,
         work_dir,
         ctx.cfg.target,
         icon=resolved_icon,

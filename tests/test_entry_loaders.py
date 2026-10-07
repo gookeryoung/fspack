@@ -56,7 +56,7 @@ def _make_multi_entry_context(
         mirror=get_mirror("huawei"),
         target=target,
     )
-    # dist_dir 需预先存在：_build_one_loader 直接 write_text 到 dist_dir/<wrapper>
+    # dist_dir 需预先存在：_write_entry_files 直接 write_text 到 dist_dir/<wrapper>
     cfg.dist_dir.mkdir(parents=True, exist_ok=True)
     return BuildContext(
         tracker=BuildTracker(),
@@ -277,3 +277,119 @@ def test_build_entry_loaders_parallel_preserves_order(tmp_path: Path, monkeypatc
     exes = _build_entry_loaders(ctx, resolved_icon=None, has_tkinter=False)
 
     assert [e.stem for e in exes] == list(names), "exes 顺序应与 entries 提交顺序一致"
+
+
+# --- 配置分类去重测试：同 (app_type, version_info) 只编译代表，其余复制 ---
+
+
+def _spy_compile(monkeypatch: pytest.MonkeyPatch, calls: list[Path], content: str = "compiled-loader") -> None:
+    """记录 compile_loader 调用时的 out_exe，模拟编译产物写入."""
+
+    def fake_compile(source: str, out_exe: Path, app_type: object, work_dir: Path, platform: object, **kw: Any) -> Path:
+        calls.append(out_exe)
+        out_exe.parent.mkdir(parents=True, exist_ok=True)
+        out_exe.write_text(content)
+        return out_exe
+
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.compile_loader", fake_compile)
+
+
+def test_build_entry_loaders_dedup_same_app_type_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Linux 目标同 app_type 多入口分类去重：只编译代表一次，其余入口复制代表 exe."""
+    ctx = _make_multi_entry_context(tmp_path, ("a", "b", "c"), target=Platform.LINUX)
+    calls: list[Path] = []
+    _spy_compile(monkeypatch, calls)
+
+    exes = _build_entry_loaders(ctx, resolved_icon=None, has_tkinter=False)
+
+    assert len(exes) == 3
+    assert len(calls) == 1, "同 app_type 多入口只应编译代表入口一次"
+    for exe in exes:
+        assert exe.is_file()
+        assert exe.read_text() == "compiled-loader", "同组入口 exe 应与代表产物一致"
+
+
+def test_build_entry_loaders_dedup_group_by_app_type_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Linux 目标不同 app_type 分属不同配置类：各编译一次，GUI/CLI 互不复制."""
+    ctx = _make_multi_entry_context(tmp_path, ("a", "gui", "b"), target=Platform.LINUX)
+    calls: list[Path] = []
+    _spy_compile(monkeypatch, calls)
+
+    exes = _build_entry_loaders(ctx, resolved_icon=None, has_tkinter=False)
+
+    assert len(exes) == 3
+    assert len(calls) == 2, "CLI 与 GUI 两个配置类各编译一次"
+    # 代表产物：a（CLI）与 gui（GUI）被编译，b 从 a 复制
+    assert {c.name for c in calls} == {"a", "gui"}
+
+
+def test_build_entry_loaders_dedup_all_same_config_no_pool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Linux 目标全部入口同配置类时走串行路径，不创建 ThreadPoolExecutor."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    ctx = _make_multi_entry_context(tmp_path, ("a", "b", "c"), target=Platform.LINUX)
+    calls: list[Path] = []
+    _spy_compile(monkeypatch, calls)
+
+    pool_created = [False]
+    original_init = ThreadPoolExecutor.__init__
+
+    def spy_init(self: ThreadPoolExecutor, *args: Any, **kwargs: Any) -> None:
+        pool_created[0] = True
+        original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.ThreadPoolExecutor", spy_init)
+    _build_entry_loaders(ctx, resolved_icon=None, has_tkinter=False)
+
+    assert len(calls) == 1
+    assert not pool_created[0], "单配置类不应创建 ThreadPoolExecutor"
+
+
+def test_build_entry_loaders_windows_compiles_per_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows 目标 version_info.exe_filename 按入口区分：多入口仍每入口编译（方案 A 边界）."""
+    ctx = _make_multi_entry_context(tmp_path, ("a", "b", "c"), target=Platform.WINDOWS)
+    calls: list[Path] = []
+    _spy_compile(monkeypatch, calls)
+
+    exes = _build_entry_loaders(ctx, resolved_icon=None, has_tkinter=False)
+
+    assert len(exes) == 3
+    assert len(calls) == 3, "Windows 每个 exe 资源段（OriginalFilename）不同，不做构建内去重"
+
+
+def test_build_entry_loaders_dedup_entries_files_still_written(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """去重不影响入口文件生成：每个入口的 wrapper 与 .entry 仍全部写出."""
+    ctx = _make_multi_entry_context(tmp_path, ("a", "b", "c"), target=Platform.LINUX)
+    calls: list[Path] = []
+    _spy_compile(monkeypatch, calls)
+
+    _build_entry_loaders(ctx, resolved_icon=None, has_tkinter=False)
+
+    for ep in ctx.info.all_entries:
+        wrapper = ctx.cfg.dist_dir / f"_entry_{ep.name}.py"
+        assert wrapper.is_file(), f"{ep.name} 的 wrapper 必须写出"
+        assert "fspack 生成的入口包装器" in wrapper.read_text(encoding="utf-8")
+        entry_file = ctx.cfg.dist_dir / f"{ep.name}.entry"
+        assert entry_file.is_file(), f"{ep.name} 的 .entry 必须写出"
+        assert entry_file.read_text(encoding="utf-8") == f"_entry_{ep.name}.py"
+
+
+def test_build_entry_loaders_dedup_representative_failure_skips_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Linux 目标代表编译失败时重抛异常，同组入口不执行复制."""
+    ctx = _make_multi_entry_context(tmp_path, ("a", "b"), target=Platform.LINUX)
+    copied: list[Path] = []
+
+    def fake_compile(source: str, out_exe: Path, app_type: object, work_dir: Path, platform: object, **kw: Any) -> Path:
+        raise LoaderError("模拟编译失败")
+
+    def fake_copy2(src: Path, dst: Path) -> None:
+        copied.append(dst)
+
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.compile_loader", fake_compile)
+    monkeypatch.setattr("fspack.packaging.pipeline.compile_stage.shutil.copy2", fake_copy2)
+
+    with pytest.raises(LoaderError, match="模拟编译失败"):
+        _build_entry_loaders(ctx, resolved_icon=None, has_tkinter=False)
+    assert not copied, "代表编译失败时不应复制同组入口"
