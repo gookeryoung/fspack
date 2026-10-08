@@ -45,6 +45,14 @@ __all__ = [
 # 25% 容忍正常抖动。匹配类别的测试使用类别专属阈值（见 DEFAULT_CATEGORIES）
 DEFAULT_THRESHOLD = 25.0
 
+# 绝对噪声下限（秒）：median 绝对差低于此值不判退化，即使百分比超阈值
+# stat 密集微基准（如 source_fingerprint ~150µs，50 个文件的 mtime/size 哈希）
+# 的调度/文件系统抖动绝对量在几十 µs 内，但相对量可达 10-27%——纯相对判定
+# 会把 µs 级抖动放大成百分比误报（实测 run：Δ=+17µs 判 +12.2% 超过 core
+# 10% 阈值导致 CI 失败，本地复跑同代码 median 反而更快）。下限只抑制"绝对
+# 差极小"的退化判定，真实代码退化（数倍变慢）绝对差远超下限仍会被捕获
+NOISE_FLOOR_SECONDS = 5e-5
+
 
 @dataclass(frozen=True)
 class BenchmarkEntry:
@@ -318,7 +326,9 @@ def compare(
             continue
 
         delta_pct = (current.median - best.median) / best.median * 100.0
-        is_regression = delta_pct > row_threshold
+        # 噪声下限：绝对差低于 NOISE_FLOOR_SECONDS 视为抖动，不判退化
+        abs_delta = current.median - best.median
+        is_regression = delta_pct > row_threshold and abs_delta >= NOISE_FLOOR_SECONDS
         # 当前运行是否为所有运行中最快（含当前）
         all_medians = [e.median for e in all_entries[name]]
         is_current_best = current.median <= min(all_medians)

@@ -330,6 +330,28 @@ class TestCompareEndToEnd:
         assert report.regressions == 0
         assert report.rows[0].is_regression is False
 
+    def test_micro_benchmark_noise_floor_suppresses_regression(self, tmp_path: Path) -> None:
+        """微基准绝对差低于噪声下限：百分比超阈值也不判退化.
+
+        复现真实 CI 误报场景：150µs 级 stat 密集测试 Δ=+17µs（+12.2%），
+        超 10% 阈值但绝对差 < 50µs，属文件系统抖动而非代码退化.
+        """
+        self._write_bench_file(tmp_path / "001_hist.json", [("t_fp", 0.0001407)], mtime_offset=-100)
+        self._write_bench_file(tmp_path / "002_cur.json", [("t_fp", 0.0001579)], mtime_offset=0)
+        report = cb.compare(tmp_path, threshold=25.0)
+        assert report.regressions == 0
+        assert report.rows[0].is_regression is False
+        # delta_pct 仍如实反映相对差，供人工审查
+        assert report.rows[0].delta_pct == pytest.approx(12.2, abs=0.1)
+
+    def test_noise_floor_does_not_mask_real_regression(self, tmp_path: Path) -> None:
+        """真实退化（绝对差远超下限）仍被捕获."""
+        self._write_bench_file(tmp_path / "001_hist.json", [("t1", 0.0001)], mtime_offset=-100)
+        self._write_bench_file(tmp_path / "002_cur.json", [("t1", 0.0005)], mtime_offset=0)
+        report = cb.compare(tmp_path, threshold=25.0)
+        assert report.regressions == 1
+        assert report.rows[0].is_regression is True
+
     def test_systemic_jitter_not_blocking(self, tmp_path: Path) -> None:
         """5/9 测试同步退化 45% 中位幅度，触发 systemic 不计入退化阻断."""
         # 历史基线：9 个测试 median=1.0
