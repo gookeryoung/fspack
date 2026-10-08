@@ -40,7 +40,7 @@
     uv run pytest tests/test_entry_startup_baseline.py -m slow --benchmark-only --benchmark-save=iter144
 
     # 优化后对比退化
-    uv run python scripts/compare_benchmark.py
+    uv run fsp doctor --bench-compare
 """
 
 from __future__ import annotations

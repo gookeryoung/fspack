@@ -25,7 +25,6 @@ CLI 入口见 :func:compare_entry，由 `fspack.cli._run_doctor` 在 doctor 子
 from __future__ import annotations
 
 import re
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -38,7 +37,6 @@ __all__ = [
     "ComparisonRow",
     "compare",
     "compare_entry",
-    "main",
     "print_report",
 ]
 
@@ -496,9 +494,8 @@ def compare_entry(
 ) -> int:
     """CLI 入口：参数分发、执行对比、打印报告、返回退出码.
 
-    `fsp doctor --bench-compare` 的实际执行函数，与原
-    `scripts/compare_benchmark.py` 的 :func:main 对齐，替换后者独立 argparse
-    为参数直接传入。保持相同的退出码语义（0=通过，1=退化）。
+    `fsp doctor --bench-compare` 的实际执行函数（参数由 CLI 层解析后直接
+    传入）。退出码语义：0=通过，1=退化。
 
     :param bench_dir: benchmark JSON 目录，默认 `Path(".benchmarks")`
     :param threshold: 全局退化阈值百分比
@@ -533,52 +530,3 @@ def compare_entry(
                 )
         return 1
     return 0
-
-
-# ---------------------------------------------------------------------------
-# 过渡期 shim：保持 scripts/compare_benchmark.py 可直接调用（importlib
-# 按路径加载场景仍需 main 函数入口）。CI 已迁移到 fsp doctor --bench-compare，
-# scripts 删除后本 shim 一并移除。
-# ---------------------------------------------------------------------------
-def main(argv: list[str] | None = None) -> int:
-    """独立 CLI 入口（兼容旧调用路径，内部委托 :func:compare_entry）."""
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description="与历史最佳基准对比当前 pytest-benchmark 运行结果",
-    )
-    parser.add_argument(
-        "--bench-dir",
-        type=Path,
-        default=Path(".benchmarks"),
-        help="benchmark JSON 存储目录（默认 .benchmarks/）",
-    )
-    parser.add_argument(
-        "--threshold",
-        type=float,
-        default=DEFAULT_THRESHOLD,
-        help=f"全局退化阈值百分比（默认 {DEFAULT_THRESHOLD:.0f}，用于未匹配类别的测试）",
-    )
-    parser.add_argument(
-        "--no-categories",
-        action="store_true",
-        help="禁用类别分组，所有测试用全局 --threshold（兼容旧行为）",
-    )
-    parser.add_argument(
-        "--list-categories",
-        action="store_true",
-        help="列出基线类别与阈值后退出",
-    )
-    args = parser.parse_args(argv)
-
-    categories = None if args.no_categories else DEFAULT_CATEGORIES
-    return compare_entry(
-        bench_dir=args.bench_dir,
-        threshold=args.threshold,
-        categories=categories,
-        list_categories=args.list_categories,
-    )
-
-
-if __name__ == "__main__":
-    sys.exit(main())

@@ -57,9 +57,6 @@ from fspack.doctor.benchmark_compare import (
     compare_entry,
     print_report,
 )
-from fspack.doctor.benchmark_compare import (
-    main as compare_main,
-)
 from fspack.doctor.cache import (
     CACHE_TYPES,
     _preview_names,
@@ -238,7 +235,6 @@ __all__ = [
     "_try_unlink",
     "compare",
     "compare_entry",
-    "compare_main",
     "print_doctor_report",
     "print_report",
     "run_cache_clean",

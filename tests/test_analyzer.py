@@ -970,7 +970,6 @@ def test_parse_parallel_timeout_warns_on_slow_worker(
 
         def cancel(self) -> bool:
             return True
-            return True
 
         def result(
             self,

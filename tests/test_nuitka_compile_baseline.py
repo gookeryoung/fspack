@@ -34,7 +34,7 @@
     uv run pytest tests/test_nuitka_compile_baseline.py -m slow --benchmark-only --benchmark-save=iter142
 
     # 优化后对比退化
-    uv run python scripts/compare_benchmark.py
+    uv run fsp doctor --bench-compare
 """
 
 from __future__ import annotations

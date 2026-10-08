@@ -26,7 +26,7 @@ iter-142 Nuitka 编译基线）。
     uv run pytest tests/test_build_perf_baseline.py -m slow --benchmark-only --benchmark-save=iter141
 
     # 优化后对比退化
-    uv run python scripts/compare_benchmark.py
+    uv run fsp doctor --bench-compare
 """
 
 from __future__ import annotations

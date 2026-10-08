@@ -41,7 +41,7 @@ pip/uv）通过 mock 替换为 ``time.sleep``，仅测量 Python 层编排开销
     uv run pytest tests/test_wheel_download_baseline.py -m slow --benchmark-only --benchmark-save=iter143
 
     # 优化后对比退化
-    uv run python scripts/compare_benchmark.py
+    uv run fsp doctor --bench-compare
 """
 
 from __future__ import annotations

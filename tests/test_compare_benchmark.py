@@ -339,19 +339,19 @@ class TestCompareEndToEnd:
         self._write_bench_file(tmp_path / "001_hist.json", hist_entries, mtime_offset=-100)
         self._write_bench_file(tmp_path / "002_cur.json", cur_entries, mtime_offset=0)
         report = cb.compare(tmp_path, threshold=25.0)
-        # systemic 检测应触发，regressions 仍计数但 main() 不阻断
+        # systemic 检测应触发，regressions 仍计数但 compare_entry 不阻断
         assert report.is_systemic is True
         assert report.regressions == 5
 
 
-class TestMainExitCode:
-    """main 退出码语义."""
+class TestCompareEntryExitCode:
+    """compare_entry 退出码语义."""
 
     def test_no_files_exit_zero(self, tmp_path: Path) -> None:
         """无 benchmark 文件 exit 0."""
         empty = tmp_path / "empty"
         empty.mkdir()
-        assert cb.main(["--bench-dir", str(empty)]) == 0
+        assert cb.compare_entry(bench_dir=empty) == 0
 
     def test_regression_exit_one(self, tmp_path: Path) -> None:
         """单测试退化超阈值 exit 1."""
@@ -368,7 +368,7 @@ class TestMainExitCode:
         cur.write_text(json.dumps(data_cur), encoding="utf-8")
         ts = cur.stat().st_mtime + 100
         os.utime(cur, (ts, ts))
-        assert cb.main(["--bench-dir", str(tmp_path), "--threshold", "25"]) == 1
+        assert cb.compare_entry(bench_dir=tmp_path, threshold=25.0) == 1
 
     def test_systemic_exit_zero(self, tmp_path: Path) -> None:
         """systemic 退化 exit 0（机器抖动不阻断）."""
@@ -401,7 +401,7 @@ class TestMainExitCode:
         )
         ts = cur.stat().st_mtime + 100
         os.utime(cur, (ts, ts))
-        assert cb.main(["--bench-dir", str(tmp_path), "--threshold", "25"]) == 0
+        assert cb.compare_entry(bench_dir=tmp_path, threshold=25.0) == 0
 
 
 class TestMatchCategory:
@@ -686,12 +686,12 @@ class TestCompareWithCategories:
         assert rows_by_name["test_unknown_baseline"].is_regression is True
 
 
-class TestMainCategoryArgs:
-    """main 类别相关 CLI 参数."""
+class TestCompareEntryCategoryArgs:
+    """compare_entry 类别相关参数."""
 
     def test_list_categories_exit_zero(self, capsys: pytest.CaptureFixture[str]) -> None:
-        """--list-categories 列出类别后 exit 0."""
-        assert cb.main(["--list-categories"]) == 0
+        """list_categories=True 列出类别后 exit 0."""
+        assert cb.compare_entry(list_categories=True) == 0
         out = capsys.readouterr().out
         assert "build_perf" in out
         assert "nuitka_compile" in out
@@ -700,7 +700,7 @@ class TestMainCategoryArgs:
         assert "core" in out
 
     def test_no_categories_uses_global_threshold(self, tmp_path: Path) -> None:
-        """--no-categories 禁用类别分组，用全局阈值."""
+        """categories=None 禁用类别分组，用全局阈值."""
         data_hist = {
             "benchmarks": [
                 {
@@ -725,9 +725,9 @@ class TestMainCategoryArgs:
         ts = cur.stat().st_mtime + 100
         os.utime(cur, (ts, ts))
         # 退化 12%，全局阈值 25% 不触发，但若类别启用（10%）会触发
-        assert cb.main(["--bench-dir", str(tmp_path), "--no-categories", "--threshold", "25"]) == 0
-        # 不带 --no-categories 时类别启用，退化 12% > 10% 触发
-        assert cb.main(["--bench-dir", str(tmp_path), "--threshold", "25"]) == 1
+        assert cb.compare_entry(bench_dir=tmp_path, threshold=25.0, categories=None) == 0
+        # 不传 categories=None 时类别启用，退化 12% > 10% 触发
+        assert cb.compare_entry(bench_dir=tmp_path, threshold=25.0) == 1
 
     def test_category_regression_exit_one(self, tmp_path: Path) -> None:
         """类别阈值触发的退化 exit 1，且输出含类别信息."""
@@ -755,7 +755,7 @@ class TestMainCategoryArgs:
         ts = cur.stat().st_mtime + 100
         os.utime(cur, (ts, ts))
         # 退化 20% > 10% 类别阈值
-        assert cb.main(["--bench-dir", str(tmp_path), "--threshold", "25"]) == 1
+        assert cb.compare_entry(bench_dir=tmp_path, threshold=25.0) == 1
 
 
 class TestFindBenchmarkFilesEdge:
