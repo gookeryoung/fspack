@@ -460,6 +460,8 @@ class TestMatchCategory:
             assert cat is not None
             assert cat.name == "build_perf"
             assert cat.threshold == 25.0
+            # ms 级 I/O 类别专属绝对噪声下限（≈2σ 高于 StdDev 27% 抖动包络）
+            assert cat.noise_floor == pytest.approx(1.5e-3)
 
     def test_nuitka_compile_category_matched(self) -> None:
         """test_nuitka_compile_baseline.py 的 4 个测试匹配 nuitka_compile 类别."""
@@ -617,6 +619,85 @@ class TestCompareWithCategories:
         # 退化 20% < 25% 类别阈值
         assert row.delta_pct == pytest.approx(20.0, abs=0.1)
         assert row.is_regression is False
+
+    def test_build_perf_regression_below_noise_floor_not_triggered(self, tmp_path: Path) -> None:
+        """build_perf 超类别阈值但绝对差低于类别噪声下限 1.5ms，不判退化.
+
+        复现 2026-10-10 CI run 误报：run 级 I/O 抖动表现为加性 ~1ms 偏移，
+        基线最小的测试百分比越 25% 阈值（4.37→5.49ms = +25.6%），但同 run 内
+        基线最大的测试仅 +17.1%（绝对差相近）——加性偏移是抖动特征，按比例
+        退化不会出现"基线越大百分比越小"。绝对差 < 1.5ms 时抑制判定。
+        """
+        # 2026-10-10 CI run 实测数据：小项目冷缓存
+        self._write_bench_file(
+            tmp_path / "001_hist.json",
+            [("test_small_project_cold_cache_baseline", 0.00437)],
+            mtime_offset=-100,
+        )
+        self._write_bench_file(
+            tmp_path / "002_cur.json",
+            [("test_small_project_cold_cache_baseline", 0.00549)],
+            mtime_offset=0,
+        )
+        report = cb.compare(tmp_path, threshold=25.0)
+        assert report.regressions == 0
+        row = report.rows[0]
+        # 相对量越阈值（+25.6% > 25%），但绝对差 1.12ms < 1.5ms 类别下限
+        assert row.delta_pct == pytest.approx(25.6, abs=0.1)
+        assert row.is_regression is False
+
+    def test_build_perf_regression_above_noise_floor_triggered(self, tmp_path: Path) -> None:
+        """build_perf 超类别阈值且绝对差 ≥ 1.5ms，正常判退化（真实退化不被下限掩盖）."""
+        self._write_bench_file(
+            tmp_path / "001_hist.json",
+            [("test_small_project_cold_cache_baseline", 0.00437)],
+            mtime_offset=-100,
+        )
+        # 6.5ms：+48.8%，绝对差 2.13ms ≥ 1.5ms
+        self._write_bench_file(
+            tmp_path / "002_cur.json",
+            [("test_small_project_cold_cache_baseline", 0.00650)],
+            mtime_offset=0,
+        )
+        report = cb.compare(tmp_path, threshold=25.0)
+        assert report.regressions == 1
+        row = report.rows[0]
+        assert row.is_regression is True
+
+    def test_build_perf_small_pct_large_abs_not_triggered(self, tmp_path: Path) -> None:
+        """build_perf 绝对差 ≥ 1.5ms 但百分比未超类别阈值，不判退化（相对门禁仍生效）."""
+        # 10ms 基线 +1.5ms = +15%，百分比未过 25%
+        self._write_bench_file(
+            tmp_path / "001_hist.json",
+            [("test_medium_project_cold_cache_baseline", 0.010)],
+            mtime_offset=-100,
+        )
+        self._write_bench_file(
+            tmp_path / "002_cur.json",
+            [("test_medium_project_cold_cache_baseline", 0.0115)],
+            mtime_offset=0,
+        )
+        report = cb.compare(tmp_path, threshold=25.0)
+        assert report.regressions == 0
+        row = report.rows[0]
+        assert row.is_regression is False
+
+    def test_other_categories_use_global_noise_floor(self, tmp_path: Path) -> None:
+        """其他类别无专属下限，沿用全局 NOISE_FLOOR_SECONDS（50µs）."""
+        # nuitka_compile：绝对差 200µs > 全局下限，百分比 12% > 10%，触发
+        self._write_bench_file(
+            tmp_path / "001_hist.json",
+            [("test_serial_compile_baseline", 0.500)],
+            mtime_offset=-100,
+        )
+        self._write_bench_file(
+            tmp_path / "002_cur.json",
+            [("test_serial_compile_baseline", 0.560)],
+            mtime_offset=0,
+        )
+        report = cb.compare(tmp_path, threshold=25.0)
+        assert report.regressions == 1
+        assert report.rows[0].is_regression is True
 
     def test_unmatched_test_uses_global_threshold(self, tmp_path: Path) -> None:
         """未匹配类别的测试用全局 threshold."""
