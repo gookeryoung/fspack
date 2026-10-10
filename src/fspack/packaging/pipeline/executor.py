@@ -473,6 +473,7 @@ def _execute_build(  # noqa: PLR0912, PLR0913
                 data_dirs=info.data_dirs,
                 web_static_dirs=info.web_static_dirs,
                 frontend_prune=_frontend_prune_map(_frontends),
+                include_dirs=info.include_dirs,
             )
 
     _compile_user_sources(ctx, src_dst)

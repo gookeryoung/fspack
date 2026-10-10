@@ -76,6 +76,7 @@ from fspack.config.parsing import (
     _BUILD_DEFAULT_KEYS,  # noqa: F401
     _parse_build_defaults,  # noqa: F401
     _parse_exclude_dirs,  # noqa: F401
+    _parse_include_dirs,  # noqa: F401
     _parse_optional_dependencies,  # noqa: F401
     _resolve_icon,  # noqa: F401
     clear_project_cache,

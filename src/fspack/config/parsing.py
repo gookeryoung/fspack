@@ -203,6 +203,8 @@ def _parse_project_cached(
 
     # [tool.fspack] exclude：额外排除目录/文件模式（合并到 copy_source 内置 _EXCLUDE）
     exclude_dirs = _parse_exclude_dirs(fspack_cfg.get("exclude"))
+    # [tool.fspack] include-dirs：强制包含路径（命中的隐藏目录不被自动排除）
+    include_dirs = _parse_include_dirs(fspack_cfg.get("include-dirs"))
     # [tool.fspack] data-dirs：原样保留的数据资源目录树（相对项目目录的 POSIX 路径），
     # copy_source 对其跳过元数据/文档排除，_strip_py_sources 跳过其下 .py 剥离。
     data_dirs = _parse_data_dirs(fspack_cfg.get("data-dirs"))
@@ -246,6 +248,7 @@ def _parse_project_cached(
                 entries=merged,
                 icon=icon_path,
                 exclude_dirs=exclude_dirs,
+                include_dirs=include_dirs,
                 data_dirs=data_dirs,
                 web_static_dirs=web_static_dirs,
                 build_defaults=build_defaults,
@@ -270,6 +273,7 @@ def _parse_project_cached(
         author=author,
         icon=icon_path,
         exclude_dirs=exclude_dirs,
+        include_dirs=include_dirs,
         data_dirs=data_dirs,
         web_static_dirs=web_static_dirs,
         build_defaults=build_defaults,
@@ -329,6 +333,16 @@ def _parse_author(authors: object) -> str:
 def _parse_exclude_dirs(value: object) -> tuple[str, ...]:
     """解析 ``[tool.fspack] exclude`` 配置为排除模式元组（空元素报错）."""
     return _parse_string_list_cfg(value, "exclude", reject_empty=True)
+
+
+def _parse_include_dirs(value: object) -> tuple[str, ...]:
+    """解析 ``[tool.fspack] include-dirs`` 配置为强制包含路径元组（空元素报错）.
+
+    路径为相对项目目录的 POSIX 风格字符串（如 ``.claude/skills``），运行时由
+    :func:`fspack.packaging.sync.copy_source` 解析为绝对路径，命中的隐藏目录
+    （``.`` 开头目录，如 ``.claude``/``.pnpm-store``）不被自动排除。
+    """
+    return _parse_string_list_cfg(value, "include-dirs", reject_empty=True)
 
 
 def _parse_data_dirs(value: object) -> tuple[str, ...]:

@@ -344,6 +344,10 @@ class ProjectInfo:
     entries: tuple[EntryPoint, ...] = ()
     icon: Path | None = None
     exclude_dirs: tuple[str, ...] = ()
+    # 强制包含路径（相对项目目录的 POSIX 路径，来自 [tool.fspack] include-dirs）：
+    # copy_source 对命中路径的隐藏目录（``.`` 开头目录，如 ``.claude``）跳过
+    # 自动排除。对 ``node_modules``/``.env`` 等具名排除规则无强制效果。
+    include_dirs: tuple[str, ...] = ()
     # 数据资源目录（相对项目目录的 POSIX 路径）：原样保留目录树，
     # copy_source 对其跳过元数据/文档排除（pyproject.toml/*.md/uv.lock 等），
     # _strip_py_sources 跳过其下 .py 剥离。用于含子项目作为资源的场景

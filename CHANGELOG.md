@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- 源码复制自动跳过 `.` 开头的配置/缓存目录（`.pnpm-store`/`.cnb`/`.codeup`/`.claude` 等），新增 `[tool.fspack] include-dirs` 强制包含
+
+### Fixed
+- 发行包不再携带构建中间标记 `.build_ok`/`.build_failed` 与 dist 内旧版残留的隐藏目录
+
 ## [0.6.8] - 2026-09-28
 
 ### Added

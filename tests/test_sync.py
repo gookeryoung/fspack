@@ -674,3 +674,135 @@ def test_copy_source_frontend_prune_incremental_sync(tmp_path: Path) -> None:
     assert sorted(p.name for p in fe_dst.iterdir()) == ["deploy"]
     assert not (fe_dst / "package.json").exists()
     assert not (fe_dst / "src").exists()
+
+
+# --- 隐藏目录自动排除与 include-dirs 强制包含测试 ---
+
+
+def test_copy_source_skips_hidden_dirs(tmp_path: Path) -> None:
+    """``.`` 开头的配置/缓存目录自动跳过，dotfile 不受影响."""
+    src = tmp_path / "proj"
+    src.mkdir()
+    (src / "app.py").write_text("print('hi')")
+    for name in (".pnpm-store", ".cnb", ".codeup", ".claude", ".cache"):
+        d = src / name
+        d.mkdir()
+        (d / "data.bin").write_text("x")
+    # dotfile 保留给具体模式决定（.prettierrc.json 非元数据模式 → 保留）
+    (src / ".prettierrc.json").write_text("{}")
+    dst = tmp_path / "out" / "src"
+
+    copy_source(src, dst)
+    assert (dst / "app.py").is_file()
+    for name in (".pnpm-store", ".cnb", ".codeup", ".claude", ".cache"):
+        assert not (dst / name).exists(), f"隐藏目录应被跳过: {name}"
+    assert (dst / ".prettierrc.json").is_file()
+
+
+def test_copy_source_skips_hidden_dirs_in_subdirs(tmp_path: Path) -> None:
+    """子目录内的隐藏目录同样被自动跳过（任意层级生效）."""
+    src = tmp_path / "proj"
+    src.mkdir()
+    (src / "app.py").write_text("print('hi')")
+    nested = src / "deploy" / "tools"
+    nested.mkdir(parents=True)
+    (nested / ".claude").mkdir()
+    (nested / ".claude" / "settings.json").write_text("{}")
+    (nested / ".pnpm-store").mkdir()
+    (nested / ".pnpm-store" / "v3").mkdir()
+    (nested / ".pnpm-store" / "v3" / "files").mkdir()
+    (nested / ".pnpm-store" / "v3" / "files" / "chunk.bin").write_text("x")
+    dst = tmp_path / "out" / "src"
+
+    copy_source(src, dst)
+    assert (dst / "deploy" / "tools").is_dir()
+    assert not (dst / "deploy" / "tools" / ".claude").exists()
+    assert not (dst / "deploy" / "tools" / ".pnpm-store").exists()
+
+
+def test_copy_source_include_dirs_forces_hidden_dir(tmp_path: Path) -> None:
+    """include-dirs 命中的隐藏目录强制包含，其余隐藏目录仍被跳过."""
+    src = tmp_path / "proj"
+    src.mkdir()
+    (src / "app.py").write_text("print('hi')")
+    (src / ".claude" / "skills").mkdir(parents=True)
+    (src / ".claude" / "skills" / "deploy.txt").write_text("skill")
+    (src / ".claude" / "settings.json").write_text("{}")
+    (src / ".pnpm-store").mkdir()
+    (src / ".pnpm-store" / "x.bin").write_text("x")
+    dst = tmp_path / "out" / "src"
+
+    copy_source(src, dst, include_dirs=(".claude",))
+    assert (dst / ".claude" / "skills" / "deploy.txt").is_file()
+    assert (dst / ".claude" / "settings.json").is_file()
+    assert not (dst / ".pnpm-store").exists()
+
+
+def test_copy_source_include_dirs_nested_path_keeps_ancestors(tmp_path: Path) -> None:
+    """include-dirs 指向隐藏目录内部时，祖先链保留以便下钻."""
+    src = tmp_path / "proj"
+    src.mkdir()
+    (src / "app.py").write_text("print('hi')")
+    (src / ".config" / "tools" / "rules").mkdir(parents=True)
+    (src / ".config" / "tools" / "rules" / "r.txt").write_text("x")
+    dst = tmp_path / "out" / "src"
+
+    copy_source(src, dst, include_dirs=(".config/tools/rules",))
+    assert (dst / ".config" / "tools" / "rules" / "r.txt").is_file()
+
+
+def test_copy_source_include_dirs_no_force_for_named_excludes(tmp_path: Path) -> None:
+    """include-dirs 对具名排除规则无强制效果：.env/node_modules/.venv 仍被剥离."""
+    src = tmp_path / "proj"
+    src.mkdir()
+    (src / "app.py").write_text("print('hi')")
+    (src / ".claude").mkdir()
+    (src / ".claude" / ".env").write_text("SECRET=x")
+    (src / ".claude" / "node_modules").mkdir()
+    (src / ".claude" / "node_modules" / "pkg.js").write_text("x")
+    (src / ".claude" / "README.md").write_text("# doc")
+    dst = tmp_path / "out" / "src"
+
+    copy_source(src, dst, include_dirs=(".claude",))
+    # 隐藏目录强制包含生效
+    assert (dst / ".claude").is_dir()
+    # 但具名排除规则不受 include-dirs 影响
+    assert not (dst / ".claude" / ".env").exists()
+    assert not (dst / ".claude" / "node_modules").exists()
+    assert not (dst / ".claude" / "README.md").exists()
+
+
+def test_copy_source_data_dirs_still_skips_hidden_dirs(tmp_path: Path) -> None:
+    """data_dirs 保护树内的隐藏目录仍被自动跳过（保护仅针对元数据/文档剥离）."""
+    src = tmp_path / "proj"
+    src.mkdir()
+    (src / "app.py").write_text("print('hi')")
+    tpl = src / "assets" / "templates" / "demo"
+    tpl.mkdir(parents=True)
+    (tpl / "pyproject.toml").write_text('[project]\nname = "demo"\n')
+    (tpl / ".pnpm-store").mkdir()
+    (tpl / ".pnpm-store" / "x.bin").write_text("x")
+    dst = tmp_path / "out" / "src"
+
+    copy_source(src, dst, data_dirs=("assets/templates",))
+    assert (dst / "assets" / "templates" / "demo" / "pyproject.toml").is_file()
+    assert not (dst / "assets" / "templates" / "demo" / ".pnpm-store").exists()
+
+
+def test_sync_tree_removes_stale_hidden_dir(tmp_path: Path) -> None:
+    """增量同步删除 dst 中旧版构建残留的隐藏目录（源侧已排除即视为不存在）."""
+    src = tmp_path / "proj"
+    src.mkdir()
+    (src / "app.py").write_text("print('hi')")
+    dst = tmp_path / "out" / "src"
+    # 模拟旧版 fspack 打出的 dist 残留（当时不排除隐藏目录）
+    dst.mkdir(parents=True)
+    (dst / "app.py").write_text("print('hi')")
+    (dst / ".pnpm-store").mkdir()
+    (dst / ".pnpm-store" / "x.bin").write_text("x")
+    (src / "app.py").write_text("print('hi')")
+
+    # 二次同步：源侧仍有该目录（用户本机工具缓存），但排除规则已生效 → dst 残留被删除
+    copy_source(src, dst)
+    assert not (dst / ".pnpm-store").exists()
+    assert (dst / "app.py").is_file()

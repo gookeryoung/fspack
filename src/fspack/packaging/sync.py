@@ -95,6 +95,20 @@ _EXCLUDE_METADATA = shutil.ignore_patterns(
 )
 
 
+def _exclude_hidden_dirs(directory: str, names: list[str]) -> set[str]:
+    """排除 ``.`` 开头的隐藏**目录**（dotfile 不受影响，保留给具体模式处理）.
+
+    自动跳过 ``.pnpm-store``/``.pnpm``/``.cnb``/``.codeup``/``.claude``/``.cache``
+    等本地工具缓存与配置目录——此类目录体积大、与运行无关且路径可超
+    ``MAX_PATH``，逐个枚举不可持续，故按「点前缀 + 是目录」统一判定。
+    文件型 dotfile（如 ``.prettierrc.json``）不在此排除，由
+    ``_EXCLUDE_ALWAYS``/``_EXCLUDE_METADATA`` 的具体模式决定去留。
+
+    返回 ``shutil.ignore_patterns`` 回调签名 ``(directory, names) -> set[str]``。
+    """
+    return {n for n in names if n.startswith(".") and n not in (".", "..") and Path(directory).joinpath(n).is_dir()}
+
+
 def _merge_ignore_fns(
     *fns: Callable[..., set[str]],
 ) -> Callable[..., set[str]]:
@@ -113,9 +127,55 @@ def _merge_ignore_fns(
     return combined
 
 
-# 完整排除集：始终排除 + 元数据排除（默认行为，向后兼容）。
-# 等价于原单一 _EXCLUDE，拆分为两层以支持 data-dirs 选择性跳过元数据排除。
-_EXCLUDE = _merge_ignore_fns(_EXCLUDE_ALWAYS, _EXCLUDE_METADATA)
+# 完整排除集：始终排除 + 元数据排除 + 隐藏目录排除（默认行为，向后兼容）。
+# 等价于原单一 _EXCLUDE，拆分为多层以支持 data-dirs 选择性跳过元数据排除与
+# include_dirs 强制包含隐藏目录。
+_EXCLUDE = _merge_ignore_fns(_EXCLUDE_ALWAYS, _EXCLUDE_METADATA, _exclude_hidden_dirs)
+
+
+def _resolve_dir(directory: str) -> Path:
+    """resolve ignore 回调收到的目录路径（resolve 失败时回退原始路径）."""
+    dir_path = Path(directory)
+    try:
+        return dir_path.resolve()
+    except OSError:
+        return dir_path
+
+
+def _is_path_or_ancestor(child: Path, target: Path) -> bool:
+    """判断 ``child`` 是 ``target`` 自身或其祖先目录（含即需要保留）.
+
+    ``Path.is_relative_to`` 语义的反向封装（目标在 child 之下即 child 是祖先），
+    用 try/except ValueError 兼容旧版 Python（与既有代码风格一致）。
+    """
+    if child == target:
+        return True
+    try:
+        target.relative_to(child)
+        return True
+    except ValueError:
+        return False
+
+
+def _force_keep_hidden(
+    dir_resolved: Path,
+    hidden: set[str],
+    include_abs: list[Path],
+) -> set[str]:
+    """返回隐藏目录排除集中命中强制包含路径、应从排除集中恢复的条目.
+
+    ``name`` 对应的子目录若自身是某个 include 路径、或是通往 include 路径的
+    祖先（如 ``include-dirs = [".claude/skills"]`` 时 ``.claude`` 须保留以便
+    下钻），则纳入返回集（调用方从排除集中减去）。
+    """
+    if not hidden or not include_abs:
+        return set()
+    kept: set[str] = set()
+    for name in hidden:
+        child = dir_resolved / name
+        if any(_is_path_or_ancestor(child, inc) for inc in include_abs):
+            kept.add(name)
+    return kept
 
 
 def copy_source(  # noqa: PLR0913
@@ -125,17 +185,26 @@ def copy_source(  # noqa: PLR0913
     data_dirs: tuple[str, ...] = (),
     web_static_dirs: tuple[str, ...] = (),
     frontend_prune: Mapping[Path, Sequence[Path]] | None = None,
+    include_dirs: tuple[str, ...] = (),
 ) -> None:
     """将项目源码同步到 dist/src，剥离开发期文件.
 
     保留应用运行所需源码与资源（``.py``/数据文件/``LICENSE`` 等），
     排除构建产物、缓存、虚拟环境、工具配置、项目元数据（
     ``pyproject.toml``/``.python-version``/``uv.lock`` 等）、
-    凭证（``.env``）、文档（``*.md``/``*.rst``/``docs``）与测试代码（``tests``）。
-    详见 ``_EXCLUDE_ALWAYS``/``_EXCLUDE_METADATA`` 模式列表。
+    凭证（``.env``）、文档（``*.md``/``*.rst``/``docs``）、测试代码（``tests``）
+    与 ``.`` 开头的隐藏目录（``.pnpm-store``/``.claude``/``.cnb``/``.codeup``
+    等工具缓存与配置目录，dotfile 不受影响）。详见
+    ``_EXCLUDE_ALWAYS``/``_EXCLUDE_METADATA``/``_exclude_hidden_dirs`` 模式列表。
 
     ``extra_excludes`` 为 ``[tool.fspack] exclude`` 配置的额外排除模式，
     合并到内置 ``_EXCLUDE`` 中（如排除 ``examples`` 目录）。
+
+    ``include_dirs`` 为 ``[tool.fspack] include-dirs`` 配置的强制包含路径
+    （相对 ``project_dir`` 的 POSIX 路径）：命中路径的隐藏目录不被
+    ``_exclude_hidden_dirs`` 排除（如 ``include-dirs = [".claude/skills"]``
+    强制打包该目录树）；对其他排除规则（``node_modules``/``.env``/元数据等）
+    无强制效果。
 
     ``data_dirs`` 为 ``[tool.fspack] data-dirs`` 配置的数据资源目录树（相对
     ``project_dir`` 的 POSIX 路径，如 ``src/fspack/assets/templates``）。
@@ -160,7 +229,7 @@ def copy_source(  # noqa: PLR0913
     增量同步：``src_dst`` 已存在时保留 ``__pycache__`` 目录以复用 ``.pyc`` 缓存，
     仅删除源码中已不存在的文件、覆盖复制新增/改动的文件（``copy2`` 保留 mtime）。
     """
-    ignore_fn = _build_ignore_fn(project_dir, extra_excludes, data_dirs, web_static_dirs, frontend_prune)
+    ignore_fn = _build_ignore_fn(project_dir, extra_excludes, data_dirs, web_static_dirs, frontend_prune, include_dirs)
     if src_dst.exists():
         _sync_tree(project_dir, src_dst, ignore_fn)
     else:
@@ -209,12 +278,13 @@ def _build_frontend_prune_fn(
     return prune_fn
 
 
-def _build_ignore_fn(
+def _build_ignore_fn(  # noqa: PLR0913
     project_dir: Path,
     extra_excludes: tuple[str, ...],
     data_dirs: tuple[str, ...],
     web_static_dirs: tuple[str, ...] = (),
     frontend_prune: Mapping[Path, Sequence[Path]] | None = None,
+    include_dirs: tuple[str, ...] = (),
 ) -> Callable[..., set[str]]:
     """构造 ignore 函数：data-dirs/web-static-dirs 内只应用 _EXCLUDE_ALWAYS，外应用完整 _EXCLUDE.
 
@@ -225,24 +295,45 @@ def _build_ignore_fn(
     ``frontend_prune`` 的产物目录并入保护集合；裁剪函数
     :func:`_build_frontend_prune_fn` 的排除集合并入返回值（前端源码不进 dist）。
 
+    ``include_dirs`` 解析为绝对路径集合：命中路径的隐藏目录（含通往该路径的
+    祖先链）从隐藏目录排除集中恢复，实现「强制包含」；对非隐藏目录排除规则
+    （``node_modules``/``.env``/元数据等）无效果。
+
     ``extra_excludes`` 始终应用（用户显式排除优先级最高，不论是否在保护目录内）。
     """
     extra_fn = shutil.ignore_patterns(*extra_excludes) if extra_excludes else None
     prune_fn = _build_frontend_prune_fn(frontend_prune) if frontend_prune else None
+    project_dir_abs = project_dir.resolve()
+    # include_dirs 预解析为绝对路径（隐藏目录强制包含判断用）
+    include_abs = [(project_dir_abs / Path(rel)).resolve() for rel in include_dirs]
     # 合并 data_dirs + web_static_dirs（两者同等保护，无顺序差异）
     protected_dirs = (*data_dirs, *web_static_dirs)
     if not protected_dirs and not frontend_prune:
-        # 无保护目录：返回完整 _EXCLUDE（已含 _ALWAYS + _METADATA）+ extra
+        # 无保护目录：返回完整 _EXCLUDE（已含 _ALWAYS + _METADATA + 隐藏目录）+ extra
         if extra_fn is None:
-            return _EXCLUDE
+            if not include_abs:
+                return _EXCLUDE
+
+            def inc_ignore(directory: str, names: list[str]) -> set[str]:
+                excluded = _EXCLUDE(directory, names)
+                dir_resolved = _resolve_dir(directory)
+                hidden = _exclude_hidden_dirs(directory, names)
+                # 强制包含：从排除集中恢复命中 include_dirs 的隐藏目录
+                return excluded - _force_keep_hidden(dir_resolved, hidden, include_abs)
+
+            return inc_ignore
 
         def full_ignore(directory: str, names: list[str]) -> set[str]:
-            return _EXCLUDE(directory, names) | extra_fn(directory, names)
+            excluded = _EXCLUDE(directory, names) | extra_fn(directory, names)
+            if include_abs:
+                dir_resolved = _resolve_dir(directory)
+                hidden = _exclude_hidden_dirs(directory, names)
+                excluded -= _force_keep_hidden(dir_resolved, hidden, include_abs)
+            return excluded
 
         return full_ignore
 
     # 预解析保护目录为绝对路径，避免每个 directory 调用时重复 resolve
-    project_dir_abs = project_dir.resolve()
     protected_abs: list[Path] = []
     for rel in protected_dirs:
         # 配置为 POSIX 路径（如 "src/fspack/assets/templates" 或 "dist"），
@@ -258,13 +349,14 @@ def _build_ignore_fn(
 
     def ignore_fn(directory: str, names: list[str]) -> set[str]:
         excluded = _EXCLUDE_ALWAYS(directory, names)
+        dir_resolved = _resolve_dir(directory)
+        # 隐藏目录排除：include_dirs 命中路径强制包含（对 _EXCLUDE_ALWAYS 内
+        # 具名 dot 目录模式无强制效果，如 include-dirs 无法救回 .venv）
+        hidden = _exclude_hidden_dirs(directory, names)
+        if include_abs:
+            hidden -= _force_keep_hidden(dir_resolved, hidden, include_abs)
+        excluded |= hidden
         # 判断 directory 是否在任一保护目录内（含目录自身）。
-        # Path.is_relative_to 是 3.9+，fspack 支持 3.8，用 try/except ValueError 兼容。
-        dir_path = Path(directory)
-        try:
-            dir_resolved = dir_path.resolve()
-        except OSError:
-            dir_resolved = dir_path
         in_protected = False
         for d in protected_abs:
             if dir_resolved == d:

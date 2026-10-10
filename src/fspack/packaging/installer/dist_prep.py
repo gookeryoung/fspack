@@ -20,6 +20,7 @@ from fspack.builder import resolve_project_info
 from fspack.config import ProjectInfo, build_options_from_defaults
 from fspack.exceptions import InstallerError
 from fspack.packaging.installer.request import ReleaseRequest
+from fspack.packaging.sync import _exclude_hidden_dirs, _merge_ignore_fns
 from fspack.platform import Platform
 
 __all__ = [
@@ -129,20 +130,28 @@ def _release_base(info: ProjectInfo, platform_suffix: str) -> str:
 # - .dep_cache.json: 依赖分析缓存（dist 根目录）
 # - .nuitka_compile_stamp: Nuitka 编译 stamp（dist 根目录）
 # - .pyc_stamp: pyc 预编译 stamp（dist 根目录）
+# - .build_ok/.build_failed: 构建完成/失败诊断标记（dist 根目录，
+#   属 fspack 内部文件，不应随便携包/安装包分发）
 # - *.build: Nuitka 临时构建目录（src 子目录下，--remove-output 仅成功时清理）
 # - build: loader 编译工作目录（旧版残留，新版用 tempfile 自动清理，此处兜底）
 _DIST_INTERMEDIATE_EXCLUDES: tuple[str, ...] = (
     ".dep_cache.json",
     ".nuitka_compile_stamp",
     ".pyc_stamp",
+    ".build_ok",
+    ".build_failed",
     "*.build",
     "build",
 )
 
 
-# 便携包/安装包打包排除模式：release 目录 + 构建中间文件（与 NSIS /x 排除一致）。
+# 便携包/安装包打包排除模式：release 目录 + 构建中间文件（与 NSIS /x 排除一致）
+# + 隐藏目录（.pnpm-store/.claude 等旧版构建残留在 dist/src 内时同样不进发行包）。
 # tar.gz / zip / .deb / .pkg / .dmg 五处 staging 复制共用，避免递归打包自身与残留中间文件。
-_DIST_IGNORE = shutil.ignore_patterns("release", *_DIST_INTERMEDIATE_EXCLUDES)
+_DIST_IGNORE = _merge_ignore_fns(
+    shutil.ignore_patterns("release", *_DIST_INTERMEDIATE_EXCLUDES),
+    _exclude_hidden_dirs,
+)
 
 
 def _prepare_staging(

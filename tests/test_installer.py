@@ -466,6 +466,34 @@ def test_make_zip_creates_archive_with_top_dir(tmp_path: Path) -> None:
     assert not any("release" in n for n in names)
 
 
+def test_make_zip_excludes_intermediate_markers_and_hidden_dirs(tmp_path: Path) -> None:
+    """打包排除构建中间标记（.build_ok/.build_failed 等）与隐藏目录残留."""
+    info = _make_info(tmp_path, name="myapp")
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "myapp.exe").write_bytes(b"exe")
+    # 构建中间标记：不应进发行包
+    for marker in (".build_ok", ".build_failed", ".dep_cache.json", ".pyc_stamp", ".nuitka_compile_stamp"):
+        (dist / marker).write_text("{}")
+    # 旧版构建残留在 dist/src 内的隐藏目录：同样不进发行包
+    legacy = dist / "src" / ".pnpm-store"
+    legacy.mkdir(parents=True)
+    (legacy / "x.bin").write_text("x")
+    (dist / "src" / "app.py").write_text("print('hi')")
+    release = dist / "release"
+    release.mkdir()
+    (release / "x.txt").write_text("x")
+
+    result = _make_zip(dist, info, release, Platform.WINDOWS)
+    with zipfile.ZipFile(result) as zf:
+        names = zf.namelist()
+    assert "myapp-1.0-py3.11.9-windows-slim/myapp.exe" in names
+    assert "myapp-1.0-py3.11.9-windows-slim/src/app.py" in names
+    for marker in (".build_ok", ".build_failed", ".dep_cache.json", ".pyc_stamp", ".nuitka_compile_stamp"):
+        assert not any(marker in n for n in names), f"中间标记应被排除: {marker}"
+    assert not any(".pnpm-store" in n for n in names), "隐藏目录残留应被排除"
+
+
 def test_make_zip_linux_platform_suffix(tmp_path: Path) -> None:
     """Linux 目标 zip 文件名含 -linux 后缀."""
     info = _make_info(tmp_path, name="app")

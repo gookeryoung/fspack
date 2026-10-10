@@ -729,12 +729,14 @@ def test_stream_compile_timeout_preserves_drained_output(
 ) -> None:
     """超时 kill 前已 drain 的输出仍保留在返回值中供诊断."""
     # 子进程先输出再 sleep，超时 kill 后已输出的内容应保留
+    # timeout 给足余量（慢环境/全量测试负载下 Python 启动可超 0.5s，
+    # 启动期被 kill 会连 partial-output 都来不及输出，造成竞态误报）
     cmd = [
         sys.executable,
         "-c",
         "print('partial-output'); import sys; sys.stdout.flush(); import time; time.sleep(30)",
     ]
-    returncode, stdout, _stderr = NuitkaCompiler._stream_compile(cmd, timeout=0.5)
+    returncode, stdout, _stderr = NuitkaCompiler._stream_compile(cmd, timeout=3.0)
     assert returncode != 0
     # partial-output 在 kill 前已 drain 到 chunks（drain 线程 join 后）
     assert "partial-output" in stdout

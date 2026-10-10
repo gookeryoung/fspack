@@ -6,6 +6,7 @@
 [tool.fspack]
 icon = "assets/app.ico"                    # exe 图标
 exclude = ["examples", "docs"]             # 源码复制时额外排除的 glob 模式
+include-dirs = [".claude/skills"]          # 强制包含（命中的隐藏目录不被自动排除）
 slim-include = ["PySide6/Qt6Charts.dll"]   # wheel 精简：强制保留
 slim-exclude = [                           # wheel 精简：强制剥离
     "PySide6/opengl32sw.dll",
@@ -38,6 +39,28 @@ slim-exclude = [
     "PySide6/include/*",           # C 头文件（14MB）
 ]
 ```
+
+## 源码复制排除规则
+
+`fsp b` 复制源码到 `dist/src` 时自动排除以下内容：
+
+- 构建产物与缓存：`dist`/`build`/`__pycache__`/`*.egg-info` 等
+- 虚拟环境与工具缓存：`.venv`/`.tox`/`.pytest_cache`/`.ruff_cache`/`.uv-cache` 等
+- **隐藏目录**：所有 `.` 开头的**目录**（如 `.pnpm-store`/`.pnpm`/`.cnb`/`.codeup`/`.claude`/`.cache`），
+  dotfile（如 `.prettierrc.json`）不受此规则影响
+- 版本控制、IDE 配置、凭证（`.env`）、CI/CD、测试目录、文档（`*.md`/`docs`）
+- 项目元数据：`pyproject.toml`/`uv.lock`/`setup.py` 等
+
+增量构建会同步删除 `dist/src` 中已被排除的旧残留。若确需打包某个隐藏目录，
+用 `include-dirs` 强制包含：
+
+```toml
+[tool.fspack]
+include-dirs = [".claude/skills"]   # 该目录树原样进入 dist/src
+```
+
+`include-dirs` 仅对隐藏目录自动排除生效，对 `node_modules`/`.env`/元数据等
+具名排除规则无强制效果；`exclude` 显式排除始终优先。
 
 ## 构建默认值
 
