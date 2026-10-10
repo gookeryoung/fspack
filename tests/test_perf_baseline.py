@@ -220,16 +220,15 @@ class TestSlimBaseline:
     def test_slim_unpack_baseline(self, benchmark: Any, tmp_path: Path, sample_wheel: Path) -> None:
         """wheel 精简解压基线：单 wheel 按需解压耗时.
 
-        多 wheel 并行解压，PySide6 拆分 wheel 场景（3 个 wheel）预期提速 2-3x。
+        计时区仅含 dest.mkdir + slim_unpack；``rmtree`` 清理移出计时区——
+        它是测试善后而非被测行为，混入计时会把 I/O 抖动放大成假性退化。
         """
         counter = {"n": 0}
 
         def _unpack() -> int:
             dest = tmp_path / f"sp_{counter['n']}"
             dest.mkdir()
-            count = slim_unpack([sample_wheel], dest, {"PySide6": frozenset({"Core", "Gui", "Widgets"})})
-            shutil.rmtree(dest, ignore_errors=True)
-            return count
+            return slim_unpack([sample_wheel], dest, {"PySide6": frozenset({"Core", "Gui", "Widgets"})})
 
         def _run() -> int:
             counter["n"] += 1
@@ -237,6 +236,9 @@ class TestSlimBaseline:
 
         result = benchmark(_run)
         assert result == 1
+        # 清理全部轮次产生的 dest 目录（在计时区外执行）
+        for i in range(counter["n"] + 1):
+            shutil.rmtree(tmp_path / f"sp_{i}", ignore_errors=True)
 
 
 @pytest.mark.slow

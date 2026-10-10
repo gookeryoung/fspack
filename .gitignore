@@ -18,6 +18,9 @@ coverage.xml
 
 # 工具缓存
 .ruff_cache/
+
+# 本地协作产物（需求/迭代/设计记录，不进入版本库）
+/.trae/
 .pyrefly_cache/
 .mypy_cache/
 .uv-cache/
