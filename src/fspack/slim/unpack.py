@@ -263,9 +263,12 @@ def _prune_previous_dist_infos(site_packages_dir: Path, wheels: Sequence[Path]) 
         return
     removed: list[str] = []
     for entry in site_packages_dir.iterdir():
+        stem = entry.name
+        # 先做零成本的文件名后缀判断，命中 dist-info/egg-info 才做 is_dir 系统调用
+        if not stem.endswith(".dist-info") and not stem.endswith(".egg-info"):
+            continue
         if not entry.is_dir():
             continue
-        stem = entry.name
         # 识别 .dist-info / .egg-info 元数据目录
         for suffix in (".dist-info", ".egg-info"):
             if stem.endswith(suffix):

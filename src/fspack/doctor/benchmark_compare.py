@@ -50,7 +50,9 @@ DEFAULT_THRESHOLD = 25.0
 # 的调度/文件系统抖动绝对量在几十 µs 内，但相对量可达 10-27%——纯相对判定
 # 会把 µs 级抖动放大成百分比误报（实测 run：Δ=+17µs 判 +12.2% 超过 core
 # 10% 阈值导致 CI 失败，本地复跑同代码 median 反而更快）。下限只抑制"绝对
-# 差极小"的退化判定，真实代码退化（数倍变慢）绝对差远超下限仍会被捕获
+# 差极小"的退化判定，真实代码退化（数倍变慢）绝对差远超下限仍会被捕获。
+# ms 级 I/O 类别（如 build_perf）抖动绝对量在 ms 级，全局下限不够用，
+# 通过 BenchmarkCategory.noise_floor 按类别覆盖
 NOISE_FLOOR_SECONDS = 5e-5
 
 
@@ -80,17 +82,24 @@ class BenchmarkCategory:
     pattern: str  # 测试名匹配正则（re.match，需锚定 ^）
     threshold: float  # 退化阈值百分比
     description: str  # 类别说明（含 StdDev 依据）
+    noise_floor: float = 0.0  # 类别专属绝对噪声下限（秒），0 用全局 NOISE_FLOOR_SECONDS
 
 
 # 默认基线类别阈值（基于 iter-141~144 实测 StdDev 设定）
 # 顺序重要：具体类别在前，core 兜底在后。_match_category 返回首个匹配
 DEFAULT_CATEGORIES: tuple[BenchmarkCategory, ...] = (
     # test_build_perf_baseline.py：含 AST 扫描与文件 I/O，StdDev 5-27%
+    # noise_floor=1.5ms：该类别 median 绝对量仅 4-6.5ms，CI run 级 I/O 调度抖动
+    # 表现为加性 ~1ms 偏移（2026-10-10 run 实测：4 项测试绝对退化一致 +0.93~1.12ms，
+    # 基线最小的 3 项百分比越 25% 阈值、基线最大的 1 项仅 +17.1%——按比例退化
+    # 不会出现"基线越大百分比越小"的排序特征）。4ms 基线 × 27% StdDev ≈ 1.1ms，
+    # 1.5ms ≈ 2σ 高于抖动包络；真实代码退化（数倍变慢）绝对差远超下限仍被捕获
     BenchmarkCategory(
         name="build_perf",
         pattern=r"^test_(small|medium)_project_.*_baseline$",
         threshold=25.0,
         description="test_build_perf_baseline.py 端到端编排基线，含 AST 扫描与文件 I/O 抖动 StdDev 5-27%",
+        noise_floor=1.5e-3,
     ),
     # test_nuitka_compile_baseline.py：mock time.sleep，StdDev <1%
     BenchmarkCategory(
@@ -326,9 +335,11 @@ def compare(
             continue
 
         delta_pct = (current.median - best.median) / best.median * 100.0
-        # 噪声下限：绝对差低于 NOISE_FLOOR_SECONDS 视为抖动，不判退化
+        # 噪声下限：绝对差低于下限视为抖动，不判退化。类别专属下限
+        # （ms 级 I/O 类别）优先，否则用全局 NOISE_FLOOR_SECONDS（µs 级微基准）
         abs_delta = current.median - best.median
-        is_regression = delta_pct > row_threshold and abs_delta >= NOISE_FLOOR_SECONDS
+        floor = max(cat.noise_floor, NOISE_FLOOR_SECONDS) if cat else NOISE_FLOOR_SECONDS
+        is_regression = delta_pct > row_threshold and abs_delta >= floor
         # 当前运行是否为所有运行中最快（含当前）
         all_medians = [e.median for e in all_entries[name]]
         is_current_best = current.median <= min(all_medians)
@@ -530,12 +541,13 @@ def compare_entry(
         # 系统性退化（机器负载波动）：输出警告但不阻断 CI
         return 0
     if report.regressions > 0:
-        # 显示退化项的详情，含类别阈值便于排查
+        # 显示退化项的详情，含类别阈值与绝对差便于排查
         print(f"\n失败: {report.regressions} 项退化超过阈值（全局 {threshold:.0f}%）")
         for row in report.rows:
             if row.is_regression:
+                abs_delta = row.current_median - row.best_median
                 print(
-                    f"  {row.name}  Δ={_format_pct(row.delta_pct)}  "
+                    f"  {row.name}  Δ={_format_pct(row.delta_pct)}（{_format_time(abs_delta)}）  "
                     f"阈值={row.threshold:.0f}%  类别={row.category or '（全局）'}"
                 )
         return 1

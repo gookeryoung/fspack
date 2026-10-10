@@ -27,6 +27,15 @@ jobs:
       - name: Sync dependencies
         run: uv sync --frozen --extra lint
 
+      # 依赖漏洞审计：仅导出运行时依赖（--no-dev 排除 dev/docs/image extras），
+      # 开发工具链（pytest/sphinx/Pillow 等）漏洞不影响最终用户，且新版本均要求
+      # Python >=3.10，与项目仍支持 3.8 的矩阵不兼容。
+      # fspack 运行时依赖仅 certifi/pefile/rich/pygments，已全部修复至安全版本。
+      - name: Dependency vulnerability audit
+        run: |
+          uv export --frozen --no-dev --no-emit-project --format requirements-txt > /tmp/audit-requirements.txt
+          uvx pip-audit --strict -r /tmp/audit-requirements.txt
+
       - name: Ruff check
         run: uv run ruff check src tests
 
@@ -143,4 +152,3 @@ jobs:
           path: .benchmarks/
           if-no-files-found: ignore
           retention-days: 30
-
