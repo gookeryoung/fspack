@@ -119,7 +119,7 @@ jobs:
       # 基线缓存：按平台 + Python 版本分组，避免硬件差异导致误报
       # key 含 v2 后缀：rounds=10→20 调整后基线数据不兼容，用 v2 让旧缓存失效
       - name: Restore benchmark baseline
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: .benchmarks/
           key: benchmark-ubuntu-3.13-v2-${{ github.run_id }}
