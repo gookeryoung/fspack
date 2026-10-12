@@ -40,4 +40,3 @@ exclude = [
     "src/webview_app/frontend/node_modules/**/*",
 ]
 include = ["src/webview_app/**/*.py"]
-

@@ -7,11 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- 修复 build_perf 基准 CI 假性退化，类别级绝对噪声下限判定
+
+## [0.6.11] - 2026-10-10
+
 ### Added
+- 新增构建性能基准报告分析，重写基准对比引擎（+114/-45）
 - 源码复制自动跳过 `.` 开头的配置/缓存目录（`.pnpm-store`/`.cnb`/`.codeup`/`.claude` 等），新增 `[tool.fspack] include-dirs` 强制包含
 
 ### Fixed
+- 基准对比新增绝对噪声下限，修复微基准抖动误报退化
 - 发行包不再携带构建中间标记 `.build_ok`/`.build_failed` 与 dist 内旧版残留的隐藏目录
+
+### Removed
+- 移除基准对比过渡 shim 并清理过期引用
+
+## [0.6.10] - 2026-10-07
+
+### Changed
+- 多入口 loader 按配置分类去重，同配置只编译一次
+
+## [0.6.9] - 2026-10-02
+
+### Changed
+- 更新版本 0.6.8 → 0.6.9，回填 0.5.6~0.6.8 更新日志与历史版本日期
+- 更新 uv.lock 并移除多余的依赖标记
+
+### Fixed
+- 修复 `.gitignore` 全局 `wheels/` 模式导致 wheel 产物缺失 `packaging.wheels` 子包
+- Python 3.8 下 `cast` 类型参数改为字符串前向引用，修复 CI 收集失败
+- 修复失效文档引用与版本提示
 
 ## [0.6.8] - 2026-09-28
 

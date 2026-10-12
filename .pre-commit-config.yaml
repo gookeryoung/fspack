@@ -3,7 +3,7 @@
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     # Ruff 版本 - 与 pyproject.toml 保持同步
-    rev: v0.15.21
+    rev: v0.16.8
     hooks:
       # 运行 linter
       - id: ruff
@@ -15,6 +15,8 @@ repos:
     hooks:
       - id: check-merge-conflict
       - id: debug-statements
+        # 模板占位文件（$entry_module）非合法 Python，跳过 ast 解析
+        exclude: ^src/fspack/assets/
       - id: fix-byte-order-marker
       - id: trailing-whitespace
         args: [--markdown-linebreak-ext=md]

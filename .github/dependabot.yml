@@ -1,0 +1,23 @@
+# Dependabot 自动依赖更新
+# https://docs.github.com/code-security/dependabot/dependabot-version-updates
+version: 2
+updates:
+  # pip 依赖：uv.lock 由 Dependabot 无法直接更新，改用 uv 官方建议的
+  # `pip` 生态扫描 pyproject.toml 直接依赖；lockfile 同步由本地 uv lock 完成
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      dev-dependencies:
+        dependency-type: development
+  # GitHub Actions：workflow 内 action 版本对齐
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci

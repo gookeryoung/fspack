@@ -19,6 +19,10 @@ coverage.xml
 # 工具缓存
 .ruff_cache/
 
+# 基准测试与上传产物（本地运行生成，不入库）
+.benchmarks/
+.uploads/
+
 # 本地协作产物（需求/迭代/设计记录，不进入版本库）
 /.trae/
 .pyrefly_cache/

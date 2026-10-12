@@ -27,6 +27,13 @@ jobs:
       - name: Sync dependencies
         run: uv sync --frozen --extra lint
 
+      # 依赖漏洞审计：导出全量锁定依赖（含 extras/dev）交给 pip-audit，
+      # 发现任何已知漏洞（含 High/Critical）即非零退出阻断合并
+      - name: Dependency vulnerability audit
+        run: |
+          uv export --frozen --all-extras --no-emit-project --format requirements-txt > /tmp/audit-requirements.txt
+          uvx pip-audit --strict -r /tmp/audit-requirements.txt
+
       - name: Ruff check
         run: uv run ruff check src tests
 
@@ -143,4 +150,3 @@ jobs:
           path: .benchmarks/
           if-no-files-found: ignore
           retention-days: 30
-
