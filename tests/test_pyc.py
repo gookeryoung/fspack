@@ -782,3 +782,40 @@ def test_strip_py_sources_skips_web_static_dirs(tmp_path: Path) -> None:
     assert stripped == 1
     assert not (src / "app.py").exists()
     assert (web_dir / "tool.py").is_file()
+
+
+# ---- _compileall_workers：compileall 并行度上限（实测调参） ----
+
+
+def test_compileall_workers_scales_with_cpu_and_caps(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """worker 数按核数缩放、上限 16：两个并行 compileall 会让进程数翻倍，超订阅反而更慢。"""
+    from fspack.packaging.pyc.compile import _compileall_workers
+
+    for cpu, expected in ((1, 1), (4, 4), (16, 16), (64, 16)):
+        monkeypatch.setattr("fspack.packaging.pyc.compile.os.cpu_count", lambda c=cpu: c)
+        assert _compileall_workers() == expected
+    monkeypatch.setattr("fspack.packaging.pyc.compile.os.cpu_count", lambda: None)
+    assert _compileall_workers() == 1
+
+
+def test_run_compileall_uses_worker_count_as_j(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """回归：cmd 的 ``-j`` 取值为 :func:`_compileall_workers`，不再硬编码 ``-j 0``。"""
+    from fspack.packaging.pyc.compile import _compileall_workers, _run_compileall
+
+    captured: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kw: Any) -> Any:
+        captured.append(list(cmd))
+        return CompletedStub()
+
+    monkeypatch.setattr("subprocess.run", fake_run)
+    ok, detail = _run_compileall(tmp_path / "python.exe", tmp_path / "site-packages", 0)
+
+    assert ok and detail is None
+    cmd = captured[0]
+    assert cmd[cmd.index("-j") + 1] == str(_compileall_workers())

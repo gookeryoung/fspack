@@ -225,14 +225,50 @@ def test_collect_size_report_categories(tmp_path: Path) -> None:
     assert names == ["runtime", "src", "site-packages", "其他"]
 
 
-def test_collect_size_report_totals(tmp_path: Path) -> None:
-    """total_size 与 total_files 为各类别之和."""
-    dist = _make_dist_with_runtime(tmp_path)
+@pytest.mark.parametrize("with_site_packages", [False, True])
+def test_collect_size_report_totals(tmp_path: Path, with_site_packages: bool) -> None:
+    """分类互斥，总量与独立磁盘遍历一致."""
+    dist = tmp_path / "dist"
+    files = {
+        "runtime/python311.dll": b"r" * 31,
+        "runtime/Lib/site-packages/nested.py": b"n" * 7,
+        "src/app.py": b"s" * 17,
+        "app.exe": b"e" * 13,
+        "release/report.txt": b"a" * 5,
+        "build/icon.ico": b"i" * 3,
+        ".build_ok": b"ok",
+    }
+    if with_site_packages:
+        files.update({"site-packages/pkg/data.bin": b"p" * 100, "site-packages/pkg-1.0.dist-info/METADATA": b"m" * 11})
+    for rel, content in files.items():
+        path = dist / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+    (dist / "empty").mkdir()
+
     report = collect_size_report(dist)
-    expected_total = sum(c.size for c in report.categories)
-    expected_files = sum(c.file_count for c in report.categories)
-    assert report.total_size == expected_total
-    assert report.total_files == expected_files
+    disk_files = [p for p in dist.rglob("*") if p.is_file()]
+    assert report.total_size == sum(p.stat().st_size for p in disk_files)
+    assert report.total_files == len(disk_files)
+    assert {c.name: (c.size, c.file_count) for c in report.categories} == {
+        "runtime": (38, 2),
+        "src": (17, 1),
+        "site-packages": (111, 2) if with_site_packages else (0, 0),
+        "其他": (23, 4),
+    }
+
+
+def test_collect_size_report_flat_site_packages_counted_once(tmp_path: Path) -> None:
+    dist = tmp_path / "dist"
+    sp = dist / "site-packages"
+    sp.mkdir(parents=True)
+    (sp / "data.bin").write_bytes(b"x" * 100)
+
+    report = collect_size_report(dist)
+    disk_files = [p for p in dist.rglob("*") if p.is_file()]
+    assert report.total_size == sum(p.stat().st_size for p in disk_files) == 100
+    assert report.total_files == len(disk_files) == 1
+    assert next(c for c in report.categories if c.name == "其他").size == 0
 
 
 def test_collect_size_report_top_packages_sorted(tmp_path: Path) -> None:
@@ -258,12 +294,12 @@ def test_collect_size_report_top_n_limit(tmp_path: Path) -> None:
 
 
 def test_collect_size_report_other_category(tmp_path: Path) -> None:
-    """其他类别包含 dist 根目录下非 runtime/src 的文件."""
+    """其他类别不重复计入 runtime/src/site-packages."""
     dist = _make_dist_with_runtime(tmp_path)
     report = collect_size_report(dist)
     other = next(c for c in report.categories if c.name == "其他")
-    assert other.size > 0  # app.exe
-    assert other.file_count >= 1
+    assert other.size == (dist / "app.exe").stat().st_size
+    assert other.file_count == 1
 
 
 # ---- print_size_report ----

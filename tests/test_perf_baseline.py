@@ -109,6 +109,27 @@ def sample_project(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
+def ast_scheduling_project(tmp_path: Path, request: pytest.FixtureRequest) -> tuple[Path, int, int]:
+    """计时外创建精确文件数的样本；清理由 tmp_path fixture 在计时外负责.
+
+    小样本沿用真实 import/函数模板；大样本重复有效源码而非 sleep，
+    总大小至少为参数指定的 MiB。不会预启动/复用池，计时包含 spawn 成本。
+    """
+    count, size_mib = request.param
+    src = tmp_path / "project"
+    src.mkdir()
+    total_bytes = 0
+    for index in range(count):
+        content = _SAMPLE_SRC_TEMPLATE.format(name=index).encode("utf-8")
+        if size_mib:
+            target = (size_mib * 1024 * 1024 + count - 1) // count
+            content *= (target + len(content) - 1) // len(content)
+        (src / f"mod_{index:04d}.py").write_bytes(content)
+        total_bytes += len(content)
+    return src, count, total_bytes
+
+
+@pytest.fixture
 def sample_wheel(tmp_path: Path) -> Path:
     """构造 PySide6 拆分 wheel 样本（用于解压基线）."""
     whl = tmp_path / "wh" / "pyside6-6.11.1-cp310-abi3-win_amd64.whl"
@@ -191,17 +212,65 @@ class TestAstBaseline:
         assert "QtWidgets" in result[1]["PySide2"]
 
     def test_analyze_dependencies_baseline(self, benchmark: Any, sample_project: Path) -> None:
-        """多文件依赖分析基线：50 个 .py 文件全量 AST 解析耗时.
-
-        ProcessPoolExecutor 并行解析预期提速 2-4x（CPU 密集 ast.parse，
-        50 文件足够并行收益）。
-        """
+        """约 50 个小文件的串行基线；工作量不足以摊销进程池启动成本."""
         result = benchmark(analyze_dependencies, sample_project, "myproj", ())
         # 功能正确性验证
         assert "os" in result.ast_stdlib
         assert "PySide2" in result.ast_third_party
         assert "numpy" in result.ast_third_party
         assert "QtWidgets" in result.ast_submodules.get("PySide2", frozenset())
+
+
+@pytest.mark.slow
+class TestAstSchedulingBaseline:
+    """普通 pytest 完成后单独串行运行；固定轮次避免自动校准反复启动池.
+
+    -k small 覆盖旧阈值两侧；-k large 是有界真进程池探测（1000 文件，
+    8/16MiB），默认策略与强制串行各 3 轮。不对跨机器耗时比值作硬断言。
+    """
+
+    @pytest.mark.parametrize("mode", ["serial", "default"])
+    @pytest.mark.parametrize("ast_scheduling_project", [(199, 0), (200, 0), (500, 0)], indirect=True)
+    def test_small_files(
+        self,
+        benchmark: Any,
+        ast_scheduling_project: tuple[Path, int, int],
+        monkeypatch: pytest.MonkeyPatch,
+        mode: str,
+    ) -> None:
+        from fspack.analyzer import analysis
+
+        src, count, total_bytes = ast_scheduling_project
+        assert not analysis._parallel_workload_ok(sorted(src.glob("*.py")))
+        if mode == "serial":
+            monkeypatch.setattr(analysis, "_PARALLEL_THRESHOLD", count + 1)
+        benchmark.extra_info.update(files=count, input_bytes=total_bytes, mode=mode)
+        result = benchmark.pedantic(analyze_dependencies, args=(src, "myproj", ()), rounds=5, iterations=1)
+        assert result.ast_third_party == ("numpy", "requests", "PySide2")
+        assert result.ast_errors == ()
+
+    @pytest.mark.parametrize("mode", ["serial", "default"])
+    @pytest.mark.parametrize("ast_scheduling_project", [(1000, 8), (1000, 16)], indirect=True)
+    def test_large_files(
+        self,
+        benchmark: Any,
+        ast_scheduling_project: tuple[Path, int, int],
+        monkeypatch: pytest.MonkeyPatch,
+        mode: str,
+    ) -> None:
+        from fspack.analyzer import analysis
+
+        if not analysis._parallel_spawn_ok():
+            pytest.skip("large benchmark requires a spawn-capable Python executable")
+        src, count, total_bytes = ast_scheduling_project
+        assert analysis._parallel_workload_ok(sorted(src.glob("*.py")))
+        if mode == "serial":
+            monkeypatch.setattr(analysis, "_PARALLEL_THRESHOLD", count + 1)
+        benchmark.extra_info.update(files=count, input_bytes=total_bytes, mode=mode)
+        result = benchmark.pedantic(analyze_dependencies, args=(src, "myproj", ()), rounds=3, iterations=1)
+        assert result.ast_third_party == ("numpy", "requests", "PySide2")
+        assert result.ast_submodules["PySide2"] == frozenset({"QtWidgets", "QtCore", "QtGui"})
+        assert result.ast_errors == ()
 
 
 @pytest.mark.slow

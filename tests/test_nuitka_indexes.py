@@ -1,8 +1,7 @@
-"""stamp 缓存体系测试：compile_with_stamp、stamp_key 六要素、hash 索引与失败文件列表（indexes.py）."""
+"""Nuitka 编译阶段测试：compile_with_stamp 每次都重编、stamp_key 六要素、失败文件列表（indexes.py）."""
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -14,20 +13,20 @@ from fspack.config import (
 )
 from fspack.exceptions import NuitkaError
 from fspack.packaging.nuitka import NuitkaCompiler
-from fspack.packaging.nuitka.compile import (
-    _HASH_INDEX_MAX,
-    _hash_index_path,
-    _load_hash_index,
-    _update_hash_index,
-)
 from fspack.platform import Platform
 from fspack.progress import StageRecorder
 
-# ---- compile_with_stamp stamp 缓存测试 ----
+# ---- compile_with_stamp 编译流程测试 ----
 
 
-def test_compile_with_stamp_cache_hit_skips_all(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """stamp 命中时跳过 ensure_env 与 compile_src."""
+def test_compile_with_stamp_matching_stamp_still_recompiles(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """回归：stamp 内容匹配但产物已被源码同步还原时，仍必须走 ensure_env + compile_src.
+
+    旧实现把"stamp 命中"当作跨构建跳过依据，而 ``copy_source`` 在编译阶段之前
+    把上次生成的 ``.pyd``/``.so`` 当陌生文件删除并还原 ``.py``，跳过即静默产出
+    只有 ``.pyc`` 的发行包（审计复现：generated_artifact_survived_sync=false、
+    python_source_restored=true、compilation_environment_calls=0）。
+    """
     src = tmp_path / "src"
     src.mkdir()
     (src / "app.py").write_text("print('hi')")
@@ -37,22 +36,26 @@ def test_compile_with_stamp_cache_hit_skips_all(tmp_path: Path, monkeypatch: pyt
     runtime.mkdir()
     cache_root = tmp_path / "nuitka_cache"
 
-    # 预写匹配的 stamp
+    # 预写与本次 stamp_key 完全一致的 stamp（模拟"上次已编译"）
     nuitka_ver = nuitka_version_for("3.11.9")
     expected_key = NuitkaCompiler._stamp_key(src, nuitka_ver, "3.11.9")
     NuitkaCompiler._stamp_path(dist).write_text(expected_key, encoding="utf-8")
 
-    ensure_called = {"n": 0}
-    compile_called = {"n": 0}
+    calls = {"ensure": 0, "build_python": 0, "compile": 0}
     monkeypatch.setattr(
         NuitkaCompiler,
         "ensure_env",
-        classmethod(lambda cls, *a, **kw: ensure_called.__setitem__("n", ensure_called["n"] + 1) or "4.1.3"),
+        classmethod(lambda cls, *a, **kw: calls.__setitem__("ensure", calls["ensure"] + 1) or "4.1.3"),
+    )
+    monkeypatch.setattr(
+        NuitkaCompiler,
+        "_ensure_build_python",
+        classmethod(lambda cls, *a, **kw: calls.__setitem__("build_python", calls["build_python"] + 1) or Path()),
     )
     monkeypatch.setattr(
         NuitkaCompiler,
         "compile_src",
-        classmethod(lambda cls, *a, **kw: compile_called.__setitem__("n", compile_called["n"] + 1)),
+        classmethod(lambda cls, *a, **kw: calls.__setitem__("compile", calls["compile"] + 1) or []),
     )
 
     st = StageRecorder("Nuitka 编译")
@@ -60,14 +63,17 @@ def test_compile_with_stamp_cache_hit_skips_all(tmp_path: Path, monkeypatch: pyt
         src, dist, runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), cache_root, stage=st
     )
 
-    assert ensure_called["n"] == 0
-    assert compile_called["n"] == 0
-    assert st._hits == 1
-    assert "stamp 命中" in st._detail
+    assert calls == {"ensure": 1, "build_python": 1, "compile": 1}
+    # 不再产生"命中跳过"记录
+    assert st._hits == 0
+    assert "命中" not in st._detail
+    assert st._items >= 1
+    # 重编后 stamp 仍写入（内容不变）
+    assert NuitkaCompiler._stamp_path(dist).read_text(encoding="utf-8") == expected_key
 
 
 def test_compile_with_stamp_writes_stamp_after_compile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """stamp 未命中时调用 ensure_env + ensure_build_python + compile_src 并写入 stamp."""
+    """无 stamp 时调用 ensure_env + ensure_build_python + compile_src 并写入 stamp."""
     src = tmp_path / "src"
     src.mkdir()
     (src / "app.py").write_text("print('hi')")
@@ -101,8 +107,8 @@ def test_compile_with_stamp_writes_stamp_after_compile(tmp_path: Path, monkeypat
     assert stamp.read_text(encoding="utf-8") == expected
 
 
-def test_compile_with_stamp_invalidates_on_src_change(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """源码变化使 stamp 失效，重新调用 ensure_env + ensure_build_python + compile_src."""
+def test_compile_with_stamp_stale_stamp_is_rewritten(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """源码变化后旧 stamp 被覆盖为本次 stamp_key，且照常重编."""
     src = tmp_path / "src"
     src.mkdir()
     (src / "app.py").write_text("print('hi')")
@@ -143,6 +149,10 @@ def test_compile_with_stamp_invalidates_on_src_change(tmp_path: Path, monkeypatc
     assert calls["ensure"] == 1
     assert calls["build_python"] == 1
     assert calls["compile"] == 1
+    # 旧 stamp 内容被本次 stamp_key 覆盖
+    stamp_text = NuitkaCompiler._stamp_path(dist).read_text(encoding="utf-8")
+    assert stamp_text != old_key
+    assert stamp_text == NuitkaCompiler._stamp_key(src, nuitka_ver, "3.11.9")
 
 
 def test_compile_with_stamp_passes_build_python_to_compile_src(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -253,7 +263,7 @@ def test_stamp_key_includes_nuitka_version_py_version_src_fingerprint(
 
 
 def test_stamp_key_compiler_suffix(tmp_path: Path) -> None:
-    """compiler 非 auto 时拼入 stamp key：切换编译器强制重编；auto 不拼接保持兼容."""
+    """compiler 非 auto 时作为第七段拼入 stamp key；auto 不拼接保持既有格式."""
     src = tmp_path / "src"
     src.mkdir()
     (src / "app.py").write_text("print('hi')")
@@ -263,7 +273,7 @@ def test_stamp_key_compiler_suffix(tmp_path: Path) -> None:
     key_mingw = NuitkaCompiler._stamp_key(src, "4.1.3", "3.11.9", compiler="mingw")
     key_msvc = NuitkaCompiler._stamp_key(src, "4.1.3", "3.11.9", compiler="msvc")
 
-    # auto 不拼接：与既有六段式格式一致，存量 stamp 不失效
+    # auto 不拼接：与既有六段式格式一致
     assert key_auto == key_auto_default
     assert key_auto.count("|") == 5
     # 非 auto 拼接第七段，且 mingw/msvc 互异
@@ -273,9 +283,10 @@ def test_stamp_key_compiler_suffix(tmp_path: Path) -> None:
 
 
 def test_stamp_key_includes_entry_rels(tmp_path: Path) -> None:
-    """entry_rels 纳入 stamp key：入口集合变化时 stamp 失效，强制重编.
+    """entry_rels 纳入 stamp key：入口集合不同则 stamp 内容不同.
 
-    避免上次编译删除了 .py、本次新增入口跳过但 .py 已不在导致 run_path 失败。
+    stamp 记录"这次编译覆盖到哪些源码与入口"，供 dist 半成品检测与诊断使用，
+    不再作为跳过编译的依据（跳过会让入口的 .py 缺失导致 run_path 失败）。
     """
     src = tmp_path / "src"
     src.mkdir()
@@ -305,10 +316,10 @@ def test_stamp_key_entry_rels_order_independent(tmp_path: Path) -> None:
 
 
 def test_stamp_key_includes_data_dirs(tmp_path: Path) -> None:
-    """data_dirs 纳入 stamp key：配置变化时编译范围变化，须强制重编.
+    """data_dirs 纳入 stamp key：数据资源目录配置不同则 stamp 内容不同.
 
-    data-dirs 增删会改变哪些 .py 被跳过编译；stamp 仍命中会导致新纳入编译的
-    文件永不编译（其 .py 已被上次构建剥离的场景）。
+    data-dirs 增删改变哪些 .py 参与编译，stamp 记录本次编译范围便于诊断；
+    跳过与否由"每次构建都重编"保证，新纳入编译的文件必然被编译。
     """
     src = tmp_path / "src"
     src.mkdir()
@@ -341,11 +352,12 @@ def test_stamp_key_data_dirs_order_independent(tmp_path: Path) -> None:
 
 
 def test_stamp_key_data_dirs_content_changes_do_not_invalidate(tmp_path: Path) -> None:
-    """data_dirs 内 .py 内容变化不改变 stamp key（不参与编译，无需重编）.
+    """data_dirs 内 .py 内容变化不改变 stamp key（其下 .py 不参与编译）.
 
     fspack 自构建 dev 循环：assets/templates/ 模板示例项目 .py 频繁编辑，
-    若纳入指纹会导致 Nuitka 全量重编。data-dirs 树从指纹排除后仅非数据
-    源码变化触发失效。指纹有构建级缓存，写文件后须手动失效再取 key。
+    若纳入指纹会让 stamp 内容随无关文件抖动，失去"标记本次编译范围"的诊断
+    价值。data-dirs 树从指纹排除后仅非数据源码变化改变 key。
+    指纹有构建级缓存，写文件后须手动失效再取 key。
     """
     from fspack.analyzer.fingerprint import clear_fingerprint_cache
 
@@ -362,7 +374,7 @@ def test_stamp_key_data_dirs_content_changes_do_not_invalidate(tmp_path: Path) -
     key_after = NuitkaCompiler._stamp_key(src, "4.1.3", "3.11.9", None, (), (tpl,))
     assert key_before == key_after
 
-    # 非数据源码变化仍须失效
+    # 非数据源码变化仍须改变 key
     (src / "app.py").write_text("x = 222")
     clear_fingerprint_cache()
     key_src_changed = NuitkaCompiler._stamp_key(src, "4.1.3", "3.11.9", None, (), (tpl,))
@@ -373,48 +385,6 @@ def test_stamp_path_under_dist(tmp_path: Path) -> None:
     """stamp 文件位于 dist/.nuitka_compile_stamp."""
     dist = tmp_path / "dist"
     assert NuitkaCompiler._stamp_path(dist) == dist / ".nuitka_compile_stamp"
-
-
-def test_compile_with_stamp_read_oserror_proceeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """stamp 读取 OSError（如磁盘错误）时容错继续编译流程，不崩溃."""
-    src = tmp_path / "src"
-    src.mkdir()
-    (src / "app.py").write_text("print('hi')")
-    dist = tmp_path / "dist"
-    dist.mkdir()
-    runtime = tmp_path / "runtime"
-    runtime.mkdir()
-    cache_root = tmp_path / "nuitka_cache"
-
-    # 预写 stamp 文件使 is_file() 为 True，随后 read_text 抛 OSError
-    stamp = NuitkaCompiler._stamp_path(dist)
-    stamp.write_text("stale", encoding="utf-8")
-
-    orig_read_text = Path.read_text
-
-    def fake_read_text(self: Path, *args: Any, **kwargs: Any) -> str:
-        if self == stamp:
-            raise OSError("disk error")
-        return orig_read_text(self, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "read_text", fake_read_text)
-
-    calls = {"compile": 0}
-    monkeypatch.setattr(NuitkaCompiler, "ensure_env", classmethod(lambda cls, *a, **kw: "4.1.3"))
-    monkeypatch.setattr(NuitkaCompiler, "_ensure_build_python", classmethod(lambda cls, *a, **kw: Path()))
-    monkeypatch.setattr(
-        NuitkaCompiler,
-        "compile_src",
-        classmethod(lambda cls, *a, **kw: calls.__setitem__("compile", calls["compile"] + 1)),
-    )
-
-    st = StageRecorder("Nuitka 编译")
-    NuitkaCompiler.compile_with_stamp(
-        src, dist, runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), cache_root, stage=st
-    )
-
-    # OSError 被容错：继续执行编译流程
-    assert calls["compile"] == 1
 
 
 def test_compile_with_stamp_write_oserror_warns(
@@ -452,363 +422,6 @@ def test_compile_with_stamp_write_oserror_warns(
 
     assert any("写入 Nuitka stamp 失败" in r.message for r in caplog.records)
     # stamp 未写入（原子化保证：要么完整写入要么不存在）
-    assert not NuitkaCompiler._stamp_path(dist).is_file()
-
-
-# ---- compile_with_stamp hash 索引回退测试（iter-129） ----
-
-
-def test_hash_index_path_under_dist(tmp_path: Path) -> None:
-    """hash 索引文件位于 dist/.nuitka_hash_index.json，与 stamp 同目录."""
-    dist = tmp_path / "dist"
-    assert _hash_index_path(dist) == dist / ".nuitka_hash_index.json"
-
-
-def test_load_hash_index_missing_file_returns_empty(tmp_path: Path) -> None:
-    """索引文件不存在时返回空 dict，不抛异常."""
-    dist = tmp_path / "dist"
-    dist.mkdir()
-    assert _load_hash_index(dist) == {}
-
-
-def test_load_hash_index_corrupt_json_deletes_file(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    """索引文件 JSON 非法时删除并返回空 dict（与 _load_deps_cache 策略一致）."""
-    dist = tmp_path / "dist"
-    dist.mkdir()
-    index_file = _hash_index_path(dist)
-    index_file.write_text("{not valid json", encoding="utf-8")
-
-    with caplog.at_level("WARNING", logger="fspack.packaging.nuitka"):
-        result = _load_hash_index(dist)
-
-    assert result == {}
-    assert not index_file.is_file()
-    assert any("hash 索引损坏" in r.message for r in caplog.records)
-
-
-def test_load_hash_index_non_dict_deletes_file(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    """索引文件顶层非 dict 时删除并返回空 dict."""
-    dist = tmp_path / "dist"
-    dist.mkdir()
-    index_file = _hash_index_path(dist)
-    index_file.write_text('["not", "a", "dict"]', encoding="utf-8")
-
-    with caplog.at_level("WARNING", logger="fspack.packaging.nuitka"):
-        result = _load_hash_index(dist)
-
-    assert result == {}
-    assert not index_file.is_file()
-    assert any("非 dict" in r.message for r in caplog.records)
-
-
-def test_load_hash_index_strips_non_str_entries(tmp_path: Path) -> None:
-    """索引含非 str 键/值时剔除异常条目，保留有效条目并回写."""
-    dist = tmp_path / "dist"
-    dist.mkdir()
-    index_file = _hash_index_path(dist)
-    # 混合有效与无效条目：123 是 int 键，"valid" 是有效条目，None 是无效值
-    raw = json.dumps({"valid": "2026-01-01T00:00:00", "123": "2026-01-01", "bad_val": None})
-    index_file.write_text(raw, encoding="utf-8")
-
-    result = _load_hash_index(dist)
-
-    # 仅保留 valid 条目（int 键 JSON 转为 str，但值 None 被剔除）
-    # 注意：json.loads 把数字键转为 str，所以 "123" 实际是 str 键 + str 值，会被保留
-    # 真正被剔除的是 "bad_val": None（值非 str）
-    assert result["valid"] == "2026-01-01T00:00:00"
-    assert "bad_val" not in result
-    # 索引文件被回写（剔除后）
-    rewritten = json.loads(index_file.read_text(encoding="utf-8"))
-    assert "bad_val" not in rewritten
-
-
-def test_load_hash_index_read_oserror_returns_empty(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    """索引读取 OSError（如权限错误）时返回空 dict，不删除文件（瞬时错误）."""
-    dist = tmp_path / "dist"
-    dist.mkdir()
-    index_file = _hash_index_path(dist)
-    index_file.write_text('{"k": "v"}', encoding="utf-8")
-
-    orig_read_text = Path.read_text
-
-    def fake_read_text(self: Path, *args: Any, **kwargs: Any) -> str:
-        if self == index_file:
-            raise OSError("permission denied")
-        return orig_read_text(self, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "read_text", fake_read_text)
-
-    with caplog.at_level("WARNING", logger="fspack.packaging.nuitka"):
-        result = _load_hash_index(dist)
-
-    assert result == {}
-    # OSError 不删除文件（瞬时错误，下次重试）
-    assert index_file.is_file()
-    assert any("读取 hash 索引失败" in r.message for r in caplog.records)
-
-
-def test_load_hash_index_corrupt_json_unlink_oserror_warns(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    """索引损坏但删除文件失败时仅告警，仍返回空 dict（不因删除失败中断）."""
-    dist = tmp_path / "dist"
-    dist.mkdir()
-    index_file = _hash_index_path(dist)
-    index_file.write_text("{corrupt", encoding="utf-8")
-
-    def raise_oserror(self: Path, *args: Any, **kwargs: Any) -> None:
-        raise OSError("permission denied")
-
-    monkeypatch.setattr(Path, "unlink", raise_oserror)
-
-    with caplog.at_level("WARNING", logger="fspack.packaging.nuitka"):
-        result = _load_hash_index(dist)
-
-    assert result == {}
-    # 删除失败告警
-    assert any("删除文件失败" in r.message for r in caplog.records)
-    # 文件仍在（删除失败）
-    assert index_file.is_file()
-
-
-def test_update_hash_index_writes_new_entry(tmp_path: Path) -> None:
-    """更新索引：新条目写入，含当前 ISO 时间戳."""
-    dist = tmp_path / "dist"
-    dist.mkdir()
-    stamp_key = "4.1.3|3.11.9|fingerprint||"
-
-    _update_hash_index(dist, stamp_key)
-
-    index = json.loads(_hash_index_path(dist).read_text(encoding="utf-8"))
-    assert stamp_key in index
-    assert isinstance(index[stamp_key], str)
-    assert len(index[stamp_key]) > 0
-
-
-def test_update_hash_index_merges_existing(tmp_path: Path) -> None:
-    """更新索引：保留已有条目，合并新条目."""
-    dist = tmp_path / "dist"
-    dist.mkdir()
-    index_file = _hash_index_path(dist)
-    index_file.write_text('{"old_key": "2026-01-01T00:00:00"}', encoding="utf-8")
-
-    _update_hash_index(dist, "new_key")
-
-    index = json.loads(index_file.read_text(encoding="utf-8"))
-    assert "old_key" in index
-    assert "new_key" in index
-
-
-def test_update_hash_index_lru_eviction(tmp_path: Path) -> None:
-    """索引超过 _HASH_INDEX_MAX 时按时间戳淘汰最旧条目."""
-    dist = tmp_path / "dist"
-    dist.mkdir()
-    index_file = _hash_index_path(dist)
-    # 预写 _HASH_INDEX_MAX 条旧条目（同一天内秒数递增，字符串排序与数值一致）
-    old_index = {f"old_{i:02d}": f"2026-01-01T00:00:{i:02d}" for i in range(_HASH_INDEX_MAX)}
-    index_file.write_text(json.dumps(old_index), encoding="utf-8")
-
-    # 更新一条新条目（now_iso 比所有旧条目都新）
-    _update_hash_index(dist, "new_key")
-
-    index = json.loads(index_file.read_text(encoding="utf-8"))
-    # 总数不超过 _HASH_INDEX_MAX
-    assert len(index) == _HASH_INDEX_MAX
-    # 新条目保留
-    assert "new_key" in index
-    # 最旧条目被淘汰（old_00 时间戳最早）
-    assert "old_00" not in index
-    # 次新条目保留
-    assert f"old_{_HASH_INDEX_MAX - 1:02d}" in index
-
-
-def test_update_hash_index_write_oserror_warns(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    """索引原子写入失败时仅告警不中断（索引是回退优化，不影响主流程）."""
-    dist = tmp_path / "dist"
-    dist.mkdir()
-
-    def raise_oserror(*a: Any, **kw: Any) -> None:
-        raise OSError("read-only file system")
-
-    monkeypatch.setattr("fspack.packaging.nuitka.compile._atomic_write_text", raise_oserror)
-
-    with caplog.at_level("WARNING", logger="fspack.packaging.nuitka"):
-        # 不抛异常即通过
-        _update_hash_index(dist, "some_key")
-
-    assert any("写入 hash 索引失败" in r.message for r in caplog.records)
-
-
-def test_compile_with_stamp_hash_index_hit_skips_compile_and_restamps(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """stamp 未命中但 hash 索引命中时跳过编译，重建 stamp（iter-129 核心场景）.
-
-    场景：dist 完整保留（.pyd 产物在）但 stamp 文件单独丢失/损坏。
-    索引与 stamp 同在 dist/，删除 dist 时一并清理，故索引命中安全。
-    """
-    src = tmp_path / "src"
-    src.mkdir()
-    (src / "app.py").write_text("print('hi')")
-    dist = tmp_path / "dist"
-    dist.mkdir()
-    runtime = tmp_path / "runtime"
-    runtime.mkdir()
-    cache_root = tmp_path / "nuitka_cache"
-
-    # 预写 hash 索引含当前 stamp_key，但不写 stamp 文件
-    nuitka_ver = nuitka_version_for("3.11.9")
-    expected_key = NuitkaCompiler._stamp_key(src, nuitka_ver, "3.11.9")
-    _hash_index_path(dist).write_text(json.dumps({expected_key: "2026-01-01T00:00:00"}), encoding="utf-8")
-
-    ensure_called = {"n": 0}
-    compile_called = {"n": 0}
-    monkeypatch.setattr(
-        NuitkaCompiler,
-        "ensure_env",
-        classmethod(lambda cls, *a, **kw: ensure_called.__setitem__("n", ensure_called["n"] + 1) or "4.1.3"),
-    )
-    monkeypatch.setattr(
-        NuitkaCompiler,
-        "compile_src",
-        classmethod(lambda cls, *a, **kw: compile_called.__setitem__("n", compile_called["n"] + 1)),
-    )
-
-    st = StageRecorder("Nuitka 编译")
-    NuitkaCompiler.compile_with_stamp(
-        src, dist, runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), cache_root, stage=st
-    )
-
-    # 索引命中：跳过 ensure_env 与 compile_src
-    assert ensure_called["n"] == 0
-    assert compile_called["n"] == 0
-    assert st._hits == 1
-    assert "hash 索引命中" in st._detail
-    # stamp 被重建
-    stamp = NuitkaCompiler._stamp_path(dist)
-    assert stamp.is_file()
-    assert stamp.read_text(encoding="utf-8") == expected_key
-
-
-def test_compile_with_stamp_hash_index_miss_proceeds_compile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """stamp 未命中且 hash 索引未命中时走完整编译，编译后更新索引."""
-    src = tmp_path / "src"
-    src.mkdir()
-    (src / "app.py").write_text("print('hi')")
-    dist = tmp_path / "dist"
-    dist.mkdir()
-    runtime = tmp_path / "runtime"
-    runtime.mkdir()
-    cache_root = tmp_path / "nuitka_cache"
-
-    # 不写 stamp，不写索引（索引文件不存在）
-
-    monkeypatch.setattr(NuitkaCompiler, "ensure_env", classmethod(lambda cls, *a, **kw: "4.1.3"))
-    fake_py = tmp_path / "fake_python.exe"
-    fake_py.write_text("")
-    monkeypatch.setattr(NuitkaCompiler, "_ensure_build_python", classmethod(lambda cls, *a, **kw: fake_py))
-    monkeypatch.setattr(NuitkaCompiler, "compile_src", classmethod(lambda cls, *a, **kw: []))
-
-    st = StageRecorder("Nuitka 编译")
-    NuitkaCompiler.compile_with_stamp(
-        src, dist, runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), cache_root, stage=st
-    )
-
-    # 编译后 stamp 与索引均写入
-    nuitka_ver = nuitka_version_for("3.11.9")
-    expected_key = NuitkaCompiler._stamp_key(src, nuitka_ver, "3.11.9")
-    assert NuitkaCompiler._stamp_path(dist).read_text(encoding="utf-8") == expected_key
-    index = json.loads(_hash_index_path(dist).read_text(encoding="utf-8"))
-    assert expected_key in index
-
-
-def test_compile_with_stamp_hash_index_corrupt_falls_through(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    """hash 索引文件损坏时删除并走完整编译（不因损坏中断）."""
-    src = tmp_path / "src"
-    src.mkdir()
-    (src / "app.py").write_text("print('hi')")
-    dist = tmp_path / "dist"
-    dist.mkdir()
-    runtime = tmp_path / "runtime"
-    runtime.mkdir()
-    cache_root = tmp_path / "nuitka_cache"
-
-    # 预写损坏的索引文件
-    _hash_index_path(dist).write_text("{corrupt json", encoding="utf-8")
-
-    monkeypatch.setattr(NuitkaCompiler, "ensure_env", classmethod(lambda cls, *a, **kw: "4.1.3"))
-    fake_py = tmp_path / "fake_python.exe"
-    fake_py.write_text("")
-    monkeypatch.setattr(NuitkaCompiler, "_ensure_build_python", classmethod(lambda cls, *a, **kw: fake_py))
-    compile_called = {"n": 0}
-    monkeypatch.setattr(
-        NuitkaCompiler,
-        "compile_src",
-        classmethod(lambda cls, *a, **kw: compile_called.__setitem__("n", compile_called["n"] + 1)),
-    )
-
-    st = StageRecorder("Nuitka 编译")
-    with caplog.at_level("WARNING", logger="fspack.packaging.nuitka"):
-        NuitkaCompiler.compile_with_stamp(
-            src, dist, runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), cache_root, stage=st
-        )
-
-    # 损坏索引被删除，走完整编译
-    assert compile_called["n"] == 1
-    assert any("hash 索引损坏" in r.message for r in caplog.records)
-    # 编译后索引重建
-    assert _hash_index_path(dist).is_file()
-
-
-def test_compile_with_stamp_hash_index_hit_restamp_oserror_warns(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    """hash 索引命中但重建 stamp 失败时仅告警，仍跳过编译（索引命中即视为已编译）."""
-    src = tmp_path / "src"
-    src.mkdir()
-    (src / "app.py").write_text("print('hi')")
-    dist = tmp_path / "dist"
-    dist.mkdir()
-    runtime = tmp_path / "runtime"
-    runtime.mkdir()
-    cache_root = tmp_path / "nuitka_cache"
-
-    nuitka_ver = nuitka_version_for("3.11.9")
-    expected_key = NuitkaCompiler._stamp_key(src, nuitka_ver, "3.11.9")
-    _hash_index_path(dist).write_text(json.dumps({expected_key: "2026-01-01T00:00:00"}), encoding="utf-8")
-
-    # patch _atomic_write_text 抛 OSError（仅影响 stamp 重建）
-    def raise_oserror(*a: Any, **kw: Any) -> None:
-        raise OSError("read-only file system")
-
-    monkeypatch.setattr("fspack.packaging.nuitka.compile._atomic_write_text", raise_oserror)
-
-    ensure_called = {"n": 0}
-    monkeypatch.setattr(
-        NuitkaCompiler,
-        "ensure_env",
-        classmethod(lambda cls, *a, **kw: ensure_called.__setitem__("n", ensure_called["n"] + 1) or "4.1.3"),
-    )
-    monkeypatch.setattr(NuitkaCompiler, "compile_src", classmethod(lambda cls, *a, **kw: []))
-
-    st = StageRecorder("Nuitka 编译")
-    with caplog.at_level("WARNING", logger="fspack.packaging.nuitka"):
-        NuitkaCompiler.compile_with_stamp(
-            src, dist, runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), cache_root, stage=st
-        )
-
-    # 索引命中仍跳过编译（ensure_env 未调用）
-    assert ensure_called["n"] == 0
-    assert st._hits == 1
-    # 重建 stamp 失败告警
-    assert any("重建 Nuitka stamp 失败" in r.message for r in caplog.records)
-    # stamp 未写入（_atomic_write_text 抛 OSError）
     assert not NuitkaCompiler._stamp_path(dist).is_file()
 
 
@@ -1026,7 +639,7 @@ def test_compile_with_stamp_warns_when_site_packages_missing(
 
 
 def test_stamp_key_includes_nuitka_packages(tmp_path: Path) -> None:
-    """nuitka_packages 纳入 stamp key：包列表变化时 stamp 失效."""
+    """nuitka_packages 纳入 stamp key：包列表不同则 stamp 内容不同."""
     src = tmp_path / "src"
     src.mkdir()
     (src / "app.py").write_text("x")
@@ -1053,7 +666,7 @@ def test_load_failed_files_valid_list(tmp_path: Path) -> None:
 
 
 def test_load_failed_files_corrupt_json_deletes_file(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    """_load_failed_files 内容损坏（非法 JSON）删除文件并返回空（与 _load_hash_index 策略一致）."""
+    """_load_failed_files 内容损坏（非法 JSON）删除文件并返回空（与 wheels 依赖缓存策略一致）."""
     from fspack.packaging.nuitka.compile import _failed_files_path, _load_failed_files
 
     path = _failed_files_path(tmp_path)
@@ -1133,12 +746,12 @@ def test_compile_with_stamp_writes_failed_files_after_compile(tmp_path: Path, mo
     assert "broken.py" in failed_file.read_text(encoding="utf-8")
 
 
-def test_compile_with_stamp_stamp_miss_retries_failed_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """stamp 未命中（源码已变化）时全量重试：不读取失败文件列表，skip_files 恒 None.
+def test_compile_with_stamp_retries_previous_failed_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """编译路径恒全量重试：不读取上次失败文件列表，skip_files 恒 None.
 
-    旧 BUG：stamp 未命中仍传 skip_files 跳过上次失败文件，且编译后用不含该文件的
-    新列表覆盖写入 + 照写 stamp，用户修复后的文件永远不被编译。新语义：编译路径
-    恒全量重试，失败列表仅作诊断记录写入。
+    旧 BUG：跳过上次失败文件，且编译后用不含该文件的新列表覆盖写入 + 照写
+    stamp，用户修复后的文件永远不被编译。新语义：每次构建全量重编，失败列表
+    仅作诊断记录写入。
     """
     from fspack.packaging.nuitka.compile import _failed_files_path, _load_failed_files
 
@@ -1174,40 +787,6 @@ def test_compile_with_stamp_stamp_miss_retries_failed_files(tmp_path: Path, monk
 
     assert captured_skip, "compile_src 应被调用"
     # skip_files 恒 None：上次失败的 broken.py（已修复）参与全量重试
-    assert captured_skip[0] is None, "stamp 未命中时应全量重试（skip_files=None）"
+    assert captured_skip[0] is None, "每次构建都应全量重试（skip_files=None）"
     # 失败文件列表仍被写入（诊断记录），内容为本次 compile_src 返回值
     assert _load_failed_files(dist) == frozenset()
-
-
-def test_compile_with_stamp_cache_hit_does_not_read_failed_files(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """stamp 命中时跳过整个 Nuitka，不读取失败文件列表（无意义）."""
-    src = tmp_path / "src"
-    src.mkdir()
-    (src / "app.py").write_text("print('hi')")
-    dist = tmp_path / "dist"
-    dist.mkdir()
-    runtime = tmp_path / "runtime"
-    runtime.mkdir()
-    cache_root = tmp_path / "nuitka_cache"
-
-    # 预置 stamp 命中
-    nuitka_ver = nuitka_version_for("3.11.9")
-    stamp_key = NuitkaCompiler._stamp_key(src, nuitka_ver, "3.11.9")
-    NuitkaCompiler._stamp_path(dist).write_text(stamp_key, encoding="utf-8")
-
-    compile_called = {"yes": False}
-
-    def fake_compile_src(cls: Any, *a: Any, **kw: Any) -> list[str]:
-        compile_called["yes"] = True
-        return []
-
-    monkeypatch.setattr(NuitkaCompiler, "compile_src", classmethod(fake_compile_src))
-
-    st = StageRecorder("Nuitka 编译")
-    NuitkaCompiler.compile_with_stamp(
-        src, dist, runtime, "3.11.9", Platform.WINDOWS, get_mirror("aliyun"), cache_root, stage=st
-    )
-
-    assert not compile_called["yes"], "stamp 命中时不应调用 compile_src"

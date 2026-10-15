@@ -318,7 +318,7 @@ def collect_size_report(dist_dir: Path, *, top_n: int = _TOP_N_PACKAGES) -> Size
     src_size, src_files = _dir_size(src_dir)
     categories.append(SizeCategory(name="src", size=src_size, file_count=src_files))
 
-    # site-packages 类别（在 runtime 内，单独统计 Top N 包）
+    # site-packages 类别（与 runtime 平级，单独统计 Top N 包）
     site_packages = find_site_packages(dist_dir)
     sp_size, sp_files = (0, 0)
     packages: list[PackageSize] = []
@@ -351,11 +351,11 @@ def collect_size_report(dist_dir: Path, *, top_n: int = _TOP_N_PACKAGES) -> Size
 
     categories.append(SizeCategory(name="site-packages", size=sp_size, file_count=sp_files))
 
-    # 其他类别：dist 根目录下非 runtime/src 的文件（exe、entry wrapper、pth、.entry 等）
+    # 其他类别：dist 根目录下非 runtime/src/site-packages 的文件（exe、entry wrapper、pth、.entry 等）
     other_size = 0
     other_files = 0
     for entry in dist_dir.iterdir():
-        if entry.name in (_RUNTIME_DIR, _SRC_DIR):
+        if entry.name in (_RUNTIME_DIR, _SRC_DIR) or entry == site_packages:
             continue
         if entry.is_dir():
             sz, n = _dir_size(entry)

@@ -33,7 +33,9 @@ api-ms-win-crt-* 依赖提示（Win7 SP1 需 KB2999226 UCRT）。
 from __future__ import annotations
 
 import logging
+import os
 import shutil
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -98,17 +100,48 @@ class Win7ScanReport:
         return not self.violations
 
 
+def _is_pe_name(name: str) -> bool:
+    """按后缀判定 PE 候选，语义等同 ``name.suffix.lower() in _SCAN_SUFFIXES``。
+
+    手写 ``rpartition`` 而非 ``Path(name).suffix``/``os.path.splitext``：热路径对
+    每个目录项都要判定一次，省去 Path 构造（``.dll`` 这类纯点前缀名与 pathlib
+    一致地视为无后缀）。
+    """
+    stem, dot, ext = name.rpartition(".")
+    return bool(dot and stem) and f".{ext.lower()}" in _SCAN_SUFFIXES
+
+
+def _walk_pe_files(dir_path: Path, *, top_level: bool) -> Iterator[Path]:
+    """深度优先 yield ``dir_path`` 下的 PE 文件；``top_level`` 时跳过一级 ``build``/``release``。
+
+    ``os.scandir`` 的 ``DirEntry`` 复用目录项自带的类型信息，避免
+    ``Path.rglob`` + ``Path.is_file()`` 对每个文件重复 stat 与路径解析；
+    一级子目录命中排除集时整棵子树不进入（rglob 会先遍历再过滤）。
+    遍历失败（权限/竞态删除）的目录静默跳过，与 rglob 行为一致。
+    """
+    try:
+        with os.scandir(dir_path) as it:
+            entries = sorted(it, key=lambda e: e.name)
+    except OSError:
+        return
+    for entry in entries:
+        try:
+            if entry.is_dir(follow_symlinks=False):
+                if top_level and entry.name in _EXCLUDE_PARTS:
+                    continue
+                yield from _walk_pe_files(Path(entry.path), top_level=False)
+            elif entry.is_file(follow_symlinks=True) and _is_pe_name(entry.name):
+                yield Path(entry.path)
+        except OSError:
+            continue
+
+
 def iter_pe_files(dist_dir: Path) -> list[Path]:
     """收集 dist 下待扫描的 PE 文件（排除 build/release，排序保证确定性）.
 
     公开给 NSIS 生成器复用（UCRT 依赖检测遍历同一文件集合）。
     """
-    files = [
-        p
-        for p in dist_dir.rglob("*")
-        if p.is_file() and p.suffix.lower() in _SCAN_SUFFIXES and p.relative_to(dist_dir).parts[0] not in _EXCLUDE_PARTS
-    ]
-    return sorted(files)
+    return sorted(_walk_pe_files(dist_dir, top_level=True))
 
 
 def scan_dist_win7(dist_dir: Path, *, shim: Path | None = WIN7_SHIM_DLL_PATH) -> Win7ScanReport:

@@ -64,7 +64,6 @@ from fspack.packaging.pipeline.stages import (
     _resolve_project_icon,  # noqa: F401
     _site_packages_has_deps,  # noqa: F401
     _slim_runtime,  # noqa: F401
-    _strip_version_specifier,  # noqa: F401
     default_icon_path,
     fspack_wheel_cache_dir,
     unpack_wheels,

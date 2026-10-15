@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import zipfile
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -17,20 +19,21 @@ from fspack.builder import (
     build,
     unpack_wheels,
 )
-from fspack.config import DependencyReport, get_mirror
+from fspack.config import BuildConfig, BuildOptions, DependencyReport, ProjectInfo, SlimRules, get_mirror
 from fspack.exceptions import DependencyError
+from fspack.packaging.pipeline.context import BuildContext
+from fspack.packaging.pipeline.deps_stage import _download_dependencies, _save_installed_dependencies
 from fspack.platform import Platform
+from fspack.progress import BuildTracker
 from tests._stubs import CompletedStub, setup_embed_mocks
 
 
-def test_site_packages_has_deps_true(tmp_path: Path) -> None:
-    """声明的依赖均在 site-packages 中已安装时返回 True."""
+def test_site_packages_metadata_alone_is_not_cache_proof(tmp_path: Path) -> None:
     sp = tmp_path / "sp"
     sp.mkdir()
     (sp / "numpy-1.0.dist-info").mkdir()
-    assert _site_packages_has_deps(sp, ["numpy"]) is True
-    # 含版本 specifier 也应匹配
-    assert _site_packages_has_deps(sp, ["numpy>=1.0"]) is True
+    assert not _site_packages_has_deps(sp, ["numpy"])
+    assert not _site_packages_has_deps(sp, ["numpy>=999.0"], build_key="key")
 
 
 def test_site_packages_has_deps_false_missing_pkg(tmp_path: Path) -> None:
@@ -52,8 +55,7 @@ def test_site_packages_has_deps_false_ignores_pip(tmp_path: Path) -> None:
     sp.mkdir()
     (sp / "pip-26.1.2.dist-info").mkdir()
     assert _site_packages_has_deps(sp, ["pygame"]) is False
-    # 无用户依赖时（packages 为空）vacuously True
-    assert _site_packages_has_deps(sp, []) is True
+    assert _site_packages_has_deps(sp, []) is False
 
 
 def test_site_packages_has_deps_false_empty(tmp_path: Path) -> None:
@@ -68,16 +70,27 @@ def test_site_packages_has_deps_false_no_dir(tmp_path: Path) -> None:
     assert _site_packages_has_deps(tmp_path / "nonexistent", ["numpy"]) is False
 
 
-def test_site_packages_has_deps_name_normalization(tmp_path: Path) -> None:
-    """包名规范化：``-``/``_``/``.`` 互通，大小写不敏感."""
-    sp = tmp_path / "sp"
+@pytest.mark.parametrize("change", ["none", "version", "key", "missing", "modified", "extra", "failed"])
+def test_installed_state_validation(tmp_path: Path, change: str) -> None:
+    from fspack.packaging.pipeline.deps_stage import _installed_fingerprint
+
+    sp = tmp_path / "site-packages"
     sp.mkdir()
-    (sp / "ordered_set-1.1.dist-info").mkdir()
-    # 导入名 orderedset 与 PyPI 名 ordered-set 不匹配（无分隔符），但
-    # ordered_set / ordered-set / Ordered.Set 均规范化为 ordered-set 互通
-    assert _site_packages_has_deps(sp, ["ordered-set"]) is True
-    assert _site_packages_has_deps(sp, ["ordered.set"]) is True
-    assert _site_packages_has_deps(sp, ["Ordered_Set"]) is True
+    artifact = sp / "numpy.py"
+    artifact.write_bytes(b"original")
+    payload = {"installed": {"key": "key", "packages": ["numpy>=1.0"], "fingerprint": _installed_fingerprint(sp)}}
+    _dep_cache_path(tmp_path).write_text(json.dumps(payload), encoding="utf-8")
+    if change == "missing":
+        artifact.unlink()
+    elif change == "modified":
+        artifact.write_bytes(b"changed payload")
+    elif change == "extra":
+        (sp / "obsolete.dll").write_bytes(b"x")
+    elif change == "failed":
+        (tmp_path / ".build_failed").write_text("failed")
+    packages = ["numpy>=999.0"] if change == "version" else ["numpy>=1.0"]
+    key = "other" if change == "key" else "key"
+    assert _site_packages_has_deps(sp, packages, build_key=key) is (change == "none")
 
 
 def test_unpack_wheels(tmp_path: Path) -> None:
@@ -215,3 +228,167 @@ def test_build_dep_cache_hit_skips_ast_analysis(tmp_path: Path, monkeypatch: pyt
     monkeypatch.setattr("fspack.config.DependencyReport.from_src", classmethod(tracking_from_src))
     build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
     assert not analyze_called, "缓存命中时不应调用 AST 分析"
+
+
+@pytest.fixture
+def dependency_context(tmp_path: Path) -> tuple[BuildContext, DependencyReport, Path]:
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
+    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    dist = tmp_path / "dist"
+    (dist / "site-packages").mkdir(parents=True)
+    ctx = BuildContext(
+        tracker=BuildTracker(),
+        info=ProjectInfo.from_dir(tmp_path, "3.11.9"),
+        cfg=BuildConfig(tmp_path, dist, tmp_path / "cache", get_mirror("huawei"), Platform.WINDOWS),
+        opts=BuildOptions(),
+        runtime_dir=dist / "runtime",
+    )
+    report = DependencyReport(declared=("demo>=1.0",), ast_third_party=(), ast_stdlib=(), ast_local=())
+    _dep_cache_save(dist, "fingerprint", report)
+    wheel = tmp_path / "demo-1.0-py3-none-any.whl"
+    with zipfile.ZipFile(wheel, "w") as zf:
+        zf.writestr("demo/__init__.py", "")
+        zf.writestr("demo/module.py", "value = 1\n")
+        zf.writestr("demo/extra.dat", "payload")
+        zf.writestr("demo-1.0.dist-info/METADATA", "Name: demo\nVersion: 1.0\n")
+    return ctx, report, wheel
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "none",
+        "version",
+        "python",
+        "platform",
+        "index",
+        "extra_index",
+        "links",
+        "include",
+        "exclude",
+        "keep",
+        "usage",
+        "pyc",
+        "site",
+        "hashes",
+        "missing",
+    ],
+)
+def test_dependency_reuse_identity(  # noqa: PLR0912 - 15 个身份要素变体共用一套分支构造差异
+    dependency_context: tuple[BuildContext, DependencyReport, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    change: str,
+) -> None:
+    ctx, report, wheel = dependency_context
+    calls: list[dict[str, Any]] = []
+
+    def download(*args: Any, **kwargs: Any) -> list[Path]:
+        calls.append(kwargs)
+        return [wheel]
+
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.download_wheels", download)
+    sp = ctx.cfg.dist_dir / "site-packages"
+    _download_dependencies(ctx, sp, report)
+    _save_installed_dependencies(ctx, sp, report)
+    if change == "version":
+        report = replace(report, declared=("demo>=999.0",))
+    elif change == "python":
+        ctx = replace(ctx, info=replace(ctx.info, py_version="3.12.1"))
+    elif change == "platform":
+        ctx = replace(ctx, cfg=replace(ctx.cfg, target=Platform.LINUX))
+    elif change == "index":
+        ctx = replace(ctx, cfg=replace(ctx.cfg, mirror=get_mirror("tsinghua")))
+    elif change == "extra_index":
+        ctx = replace(ctx, info=replace(ctx.info, extra_index_urls=("https://example.com/simple/",)))
+    elif change == "links":
+        ctx = replace(ctx, info=replace(ctx.info, find_links=("./wheels",)))
+    elif change == "include":
+        ctx = replace(ctx, info=replace(ctx.info, slim_rules=SlimRules(include=("demo/*",))))
+    elif change == "exclude":
+        ctx = replace(ctx, info=replace(ctx.info, slim_rules=SlimRules(exclude=("demo/extra.dat",))))
+    elif change == "keep":
+        ctx = replace(ctx, opts=replace(ctx.opts, keep_modules={"demo.module"}))
+    elif change == "usage":
+        report = replace(report, ast_submodules={"demo": frozenset({"module"})})
+    elif change == "pyc":
+        ctx = replace(ctx, opts=replace(ctx.opts, pyc_strip=True))
+    elif change == "site":
+        ctx = replace(ctx, opts=replace(ctx.opts, no_site=True))
+    elif change == "hashes":
+        ctx = replace(ctx, opts=replace(ctx.opts, require_hashes=True))
+    elif change == "missing":
+        (sp / "demo/module.py").unlink()
+    stamp = ctx.cfg.dist_dir / ".pyc_stamp"
+    stamp.write_text("old stamp")
+    _download_dependencies(ctx, sp, report)
+    assert len(calls) == (1 if change == "none" else 2)
+    assert stamp.exists() is (change == "none")
+    assert (sp / "demo/module.py").is_file()
+    assert (sp / "demo/extra.dat").exists() is (change != "exclude")
+    assert calls[-1]["require_hashes"] is (change == "hashes")
+
+
+def test_dependency_removal_clears_old_files(
+    dependency_context: tuple[BuildContext, DependencyReport, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx, report, wheel = dependency_context
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.download_wheels", lambda *a, **kw: [wheel])
+    sp = ctx.cfg.dist_dir / "site-packages"
+    _download_dependencies(ctx, sp, report)
+    _save_installed_dependencies(ctx, sp, report)
+    _download_dependencies(ctx, sp, DependencyReport(declared=(), ast_third_party=(), ast_stdlib=(), ast_local=()))
+    assert list(sp.iterdir()) == []
+
+
+def test_dependency_transformed_outputs_reuse_final_state(
+    dependency_context: tuple[BuildContext, DependencyReport, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx, report, wheel = dependency_context
+    ctx = replace(ctx, opts=replace(ctx.opts, pyc_strip=True))
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.download_wheels", lambda *a, **kw: [wheel])
+    sp = ctx.cfg.dist_dir / "site-packages"
+    _download_dependencies(ctx, sp, report)
+    (sp / "demo/module.py").unlink()
+    (sp / "demo/module.pyc").write_bytes(b"compiled artifact")
+    _save_installed_dependencies(ctx, sp, report)
+
+    def unexpected_download(*a: Any, **kw: Any) -> list[Path]:
+        pytest.fail("unchanged final outputs must reuse dependencies")
+
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.download_wheels", unexpected_download)
+    _download_dependencies(ctx, sp, report)
+    assert (sp / "demo/module.pyc").is_file()
+    assert not (sp / "demo/module.py").exists()
+
+
+@pytest.mark.parametrize("failure", ["unpack", "replace"])
+def test_dependency_refresh_failure_preserves_old_files(
+    dependency_context: tuple[BuildContext, DependencyReport, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    ctx, report, wheel = dependency_context
+    sp = ctx.cfg.dist_dir / "site-packages"
+    (sp / "previous.py").write_bytes(b"keep old tree")
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.download_wheels", lambda *a, **kw: [wheel])
+    if failure == "unpack":
+
+        def fail_unpack(wheels: object, dest: Path, *args: Any, **kwargs: Any) -> None:
+            (dest / "partial.py").write_bytes(b"partial")
+            raise OSError("unpack failed")
+
+        monkeypatch.setattr("fspack.packaging.pipeline.stages.unpack_wheels", fail_unpack)
+    else:
+        original_replace = Path.replace
+
+        def fail_replace(path: Path, target: Path) -> Path:
+            if target == sp and path.name == "site-packages":
+                raise OSError("replace failed")
+            return original_replace(path, target)
+
+        monkeypatch.setattr(Path, "replace", fail_replace)
+    with pytest.raises(OSError, match="failed"):
+        _download_dependencies(ctx, sp, report)
+    assert (sp / "previous.py").read_bytes() == b"keep old tree"
+    assert not (sp / "demo").exists()
+    assert not list(ctx.cfg.dist_dir.glob(".fspack-deps-*"))

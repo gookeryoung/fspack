@@ -144,8 +144,8 @@ def download_wheels(  # noqa: PLR0913
     ``require_hashes`` 为 True 时强制依赖哈希校验（iter-103）：仅在线模式生效，
     强制走 ``uv pip compile --generate-hashes`` 路径生成带哈希的 requirements.txt，
     再 ``pip download --require-hashes -r requirements.txt`` 校验下载。
-    缓存命中（deps_cache 或 --no-index 解析成功）时跳过校验（缓存目录 wheel 已首次
-    校验）；uv 不可用时降级为 warning 不校验（避免阻塞构建）。
+    该模式下跳过依赖解析缓存的读取与写入——缓存只存 wheel 文件名，命中即等于
+    静默跳过校验。uv 不可用时降级为 warning 不校验（避免阻塞构建）。
 
     ``pypi_index`` 防御性清理：strip 首尾空白与 markdown 反引号/引号包裹
     （从文档复制 URL 常带入 `` `url` `` 形式，pip/uv 不识别反引号导致
@@ -158,10 +158,19 @@ def download_wheels(  # noqa: PLR0913
     if not filtered:
         return []
 
-    # 尝试读取依赖解析缓存，命中则跳过 pip 调用
-    # require_hashes=True 时缓存命中仍跳过校验：缓存目录 wheel 已首次校验过哈希
-    deps_key = _deps_cache_key(filtered, py_version, platform_tags, extra_index_urls, find_links)
-    cached_wheels = _load_deps_cache(cache_dir, deps_key)
+    # 尝试读取依赖解析缓存，命中则跳过 pip 调用。
+    # require_hashes=True 时不读也不写解析缓存：缓存只记录 wheel 文件名列表，
+    # 无法证明这些 wheel 真的通过哈希校验，命中即等于静默跳过校验。
+    deps_key = _deps_cache_key(
+        filtered,
+        py_version,
+        platform_tags,
+        extra_index_urls,
+        find_links,
+        pypi_index=pypi_index,
+        require_hashes=require_hashes,
+    )
+    cached_wheels = None if require_hashes else _load_deps_cache(cache_dir, deps_key)
     if cached_wheels is not None:
         _logger.info("依赖解析缓存命中，跳过 pip 调用")
         if stage is not None:
@@ -197,7 +206,7 @@ def download_wheels(  # noqa: PLR0913
 
     wheel_names, used_fallback = _parse_wheel_names(result.stdout, cache_dir)
     wheels = [cache_dir / name for name in wheel_names if (cache_dir / name).is_file()]
-    if wheels and not used_fallback:
+    if wheels and not used_fallback and not require_hashes:
         _save_deps_cache(cache_dir, deps_key, wheels)
     if stage is not None:
         _record_wheel_stage(stage, wheels, before)

@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import subprocess as _default_subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -32,10 +33,24 @@ if TYPE_CHECKING:
 
 _logger = logging.getLogger(__name__)
 
-# compileall 超时（秒）：实测 1000 文件 P99 <60s（含 -j 0 并行），
+# compileall 超时（秒）：实测 1000 文件 P99 <60s（含 :func:`_compileall_workers` 并行），
 # 300s 裕量覆盖慢速 CI 与大 site-packages。超时不写 stamp 下次重试，
 # 避免 compileall 卡死（如磁盘 I/O hang）无限阻塞构建。iter-127 引入。
 _COMPILEALL_TIMEOUT = 300.0
+
+# compileall 单次调用 worker 上限。``-j 0`` 让 compileall 自算 ``min(32, cpu+4)``，
+# 但本模块恒并行跑 src + site-packages 两次调用，进程数直接翻倍——24 逻辑核机器
+# 上开到 56 个 worker，spawn 成本压过编译收益反而变慢。实测 535 个 .py 的
+# site-packages（24 逻辑核，取 5 轮中位数）：-j 1 → 2599ms、-j 8 → 490ms、
+# -j 16 → 392ms、-j 20 → 420ms、-j 24 → 446ms、-j 0(=28) → 478ms。
+# 取 16 为上限：小机器按核数缩放（不超订阅），大机器停在实测最优点。
+_COMPILEALL_MAX_WORKERS = 16
+
+
+def _compileall_workers() -> int:
+    """返回单次 compileall 的 ``-j`` 值（按核数缩放，上限 :data:`_COMPILEALL_MAX_WORKERS`）。"""
+    return max(1, min(_COMPILEALL_MAX_WORKERS, os.cpu_count() or 1))
+
 
 # ---------------------------------------------------------------------------
 # pyc facade 延迟 dispatch：兼容 monkeypatch.setattr("pyc.<name>", ...) 替换
@@ -83,7 +98,7 @@ def _run_compileall(py_exe: Path, target_dir: Path, optimize: int) -> tuple[bool
     cmd = [str(py_exe)]
     if optimize > 0:
         cmd.append("-" + "O" * optimize)
-    cmd += ["-m", "compileall", str(target_dir), "-q", "-j", "0"]
+    cmd += ["-m", "compileall", str(target_dir), "-q", "-j", str(_compileall_workers())]
     try:
         result = subprocess_dispatch.run(
             cmd,

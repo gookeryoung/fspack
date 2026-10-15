@@ -3,18 +3,22 @@
 职责单一化：仅处理依赖相关的阶段，不涉及源码编译、loader 生成等其他流程。
 
 - :func:`_analyze_dependencies`：AST 分析（指纹缓存命中则跳过）
-- :func:`_download_dependencies`：tkinter 补充 + wheel 下载 + 精简解压
+- :func:`_download_dependencies`：tkinter 补充 + wheel 下载 + 暂存目录精简解压
 - :func:`_dep_cache_path` / :func:`_dep_cache_load` / :func:`_dep_cache_save`：
-  指纹缓存（JSON 文件），重复构建加速 ~478ms
-- :func:`_site_packages_has_deps` / :func:`_strip_version_specifier`：辅助判断
+  分析结果缓存（JSON 文件），重复构建加速 ~478ms
+- :func:`_dependency_build_key` / :func:`_installed_fingerprint` /
+  :func:`_save_installed_dependencies` / :func:`_site_packages_has_deps`：
+  依赖复用判定——构建身份 + 产物指纹双重校验
 - :func:`unpack_wheels`：调用 slim_unpack（顶层包装便于测试 patch）
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
-import re
+import os
+import tempfile
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -27,7 +31,6 @@ from fspack.config import (
 )
 from fspack.fsutil import atomic_write_text
 from fspack.packaging.builtin import TkinterBundler as _DefaultTkinterBundler
-from fspack.packaging.site_packages import normalize_pkg_name as _normalize_pkg_name
 from fspack.packaging.wheels import download_wheels as _default_download_wheels
 from fspack.platform import wheel_platform_tags
 
@@ -41,9 +44,11 @@ __all__ = [
     "_dep_cache_load",
     "_dep_cache_path",
     "_dep_cache_save",
+    "_dependency_build_key",
     "_download_dependencies",
+    "_installed_fingerprint",
+    "_save_installed_dependencies",
     "_site_packages_has_deps",
-    "_strip_version_specifier",
     "unpack_wheels",
 ]
 
@@ -124,6 +129,20 @@ def _download_dependencies(ctx: BuildContext, site_packages: Path, report: Depen
 
     补充内置库 tkinter（embed python 缺失，AST 检测到使用时从 python-build-standalone 提取）。
     下载用包名优先 declared（PyPI 包名权威），declared 为空时回退 ast_third_party。
+
+    复用判定：:func:`_site_packages_has_deps` 同时校验构建身份键与 site-packages
+    产物指纹，两者都与上次成功构建一致才跳过下载解压。
+
+    重解包走暂存目录：先解压到 ``dist/.fspack-deps-*/site-packages``，成功后整体
+    ``replace`` 替换正式目录。两个目的——
+
+    - 依赖变少或 ``slim_rules``/子模块收紧时，旧文件不会残留（原地解压只会新增
+      与覆盖，从不删除）
+    - 解压或替换失败时旧 site-packages 原样回滚，不会留下半成品
+
+    tkinter 装于 runtime 目录而非 site-packages，故整体替换不影响它。
+    替换前删除 ``.pyc_stamp``：dist-info 目录名未变时 pyc 键不变，但它记录的
+    字节码可能属于已被替换的旧依赖版本。
     """
     target = ctx.cfg.target
     # 补充内置库：embed python 缺失 tkinter（纯 Python 包 + _tkinter.pyd + Tcl/Tk 脚本），
@@ -146,38 +165,63 @@ def _download_dependencies(ctx: BuildContext, site_packages: Path, report: Depen
     # declared 非空时以声明为准，未声明的依赖通过 report.missing 日志提示用户补充。
     packages_to_download: tuple[str, ...] = report.declared if report.declared else report.ast_third_party
 
+    build_key = _dependency_build_key(ctx, report)
+    if _site_packages_has_deps(site_packages, packages_to_download, build_key=build_key):
+        with ctx.tracker.stage("下载依赖") as st:
+            st.skip(len(packages_to_download))
+            st.set_detail("已存在跳过（构建参数与产物校验通过）")
+        return has_tkinter
+
+    wheels: list[Path] = []
     if packages_to_download:
-        if _site_packages_has_deps(site_packages, packages_to_download):
-            with ctx.tracker.stage("下载依赖") as st:
-                _logger.info("site-packages 已有依赖，跳过下载解压")
-                st.skip(len(packages_to_download))
-                st.set_detail("已存在跳过")
-        else:
-            wheel_cache = fspack_wheel_cache_dir()
-            download_wheels_dispatch = _S("download_wheels", _default_download_wheels)
-            unpack_wheels_dispatch = _S("unpack_wheels", unpack_wheels)
-            with ctx.tracker.stage("下载依赖") as st:
-                wheels = download_wheels_dispatch(
-                    packages_to_download,
-                    ctx.info.py_version,
-                    ctx.cfg.mirror.pypi_index,
-                    wheel_cache,
-                    platform_tags=wheel_platform_tags(target),
-                    stage=st,
-                    extra_index_urls=ctx.info.extra_index_urls,
-                    find_links=ctx.info.find_links,
-                )
+        download_wheels_dispatch = _S("download_wheels", _default_download_wheels)
+        with ctx.tracker.stage("下载依赖") as st:
+            wheels = download_wheels_dispatch(
+                packages_to_download,
+                ctx.info.py_version,
+                ctx.cfg.mirror.pypi_index,
+                fspack_wheel_cache_dir(),
+                platform_tags=wheel_platform_tags(target),
+                stage=st,
+                extra_index_urls=ctx.info.extra_index_urls,
+                find_links=ctx.info.find_links,
+                require_hashes=ctx.opts.require_hashes,
+            )
+    else:
+        _logger.info("无第三方依赖，跳过 wheel 下载")
+
+    # 暂存目录与旧目录备份都在同一个临时目录内：整体替换成功后临时目录自动清理，
+    # 失败时备份仍在（回滚用），且两种情况都不会在 dist 留下中间目录。
+    with tempfile.TemporaryDirectory(prefix=".fspack-deps-", dir=site_packages.parent) as work:
+        staged = Path(work) / "site-packages"
+        staged.mkdir()
+        if packages_to_download:
             with ctx.tracker.stage("解压 wheel(精简)") as st:
-                unpack_wheels_dispatch(
+                _S("unpack_wheels", unpack_wheels)(
                     wheels,
-                    site_packages,
+                    staged,
                     report.ast_submodules,
                     ctx.opts.keep_modules,
                     slim_rules=ctx.info.slim_rules,
                     stage=st,
                 )
-    else:
-        _logger.info("无第三方依赖，跳过 wheel 下载")
+        # dist-info 名称相同时 pyc 键不会变化，替换依赖前必须使旧编译 stamp 失效。
+        pyc_stamp = ctx.cfg.dist_dir / ".pyc_stamp"
+        if pyc_stamp.is_file():
+            pyc_stamp.unlink()
+        previous = Path(work) / "previous"
+        if site_packages.exists():
+            site_packages.replace(previous)
+        try:
+            staged.replace(site_packages)
+        except OSError:
+            # 回滚：恢复旧 site-packages。回滚本身失败时保留备份目录并告警
+            # （临时目录退出会带走备份，故先移出 dist），仍抛原始异常。
+            try:
+                previous.replace(site_packages)
+            except OSError as rollback_error:  # pragma: no cover - 双重故障极罕见
+                _logger.error("依赖回滚失败，旧 site-packages 保留在 %s: %s", previous, rollback_error)
+            raise
     return has_tkinter
 
 
@@ -239,40 +283,135 @@ def _dep_cache_save(dist_dir: Path, fingerprint: str, report: DependencyReport) 
     atomic_write_text(cache, json.dumps(payload, ensure_ascii=False))
 
 
-def _site_packages_has_deps(site_packages: Path, packages: Sequence[str]) -> bool:
-    """检查 site-packages 是否已安装全部声明依赖.
+def _dependency_build_key(ctx: BuildContext, report: DependencyReport) -> str:
+    """依赖复用身份键：影响 site-packages 最终内容的全部构建参数.
 
-    逐个检查 ``packages`` 中的包是否有对应的 ``*.dist-info`` 目录。
-    仅当全部声明依赖均已安装时返回 True，可跳过下载+解压阶段
-    （需 ``fspack c`` 清理后才会重新解压）。
+    覆盖下载包列表（含版本 specifier）、目标 Python/平台、主镜像与私有源、
+    子模块使用与 keep_modules、slim include/exclude 规则，以及会改写依赖文件的
+    下游转换开关（pyc 编译/剥离、no_site、Nuitka、二进制依赖分析、Win7 补丁、
+    哈希校验）。任一项变化即视为身份不同，必须重新下载解压。
 
-    不能仅检查 ``any(*.dist-info)``：python-build-standalone 预装 pip
-    （含 ``pip-*.dist-info``），embed python 也会预装 pip，导致无用户依赖时
-    误判为已安装。必须按声明的包名逐一匹配。
+    ``analyze_deps`` 会按源码 import 图删除无引用二进制，故仅在该开关开启时把
+    源码指纹纳入键（代价是一次目录遍历）。
+    """
+    from fspack import __version__
+    from fspack.analyzer import source_fingerprint
+
+    opts = ctx.opts
+    payload = {
+        "schema": 1,
+        "fspack": __version__,
+        "packages": sorted(report.declared or report.ast_third_party),
+        "python": ctx.info.py_version,
+        "platform": ctx.cfg.target.value,
+        "index": ctx.cfg.mirror.pypi_index,
+        "extra_indexes": ctx.info.extra_index_urls,
+        "find_links": ctx.info.find_links,
+        "submodules": {pkg: sorted(subs) for pkg, subs in report.ast_submodules.items()},
+        "keep_modules": sorted(opts.keep_modules or ()),
+        "include": ctx.info.slim_rules.include,
+        "exclude": ctx.info.slim_rules.exclude,
+        "transforms": [
+            opts.no_pyc,
+            opts.pyc_strip,
+            opts.pyc_optimize,
+            opts.no_site,
+            opts.nuitka,
+            opts.nuitka_packages,
+            opts.compiler,
+            opts.analyze_deps,
+            opts.no_win7_scan,
+            opts.no_win7_dll,
+            opts.require_hashes,
+        ],
+        "source": source_fingerprint(ctx.cfg.project_dir, ctx.info.data_dirs) if opts.analyze_deps else "",
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _installed_fingerprint(site_packages: Path) -> str | None:
+    """site-packages 内容指纹（相对路径 + size + mtime_ns），含子目录.
+
+    用 ``os.scandir`` 复用目录枚举缓存的 stat，避免逐文件独立系统调用。
+    含符号链接或枚举遇 ``OSError``（权限/并发删除）时返回 ``None``——
+    调用方据此判定"无法验证"并重新解包，绝不在不确定时复用。
     """
     if not site_packages.is_dir():
-        return False
-    # 收集 site-packages 中所有已安装包的规范化名（PEP 503）
-    installed: set[str] = set()
-    for d in site_packages.glob("*.dist-info"):
-        if not d.is_dir():
-            continue
-        # dist-info 目录名格式: <name>-<version>.dist-info
-        stem = d.name[: -len(".dist-info")]
-        # 从右侧分离 version（最后一个 - 之后的部分）
-        parts = stem.rsplit("-", 1)
-        pkg_name = parts[0] if len(parts) == 2 else stem
-        installed.add(_normalize_pkg_name(pkg_name))
+        return None
+    digest = hashlib.sha256()
+    pending = [site_packages]
+    try:
+        while pending:
+            with os.scandir(pending.pop()) as entries:
+                ordered = sorted(entries, key=lambda entry: entry.name)
+            for entry in ordered:
+                if entry.is_symlink():
+                    return None
+                if entry.is_dir(follow_symlinks=False):
+                    pending.append(Path(entry.path))
+                elif entry.is_file(follow_symlinks=False):
+                    stat = entry.stat(follow_symlinks=False)
+                    rel = Path(entry.path).relative_to(site_packages).as_posix()
+                    digest.update(json.dumps([rel, stat.st_size, stat.st_mtime_ns]).encode("utf-8"))
+    except OSError:
+        return None
+    return digest.hexdigest()
 
-    return all(_normalize_pkg_name(_strip_version_specifier(pkg)) in installed for pkg in packages)
 
+def _save_installed_dependencies(ctx: BuildContext, site_packages: Path, report: DependencyReport) -> None:
+    """在构建末尾记录 site-packages 的最终状态，供下次构建验证复用.
 
-def _strip_version_specifier(pkg: str) -> str:
-    """从依赖字符串中剥离版本 specifier，返回纯包名.
+    pyc 剥离、Nuitka 替换、``no_site`` 删除 ``.pth``、二进制依赖分析与 Win7 补丁
+    都会合法改写/删除 wheel 解出的文件，因此必须在这些步骤完成之后采集指纹——
+    记录的是"上次成功构建真正留下的产物"，而非解压瞬间的原始内容。
 
-    ``pygame>=2.5.0`` → ``pygame``；``requests`` → ``requests``。
+    指纹为 ``None``（符号链接等）时照常写入：下次校验必然不匹配，退回重新解包。
     """
-    return re.split(r"[<>=!~;\[]", pkg, maxsplit=1)[0].strip()
+    cache = _dep_cache_path(ctx.cfg.dist_dir)
+    try:
+        payload = json.loads(cache.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return
+        payload["installed"] = {
+            "key": _dependency_build_key(ctx, report),
+            "packages": sorted(report.declared or report.ast_third_party),
+            "fingerprint": _installed_fingerprint(site_packages),
+        }
+        atomic_write_text(cache, json.dumps(payload, ensure_ascii=False))
+    except (OSError, ValueError):
+        _logger.warning("无法保存依赖产物状态，下次构建将重新解包")
+
+
+def _site_packages_has_deps(
+    site_packages: Path,
+    packages: Sequence[str],
+    *,
+    build_key: str = "",
+) -> bool:
+    """site-packages 可否直接复用：构建身份与产物指纹同时匹配.
+
+    历史实现只按 ``*.dist-info`` 目录名判断"依赖已安装"，两处假阳性：版本
+    specifier 变化（``numpy>=1.0`` → ``numpy>=2.0``）与产物被下游步骤/人工删除
+    均检测不到，会静默产出旧依赖。现改为双重校验——
+
+    1. ``build_key``（:func:`_dependency_build_key`）与上次成功构建一致，
+       且记录的包名列表与本次完全相同；
+    2. site-packages 实际内容指纹与记录的指纹逐字节一致。
+
+    任一条件不满足、缺少 ``build_key``、上次构建留有 ``.build_failed`` 标记或
+    缓存结构异常，一律返回 ``False`` 走重新下载解压。
+    """
+    if not build_key or (site_packages.parent / ".build_failed").exists():
+        return False
+    try:
+        payload = json.loads(_dep_cache_path(site_packages.parent).read_text(encoding="utf-8"))
+        state = payload["installed"]
+        if state["key"] != build_key or state["packages"] != sorted(packages):
+            return False
+        fingerprint = _installed_fingerprint(site_packages)
+        return fingerprint is not None and state["fingerprint"] == fingerprint
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
 
 
 def unpack_wheels(  # noqa: PLR0913

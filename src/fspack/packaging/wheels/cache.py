@@ -28,21 +28,35 @@ __all__ = [
 _logger = logging.getLogger(__name__)
 
 
-def _deps_cache_key(
+def _deps_cache_key(  # noqa: PLR0913 - 缓存键须覆盖全部影响解析结果的包源与校验模式
     packages: tuple[str, ...] | list[str],
     py_version: str,
     platform_tags: Sequence[str],
     extra_index_urls: Sequence[str] = (),
     find_links: Sequence[str] = (),
+    *,
+    pypi_index: str = "",
+    require_hashes: bool = False,
 ) -> str:
-    """根据依赖列表、Python 版本、平台标签与私有包源计算缓存键。
+    """根据依赖列表、Python 版本、平台标签与全部包源计算缓存键。
 
     不同组合产生不同键，确保跨项目/跨版本/跨平台/跨私有源不会误命中。
     私有包源纳入键：切换 ``--extra-index-url``/``--find-links`` 后强制重新解析，
     避免旧缓存返回来自其他源的 wheel。
+
+    ``pypi_index``（主索引）同样纳入键：镜像切换（华为云 → 清华源）后各索引
+    各存自己的解析结果，切回旧索引仍命中自己的缓存。此前主索引缺失会让换镜像
+    直接复用旧解析列表，把上一个索引的版本选择带进新索引。
+
+    ``require_hashes``（强制哈希校验模式）纳入键，并与调用方的"该模式不读写
+    解析缓存"策略配套：解析缓存只记录 wheel 文件名，无法证明 wheel 通过哈希校验。
+
     返回 16 位 hex 摘要，用于 ``.deps-<key>.json`` 文件名。
     """
-    data = f"{sorted(packages)}|{py_version}|{list(platform_tags)}|{list(extra_index_urls)}|{list(find_links)}"
+    data = (
+        f"{sorted(packages)}|{py_version}|{list(platform_tags)}|{list(extra_index_urls)}"
+        f"|{list(find_links)}|{pypi_index}|{require_hashes}"
+    )
     return hashlib.sha256(data.encode("utf-8")).hexdigest()[:16]
 
 

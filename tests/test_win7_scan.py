@@ -10,8 +10,10 @@ from pathlib import Path
 import pytest
 
 from fspack.packaging.win7.scan import (
+    _SCAN_SUFFIXES,
     Win7ScanError,
     enforce_win7_loaders,
+    iter_pe_files,
     render_win7_report,
     scan_dist_win7,
     write_win7_report,
@@ -30,6 +32,74 @@ def _write_pe(path: Path, imports: dict[str, list[str]] | None = None) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(_build_pe(imports if imports is not None else _OK_IMPORTS))
     return path
+
+
+# ---------------------------------------------------------------------------
+# iter_pe_files：dist 遍历语义（os.scandir 快路径须与 Path.rglob 结果完全一致）
+# ---------------------------------------------------------------------------
+
+
+def test_iter_pe_files_suffix_and_exclusion_rules(tmp_path: Path) -> None:
+    """后缀大小写不敏感，仅排除一级 build/release，深层同名目录照常收集。"""
+    rels = (
+        "app.exe",
+        "runtime/PYTHON311.DLL",
+        "site-packages/_speedups.pyd",
+        "build/artifact.dll",
+        "release/report.dll",
+        "nested/build/deep.dll",
+        "notes.txt",
+        "runtime/readme.md",
+    )
+    for rel in rels:
+        target = tmp_path / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"MZ")
+
+    got = [p.relative_to(tmp_path).as_posix() for p in iter_pe_files(tmp_path)]
+
+    assert got == sorted(got)
+    assert set(got) == {"app.exe", "runtime/PYTHON311.DLL", "site-packages/_speedups.pyd", "nested/build/deep.dll"}
+
+
+def test_iter_pe_files_includes_symlinked_pe(tmp_path: Path) -> None:
+    """符号链接指向的 PE 纳入扫描（跟随链接，与旧 rglob + is_file() 语义一致）。"""
+    real = tmp_path / "runtime" / "libpython3.11.dll"
+    real.parent.mkdir(parents=True)
+    real.write_bytes(b"MZ")
+    link = tmp_path / "runtime" / "libpython.dll"
+    try:
+        link.symlink_to(real)
+    except (OSError, NotImplementedError):  # pragma: no cover - Windows 无开发者模式/符号链接权限
+        pytest.skip("当前环境不支持创建符号链接")
+
+    assert link in iter_pe_files(tmp_path)
+
+
+def test_iter_pe_files_missing_dist_returns_empty(tmp_path: Path) -> None:
+    """dist 不存在时返回空列表，不抛异常（由调用方报告零扫描）。"""
+    assert iter_pe_files(tmp_path / "nope") == []
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("python311.dll", True),
+        ("_SPEEDUPS.PYD", True),
+        ("app.exe", True),
+        ("readme.md", False),
+        ("no_suffix", False),
+        (".dll", False),  # 纯点前缀名：pathlib 视为无后缀，不采集
+        ("a.b.dll", True),
+        ("dir.", False),
+    ],
+)
+def test_is_pe_name_matches_pathlib_suffix(name: str, expected: bool) -> None:
+    """``_is_pe_name`` 与 ``Path(name).suffix.lower() in _SCAN_SUFFIXES`` 判定一致。"""
+    from fspack.packaging.win7.scan import _is_pe_name
+
+    assert _is_pe_name(name) is expected
+    assert (Path(name).suffix.lower() in _SCAN_SUFFIXES) is expected
 
 
 def test_scan_empty_dist(tmp_path: Path) -> None:

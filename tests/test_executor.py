@@ -410,8 +410,7 @@ def test_build_passes_config_private_sources_without_cli(tmp_path: Path, monkeyp
     assert captured["find_links"] == ("./wheels",)
 
 
-def test_build_skips_download_when_site_packages_has_deps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """site-packages 已有 dist-info 时跳过下载解压，记录跳过数."""
+def test_build_requires_verified_dependency_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     proj = tmp_path / "app"
     proj.mkdir()
     (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
@@ -444,11 +443,13 @@ def test_build_skips_download_when_site_packages_has_deps(tmp_path: Path, monkey
         )[-1],
     )
 
+    build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
+    assert download_called
+    download_called = False
     with console.rich.capture() as capture:
         build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
     assert not download_called
-    out = capture.get()
-    assert "已存在跳过" in out
+    assert "已存在跳过" in capture.get()
 
 
 def test_build_orchestration_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

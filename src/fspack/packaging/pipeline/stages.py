@@ -44,7 +44,6 @@ from fspack.packaging.pipeline.deps_stage import (
     _dep_cache_save,
     _download_dependencies,
     _site_packages_has_deps,
-    _strip_version_specifier,
     unpack_wheels,
 )
 from fspack.packaging.pipeline.frontend_stage import (
@@ -97,7 +96,6 @@ __all__ = [
     "_resolve_project_icon",
     "_site_packages_has_deps",
     "_slim_runtime",
-    "_strip_version_specifier",
     "_zip_stdlib",
     "compile_loader",
     "default_icon_path",

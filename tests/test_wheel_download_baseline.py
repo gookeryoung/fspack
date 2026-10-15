@@ -252,7 +252,7 @@ class TestWheelDownloadBaseline:
             whl.write_bytes(b"x" * 1024)
             wheels.append(whl)
         packages = tuple(f"pkg_{i:03d}" for i in range(_WHEEL_COUNT))
-        key = _deps_cache_key(packages, "3.11.9", ("win_amd64",))
+        key = _deps_cache_key(packages, "3.11.9", ("win_amd64",), pypi_index="https://pypi.org/simple")
         _save_deps_cache(cache_dir, key, wheels)
 
         def _run() -> int:

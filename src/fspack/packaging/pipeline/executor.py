@@ -35,6 +35,7 @@ from fspack.config import (
 )
 from fspack.exceptions import ProjectError
 from fspack.packaging.log_file import LogFormat, setup_log_file, teardown_log_file
+from fspack.packaging.pipeline.deps_stage import _save_installed_dependencies
 from fspack.packaging.pipeline.dist_helpers import (
     _handle_dist_incomplete,
     _remove_build_failure,
@@ -433,8 +434,8 @@ def _execute_build(  # noqa: PLR0912, PLR0913
             st.set_detail(_build_frontend(_frontends))
 
     site_packages = _prepare_runtime(ctx)
-    report = _analyze_dependencies(ctx)
-    has_tkinter = _download_dependencies(ctx, site_packages, report)
+    dependency_report = _analyze_dependencies(ctx)
+    has_tkinter = _download_dependencies(ctx, site_packages, dependency_report)
 
     if target is Platform.WINDOWS:
         # tkinter 补充到 runtime/Lib/tkinter/，需将 Lib 加入 _pth 使其可 import
@@ -513,7 +514,51 @@ def _execute_build(  # noqa: PLR0912, PLR0913
     if opts.analyze_deps:
         _analyze_binary_dependencies(ctx)
 
-    # SBOM 与 manifest 并行生成：两者都只读扫描 dist 目录，无写入冲突。
+    # Win7 兼容修复+扫描（软门禁，默认启用，--no-win7-scan 关闭）：先对 dist
+    # 下全部 PE 执行导入表原地改名（kernel32 Win8+ API → Win7 原生等价函数，
+    # 如 pydantic-core 2.18+ / libpq 的 GetSystemTimePreciseAsFileTime），随后
+    # 全量导入表扫描复核、注入内置 Win7 shim（api-ms-win-core-path +
+    # bcryptprimitives.ProcessPrng）到 runtime 目录，剩余违规由报告提示。
+    # 仅 Windows 目标（Linux/macOS 产物不运行于 Win7）。
+    if target is Platform.WINDOWS and not opts.no_win7_scan:
+        from fspack.packaging.win7.patch import patch_dist_win7
+        from fspack.packaging.win7.scan import (
+            inject_win7_shims,
+            scan_dist_win7,
+            write_win7_report,
+        )
+
+        with tracker.stage("Win7 兼容扫描") as st:
+            # 改名必须在扫描之前：报告反映改写后的最终兼容状态
+            patched = patch_dist_win7(cfg.dist_dir)
+            report = scan_dist_win7(cfg.dist_dir)
+            if patched:
+                report = replace(report, patched=patched)
+            # 扫描后自动注入 shim DLL（runtime 目录，与 loader 的 DLL 搜索路径一致）
+            injected = inject_win7_shims(cfg.dist_dir)
+            if injected:
+                report = replace(report, injected_shims=injected)
+            report_path = write_win7_report(report, cfg.dist_dir)
+            st.processed(report.scanned)
+            details: list[str] = []
+            if patched:
+                details.append(f"改名: {len(patched)} 个文件")
+            if injected:
+                details.append(f"shim: {', '.join(injected)}")
+            if report.violations:
+                details.append(f"{len(report.violations)} 个文件违规")
+                _logger.warning(
+                    "Win7 兼容扫描发现 %d 个违规文件（不阻断构建），详见 %s",
+                    len(report.violations),
+                    report_path,
+                )
+            else:
+                details.append(f"{report.scanned} 个文件通过")
+            st.set_detail("；".join(details))
+
+    _save_installed_dependencies(ctx, site_packages, dependency_report)
+
+    # SBOM 与 manifest 在 Win7 修改、注入及报告落盘后并行生成，确保记录最终文件。
     # 用 ThreadPoolExecutor 并行 submit，主线程在各 stage 内等待对应 future。
     # stage 记录保持串行（避免 tracker._records 顺序不稳定）。单个启用时
     # 退化为串行调用，避免线程池启动开销。size_report 在 summary 之后串行
@@ -552,7 +597,7 @@ def _execute_build(  # noqa: PLR0912, PLR0913
                     st.set_detail("生成失败")
 
         # manifest 产物清单生成（默认启用，--no-manifest 关闭）：扫描 dist 下
-        # 所有文件按分类记录大小/SHA256，生成 JSON 到 dist/release/。版本间
+        # 文件按既定排除口径记录大小/SHA256，生成 JSON 到 dist/release/。版本间
         # 可通过 ``fsp manifest diff`` 对比差异。失败不阻断构建。
         if manifest_enabled:
             from fspack.packaging.manifest import generate_manifest
@@ -573,48 +618,6 @@ def _execute_build(  # noqa: PLR0912, PLR0913
     finally:
         if _post_build_pool is not None:
             _post_build_pool.shutdown(wait=True)
-
-    # Win7 兼容修复+扫描（软门禁，默认启用，--no-win7-scan 关闭）：先对 dist
-    # 下全部 PE 执行导入表原地改名（kernel32 Win8+ API → Win7 原生等价函数，
-    # 如 pydantic-core 2.18+ / libpq 的 GetSystemTimePreciseAsFileTime），随后
-    # 全量导入表扫描复核、注入内置 Win7 shim（api-ms-win-core-path +
-    # bcryptprimitives.ProcessPrng）到 dist 根目录，剩余违规由报告提示。
-    # 仅 Windows 目标（Linux/macOS 产物不运行于 Win7）。
-    if target is Platform.WINDOWS and not opts.no_win7_scan:
-        from fspack.packaging.win7.patch import patch_dist_win7
-        from fspack.packaging.win7.scan import (
-            inject_win7_shims,
-            scan_dist_win7,
-            write_win7_report,
-        )
-
-        with tracker.stage("Win7 兼容扫描") as st:
-            # 改名必须在扫描之前：报告反映改写后的最终兼容状态
-            patched = patch_dist_win7(cfg.dist_dir)
-            report = scan_dist_win7(cfg.dist_dir)
-            if patched:
-                report = replace(report, patched=patched)
-            # 扫描后自动注入 shim DLL（根目录级别，PE loader 优先从同目录加载）
-            injected = inject_win7_shims(cfg.dist_dir)
-            if injected:
-                report = replace(report, injected_shims=injected)
-            report_path = write_win7_report(report, cfg.dist_dir)
-            st.processed(report.scanned)
-            details: list[str] = []
-            if patched:
-                details.append(f"改名: {len(patched)} 个文件")
-            if injected:
-                details.append(f"shim: {', '.join(injected)}")
-            if report.violations:
-                details.append(f"{len(report.violations)} 个文件违规")
-                _logger.warning(
-                    "Win7 兼容扫描发现 %d 个违规文件（不阻断构建），详见 %s",
-                    len(report.violations),
-                    report_path,
-                )
-            else:
-                details.append(f"{report.scanned} 个文件通过")
-            st.set_detail("；".join(details))
 
     # 延迟导入：console 触发 fspack.console 加载（含 rich.console/rich.logging/
     # rich.theme ~17ms）。仅在构建完成输出 summary 时加载。注意 _execute_build

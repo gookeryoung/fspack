@@ -6,18 +6,19 @@ facade，所有 ``cls.`` 调用经 MRO 自动派发到对应 mixin。
 
 职责拆分（iter-149 深化）：
 
-- **indexes.py**：hash 索引 + 失败文件列表（纯模块级函数，与 mixin 类无关）
+- **indexes.py**：失败文件列表（纯模块级函数，与 mixin 类无关）
 - **progress.py**：``NuitkaProgress`` mixin — 流式 subprocess 输出（``_stream_compile``）
   + 并行编译池（``_compile_files``）
 - **本模块 compile.py**：``NuitkaCompile`` mixin — 编译编排入口
   （``compile_src`` / ``compile_packages`` / ``compile_with_stamp``）
-  + stamp 缓存（``_stamp_path`` / ``_stamp_key``）
+  + 编译完成度 stamp（``_stamp_path`` / ``_stamp_key``，仅作半成品检测标记，
+  不作为跳过编译的依据）
 
 **测试 patch 兼容**：以下常量/名字保留在本模块顶层（从 progress.py/indexes.py
 re-export），维持 ``fspack.packaging.nuitka.compile.*`` patch 路径不变：
 
 - ``_HEARTBEAT_INTERVAL`` / ``_MAX_COMPILE_WORKERS`` / ``_STREAM_ACCUM_LIMIT``
-  / ``_COMPILE_TIMEOUT`` / ``_DRAIN_JOIN_TIMEOUT`` / ``_HASH_INDEX_MAX``
+  / ``_COMPILE_TIMEOUT`` / ``_DRAIN_JOIN_TIMEOUT``
 - ``_atomic_write_text`` / ``_safe_unlink``
 - ``ThreadPoolExecutor``（被 ``CapturingTPE`` 替换测试）
 
@@ -45,13 +46,9 @@ from fspack.fsutil import atomic_write_text, safe_unlink
 # 拿到的是 compile 层独立的薄封装（或被 monkeypatch 替换后的 mock 函数），
 # 不会与 indexes 的 dispatch 函数对象混淆，避免递归死循环。
 from fspack.packaging.nuitka.indexes import (  # noqa: F401 - re-export for patch compat
-    _HASH_INDEX_MAX,
     _failed_files_path,
-    _hash_index_path,
     _load_failed_files,
-    _load_hash_index,
     _save_failed_files,
-    _update_hash_index,
 )
 
 # -- 进度相关常量：从 progress.py re-export，维持 fspack.packaging.nuitka.compile.* patch 路径
@@ -448,10 +445,8 @@ class NuitkaCompile:
         3. 入口文件（``entry_rels``）：入口包装器用 ``runpy.run_path()`` 显式指定 .py 路径，
            编译后 .py 被删除会导致 FileNotFoundError。入口文件保留 .py 形态，由 .pyc 优化。
         4. 指定跳过文件（``skip_files``）：相对 ``src_dir`` 的 POSIX 路径集合，
-           这些文件本次构建不编译不删除。``compile_with_stamp`` 已不传该参数
-           （stamp 未命中即全量重试，避免已修复文件被永久跳过）。注意：仅删除
-           stamp 文件无法强制重试——hash 索引兜底命中会重建 stamp 跳过编译；
-           源码变化（stamp 键变化）才是全量重试的触发条件。
+           这些文件本次构建不编译不删除。``compile_with_stamp`` 恒不传该参数
+           （每次构建全量重编，避免上次失败的文件被永久跳过）。
         5. 数据资源目录树（``data_dirs``）：``[tool.fspack] data-dirs`` 与
            ``web-static-dirs`` 配置的目录树（绝对路径，位于 ``src_dir`` 下），
            其下 ``.py`` 是模板/前端产物等数据资源，不编译不删除。如 fspack
@@ -559,19 +554,20 @@ class NuitkaCompile:
         data_dirs: tuple[Path, ...] = (),
         compiler: str = "auto",
     ) -> None:
-        """整合 ensure_env + standalone python + stamp 缓存 + compile_src 的入口.
+        """整合 ensure_env + standalone python + compile_src 的入口.
 
-        重复构建时若 :meth:`_stamp_path` 文件内容与 :meth:`_stamp_key` 匹配，
-        跳过整个 Nuitka 阶段（含 C 编译器检查、wheel 安装、源码编译），
-        避免重复 subprocess 启动与编译耗时。
+        每次构建都重新编译：源码同步阶段（:func:`copy_source`）先把上次生成的
+        ``.pyd``/``.so`` 当陌生文件删除并还原 ``.py``，进入本函数时 ``dist/src``
+        里没有可复用的编译产物，任何"stamp 命中即跳过"都会静默产出未编译的包
+        （历史上正是如此）。增量编译需要把产物缓存到同步目录之外，尚未实现。
 
-        首次构建或源码/版本变化时：
+        构建流程：
 
         1. :meth:`ensure_env` 检查 C 编译器并安装锁定版 nuitka 到本地缓存
         2. :meth:`_ensure_build_python` 准备 standalone python（Windows 专用，
            embed runtime python 不完整会导致 Nuitka reExecute fork bomb）
         3. :meth:`compile_src` 用 standalone python 运行 nuitka 逐文件编译 ``.py`` 为 ``.pyd``
-        4. 写入 stamp 文件供下次构建比对
+        4. 写入 stamp 文件：仅作 dist 半成品检测的"已编译到该阶段"标记
 
         ``data_dirs`` 为数据资源目录树（``[tool.fspack] data-dirs`` 与
         ``web-static-dirs`` 解析到 ``src_dir`` 下的绝对路径元组），透传给
@@ -591,29 +587,14 @@ class NuitkaCompile:
         stamp = cls._stamp_path(dist_dir)
         stamp_key = cls._stamp_key(src_dir, nuitka_ver, py_version, entry_rels, nuitka_packages, data_dirs, compiler)
 
-        # stamp 命中：跳过整个 Nuitka 阶段
-        try:
-            if stamp.is_file() and stamp.read_text(encoding="utf-8") == stamp_key:
-                _logger.info("Nuitka stamp 命中，跳过编译")
-                stage.hit_cache()
-                stage.set_detail(f"stamp 命中，nuitka {nuitka_ver} 已编译")
-                return
-        except (OSError, UnicodeDecodeError):
-            pass
-
-        # stamp 未命中但 hash 索引命中：dist 完整保留但 stamp 单独丢失/损坏时，
-        # 跳过编译并重建 stamp。索引与 stamp 同在 dist/，删除 dist 时
-        # 一并清理，保证索引命中场景仅限于 dist 完整保留的情况（.pyd 产物仍在）。
-        hash_index = _load_hash_index(dist_dir)
-        if stamp_key in hash_index:
-            _logger.info("Nuitka stamp 未命中但 hash 索引命中，跳过编译并重建 stamp")
-            stage.hit_cache()
-            stage.set_detail(f"hash 索引命中，nuitka {nuitka_ver} 已编译（重建 stamp）")
-            try:
-                _atomic_write_text(stamp, stamp_key)
-            except OSError as e:
-                _logger.warning("重建 Nuitka stamp 失败: %s", e)
-            return
+        # 不做跨构建跳过（历史上此处有 stamp 命中与 hash 索引命中两条捷径，均为假命中）：
+        # copy_source 在编译阶段之前运行，把上次生成的 .pyd/.so 视为"源码树里的陌生
+        # 文件"删除并还原对应 .py，因此走到这里时 dist/src 必然没有编译产物。
+        # 旧实现在这种状态下仍然跳过编译，用户要的是 .pyd、实际拿到 .pyc，
+        # 静默产出未编译的发行包。真正的增量编译需要把产物存到同步目录之外
+        # （产物缓存，见性能计划 P1），本轮先保证正确。
+        _logger.info("Nuitka 重新编译（源码同步已还原 .py，上次产物不可复用）")
+        stage.processed()
 
         # 环境就绪阶段（ensure_env + ensure_build_python）失败时回退到 .pyc 模式：
         # Nuitka 是可选优化，网络不可用/C 编译器缺失/下载失败不应中断构建。
@@ -641,10 +622,9 @@ class NuitkaCompile:
             stage.set_detail(f"回退到 .pyc 模式: {e}")
             return
 
-        # stamp 未命中（源码已变化）时不读取上次失败文件列表：失败文件可能已被
-        # 用户修复，若继续传 skip_files 跳过且编译后用不含该文件的新列表覆盖写入，
-        # 该文件将永远不被编译（旧 BUG）。缓存命中路径（stamp/hash 索引命中）直接
-        # 早退不编译，无需 skip_files。故编译路径恒全量重试，失败列表仅作诊断记录。
+        # 不读取上次失败文件列表：失败文件可能已被用户修复，若继续传 skip_files
+        # 跳过且编译后用不含该文件的新列表覆盖写入，该文件将永远不被编译（旧 BUG）。
+        # 故编译路径恒全量重试，失败列表仅作诊断记录。
         failed_files = cls.compile_src(
             src_dir,
             runtime_dir,
@@ -680,18 +660,15 @@ class NuitkaCompile:
             else:
                 _logger.warning("site-packages 不存在，跳过包编译: %s", site_packages)
 
-        # 编译后写 stamp（即使部分文件失败也写，避免下次重复尝试）。
-        # 原子化写入（tempfile + os.replace）：构建被 Ctrl+C 中断后，
-        # 半写入的 stamp 文件可能被下次构建误读为有效缓存，跳过编译输出陈旧 .pyd。
-        # 原子 rename 保证 stamp 要么完整写入要么不存在，无中间状态。
-        # 同步更新 hash 索引：stamp 单独丢失/损坏时，索引命中可跳过编译重建 stamp。
+        # 编译后写 stamp（部分文件失败也写：stamp 记录"本次编译已执行到这一步"，
+        # 供 dist 半成品检测判定构建完成度，不作为跳过编译的依据）。
+        # 原子化写入（tempfile + os.replace）：构建被 Ctrl+C 中断时不留下半写入文件。
         try:
             _atomic_write_text(stamp, stamp_key)
         except OSError as e:
             _logger.warning("写入 Nuitka stamp 失败: %s", e)
-        _update_hash_index(dist_dir, stamp_key)
         # 写入失败文件列表（诊断记录：用户可据此定位反复失败的文件；
-        # stamp 未命中时下次构建全量重试，不再据其跳过）
+        # 每次构建全量重编，不据其跳过）
         _save_failed_files(dist_dir, failed_files)
         # Nuitka 编译已修改 dist/src 树（删除成功编译的 .py），失效构建级
         # 指纹缓存，保证后续 pyc stamp 等阶段的指纹反映最新目录树状态

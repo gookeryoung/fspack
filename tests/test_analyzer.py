@@ -357,6 +357,7 @@ def test_parallel_spawn_ok_guard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(analysis, "_parse_serial", spy_serial)
     monkeypatch.setattr(analysis, "_parse_parallel", spy_parallel)
     monkeypatch.setattr(analysis, "_PARALLEL_THRESHOLD", 1)
+    monkeypatch.setattr(analysis, "_PARALLEL_MIN_BYTES", 0)
     r = analyze_dependencies(tmp_path, "main", ())
     assert calls == ["serial"]
     assert "os" in r.ast_stdlib
@@ -439,33 +440,41 @@ def test_iter_py_entries_prunes_and_drops_out_of_tree_data_dir(tmp_path: Path) -
 
 
 def test_analyze_dependencies_parallel_matches_serial(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """并行解析路径与串行路径结果一致.
-
-    通过 monkeypatch 调低 ``_PARALLEL_THRESHOLD`` 强制走并行路径，
-    验证 ``ProcessPoolExecutor`` 分发与结果合并的正确性。
-    """
+    """一次有界真进程池回归：多批次、编码、错误、QML 和源码排除均等价."""
     from fspack.analyzer import analysis
 
-    # 构造 10 个 .py 文件（足够触发并行路径，阈值调到 2）
     pkg = tmp_path / "myproj"
     pkg.mkdir()
     (pkg / "__init__.py").write_text("", encoding="utf-8")
-    for i in range(10):
-        (pkg / f"mod_{i}.py").write_text(
-            "import os\nimport sys\nimport numpy as np\nfrom PySide2.QtWidgets import QApplication\n",
+    for i in range(35):
+        (pkg / f"mod_{i:03d}.py").write_text(
+            f"import dep_{i}\nimport os\nimport sys\nimport numpy as np\nfrom PySide2.QtWidgets import QApplication\n",
             encoding="utf-8",
         )
     (tmp_path / "main.py").write_text("import os\nimport myproj\n", encoding="utf-8")
+    (pkg / "bad.py").write_text("def bad(:\n", encoding="utf-8")
+    (pkg / "nul.py").write_bytes(b"\x00")
+    (pkg / "encoded.py").write_bytes(b"# coding: latin-1\n# caf\xe9\nimport encoded_dep\n")
+    (tmp_path / "Main.qml").write_text("import QtQuick 2.15\n", encoding="utf-8")
+    for name in ("dist", "assets"):
+        directory = tmp_path / name
+        directory.mkdir()
+        (directory / "ignored.py").write_text("import ignored_dep\n", encoding="utf-8")
+        (directory / "Ignored.qml").write_text("import QtCharts 2.15\n", encoding="utf-8")
 
-    # 串行路径
     monkeypatch.setattr(analysis, "_PARALLEL_THRESHOLD", 10000)
-    serial = analyze_dependencies(tmp_path, "main", ())
+    serial = analyze_dependencies(tmp_path, "main", (), data_dirs=("assets",))
 
-    # 并行路径
     monkeypatch.setattr(analysis, "_PARALLEL_THRESHOLD", 2)
-    parallel = analyze_dependencies(tmp_path, "main", ())
+    monkeypatch.setattr(analysis, "_PARALLEL_MIN_BYTES", 0)
+    parallel = analyze_dependencies(tmp_path, "main", (), data_dirs=("assets",))
 
     assert serial == parallel
+    assert list(serial.ast_submodules) == list(parallel.ast_submodules)
+    assert len(parallel.ast_errors) == 2
+    assert "encoded_dep" in parallel.ast_third_party
+    assert "ignored_dep" not in parallel.ast_third_party
+    assert parallel.ast_submodules["PySide2"] == frozenset({"QtWidgets", "Quick"})
 
 
 def test_parse_file_worker_skips_syntax_error(tmp_path: Path) -> None:
@@ -730,8 +739,11 @@ def test_analyze_dependencies_parallel_records_ast_errors(tmp_path: Path, monkey
 
     (tmp_path / "bad.py").write_text("def bad(:\n", encoding="utf-8")
     (tmp_path / "good.py").write_text("import os\n", encoding="utf-8")
-    # 强制走并行路径
+    # 错误聚合用同步执行桩覆盖，真 spawn 已由功能等价测试覆盖
+    monkeypatch.setattr(analysis, "ProcessPoolExecutor", _InlineExecutor)
+    monkeypatch.setattr(analysis, "as_completed", _fake_as_completed)
     monkeypatch.setattr(analysis, "_PARALLEL_THRESHOLD", 1)
+    monkeypatch.setattr(analysis, "_PARALLEL_MIN_BYTES", 0)
     r = analyze_dependencies(tmp_path, "good", ())
     assert "os" in r.ast_stdlib
     assert len(r.ast_errors) == 1
@@ -851,16 +863,21 @@ def test_source_fingerprint_includes_qml_changes(tmp_path: Path) -> None:
 
 
 class _StubFuture:
-    """测试桩：预置 result 返回值或异常，done/cancel 固定返回（仅供 ``_parse_parallel`` 消费）."""
+    """批次结果桩；None 表示未完成，记录取消，不实际等待."""
 
     def __init__(self, payload: object) -> None:
         self._payload = payload
+        self.cancel_calls = 0
 
     def done(self) -> bool:
-        return True
+        return self._payload is not None
+
+    def cancelled(self) -> bool:
+        return self._payload is None and self.cancel_calls > 0
 
     def cancel(self) -> bool:
-        return False
+        self.cancel_calls += 1
+        return self._payload is None
 
     def result(self) -> object:
         if isinstance(self._payload, BaseException):
@@ -901,45 +918,60 @@ def test_parse_parallel_broken_pool_preserves_aggregated_results(
     stub = _StubExecutor([(["os"], [], {}, []), BrokenProcessPool("simulated worker OOM")])
     monkeypatch.setattr(analysis, "ProcessPoolExecutor", lambda **kwargs: stub)
     monkeypatch.setattr(analysis, "as_completed", _fake_as_completed)
+    monkeypatch.setattr(analysis, "_PARSE_BATCH_SIZE", 1)
 
     imports_ord: dict[str, None] = {}
     stdlib_ord: dict[str, None] = {}
     submodules: dict[str, list[str]] = {}
     errors: list[tuple[str, str]] = []
     analysis._parse_parallel([Path("a.py"), Path("b.py")], imports_ord, stdlib_ord, submodules, errors)
-    # 第一个 worker 的结果已聚合保留，第二个崩溃不吞掉已完成部分
+    # 第一个 worker 的结果保留，缺失结果不能返回无错误报告
     assert "os" in imports_ord
-    # 正常结束路径：finally 中 shutdown(wait=True)
-    assert stub.shutdown_waits == [(True, False)]
+    assert len(errors) == 1
+    assert errors[0][0] == "b.py"
+    assert "BrokenProcessPool" in errors[0][1]
+    assert stub.shutdown_waits == [(False, True)]
 
 
+@pytest.mark.parametrize("version", [(3, 8), (3, 14)])
 def test_parse_parallel_timeout_shutdowns_without_waiting(
+    version: tuple[int, int],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """并行超时分支 cancel 后 shutdown(wait=False) 立即返回，不再无限等待卡死 worker."""
+    """只 shutdown 一次；3.8 不传 cancel_futures，两个版本均主动取消 future."""
     from concurrent.futures import TimeoutError as FuturesTimeoutError
 
     from fspack.analyzer import analysis
 
-    def _as_completed_timeout(futures: list[_StubFuture], timeout: float | None = None) -> Iterator[_StubFuture]:
-        yield futures[0]
+    observed = []
+
+    def _as_completed_timeout(futures: object, timeout: float | None = None) -> Iterator[_StubFuture]:
+        observed.extend(futures)
+        yield observed[0]
         raise FuturesTimeoutError
 
-    stub = _StubExecutor([(["os"], [], {}, []), ([], [], {}, [])])
+    class _Py38Executor(_StubExecutor):
+        def shutdown(self, wait: bool = True) -> None:
+            self.shutdown_waits.append((wait, False))
+
+    executor_class = _Py38Executor if version == (3, 8) else _StubExecutor
+    stub = executor_class([(["os"], [], {}, []), None])
     monkeypatch.setattr(analysis, "ProcessPoolExecutor", lambda **kwargs: stub)
     monkeypatch.setattr(analysis, "as_completed", _as_completed_timeout)
+    monkeypatch.setattr(analysis, "_PARSE_BATCH_SIZE", 1)
+    monkeypatch.setattr(analysis.sys, "version_info", version)
 
     imports_ord: dict[str, None] = {}
     stdlib_ord: dict[str, None] = {}
     submodules: dict[str, list[str]] = {}
     errors: list[tuple[str, str]] = []
     analysis._parse_parallel([Path("a.py"), Path("b.py")], imports_ord, stdlib_ord, submodules, errors)
-    # 超时前已完成的结果保留
     assert "os" in imports_ord
-    # 超时分支 shutdown(wait=False)，timed_out 标志使 finally 跳过重复 shutdown
-    # 超时分支 shutdown(wait=False, cancel_futures=True)，提前 return 跳过 finally
-    # 超时分支 shutdown(wait=False, cancel_futures=True) 后 return，finally 中 shutdown(wait=True) 幂等
-    assert stub.shutdown_waits == [(False, True), (True, False)]
+    assert stub.shutdown_waits == [(False, version >= (3, 9))]
+    assert observed[1].cancel_calls == 1
+    assert len(errors) == 1
+    assert errors[0][0] == "b.py"
+    assert "超时" in errors[0][1]
 
 
 def test_parse_parallel_timeout_warns_on_slow_worker(
@@ -993,6 +1025,7 @@ def test_parse_parallel_timeout_warns_on_slow_worker(
             shutdown_calls.append((wait, cancel_futures))
 
     monkeypatch.setattr(analysis, "ProcessPoolExecutor", _FakePool)
+    monkeypatch.setattr(analysis, "_PARSE_BATCH_SIZE", 1)
 
     def fake_as_completed(futures: object, timeout: float | None = None) -> object:
         raise FuturesTimeoutError("simulated timeout")
@@ -1011,13 +1044,12 @@ def test_parse_parallel_timeout_warns_on_slow_worker(
     timeout_logs = [r for r in caplog.records if "超时" in r.message]
     assert len(timeout_logs) == 1
     assert "AST 并行解析" in timeout_logs[0].message
-    # 超时分支 shutdown(wait=False, cancel_futures=True) 触发，finally 中 shutdown(wait=True) 幂等
-    assert (False, True) in shutdown_calls
-    # 超时后 imports/submodules/errors 为空（fake as_completed 抛异常未返回结果）
+    assert shutdown_calls == [(False, True)]
     assert all_imports_ord == {}
     assert all_stdlib_ord == {}
     assert all_submodules == {}
-    assert all_errors == []
+    assert [path for path, _ in all_errors] == [str(path) for path in py_files]
+    assert all("超时" in message for _, message in all_errors)
 
 
 def test_parse_parallel_normal_completes_without_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1029,8 +1061,9 @@ def test_parse_parallel_normal_completes_without_timeout(tmp_path: Path, monkeyp
         (tmp_path / f"mod_{i}.py").write_text(f"import os\nx = {i}\n", encoding="utf-8")
     py_files = sorted(tmp_path.glob("*.py"))
 
-    # 设较长 timeout 确保正常完成
     monkeypatch.setattr(analysis, "_PARSE_TOTAL_TIMEOUT", 60.0)
+    monkeypatch.setattr(analysis, "ProcessPoolExecutor", _InlineExecutor)
+    monkeypatch.setattr(analysis, "as_completed", _fake_as_completed)
 
     all_imports_ord: dict[str, None] = {}
     all_stdlib_ord: dict[str, None] = {}
@@ -1052,19 +1085,21 @@ def test_parse_parallel_timeout_constant_default() -> None:
     assert _PARSE_TOTAL_TIMEOUT == 300.0
 
 
+@pytest.mark.parametrize("cpu,files,expected", [(24, 1000, 4), (2, 1000, 2), (None, 1000, 1), (24, 17, 2), (24, 5, 1)])
 def test_parse_parallel_uses_initializer(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    cpu: int | None,
+    files: int,
+    expected: int,
 ) -> None:
-    """``_parse_parallel`` 用 ``initializer`` 预加载 ``_STDLIB`` 传给 worker（iter-134）."""
+    """worker 上限同时受 4、可用 CPU 数与批次数约束，initializer 保持可 pickle."""
     from fspack.analyzer import analysis
     from fspack.analyzer.analysis import _init_parse_worker, _parse_parallel
     from fspack.analyzer.ast_scan import _STDLIB
 
-    for i in range(5):
-        (tmp_path / f"mod_{i}.py").write_text("x = 0\n", encoding="utf-8")
-    py_files = sorted(tmp_path.glob("*.py"))
-
+    py_files = [tmp_path / f"mod_{i}.py" for i in range(files)]
+    monkeypatch.setattr(analysis.os, "cpu_count", lambda: cpu)
     captured: dict[str, object] = {}
 
     class _FakeFuture:
@@ -1101,62 +1136,45 @@ def test_parse_parallel_uses_initializer(
 
     assert captured.get("initializer") is _init_parse_worker
     assert captured.get("initargs") == (_STDLIB,)
+    assert captured.get("max_workers") == expected
 
 
-def test_parse_parallel_interleave_and_submit(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """``_parse_parallel`` 对每个文件 submit 一个 future（iter-138 改 submit 逐文件提交）.
+class _InlineExecutor(_StubExecutor):
+    """真实解析、同步执行；仅用来验证调度，不作为性能证据."""
 
-    旧 ``_interleave_by_size`` 为 ``map(chunksize=)`` 连续分块设计，submit 模式下
-    进程池 FIFO 队列天然负载均衡，已删除——本测试验证 submit 调用次数等于文件数。
-    """
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__([])
+        self.submit_calls: list[tuple[str, ...]] = []
+
+    def submit(self, fn, batch: tuple[str, ...]) -> _StubFuture:
+        self.submit_calls.append(batch)
+        return _StubFuture(fn(batch))
+
+
+def test_parse_parallel_batches_are_deterministic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """反向完成也必须保序；35 文件为 16/16/3 三批，错误不能中断批内后续文件."""
     from fspack.analyzer import analysis
-    from fspack.analyzer.analysis import _parse_parallel
 
-    for i in range(20):
-        (tmp_path / f"mod_{i}.py").write_text("x = 0\n", encoding="utf-8")
-    py_files = sorted(tmp_path.glob("*.py"))
-
-    submit_calls: list[str] = []
-
-    class _FakeFuture:
-        def done(self) -> bool:
-            return True
-
-        def cancel(self) -> bool:
-            return False
-
-        def result(
-            self,
-        ) -> tuple[list[str], list[str], dict[str, frozenset[str]], list[tuple[str, str]]]:
-            return [], [], {}, []
-
-    class _Pool:
-        def __init__(self, *args: object, **kw: object) -> None:
-            pass
-
-        def __enter__(self) -> _Pool:
-            return self
-
-        def __exit__(self, *args: object) -> bool:
-            return False
-
-        def submit(self, fn: object, *args: object) -> _FakeFuture:
-            # args[0] 是文件路径 str
-            submit_calls.append(str(args[0]) if args else "")
-            return _FakeFuture()
-
-        def shutdown(self, wait: bool = True, cancel_futures: bool = False) -> None:
-            pass
-
-    monkeypatch.setattr(analysis, "ProcessPoolExecutor", _Pool)
-    monkeypatch.setattr(analysis, "as_completed", lambda futures, timeout=None: iter(futures))
-    _parse_parallel(py_files, {}, {}, {}, [])
-
-    # 20 个文件每个 submit 一次（submit 替代 map+chunksize，无需 interleave 重排）
-    assert len(submit_calls) == 20
+    for i in range(35):
+        content = f"import dep_{i}\nimport os\nfrom shared import sub_{i}\n"
+        if i in (2, 18):
+            content = "def bad(:\n"
+        (tmp_path / f"mod_{i:03d}.py").write_text(content, encoding="utf-8")
+    serial = analyze_dependencies(tmp_path, "main", ())
+    pool = _InlineExecutor()
+    monkeypatch.setattr(analysis, "ProcessPoolExecutor", lambda **kwargs: pool)
+    monkeypatch.setattr(analysis, "as_completed", lambda futures, timeout=None: reversed(list(futures)))
+    monkeypatch.setattr(analysis, "_PARALLEL_THRESHOLD", 1)
+    monkeypatch.setattr(analysis, "_PARALLEL_MIN_BYTES", 0)
+    for _ in range(2):
+        parallel = analyze_dependencies(tmp_path, "main", ())
+        assert parallel == serial
+        assert list(parallel.ast_submodules) == list(serial.ast_submodules)
+    assert [len(batch) for batch in pool.submit_calls] == [16, 16, 3] * 2
+    assert [path for batch in pool.submit_calls[:3] for path in batch] == [
+        str(p) for p in sorted(tmp_path.glob("*.py"))
+    ]
+    assert pool.shutdown_waits == [(True, False)] * 2
 
 
 def test_parse_parallel_partial_timeout_aggregates_completed_results(
@@ -1228,6 +1246,7 @@ def test_parse_parallel_partial_timeout_aggregates_completed_results(
             pass
 
     monkeypatch.setattr(analysis, "ProcessPoolExecutor", _FakePool)
+    monkeypatch.setattr(analysis, "_PARSE_BATCH_SIZE", 1)
 
     def fake_as_completed(futures: object, timeout: float | None = None) -> Iterator[object]:
         # 前 3 个已完成的 yield，然后抛 TimeoutError 模拟后 2 个超时
@@ -1244,9 +1263,123 @@ def test_parse_parallel_partial_timeout_aggregates_completed_results(
 
     _parse_parallel(py_files, all_imports_ord, all_stdlib_ord, all_submodules, all_errors)
 
-    # 已完成的 3 个 future 结果被聚合（关键改进：map(timeout=) 会丢失这些结果）
-    assert "numpy" in all_imports_ord
-    assert "requests" in all_imports_ord
-    assert "flask" in all_imports_ord
-    assert "os" in all_stdlib_ord
-    assert "sys" in all_stdlib_ord
+    assert list(all_imports_ord) == ["numpy", "requests", "flask"]
+    assert list(all_stdlib_ord) == ["os", "sys"]
+    assert [path for path, _ in all_errors] == [str(path) for path in py_files[3:]]
+
+
+@pytest.mark.parametrize("count", [199, 200, 500])
+def test_small_projects_never_start_pool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, count: int) -> None:
+    """旧 200 文件断崖附近的小文件不启动进程池，也不逐文件 stat."""
+    from fspack.analyzer import analysis
+
+    for i in range(count):
+        (tmp_path / f"mod_{i:03d}.py").write_text("import numpy\nimport os\n", encoding="utf-8")
+
+    def no_pool(**kwargs: object) -> None:
+        pytest.fail("small project started a pool")
+
+    monkeypatch.setattr(analysis, "ProcessPoolExecutor", no_pool)
+    result = analyze_dependencies(tmp_path, "main", ())
+    assert result.ast_third_party == ("numpy",)
+    assert result.ast_stdlib == ("os",)
+    assert result.ast_errors == ()
+
+    def no_stat(path: Path, **kwargs: object) -> None:
+        pytest.fail("file-count guard should avoid stat")
+
+    monkeypatch.setattr(Path, "stat", no_stat)
+    assert not analysis._parallel_workload_ok([tmp_path / "small.py"] * count)
+
+
+def test_parallel_admission_uses_actual_bytes(tmp_path: Path) -> None:
+    """真实磁盘大小：两门槛均含等号；同文件数改变大小必须改变决策."""
+    from fspack.analyzer import analysis
+
+    paths = [tmp_path / f"mod_{i:04d}.py" for i in range(analysis._PARALLEL_THRESHOLD)]
+    for path in paths:
+        path.write_bytes(b"")
+    assert not analysis._parallel_workload_ok(paths)
+    paths[0].write_bytes(b"#" * (analysis._PARALLEL_MIN_BYTES - 1))
+    assert not analysis._parallel_workload_ok(paths)
+    paths[0].write_bytes(b"#" * analysis._PARALLEL_MIN_BYTES)
+    assert analysis._parallel_workload_ok(paths)
+    assert not analysis._parallel_workload_ok(paths[:-1])
+    paths[0].write_bytes(b"#" * (analysis._PARALLEL_MIN_BYTES + 1))
+    assert analysis._parallel_workload_ok(paths)
+    paths[-1].unlink()
+    assert not analysis._parallel_workload_ok(paths)  # stat 竞态回退而非吞掉文件
+    errors: list[tuple[str, str]] = []
+    analysis._parse_serial([paths[-1]], {}, {}, {}, errors)
+    assert errors[0][0] == str(paths[-1])
+
+
+def test_admission_excludes_qml_and_data_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """大 QML/被排除的源码不得计入并行工作量."""
+    from fspack.analyzer import analysis
+
+    for i in range(2):
+        (tmp_path / f"mod_{i}.py").write_bytes(b"import PySide2\n")
+    (tmp_path / "Main.qml").write_bytes(b"import QtQuick 2.15\n" + b" " * 4096)
+    for name in ("dist", "assets"):
+        directory = tmp_path / name
+        directory.mkdir()
+        (directory / "ignored.py").write_bytes(b"import ignored_dep\n" + b"#" * 4096)
+    monkeypatch.setattr(analysis, "_PARALLEL_THRESHOLD", 2)
+    monkeypatch.setattr(analysis, "_PARALLEL_MIN_BYTES", 4096)
+
+    def no_pool(**kwargs: object) -> None:
+        pytest.fail("excluded/QML bytes incorrectly admitted to pool")
+
+    monkeypatch.setattr(analysis, "ProcessPoolExecutor", no_pool)
+    result = analyze_dependencies(tmp_path, "main", (), data_dirs=("assets",))
+    assert result.ast_third_party == ("PySide2",)
+    assert "Quick" in result.ast_submodules["PySide2"]
+
+
+@pytest.mark.parametrize("phase", ["create", "submit", "result"])
+def test_parallel_failure_marks_missing_batches(monkeypatch: pytest.MonkeyPatch, phase: str) -> None:
+    """创建/部分提交/结果异常均关闭已有池，保留可收回的结果并逐文件报错."""
+    from fspack.analyzer import analysis
+
+    class _FailingExecutor(_StubExecutor):
+        def submit(self, fn: object, arg: object) -> _StubFuture:
+            if phase == "submit" and not self._payloads:
+                raise OSError("submit failed")
+            return super().submit(fn, arg)
+
+    payloads: list[object] = [(["kept"], [], {}, [])]
+    if phase == "result":
+        payloads.extend([ValueError("unexpected worker error"), (["also_kept"], [], {}, [])])
+    pool = _FailingExecutor(payloads)
+
+    def create(**kwargs: object) -> _StubExecutor:
+        if phase == "create":
+            raise OSError("pool creation failed")
+        return pool
+
+    monkeypatch.setattr(analysis, "ProcessPoolExecutor", create)
+    monkeypatch.setattr(analysis, "as_completed", _fake_as_completed)
+    paths = [Path(f"mod_{i:03d}.py") for i in range(35)]
+    imports: dict[str, None] = {}
+    errors: list[tuple[str, str]] = []
+    analysis._parse_parallel(paths, imports, {}, {}, errors)
+    missing = paths if phase == "create" else paths[16:] if phase == "submit" else paths[16:32]
+    assert [path for path, _ in errors] == [str(path) for path in missing]
+    assert all("不完整" in message for _, message in errors)
+    assert list(imports) == ([] if phase == "create" else ["kept", "also_kept"] if phase == "result" else ["kept"])
+    assert pool.shutdown_waits == ([] if phase == "create" else [(False, True)])
+
+
+def test_parallel_empty_input_and_keyboard_interrupt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """空任务不建池；用户中断不吞异常，也不等待池中的其他任务."""
+    from fspack.analyzer import analysis
+
+    pool = _StubExecutor([KeyboardInterrupt()])
+    monkeypatch.setattr(analysis, "ProcessPoolExecutor", lambda **kwargs: pool)
+    monkeypatch.setattr(analysis, "as_completed", _fake_as_completed)
+    analysis._parse_parallel([], {}, {}, {}, [])
+    assert pool.shutdown_waits == []
+    with pytest.raises(KeyboardInterrupt):
+        analysis._parse_parallel([Path("a.py")], {}, {}, {}, [])
+    assert pool.shutdown_waits == [(False, True)]

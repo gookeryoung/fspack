@@ -440,6 +440,29 @@ def test_deps_cache_key_stable_and_distinct() -> None:
     assert k1 != k5
 
 
+def test_deps_cache_key_isolates_main_index_and_hash_mode() -> None:
+    """主索引与哈希模式分别参与缓存键，且同配置下包顺序仍不影响键."""
+    keys = set()
+    for pypi_index in ("https://idx/simple", "https://other/simple"):
+        for require_hashes in (False, True):
+            key = _deps_cache_key(
+                ("numpy", "requests"),
+                "3.11.9",
+                ("win_amd64",),
+                pypi_index=pypi_index,
+                require_hashes=require_hashes,
+            )
+            assert key == _deps_cache_key(
+                ("requests", "numpy"),
+                "3.11.9",
+                ("win_amd64",),
+                pypi_index=pypi_index,
+                require_hashes=require_hashes,
+            )
+            keys.add(key)
+    assert len(keys) == 4
+
+
 def test_deps_cache_key_order_independent() -> None:
     """包顺序不影响键（sorted 后哈希）."""
     k1 = _deps_cache_key(("numpy", "requests"), "3.11.9", ("win_amd64",))
@@ -568,15 +591,18 @@ def test_save_deps_cache_best_effort(tmp_path: Path) -> None:
     assert data == {"wheels": ["numpy-1.0.whl"]}
 
 
-def test_download_wheels_deps_cache_hit_skips_pip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """依赖解析缓存命中时完全跳过 pip 调用."""
+@pytest.mark.parametrize("pypi_index", ["https://idx/simple", "  `https://idx/simple`  "])
+def test_download_wheels_deps_cache_hit_skips_pip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pypi_index: str
+) -> None:
+    """同一主索引（清理空白和引号后）命中解析缓存，完全跳过 pip."""
     cache = tmp_path / "cache"
     cache.mkdir()
     whl_name = "numpy-1.24.0-cp311-cp311-win_amd64.whl"
     (cache / whl_name).write_bytes(b"numpy")
 
     # 预写依赖解析缓存
-    key = _deps_cache_key(("numpy",), "3.11.9", ("win_amd64",))
+    key = _deps_cache_key(("numpy",), "3.11.9", ("win_amd64",), pypi_index="https://idx/simple", require_hashes=False)
     _save_deps_cache(cache, key, [cache / whl_name])
 
     pip_called = False
@@ -590,13 +616,45 @@ def test_download_wheels_deps_cache_hit_skips_pip(tmp_path: Path, monkeypatch: p
     monkeypatch.setattr("fspack.packaging.wheels.downloader._find_pip_python", lambda: "/py/python")
 
     stage = StageRecorder("下载依赖")
-    result = download_wheels(("numpy",), "3.11.9", "https://idx/simple", cache, stage=stage)
+    result = download_wheels(("numpy",), "3.11.9", pypi_index, cache, stage=stage)
     record = stage._finalize()
     assert not pip_called
     assert len(result) == 1
     assert result[0].name == whl_name
     assert record.cache_hit == 1
     assert record.bytes_downloaded == 0
+
+
+def test_download_wheels_deps_cache_isolates_main_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """切换主索引重新解析，同一索引再次调用（包括切回旧索引）仍命中自己的缓存."""
+    cache = tmp_path / "cache"
+    calls: list[str] = []
+
+    def fake_download(
+        packages: list[str], ctx: DownloadContext, *, require_hashes: bool = False
+    ) -> subprocess.CompletedProcess[str]:
+        assert not require_hashes
+        calls.append(ctx.pypi_index)
+        wheel = cache / f"numpy-{len(calls)}.0-py3-none-any.whl"
+        wheel.write_bytes(b"fake wheel")
+        return subprocess.CompletedProcess([], 0, stdout=f"Saved {wheel}\n", stderr="")
+
+    monkeypatch.setattr("fspack.packaging.wheels.downloader._find_pip_python", lambda: "/py/python")
+    monkeypatch.setattr("fspack.packaging.wheels.downloader._run_pip_download", fake_download)
+    first_index = "https://idx/simple"
+    second_index = "https://other/simple"
+    first = download_wheels(("numpy",), "3.11.9", first_index, cache)
+    assert download_wheels(("numpy",), "3.11.9", first_index, cache) == first
+    assert calls == [first_index]
+
+    second = download_wheels(("numpy",), "3.11.9", second_index, cache)
+    assert second != first
+    assert download_wheels(("numpy",), "3.11.9", second_index, cache) == second
+    assert download_wheels(("numpy",), "3.11.9", first_index, cache) == first
+    assert calls == [first_index, second_index]
+    for index, wheels in ((first_index, first), (second_index, second)):
+        key = _deps_cache_key(("numpy",), "3.11.9", ("win_amd64",), pypi_index=index, require_hashes=False)
+        assert _load_deps_cache(cache, key) == wheels
 
 
 def test_download_wheels_writes_deps_cache_after_pip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -618,7 +676,7 @@ def test_download_wheels_writes_deps_cache_after_pip(tmp_path: Path, monkeypatch
 
     # 第一次调用：cache miss，走 pip，写缓存
     download_wheels(("numpy",), "3.11.9", "https://idx/simple", cache)
-    key = _deps_cache_key(("numpy",), "3.11.9", ("win_amd64",))
+    key = _deps_cache_key(("numpy",), "3.11.9", ("win_amd64",), pypi_index="https://idx/simple", require_hashes=False)
     cache_file = cache / f".deps-{key}.json"
     assert cache_file.is_file()
     import json as _json
@@ -633,7 +691,7 @@ def test_download_wheels_deps_cache_hit_no_stage(tmp_path: Path, monkeypatch: py
     cache.mkdir()
     whl_name = "numpy-1.24.0-cp311-cp311-win_amd64.whl"
     (cache / whl_name).write_bytes(b"numpy")
-    key = _deps_cache_key(("numpy",), "3.11.9", ("win_amd64",))
+    key = _deps_cache_key(("numpy",), "3.11.9", ("win_amd64",), pypi_index="https://idx/simple", require_hashes=False)
     _save_deps_cache(cache, key, [cache / whl_name])
 
     pip_called = False
@@ -2709,23 +2767,37 @@ def test_download_online_require_hashes_no_uv_degrades(
     assert any("require_hashes" in rec.message and "降级" in rec.message for rec in caplog.records)
 
 
-def test_download_wheels_require_hashes_cache_hit_skips_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """require_hashes=True 缓存命中时跳过校验（缓存 wheel 已首次校验）."""
+def test_download_wheels_require_hashes_ignores_deps_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """require_hashes=True 不复用解析缓存，也不写入解析缓存.
+
+    解析缓存只存 wheel 文件名列表，命中即等于跳过哈希校验——旧实现正是如此
+    （"缓存 wheel 已首次校验"是未经验证的假设）。现改为该模式强制走下载校验路径。
+    """
     cache = tmp_path / "cache"
     cache.mkdir()
-    # 预置依赖解析缓存
     wheel_file = cache / "numpy-1.24.0-cp311-cp311-win_amd64.whl"
     wheel_file.write_bytes(b"fake wheel")
-    _save_deps_cache(cache, _deps_cache_key(("numpy",), "3.11.9", ("win_amd64",), (), ()), [wheel_file])
+    # 预置非哈希模式的解析缓存：旧实现会被它直接命中而跳过校验
+    _save_deps_cache(
+        cache,
+        _deps_cache_key(
+            ("numpy",), "3.11.9", ("win_amd64",), (), (), pypi_index="https://idx/simple", require_hashes=False
+        ),
+        [wheel_file],
+    )
+    calls: list[bool] = []
 
-    # pip 不应被调用
-    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
-        raise AssertionError("缓存命中不应调用 pip")
+    def fake_run_pip(packages: list[str], ctx: DownloadContext, *, require_hashes: bool = False):
+        calls.append(require_hashes)
+        return subprocess.CompletedProcess([], 0, stdout=f"Saved {wheel_file}\n", stderr="")
 
-    monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
     monkeypatch.setattr("fspack.packaging.wheels.downloader._find_pip_python", lambda: "/py/python")
+    monkeypatch.setattr("fspack.packaging.wheels.downloader._run_pip_download", fake_run_pip)
     wheels = download_wheels(("numpy",), "3.11.9", "https://idx/simple", cache, require_hashes=True)
+    assert calls == [True]
     assert wheels == [wheel_file]
+    # 该模式的结果不落解析缓存：仅预置的那一份存在
+    assert len(list(cache.glob(".deps-*.json"))) == 1
 
 
 def test_download_with_hashes_cleanup_on_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -21,7 +21,7 @@ from typing import Any
 
 import pytest
 
-from fspack.config import AppType, ProjectInfo
+from fspack.config import AppType, BuildOptions, MirrorConfig, ProjectInfo
 from fspack.packaging.manifest import (
     ManifestDiff,
     ManifestEntry,
@@ -35,6 +35,8 @@ from fspack.packaging.manifest import (
     load_manifest,
     print_manifest_diff,
 )
+from fspack.packaging.pipeline import executor
+from fspack.platform import Platform
 
 
 def _make_info(tmp_path: Path, name: str = "app", version: str = "1.0") -> ProjectInfo:
@@ -149,6 +151,32 @@ def test_collect_manifest_empty_dist_returns_no_entries(tmp_path: Path) -> None:
     assert data["summary"]["total_files"] == 0
     assert data["summary"]["total_size"] == 0
     assert data["entries"] == []
+
+
+@pytest.mark.parametrize("marker", [".build_ok", ".build_failed"])
+def test_manifest_excludes_only_root_build_status(tmp_path: Path, marker: str) -> None:
+    dist = tmp_path / "dist"
+    info = _make_info(tmp_path)
+    _make_dist_tree(dist)
+    (dist / "src" / marker).write_bytes(b"user data")
+    (dist / f"{marker}.data").write_bytes(b"runtime data")
+    baseline = collect_manifest(dist, info)
+
+    status = dist / marker
+    status.write_bytes(b"old build status")
+    first = load_manifest(generate_manifest(dist, info))
+    status.write_bytes(b"new build status with timestamp")
+    second = load_manifest(generate_manifest(dist, info))
+    status.unlink()
+    final = collect_manifest(dist, info)
+
+    for data in (first, second, final):
+        assert data["entries"] == baseline["entries"]
+        assert data["summary"] == baseline["summary"]
+    paths = {e["path"] for e in final["entries"]}
+    assert f"src/{marker}" in paths
+    assert f"{marker}.data" in paths
+    assert marker not in paths
 
 
 def test_diff_manifest_added_removed_modified(tmp_path: Path) -> None:
@@ -428,3 +456,217 @@ def test_run_diff_exit_code_flag_exits_nonzero(tmp_path: Path) -> None:
     with pytest.raises(SystemExit) as ei:
         cli._run_diff(ns)
     assert ei.value.code == 1
+
+
+@pytest.fixture
+def report_pipeline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    import socket
+    import subprocess
+
+    from fspack.packaging.win7.scan import Win7ScanReport
+
+    def forbidden(*args: Any, **kwargs: Any) -> None:
+        pytest.fail("报告流水线测试禁止联网或启动外部进程")
+
+    monkeypatch.setattr(socket.socket, "connect", forbidden)
+    monkeypatch.setattr(socket.socket, "connect_ex", forbidden)
+    monkeypatch.setattr(socket, "getaddrinfo", forbidden)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+
+    dist = tmp_path / "dist"
+    files = {
+        "runtime/python311.dll": b"runtime",
+        "site-packages/pkg/native.pyd": b"old-imports",
+        "site-packages/pkg-1.0.dist-info/METADATA": b"Name: pkg\nVersion: 1.0\nLicense: MIT\n",
+        "site-packages/pkg-1.0.dist-info/RECORD": b"pkg/native.pyd,,11\n",
+        "src/app.py": b"print('hi')\n",
+        "app.exe": b"loader",
+    }
+    for rel, content in files.items():
+        path = dist / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+
+    monkeypatch.setattr(executor, "resolve_project_info", lambda *a: _make_info(tmp_path))
+    monkeypatch.setattr(executor, "_detect_frontends", lambda *a: [])
+    monkeypatch.setattr(executor, "_prepare_runtime", lambda *a: dist / "site-packages")
+    monkeypatch.setattr(executor, "_analyze_dependencies", lambda *a: None)
+    monkeypatch.setattr(executor, "_download_dependencies", lambda *a: False)
+    for name in (
+        "write_pth",
+        "copy_source",
+        "_compile_user_sources",
+        "_zip_stdlib",
+        "_slim_runtime",
+        "_resolve_project_icon",
+    ):
+        monkeypatch.setattr(executor, name, lambda *a, **kw: None)
+    monkeypatch.setattr(executor, "_build_entry_loaders", lambda *a: [dist / "app.exe"])
+    monkeypatch.setattr("fspack.packaging.win7.scan.enforce_win7_loaders", lambda *a: None)
+
+    def patch_binary(dist_dir: Path) -> tuple[tuple[str, tuple[str, ...]], ...]:
+        assert dist_dir == dist
+        binary = dist / "site-packages/pkg/native.pyd"
+        assert binary.read_bytes() == b"old-imports"
+        binary.write_bytes(b"new-imports")
+        return (("site-packages/pkg/native.pyd", ("old-imports→new-imports",)),)
+
+    def scan_binary(dist_dir: Path) -> Win7ScanReport:
+        assert dist_dir == dist
+        assert (dist / "site-packages/pkg/native.pyd").read_bytes() == b"new-imports"
+        return Win7ScanReport(scanned=3, dist_dir=dist)
+
+    def inject_shim(dist_dir: Path) -> tuple[str, ...]:
+        assert dist_dir == dist
+        (dist / "runtime/bcryptprimitives.dll").write_bytes(b"injected shim")
+        return ("bcryptprimitives.dll",)
+
+    monkeypatch.setattr("fspack.packaging.win7.patch.patch_dist_win7", patch_binary)
+    monkeypatch.setattr("fspack.packaging.win7.scan.scan_dist_win7", scan_binary)
+    monkeypatch.setattr("fspack.packaging.win7.scan.inject_win7_shims", inject_shim)
+    return dist
+
+
+@pytest.mark.parametrize("no_sbom", [False, True])
+@pytest.mark.parametrize("previous_build", [False, True])
+def test_pipeline_manifest_records_final_win7_files(
+    report_pipeline: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mirror: MirrorConfig,
+    no_sbom: bool,
+    previous_build: bool,
+) -> None:
+    from threading import Barrier
+
+    from fspack.packaging import sbom
+
+    dist = report_pipeline
+    if previous_build:
+        (dist / ".build_ok").write_text("{}", encoding="utf-8")
+        (dist / ".build_failed").write_text('{"error": "previous failure"}', encoding="utf-8")
+    barrier = Barrier(2)
+    real_sbom = sbom.generate_sbom
+
+    def concurrent_manifest(dist_dir: Path, info: ProjectInfo) -> Path:
+        if not no_sbom:
+            barrier.wait(timeout=10)
+        return generate_manifest(dist_dir, info)
+
+    def concurrent_sbom(dist_dir: Path, info: ProjectInfo) -> Path:
+        barrier.wait(timeout=10)
+        return real_sbom(dist_dir, info)
+
+    monkeypatch.setattr("fspack.packaging.manifest.generate_manifest", concurrent_manifest)
+    monkeypatch.setattr(sbom, "generate_sbom", concurrent_sbom)
+    info = executor.build(
+        dist.parent,
+        mirror,
+        dist_dir=dist,
+        embed_cache=dist.parent / "cache",
+        target=Platform.WINDOWS,
+        options=BuildOptions(no_sbom=no_sbom, no_size_report=True),
+    )
+
+    data = load_manifest(dist / "release/app-1.0-manifest.json")
+    entries = {e["path"]: e for e in data["entries"]}
+    binary_hash = hashlib.sha256(b"new-imports").hexdigest()
+    assert entries["site-packages/pkg/native.pyd"]["sha256"] == binary_hash
+    assert entries["runtime/bcryptprimitives.dll"]["sha256"] == hashlib.sha256(b"injected shim").hexdigest()
+    assert "release/win7-compat-report.txt" in entries
+    assert (dist / ".build_ok").is_file()
+    assert not (dist / ".build_failed").exists()
+    excluded = {".build_ok", ".build_failed", "release/app-1.0-manifest.json", "release/app-1.0-sbom.json"}
+    disk_files = {p.relative_to(dist).as_posix(): p for p in dist.rglob("*") if p.is_file()}
+    expected_files = {rel: p for rel, p in disk_files.items() if rel not in excluded}
+    assert set(entries) == set(expected_files)
+    for rel, path in expected_files.items():
+        assert entries[rel]["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+        assert entries[rel]["size"] == path.stat().st_size
+    assert data["summary"]["total_files"] == len(expected_files)
+    assert data["summary"]["total_size"] == sum(p.stat().st_size for p in expected_files.values())
+    recollected = collect_manifest(dist, info)
+    assert recollected["entries"] == data["entries"]
+    assert recollected["summary"] == data["summary"]
+    sbom_path = dist / "release/app-1.0-sbom.json"
+    if no_sbom:
+        assert not sbom_path.exists()
+    else:
+        sbom_data = json.loads(sbom_path.read_text(encoding="utf-8"))
+        expected_checksum = hashlib.sha256(f"pkg/native.pyd:{binary_hash}".encode()).hexdigest()
+        assert sbom_data["packages"][0]["checksums"] == [{"algorithm": "SHA256", "checksumValue": expected_checksum}]
+
+
+@pytest.mark.parametrize("failure_mode", [("sbom", False), ("manifest", False), ("sbom", True), ("manifest", True)])
+def test_pipeline_report_failure_remains_nonfatal(
+    report_pipeline: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mirror: MirrorConfig,
+    caplog: pytest.LogCaptureFixture,
+    failure_mode: tuple[str, bool],
+) -> None:
+    dist = report_pipeline
+    failed_report, parallel = failure_mode
+
+    def fail_report(dist_dir: Path, info: ProjectInfo) -> Path:
+        assert (dist_dir / "release/win7-compat-report.txt").is_file()
+        raise ValueError("report failure stub")
+
+    monkeypatch.setattr(f"fspack.packaging.{failed_report}.generate_{failed_report}", fail_report)
+    info = executor.build(
+        dist.parent,
+        mirror,
+        dist_dir=dist,
+        embed_cache=dist.parent / "cache",
+        target=Platform.WINDOWS,
+        options=BuildOptions(
+            no_sbom=not parallel and failed_report != "sbom",
+            no_manifest=not parallel and failed_report != "manifest",
+            no_size_report=True,
+        ),
+    )
+    assert info.name == "app"
+    assert "report failure stub" in caplog.text
+    assert (dist / ".build_ok").is_file()
+    assert not (dist / f"release/app-1.0-{failed_report}.json").exists()
+    if parallel:
+        successful_report = "manifest" if failed_report == "sbom" else "sbom"
+        assert (dist / f"release/app-1.0-{successful_report}.json").is_file()
+
+
+@pytest.mark.parametrize("no_sbom", [False, True])
+@pytest.mark.parametrize("no_manifest", [False, True])
+def test_pipeline_report_flags_without_win7_scan(
+    report_pipeline: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mirror: MirrorConfig,
+    no_sbom: bool,
+    no_manifest: bool,
+) -> None:
+    dist = report_pipeline
+
+    def disabled_stage(*args: Any, **kwargs: Any) -> None:
+        pytest.fail("已关闭的阶段不应执行")
+
+    for name in ("patch.patch_dist_win7", "scan.scan_dist_win7", "scan.inject_win7_shims", "scan.write_win7_report"):
+        monkeypatch.setattr(f"fspack.packaging.win7.{name}", disabled_stage)
+    if no_sbom:
+        monkeypatch.setattr("fspack.packaging.sbom.generate_sbom", disabled_stage)
+    if no_manifest:
+        monkeypatch.setattr("fspack.packaging.manifest.generate_manifest", disabled_stage)
+    executor.build(
+        dist.parent,
+        mirror,
+        dist_dir=dist,
+        embed_cache=dist.parent / "cache",
+        target=Platform.WINDOWS,
+        options=BuildOptions(no_sbom=no_sbom, no_manifest=no_manifest, no_win7_scan=True, no_size_report=True),
+    )
+    assert (dist / "release/app-1.0-sbom.json").is_file() is (not no_sbom)
+    manifest_path = dist / "release/app-1.0-manifest.json"
+    assert manifest_path.is_file() is (not no_manifest)
+    assert not (dist / "release/win7-compat-report.txt").exists()
+    assert not (dist / "runtime/bcryptprimitives.dll").exists()
+    assert (dist / "site-packages/pkg/native.pyd").read_bytes() == b"old-imports"
+    if not no_manifest:
+        entries = {e["path"]: e for e in load_manifest(manifest_path)["entries"]}
+        assert entries["site-packages/pkg/native.pyd"]["sha256"] == hashlib.sha256(b"old-imports").hexdigest()

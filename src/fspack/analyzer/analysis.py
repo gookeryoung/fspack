@@ -27,6 +27,7 @@ from collections.abc import Iterator
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from concurrent.futures.process import BrokenProcessPool
+from contextlib import suppress
 from pathlib import Path
 
 from fspack.analyzer.ast_scan import (
@@ -76,9 +77,9 @@ def analyze_dependencies(  # noqa: PLR0912 - 分支多是分类与异常处理�
     不应被 AST 扫描误判为项目依赖（如 fspack 打包自身时，``assets/init_templates``
     下的 tkinter 模板不应让 fspack 依赖 tkinter）。
 
-    文件数超过 :data:`_PARALLEL_THRESHOLD` 时使用 :class:`ProcessPoolExecutor`
-    并行解析（CPU 密集 ``ast.parse``），大项目显著提速。小项目走串行路径
-    避免进程池启动开销（Windows spawn 约 100-200ms，需足够工作量摊销）。
+    仅当 Python 文件数和总输入字节数均达到保守阈值时才启用进程池。
+    字节数只是 AST 工作量的粗略代理，不保证任意源码都能提速；小文件项目
+    保持串行，避免 Windows spawn 启动和 IPC 开销超过解析本身。
 
     QML 文件（``.qml``）中的 ``import QtXxx`` 语句会被解析并映射为 Qt 子模块名
     （如 ``QtQuick`` → ``Quick``），加入对应 Qt 绑定包（PySide2/PySide6/PyQt5/PyQt6）
@@ -105,7 +106,7 @@ def analyze_dependencies(  # noqa: PLR0912 - 分支多是分类与异常处理�
     all_submodules: dict[str, list[str]] = {}
     all_errors: list[tuple[str, str]] = []  # AST 解析失败记录 (abs_path, error_msg)（iter-138）
 
-    if len(py_files) >= _PARALLEL_THRESHOLD and _parallel_spawn_ok():
+    if _parallel_spawn_ok() and _parallel_workload_ok(py_files):
         _parse_parallel(py_files, all_imports_ord, all_stdlib_ord, all_submodules, all_errors)
     else:
         _parse_serial(py_files, all_imports_ord, all_stdlib_ord, all_submodules, all_errors)
@@ -177,9 +178,30 @@ def _format_ast_errors(src_dir: Path, errors: list[tuple[str, str]]) -> list[str
     return formatted
 
 
-# 并行解析阈值：低于此文件数走串行，避免进程池启动开销
-# Windows spawn 启动 ~100-200ms，需足够工作量摊销；Linux fork 较快可更低
-_PARALLEL_THRESHOLD = 200
+# 并行门槛与 worker 上限（24 逻辑核 Windows 实测，1000 文件 / 8 MiB）：
+# 200-500 个小文件的解析仅数十 ms，进程池 spawn 成本远超收益，故文件数与
+# 输入字节数双门槛都要满足才放行。worker 上限取 4：同一批文件按解析密度
+# 测得 1/4/8/12/24 worker 的耗时呈"注释密集型 213/265/435/531/513ms、
+# 代码密集型 2485/831/621/644/671ms"两种相反走向——低 worker 对易解析大
+# 项目更稳，高 worker 只难解析项目多赚约 25%，取中间值 4。
+_PARALLEL_THRESHOLD = 1000
+_PARALLEL_MIN_BYTES = 8 * 1024 * 1024
+_MAX_PARSE_WORKERS = 4
+_PARSE_BATCH_SIZE = 16
+
+
+def _parallel_workload_ok(py_files: list[Path]) -> bool:
+    """仅统计排除后的 Python 输入；小项目不增加逐文件 stat 开销.
+
+    枚举后文件消失/无权限时回退串行，让读取阶段照常记录 AST 错误，
+    不把未知大小当作达到并行阈值。字节数采用磁盘实际大小（含编码/换行）。
+    """
+    if len(py_files) < _PARALLEL_THRESHOLD:
+        return False
+    try:
+        return sum(py.stat().st_size for py in py_files) >= _PARALLEL_MIN_BYTES
+    except OSError:
+        return False
 
 
 def _parallel_spawn_ok() -> bool:
@@ -200,11 +222,8 @@ def _parallel_spawn_ok() -> bool:
     return name.startswith("python")
 
 
-# 并行解析整体超时（秒）：``as_completed(timeout=)`` 从调用起算的总等待时间，
-# 任一 future 未就绪则抛 ``TimeoutError``。实测 500 文件 P99 <30s（8 核），
-# 300s 裕量覆盖慢速 CI 与病态输入（深度嵌套 AST）。iter-127 引入。
-# iter-138 改用 ``submit`` + ``as_completed``：单个 worker 卡死不阻塞其他 worker
-# 的结果聚合（``map(timeout=)`` 在首个 future 卡死时丢弃后续已完成结果）。
+# ``as_completed(timeout=)`` 从调用起算的总等待时间（不含提交/启动时间）。
+# 用完成顺序收取结果、输入顺序合并；某批超时不丢弃其他已完成批次。
 _PARSE_TOTAL_TIMEOUT = 300.0
 
 
@@ -312,84 +331,99 @@ def _parse_serial(
             all_submodules.setdefault(pkg, []).extend(sub_set)
 
 
-def _parse_parallel(
+def _parse_batch_worker(
+    paths: tuple[str, ...],
+) -> tuple[list[str], list[str], dict[str, frozenset[str]], list[tuple[str, str]]]:
+    """按输入顺序解析小批次，批内去重后只传回依赖与错误，不传 AST."""
+    imports: dict[str, None] = {}
+    stdlib: dict[str, None] = {}
+    submodules: dict[str, list[str]] = {}
+    errors: list[tuple[str, str]] = []
+    for path in paths:
+        tops, std_tops, subs, file_errors = _parse_file_worker(path)
+        imports.update(dict.fromkeys(tops))
+        stdlib.update(dict.fromkeys(std_tops))
+        for pkg, values in subs.items():
+            submodules.setdefault(pkg, []).extend(values)
+        errors.extend(file_errors)
+    return list(imports), list(stdlib), {pkg: frozenset(values) for pkg, values in submodules.items()}, errors
+
+
+def _parse_parallel(  # noqa: PLR0912 - 调度、异常清理与确定性合并共用批次状态
     py_files: list[Path],
     all_imports_ord: dict[str, None],
     all_stdlib_ord: dict[str, None],
     all_submodules: dict[str, list[str]],
     all_errors: list[tuple[str, str]],
 ) -> None:
-    """进程池并行解析 .py 文件（CPU 密集 ``ast.parse``）。
+    """最多 4 worker，每 16 文件一个 future，降低 spawn 和 IPC/调度成本.
 
-    ``submit`` 逐文件提交：进程池内部 FIFO 队列天然负载均衡（空闲 worker
-    先取任务），无需按文件大小重排（旧 ``_interleave_by_size`` 为
-    ``map(chunksize=)`` 连续分块设计，submit 模式下双重 stat 纯浪费，已删除）。
+    按完成顺序收取结果，但按批次的输入索引合并，依赖与错误的顺序不受
+    worker 调度影响。超时/池启动失败/worker 异常保留已完成批次，并为缺失
+    结果的每个文件记录 ast_errors，不能把不完整分析伪装为无错误报告。
 
-    ``ProcessPoolExecutor`` 用 ``initializer=_init_parse_worker`` 在 worker
-    启动时预加载 :data:`_STDLIB` 到 worker 全局，worker 内分离标准库导入，
-    减少主进程分类循环（iter-134）。
-
-    内存优化：worker 返回的 list 合并时直接用 ``dict.setdefault`` 去重保序，
-    省掉末尾独立 ``seen`` 去重循环。``all_submodules`` 用 ``list`` 暂存：
-    逐结果 ``list.extend`` 代替 ``set.update``，减少 worker 结果合并的
-    哈希表扩容开销。去重统一在主循环末尾做一次 dict 保序去重。
-
-    **超时防护**（iter-127）：``as_completed(timeout=)`` 设整体超时
-    :data:`_PARSE_TOTAL_TIMEOUT`（300s）。超时抛 ``TimeoutError``，
-    已处理的结果保留（依赖分析可能不完整但不会无限阻塞），warning 提示用户。
-    超时分支调用 ``shutdown(wait=False, cancel_futures=True)`` 立即返回——
-    若依赖 ``with`` 块退出隐式 ``shutdown(wait=True)`` 会无限等待卡死的 worker。
-    超时不回退串行（若 ast.parse 真卡死，串行同样会卡死）。
-
-    **worker 崩溃容错**：``future.result()`` 抛 ``BrokenProcessPool``
-    （worker OOM/段错误）时 warning 后提前结束循环——已聚合的结果保留，
-    依赖分析降级为不完整而非整单失败。
-
-    **单 worker 卡死不阻塞**（iter-138）：``submit`` + ``as_completed``
-    按完成顺序 yield，卡死的 worker 不影响其他已完成 worker 的结果聚合。
+    池只 shutdown 一次；失败时取消排队任务但不等待正在运行的任务。
+    Python 3.8 用 Future.cancel，3.9+ 还用 cancel_futures 清理队列。
+    wait=False 不终止运行中的 worker，也不承诺解释器退出时无需等待。
+    超时不重试串行，避免在同一病态源码上再次卡住。
     """
-    cpu_count = os.cpu_count() or 4
-    pool = ProcessPoolExecutor(
-        max_workers=cpu_count,
-        initializer=_init_parse_worker,
-        initargs=(_STDLIB,),
-    )
+    if not py_files:
+        return
+    batches = [
+        tuple(str(p) for p in py_files[i : i + _PARSE_BATCH_SIZE]) for i in range(0, len(py_files), _PARSE_BATCH_SIZE)
+    ]
+    results: dict[int, tuple[list[str], list[str], dict[str, frozenset[str]], list[tuple[str, str]]]] = {}
+    futures = {}
+    pool = None
+    complete = False
+    failure = "AST 并行解析未完成"
     try:
-        futures = [pool.submit(_parse_file_worker, str(p)) for p in py_files]
-        completed = 0
-        try:
-            for future in as_completed(futures, timeout=_PARSE_TOTAL_TIMEOUT):
-                try:
-                    non_stdlib_tops, stdlib_tops, subs, errors = future.result()
-                except BrokenProcessPool:
-                    _logger.warning(
-                        "AST 并行解析 worker 崩溃（BrokenProcessPool），%d/%d 个文件结果丢失，依赖分析可能不完整",
-                        len(futures) - completed,
-                        len(futures),
-                    )
-                    break
-                for top in non_stdlib_tops:
-                    all_imports_ord.setdefault(top, None)
-                for top in stdlib_tops:
-                    all_stdlib_ord.setdefault(top, None)
-                for pkg, sub_set in subs.items():
-                    all_submodules.setdefault(pkg, []).extend(sub_set)
-                all_errors.extend(errors)
-                completed += 1
-        except FuturesTimeoutError:
-            pending = len(futures) - completed
-            _logger.warning(
-                "AST 并行解析超时（%ds），%d/%d 个文件未完成，依赖分析可能不完整",
-                int(_PARSE_TOTAL_TIMEOUT),
-                pending,
-                len(futures),
-            )
-            # 取消未完成 future 并立即关闭池（已运行的无法取消，仅避免新任务启动）
-            pool.shutdown(wait=False, cancel_futures=True)
-            return
+        pool = ProcessPoolExecutor(
+            max_workers=min(_MAX_PARSE_WORKERS, os.cpu_count() or 1, len(batches)),
+            initializer=_init_parse_worker,
+            initargs=(_STDLIB,),
+        )
+        for index, batch in enumerate(batches):
+            futures[pool.submit(_parse_batch_worker, batch)] = index
+        for future in as_completed(futures, timeout=_PARSE_TOTAL_TIMEOUT):
+            results[futures[future]] = future.result()
+        complete = True
+    except FuturesTimeoutError:
+        failure = f"AST 并行解析超时（{_PARSE_TOTAL_TIMEOUT:g}s），依赖分析不完整"
+    except BrokenProcessPool as exc:
+        failure = f"AST 并行解析 worker 崩溃（BrokenProcessPool），依赖分析不完整: {exc}"
+    except Exception as exc:  # 进程边界：含创建/提交失败及 worker 未预期异常
+        failure = f"AST 并行解析失败（{type(exc).__name__}），依赖分析不完整: {exc}"
     finally:
-        # 超时分支已提前 shutdown 并 return，此处仅正常退出路径执行
-        pool.shutdown(wait=True)
+        if pool is not None:
+            if not complete:
+                for future in futures:
+                    future.cancel()
+            if sys.version_info >= (3, 9):
+                pool.shutdown(wait=complete, cancel_futures=not complete)
+            else:
+                pool.shutdown(wait=complete)
+
+    if not complete:
+        _logger.warning("%s", failure)
+        # 超时或提交失败时，收回已完成但尚未被 as_completed yield 的结果。
+        for future, index in futures.items():
+            if index not in results and future.done() and not future.cancelled():
+                # 仍然失败时，下方为整个缺失批次逐文件记录 failure。
+                with suppress(Exception):
+                    results[index] = future.result()
+    for index, batch in enumerate(batches):
+        if index not in results:
+            all_errors.extend((path, failure) for path in batch)
+            continue
+        non_stdlib_tops, stdlib_tops, subs, errors = results[index]
+        for top in non_stdlib_tops:
+            all_imports_ord.setdefault(top, None)
+        for top in stdlib_tops:
+            all_stdlib_ord.setdefault(top, None)
+        for pkg, sub_set in subs.items():
+            all_submodules.setdefault(pkg, []).extend(sub_set)
+        all_errors.extend(errors)
 
 
 def _data_dir_prefixes(root: Path, data_dirs: tuple[Path, ...]) -> tuple[tuple[str, ...], ...]:

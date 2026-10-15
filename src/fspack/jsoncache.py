@@ -5,8 +5,8 @@
 仅保留自身的 ``wheels`` 字段校验与 wheel 文件存在性检查外壳。
 
 只抽取共同骨架 :func:`load_json_dict`，各调用点保留自身的类型转换/回写外壳，
-避免过度抽象。日志文案被测试锁死的调用点（如 ``nuitka.compile._load_hash_index``
-断言 "hash 索引损坏"、``doctor_envs._scan_cache_health`` 需区分损坏计数语义）
+避免过度抽象。日志文案被测试锁死的调用点（如 ``nuitka.indexes._load_failed_files``
+断言 "失败文件列表损坏"、``doctor_envs._scan_cache_health`` 需区分损坏计数语义）
 不复用本骨架，保持各自实现。
 
 ``delete_on_corrupt`` 区分两类语义：

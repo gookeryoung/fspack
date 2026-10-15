@@ -25,7 +25,10 @@
 - ``src``：dist/src/ 下（用户源码与数据资源）
 - ``release``：dist/release/ 下（SBOM/manifest/安装包等审计与发行产物）
 - ``build``：dist/build/ 下（图标转换、NSIS 脚本等中间产物）
-- ``other``：dist 根目录或其他路径（如 .build_failed 标记、python3xx._pth 等）
+- ``other``：dist 根目录或其他路径（如 python3xx._pth 等）
+
+根目录的 ``.build_ok``/``.build_failed`` 是不随发行包分发的构建状态标记，
+会在报告生成后写入或删除，始终排除；其余构建中间产物保留原有扫描口径。
 """
 
 from __future__ import annotations
@@ -97,7 +100,8 @@ def collect_manifest(dist_dir: Path, info: ProjectInfo) -> dict[str, Any]:
 
     遍历 ``dist_dir`` 下所有文件（通过 :func:`scandir_tree` 复用 stat
     缓存），计算每个文件的 SHA256，按相对路径排序（保证可重现性）。
-    跳过 manifest JSON 自身（避免每次生成后校验和变化）。
+    跳过 manifest JSON 自身、release 隐藏文件、SBOM，以及根目录构建状态
+    标记 ``.build_ok``/``.build_failed``，避免并发报告与构建收尾造成清单漂移。
 
     Args:
         dist_dir: dist 根目录（``dist/``）
@@ -125,6 +129,8 @@ def collect_manifest(dist_dir: Path, info: ProjectInfo) -> dict[str, Any]:
         # 跳过 release/ 下隐藏文件与 SBOM 文件：manifest 与 SBOM 并行生成时，
         # mkstemp 临时文件（".tmp_" 前缀）与半成品 SBOM 可能被扫到导致内容抖动
         if rel.startswith("release/.") or rel.endswith("-sbom.json"):
+            continue
+        if rel in (".build_ok", ".build_failed"):
             continue
         collected.append((rel, dir_entry))
 
