@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- fspack favicon: lightning (one-command speed) + gear (build/pack) -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#214A72"/>
+      <stop offset="1" stop-color="#0B1F35"/>
+    </linearGradient>
+    <linearGradient id="bolt" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFD84D"/>
+      <stop offset="0.5" stop-color="#FB9422"/>
+      <stop offset="1" stop-color="#F26D0D"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.07"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <clipPath id="tile">
+      <rect width="512" height="512" rx="116"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#tile)">
+    <rect width="512" height="512" fill="url(#bg)"/>
+    <!-- gear ring + 8 teeth -->
+    <g>
+      <circle cx="256" cy="256" r="150" fill="none" stroke="#2C587F" stroke-width="56"/>
+      <g fill="#2C587F">
+        <rect x="231" y="50" width="50" height="100" rx="14"/>
+        <rect x="231" y="50" width="50" height="100" rx="14" transform="rotate(45 256 256)"/>
+        <rect x="231" y="50" width="50" height="100" rx="14" transform="rotate(90 256 256)"/>
+        <rect x="231" y="50" width="50" height="100" rx="14" transform="rotate(135 256 256)"/>
+        <rect x="231" y="50" width="50" height="100" rx="14" transform="rotate(180 256 256)"/>
+        <rect x="231" y="50" width="50" height="100" rx="14" transform="rotate(225 256 256)"/>
+        <rect x="231" y="50" width="50" height="100" rx="14" transform="rotate(270 256 256)"/>
+        <rect x="231" y="50" width="50" height="100" rx="14" transform="rotate(315 256 256)"/>
+      </g>
+    </g>
+    <!-- top sheen -->
+    <rect width="512" height="512" fill="url(#sheen)"/>
+    <!-- lightning bolt -->
+    <path d="M296 54 L148 296 L246 296 L196 458 L380 214 L274 214 L352 54 Z"
+          fill="url(#bolt)" stroke="#081827" stroke-width="26"
+          stroke-linejoin="round" paint-order="stroke"/>
+    <!-- specular streak -->
+    <path d="M272 136 L214 232" stroke="#FFE9A8" stroke-width="12"
+          stroke-linecap="round" opacity="0.5" fill="none"/>
+  </g>
+</svg>
