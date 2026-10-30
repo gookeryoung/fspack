@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import ast
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 import pytest
+
+try:
+    from typing import override
+except ImportError:  # Python < 3.12
+    from typing_extensions import override
 
 from fspack.analyzer import (
     _qml_module_to_qt_sub,
@@ -943,16 +948,17 @@ def test_parse_parallel_timeout_shutdowns_without_waiting(
 
     from fspack.analyzer import analysis
 
-    observed = []
+    observed: list[_StubFuture] = []
 
-    def _as_completed_timeout(futures: object, timeout: float | None = None) -> Iterator[_StubFuture]:
+    def _as_completed_timeout(futures: Iterable[_StubFuture], timeout: float | None = None) -> Iterator[_StubFuture]:
         observed.extend(futures)
         yield observed[0]
         raise FuturesTimeoutError
 
     class _Py38Executor(_StubExecutor):
-        def shutdown(self, wait: bool = True) -> None:
-            self.shutdown_waits.append((wait, False))
+        @override
+        def shutdown(self, wait: bool = True, cancel_futures: bool = False) -> None:
+            self.shutdown_waits.append((wait, cancel_futures))
 
     executor_class = _Py38Executor if version == (3, 8) else _StubExecutor
     stub = executor_class([(["os"], [], {}, []), None])
@@ -1146,9 +1152,10 @@ class _InlineExecutor(_StubExecutor):
         super().__init__([])
         self.submit_calls: list[tuple[str, ...]] = []
 
-    def submit(self, fn, batch: tuple[str, ...]) -> _StubFuture:
-        self.submit_calls.append(batch)
-        return _StubFuture(fn(batch))
+    @override
+    def submit(self, fn: object, arg: object) -> _StubFuture:
+        self.submit_calls.append(arg)  # type: ignore[arg-type]
+        return _StubFuture(fn(arg))  # type: ignore[operator, arg-type]
 
 
 def test_parse_parallel_batches_are_deterministic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1343,6 +1350,7 @@ def test_parallel_failure_marks_missing_batches(monkeypatch: pytest.MonkeyPatch,
     from fspack.analyzer import analysis
 
     class _FailingExecutor(_StubExecutor):
+        @override
         def submit(self, fn: object, arg: object) -> _StubFuture:
             if phase == "submit" and not self._payloads:
                 raise OSError("submit failed")
