@@ -744,6 +744,141 @@ def test_parse_pip_download_wheels_empty() -> None:
     assert _parse_pip_download_wheels("") == []
 
 
+def test_parse_pip_download_wheels_filters_by_success_line() -> None:
+    """有 Successfully downloaded 行时，按最终包名过滤掉非最终集的 wheel."""
+    stdout = (
+        "Collecting numpy\n  Saved /path/to/numpy-1.0-py3-none-any.whl\n"
+        "Collecting pygame\n  File was already downloaded /other/pygame-2.0-py3-none-any.whl\n"
+        "Successfully downloaded numpy\n"
+    )
+    names = _parse_pip_download_wheels(stdout)
+    assert names == ["numpy-1.0-py3-none-any.whl"]
+
+
+def test_parse_pip_download_wheels_success_line_keeps_same_pkg_candidates() -> None:
+    """Successfully downloaded 只按包名过滤；同包多版本候选交由冲突消解处理."""
+    stdout = (
+        "  File was already downloaded /a/pydantic-2.13.5-py3-none-any.whl\n"
+        "  File was already downloaded /a/pydantic-2.6.4-py3-none-any.whl\n"
+        "Successfully downloaded pydantic\n"
+    )
+    names = _parse_pip_download_wheels(stdout)
+    assert names == ["pydantic-2.13.5-py3-none-any.whl", "pydantic-2.6.4-py3-none-any.whl"]
+
+
+def test_select_coherent_wheels_picks_metadata_consistent_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """同包多版本时按 METADATA 依赖约束消解，选中与 pydantic-core 配套的版本."""
+    from fspack.packaging.wheels.downloader import _select_coherent_wheels
+
+    names = [
+        "pydantic-2.13.5-py3-none-any.whl",
+        "pydantic-2.6.4-py3-none-any.whl",
+        "pydantic_core-2.16.3-cp312-none-win_amd64.whl",
+    ]
+    requires_by_pkg = {
+        "pydantic-2.13.5-py3-none-any.whl": ["pydantic-core==2.41.5", "annotated-types>=0.4.0"],
+        "pydantic-2.6.4-py3-none-any.whl": ["pydantic-core==2.16.3", "annotated-types>=0.4.0"],
+        "pydantic_core-2.16.3-cp312-none-win_amd64.whl": ["typing-extensions>=4.6.0"],
+    }
+    monkeypatch.setattr(
+        "fspack.packaging.wheels.downloader._wheel_requires",
+        lambda wheel_path: requires_by_pkg.get(wheel_path.name, []),
+    )
+
+    result = _select_coherent_wheels(names, tmp_path)
+    assert result == ["pydantic-2.6.4-py3-none-any.whl", "pydantic_core-2.16.3-cp312-none-win_amd64.whl"]
+
+
+def test_select_coherent_wheels_no_conflict_passthrough(tmp_path: Path) -> None:
+    """无同包多版本时原样返回，不做任何过滤."""
+    from fspack.packaging.wheels.downloader import _select_coherent_wheels
+
+    names = ["numpy-1.26.0-cp311-cp311-win_amd64.whl", "requests-2.31.0-py3-none-any.whl"]
+    assert _select_coherent_wheels(names, tmp_path) == names
+
+
+def test_select_coherent_wheels_fallback_keeps_last_when_unsolvable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """约束无解（METADATA 缺失）时回退为保留每组最后一个 wheel."""
+    from fspack.packaging.wheels.downloader import _select_coherent_wheels
+
+    names = ["pydantic-2.13.5-py3-none-any.whl", "pydantic-2.6.4-py3-none-any.whl"]
+    monkeypatch.setattr(
+        "fspack.packaging.wheels.downloader._wheel_requires",
+        lambda wheel_path: [],
+    )
+    result = _select_coherent_wheels(names, tmp_path)
+    assert result == ["pydantic-2.6.4-py3-none-any.whl"]
+
+
+def test_validate_declared_constraints_rejects_out_of_range() -> None:
+    """选中 wheel 版本超出顶层声明范围时报 DependencyError."""
+    import pytest
+
+    from fspack.exceptions import DependencyError
+    from fspack.packaging.wheels.downloader import _validate_declared_constraints
+
+    with pytest.raises(DependencyError, match="pydantic"):
+        _validate_declared_constraints(["pydantic-2.15.0-py3-none-any.whl"], ["pydantic>=2.6.0,<2.15.0"])
+
+
+def test_validate_declared_constraints_accepts_in_range() -> None:
+    """满足声明的版本与裸包名声明不报错."""
+    from fspack.packaging.wheels.downloader import _validate_declared_constraints
+
+    _validate_declared_constraints(
+        ["pydantic-2.13.5-py3-none-any.whl", "sqlalchemy-2.0.0-py3-none-any.whl"],
+        ["pydantic>=2.6.0,<2.15.0", "sqlalchemy>=2.0.0", "numpy"],
+    )
+
+
+def test_download_wheels_cache_hit_selects_coherent_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """两次构建：首次解析写入缓存时即完成消解，第二次命中缓存拿到配套版本."""
+    whl_new = "pydantic-2.13.5-py3-none-any.whl"
+    whl_old = "pydantic-2.6.4-py3-none-any.whl"
+    whl_core = "pydantic_core-2.16.3-cp312-none-win_amd64.whl"
+
+    requires_by_pkg = {
+        whl_new: ["pydantic-core==2.41.5"],
+        whl_old: ["pydantic-core==2.16.3"],
+        whl_core: [],
+    }
+
+    class _Result:
+        returncode = 0
+        stdout = (
+            f"  File was already downloaded /a/{whl_new}\n"
+            f"  Saved /a/{whl_core}\n"
+            f"  File was already downloaded /a/{whl_old}\n"
+            "Successfully downloaded pydantic pydantic-core\n"
+        )
+        stderr = ""
+
+    def fake_run(cmd: list[str], **kw: Any) -> _Result:
+        cache = tmp_path / "cache"
+        for name in (whl_new, whl_old, whl_core):
+            (cache / name).write_bytes(b"x")
+        return _Result()
+
+    monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
+    monkeypatch.setattr("fspack.packaging.wheels.downloader._find_pip_python", lambda: "/py/python")
+    monkeypatch.setattr(
+        "fspack.packaging.wheels.downloader._wheel_requires",
+        lambda wheel_path: requires_by_pkg.get(wheel_path.name, []),
+    )
+
+    reqs = ("pydantic>=2.6.0,<2.15.0",)
+    first = download_wheels(reqs, "3.12.0", "https://idx/simple", tmp_path / "cache")
+    assert {p.name for p in first} == {whl_old, whl_core}
+
+    # 第二次构建命中解析缓存，仍应返回消解后的配套版本
+    second = download_wheels(reqs, "3.12.0", "https://idx/simple", tmp_path / "cache")
+    assert {p.name for p in second} == {whl_old, whl_core}
+
+
 def test_find_pip_python_uses_sys_executable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """sys.executable 能跑 pip 时优先用它."""
     venv_py = tmp_path / "venv" / "python"
