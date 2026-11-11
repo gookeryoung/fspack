@@ -298,6 +298,7 @@ def test_run_with_profile_repeat_stats_and_runs_data(capsys: pytest.CaptureFixtu
     assert "运行 1/1" not in out
 
 
+@pytest.mark.slow
 def test_run_with_profile_timeout_terminates_long_run(capsys: pytest.CaptureFixture[str]) -> None:
     """超时兜底：长跑子进程（未知 GUI 框架）被 watchdog 强制终止，汇总标注数据不完整."""
     t0 = time.perf_counter()

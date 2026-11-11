@@ -122,6 +122,7 @@ def test_build_offline_wheel_cache_miss_raises_dependency_error(
 # ---- FSPACK_CACHE_DIR 环境变量 → build() 用此路径作为 embed 缓存 ----
 
 
+@pytest.mark.slow
 def test_build_offline_uses_cache_dir_env_var(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """FSPACK_CACHE_DIR 环境变量 → build() 用此路径作为 embed_cache_dir.
 
@@ -161,6 +162,7 @@ def test_build_offline_uses_cache_dir_env_var(tmp_path: Path, monkeypatch: pytes
 # ---- 非离线模式缓存未命中 → 回退到网络下载路径 ----
 
 
+@pytest.mark.slow
 def test_build_non_offline_falls_back_to_network(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """非离线模式 embed 缓存未命中 → 不抛离线异常，走网络下载路径.
 

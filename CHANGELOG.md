@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- 单测门禁按实测耗时重新分档：超过 0.5 秒的用例标记 `slow`，`-m "not slow"` 主门禁只保留 0.5 秒以内用例
+
 ### Fixed
 - 修复 build_perf 基准 CI 假性退化，类别级绝对噪声下限判定
 - 修复 macOS arm64 运行时 tarball 资产名误用 `arm64-apple-darwin`，归一化为上游实际名称 `aarch64-apple-darwin`（URL 拼接与哈希清单校验同步生效）

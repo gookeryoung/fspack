@@ -685,6 +685,7 @@ def test_stream_compile_timeout_default_value() -> None:
     assert timeout_param.default is None
 
 
+@pytest.mark.slow
 def test_stream_compile_timeout_none_dispatches_compile_constant(
     capfd: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
@@ -697,6 +698,7 @@ def test_stream_compile_timeout_none_dispatches_compile_constant(
     assert returncode != 0
 
 
+@pytest.mark.slow
 def test_stream_compile_timeout_kills_long_process(
     capfd: pytest.CaptureFixture[str],
     caplog: pytest.LogCaptureFixture,
@@ -724,6 +726,7 @@ def test_stream_compile_timeout_not_triggered_for_fast_process(
     assert "fast" in stdout
 
 
+@pytest.mark.slow
 def test_stream_compile_timeout_preserves_drained_output(
     capfd: pytest.CaptureFixture[str],
 ) -> None:

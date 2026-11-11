@@ -200,6 +200,7 @@ def _mock_cache_content_fns(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+@pytest.mark.slow
 def test_run_doctor_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     """run_doctor 在 Windows 平台检查 mingw/NSIS，不查 gcc/wine."""
     monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.WINDOWS)
@@ -258,6 +259,7 @@ def test_run_doctor_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "wine" not in tool_names
 
 
+@pytest.mark.slow
 def test_run_doctor_linux(monkeypatch: pytest.MonkeyPatch) -> None:
     """run_doctor 在 Linux 平台检查 gcc/wine，不查 mingw."""
     monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
@@ -286,6 +288,7 @@ def test_run_doctor_linux(monkeypatch: pytest.MonkeyPatch) -> None:
     assert report.has_warn is True
 
 
+@pytest.mark.slow
 def test_run_doctor_macos(monkeypatch: pytest.MonkeyPatch) -> None:
     """run_doctor 在 macOS 平台检查 clang，不查 mingw/gcc/wine/NSIS."""
     monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.MACOS)
@@ -307,6 +310,7 @@ def test_run_doctor_macos(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "NSIS (交叉打包)" not in tool_names
 
 
+@pytest.mark.slow
 def test_run_doctor_has_error_when_tool_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     """run_doctor 必备工具缺失时 has_error=True."""
     monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
