@@ -1,0 +1,61 @@
+Looking in indexes: https://mirrors.aliyun.com/pypi/simple/
+Collecting pydantic<2.15.0,>=2.6.0
+  Downloading pydantic-2.14.3-py3-none-any.whl (494 kB)
+Collecting pydantic-core<2.20.0
+  Downloading pydantic_core-2.19.0-cp311-none-win_amd64.whl (1.9 MB)
+     ---------------------------------------- 1.9/1.9 MB 2.6 MB/s  0:00:00
+Collecting annotated-types>=0.6.0 (from pydantic<2.15.0,>=2.6.0)
+  Downloading annotated_types-0.8.0-py3-none-any.whl (13 kB)
+INFO: pip is looking at multiple versions of pydantic to determine which version is compatible with other requirements. This could take a while.
+Collecting pydantic<2.15.0,>=2.6.0
+  Downloading pydantic-2.14.2-py3-none-any.whl (490 kB)
+  Downloading pydantic-2.14.1-py3-none-any.whl (488 kB)
+  Downloading pydantic-2.14.0-py3-none-any.whl (487 kB)
+  Downloading pydantic-2.13.5-py3-none-any.whl (472 kB)
+  Downloading pydantic-2.13.4-py3-none-any.whl (472 kB)
+  Downloading pydantic-2.13.3-py3-none-any.whl (471 kB)
+  Downloading pydantic-2.13.2-py3-none-any.whl (471 kB)
+INFO: pip is still looking at multiple versions of pydantic to determine which version is compatible with other requirements. This could take a while.
+  Downloading pydantic-2.13.1-py3-none-any.whl (471 kB)
+  Downloading pydantic-2.13.0-py3-none-any.whl (471 kB)
+  Downloading pydantic-2.12.5-py3-none-any.whl (463 kB)
+  Downloading pydantic-2.12.4-py3-none-any.whl (463 kB)
+  Downloading pydantic-2.12.3-py3-none-any.whl (462 kB)
+INFO: This is taking longer than usual. You might need to provide the dependency resolver with stricter constraints to reduce runtime. See https://pip.pypa.io/warnings/backtracking for guidance. If you want to abort this run, press Ctrl + C.
+  Downloading pydantic-2.12.2-py3-none-any.whl (460 kB)
+  Downloading pydantic-2.12.0-py3-none-any.whl (459 kB)
+  Downloading pydantic-2.11.10-py3-none-any.whl (444 kB)
+  Downloading pydantic-2.11.9-py3-none-any.whl (444 kB)
+  Downloading pydantic-2.11.8-py3-none-any.whl (444 kB)
+  Downloading pydantic-2.11.7-py3-none-any.whl (444 kB)
+  Downloading pydantic-2.11.6-py3-none-any.whl (444 kB)
+  Downloading pydantic-2.11.5-py3-none-any.whl (444 kB)
+  Downloading pydantic-2.11.4-py3-none-any.whl (443 kB)
+  Downloading pydantic-2.11.3-py3-none-any.whl (443 kB)
+  Downloading pydantic-2.11.2-py3-none-any.whl (443 kB)
+  Downloading pydantic-2.11.1-py3-none-any.whl (442 kB)
+  Downloading pydantic-2.11.0-py3-none-any.whl (442 kB)
+  Downloading pydantic-2.10.6-py3-none-any.whl (431 kB)
+  Downloading pydantic-2.10.5-py3-none-any.whl (431 kB)
+  Downloading pydantic-2.10.4-py3-none-any.whl (431 kB)
+  Downloading pydantic-2.10.3-py3-none-any.whl (456 kB)
+  Downloading pydantic-2.10.2-py3-none-any.whl (456 kB)
+  Downloading pydantic-2.10.1-py3-none-any.whl (455 kB)
+  Downloading pydantic-2.10.0-py3-none-any.whl (454 kB)
+  Downloading pydantic-2.9.2-py3-none-any.whl (434 kB)
+  Downloading pydantic-2.9.1-py3-none-any.whl (434 kB)
+  Downloading pydantic-2.9.0-py3-none-any.whl (434 kB)
+  Downloading pydantic-2.8.2-py3-none-any.whl (423 kB)
+  Downloading pydantic-2.8.1-py3-none-any.whl (423 kB)
+  Downloading pydantic-2.8.0-py3-none-any.whl (423 kB)
+  Downloading pydantic-2.7.4-py3-none-any.whl (409 kB)
+Collecting pydantic-core<2.20.0
+  Downloading pydantic_core-2.18.4-cp311-none-win_amd64.whl (1.9 MB)
+     ---------------------------------------- 1.9/1.9 MB 2.6 MB/s  0:00:00
+Collecting typing-extensions>=4.6.1 (from pydantic<2.15.0,>=2.6.0)
+  Downloading typing_extensions-4.16.0-py3-none-any.whl (45 kB)
+Saved c:\users\zhou\appdata\local\temp\fsp_pipgen4\pydantic-2.7.4-py3-none-any.whl
+Saved c:\users\zhou\appdata\local\temp\fsp_pipgen4\pydantic_core-2.18.4-cp311-none-win_amd64.whl
+Saved c:\users\zhou\appdata\local\temp\fsp_pipgen4\annotated_types-0.8.0-py3-none-any.whl
+Saved c:\users\zhou\appdata\local\temp\fsp_pipgen4\typing_extensions-4.16.0-py3-none-any.whl
+Successfully downloaded pydantic pydantic-core annotated-types typing-extensions

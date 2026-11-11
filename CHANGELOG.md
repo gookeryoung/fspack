@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- 新增端到端测试：真实构建并运行产物、多入口/包级入口、冷缓存并行下载、Linux 交叉构建 Windows 目标的 marker 取舍、`--lock`/`--frozen` 锁校验回归，由独立 CI job 执行
+
 ### Changed
 - 单测门禁按实测耗时重新分档：超过 0.5 秒的用例标记 `slow`，`-m "not slow"` 主门禁只保留 0.5 秒以内用例
 

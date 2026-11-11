@@ -1,0 +1,5 @@
+Looking in indexes: https://mirrors.aliyun.com/pypi/simple/
+Collecting idna
+  Downloading idna-3.20-py3-none-any.whl (69 kB)
+Saved c:\users\zhou\appdata\local\temp\fsp_pipgen2\idna-3.20-py3-none-any.whl
+Successfully downloaded idna

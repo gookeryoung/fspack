@@ -87,6 +87,51 @@ jobs:
           PYTHONUTF8: "1"
         run: uv run pytest -m "not slow" --cov=fspack --cov-fail-under=95 --cov-report=term-missing
 
+  # ===== 端到端（真实构建/运行）：独立 job，不计入主门禁 =====
+  # 覆盖单测 mock 层无法验证的链路：真实镜像下载运行时与依赖、产物执行为冒烟、
+  # 交叉构建 Windows 目标（Linux + mingw）、--lock/--frozen 端到端校验。
+  # 这些用例均标记 e2e（多数同时 slow），主门禁 `-m "not slow"` 不会执行。
+  e2e:
+    name: E2E (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+          save-cache: false
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Install build toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc mingw-w64
+
+      # 运行时归档（standalone tarball）体积较大，缓存避免每次重新下载；
+      # key 不含 release tag，升级 tag 后由 restore-keys 命中旧缓存再多下新文件。
+      - name: Restore fspack runtime cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.fspack/cache
+          key: fspack-runtime-${{ runner.os }}-${{ hashFiles('src/fspack/packaging/runtime/hashes.py') }}-${{ hashFiles('src/fspack/config/versions.py') }}
+          restore-keys: |
+            fspack-runtime-${{ runner.os }}-
+
+      - name: Sync dependencies
+        run: uv sync --frozen --extra test --python 3.11
+
+      - name: Run e2e tests
+        env:
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: "1"
+        run: uv run pytest -m e2e -v
+
   # ===== 性能基准监控：仅 push to main 触发，PR 不触发 =====
   # 运行 pytest-benchmark 基线测试，保存结果并与历史最佳基准对比。
   # 对比逻辑见 fspack.doctor.benchmark_compare：扫描所有历史 JSON，按测试名

@@ -1,0 +1,5 @@
+Looking in indexes: https://mirrors.aliyun.com/pypi/simple/
+Collecting six
+  Downloading six-1.17.0-py2.py3-none-any.whl (11 kB)
+Saved c:\users\zhou\appdata\local\temp\fsp_pipgen\six-1.17.0-py2.py3-none-any.whl
+Successfully downloaded six
