@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import types
 from collections.abc import Sequence
 from pathlib import Path
@@ -1413,7 +1414,12 @@ def test_build_sdist_wheels_pip_missing_raises(tmp_path: Path, monkeypatch: pyte
 
 
 def test_download_wheels_filters_python_version_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """带 python_version >= '3.11' 的依赖在目标 3.8 时被剔除，不传给 pip."""
+    """带 python_version >= '3.11' 的依赖在目标 3.8 时被剔除，不传给 pip.
+
+    ``python_version <= '3.10'`` 在目标 3.8 为真；marker 是否保留取决于宿主
+    解释器（宿主也为真时保留原文，避免 pip 用宿主环境复评误删），故断言随
+    宿主版本变化。
+    """
     captured: dict[str, list[str]] = {}
 
     def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
@@ -1429,12 +1435,15 @@ def test_download_wheels_filters_python_version_marker(tmp_path: Path, monkeypat
     )
     download_wheels(pkgs, "3.8.10", "https://idx/simple", tmp_path / "cache")
     cmd = captured["cmd"]
-    # PySide6 不应出现在命令中，PySide2 去掉标记后传入
-    assert any(a == "PySide2>=5.15.2.1" for a in cmd)
+    # PySide6 不应出现在命令中；PySide2 在目标环境为真——宿主同为 <=3.10 时
+    # 保留 marker 原文（防止 pip 用宿主环境复评丢弃依赖），否则剥离 marker
+    host_keeps_marker = sys.version_info[:2] <= (3, 10)
+    expected_pyside2 = "PySide2>=5.15.2.1; python_version <= '3.10'" if host_keeps_marker else "PySide2>=5.15.2.1"
+    assert any(a == expected_pyside2 for a in cmd)
     assert not any(a.startswith("PySide6") for a in cmd)
     assert "PyYAML>=6.0" in cmd
-    # 标记部分不应作为独立参数传入
-    assert not any("python_version" in a for a in cmd)
+    # 标记部分不应作为独立参数传入；被剥离时不应残留任何 marker
+    assert not any("python_version" in a for a in cmd) or host_keeps_marker
 
 
 def test_download_wheels_all_filtered_returns_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
