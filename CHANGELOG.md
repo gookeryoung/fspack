@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - 修复 build_perf 基准 CI 假性退化，类别级绝对噪声下限判定
+- 修复 macOS arm64 运行时 tarball 资产名误用 `arm64-apple-darwin`，归一化为上游实际名称 `aarch64-apple-darwin`（URL 拼接与哈希清单校验同步生效）
 
 ## [0.6.11] - 2026-10-10
 

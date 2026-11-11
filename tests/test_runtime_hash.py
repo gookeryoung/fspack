@@ -42,13 +42,17 @@ def test_manifest_covers_known_embed_versions() -> None:
 
 
 def test_manifest_covers_known_standalone_versions() -> None:
-    """KNOWN_STANDALONE_VERSIONS 在 Linux/Windows/macOS 双架构上都有 sha256."""
+    """KNOWN_STANDALONE_VERSIONS 在 Linux/Windows/macOS 双架构上都有 sha256.
+
+    macOS 侧直接使用生产中真实传入的值 ``"arm64"``/``"x86_64"``（而非上游资产名
+    ``aarch64``），以验证命名归一化后能命中清单。
+    """
     for version in KNOWN_STANDALONE_VERSIONS.values():
         names = [
             standalone_tarball_name(version, STANDALONE_RELEASE_TAG),
             standalone_tarball_name(version, STANDALONE_RELEASE_TAG, windows=True),
             standalone_tarball_name(version, STANDALONE_RELEASE_TAG, macos_arch="x86_64"),
-            standalone_tarball_name(version, STANDALONE_RELEASE_TAG, macos_arch="aarch64"),
+            standalone_tarball_name(version, STANDALONE_RELEASE_TAG, macos_arch="arm64"),
         ]
         for name in names:
             assert name in STANDALONE_SHA256, f"缺少 {name} 的 sha256，升级版本/tag 时请同步 hashes.py"

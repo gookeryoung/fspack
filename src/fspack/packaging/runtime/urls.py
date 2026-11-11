@@ -55,6 +55,11 @@ def embed_zip_name(version: str) -> str:
     return f"python-{version}-embed-amd64.zip"
 
 
+# macOS 架构名到上游三元组的归一化。上游 astral-sh 资产用 ``aarch64`` 而非
+# Apple 自家的 ``arm64``（后者仅用于 wheel tag / ``platform.machine()`` 返回值）。
+_MACOS_TRIPLE_ARCHS = {"arm64": "aarch64", "aarch64": "aarch64", "x86_64": "x86_64"}
+
+
 def standalone_tarball_name(
     version: str,
     release_tag: str,
@@ -68,7 +73,9 @@ def standalone_tarball_name(
         version: Python 完整版本号（如 ``3.10.20`` 或自由线程 ``3.13.14t``）。
         release_tag: astral-sh release tag（如 ``20260718``）。
         windows: True 返回 Windows (msvc) 平台 tarball，False 返回 Linux (gnu)。
-        macos_arch: 非 None 时返回 macOS tarball，值为 ``"x86_64"`` 或 ``"arm64"``。
+        macos_arch: 非 None 时返回 macOS tarball，值为 ``"x86_64"`` 或 ``"arm64"``
+            （也接受上游写法 ``"aarch64"``）。``"arm64"`` 会归一化为上游资产名
+            ``aarch64-apple-darwin``；``"x86_64"`` 保持 ``x86_64-apple-darwin``。
             macOS 与 Linux/Windows 互斥，``macos_arch`` 非 None 时忽略 ``windows``。
 
     自由线程版本（``version`` 末尾 ``t`` 后缀）：astral-sh python-build-standalone
@@ -78,7 +85,7 @@ def standalone_tarball_name(
     标准版无此段，如 ``cpython-3.13.14+20260718-x86_64-pc-windows-msvc-install_only.tar.gz``。
     """
     if macos_arch is not None:
-        platform = f"{macos_arch}-apple-darwin"
+        platform = f"{_MACOS_TRIPLE_ARCHS.get(macos_arch, macos_arch)}-apple-darwin"
     elif windows:
         platform = "x86_64-pc-windows-msvc"
     else:

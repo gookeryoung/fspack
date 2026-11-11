@@ -378,10 +378,17 @@ def test_standalone_tarball_name_macos_x86_64() -> None:
 
 
 def test_standalone_tarball_name_macos_arm64() -> None:
-    """macos_arch='arm64' 返回 Apple Silicon tarball."""
+    """macos_arch='arm64' 归一化为上游资产名 aarch64-apple-darwin."""
     assert (
         standalone_tarball_name("3.13.14", "20260718", macos_arch="arm64")
-        == "cpython-3.13.14+20260718-arm64-apple-darwin-install_only.tar.gz"
+        == "cpython-3.13.14+20260718-aarch64-apple-darwin-install_only.tar.gz"
+    )
+
+
+def test_standalone_tarball_name_macos_aarch64_passthrough() -> None:
+    """macos_arch='aarch64'（上游写法）与 'arm64' 产出同一文件名."""
+    assert standalone_tarball_name("3.13.14", "20260718", macos_arch="aarch64") == (
+        standalone_tarball_name("3.13.14", "20260718", macos_arch="arm64")
     )
 
 
@@ -412,7 +419,7 @@ def test_standalone_tarball_name_freethreaded_macos_arm64() -> None:
     """自由线程版本在 macOS arm64 平台追加 -freethreaded 标识（版本号无 t 后缀）."""
     assert (
         standalone_tarball_name("3.13.14t", "20260718", macos_arch="arm64")
-        == "cpython-3.13.14+20260718-arm64-apple-darwin-freethreaded-install_only.tar.gz"
+        == "cpython-3.13.14+20260718-aarch64-apple-darwin-freethreaded-install_only.tar.gz"
     )
 
 
@@ -436,10 +443,11 @@ def test_standalone_url() -> None:
 
 
 def test_standalone_url_macos() -> None:
-    """macOS tarball URL 含 apple-darwin 平台段."""
+    """macOS tarball URL 含上游 aarch64-apple-darwin 平台段."""
     url = standalone_url("3.13.14", "20260718", macos_arch="arm64")
     assert url.startswith(STANDALONE_BASE_URL)
-    assert "arm64-apple-darwin" in url
+    assert "aarch64-apple-darwin" in url
+    assert "arm64-apple-darwin" not in url
 
 
 def test_download_standalone_cache_hit(tmp_path: Path) -> None:
