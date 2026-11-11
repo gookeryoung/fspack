@@ -200,6 +200,57 @@ def _mock_cache_content_fns(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("platform", "expected", "absent"),
+    [
+        (Platform.WINDOWS, {"mingw-w64", "NSIS"}, {"gcc", "wine", "clang", "NSIS (交叉打包)"}),
+        (Platform.MACOS, {"clang"}, {"mingw-w64", "NSIS", "gcc", "wine", "NSIS (交叉打包)"}),
+        (Platform.LINUX, {"gcc", "wine", "NSIS (交叉打包)"}, {"mingw-w64", "NSIS", "clang"}),
+    ],
+)
+def test_run_doctor_dispatches_tool_checks_per_platform(
+    monkeypatch: pytest.MonkeyPatch,
+    platform: Platform,
+    expected: set[str],
+    absent: set[str],
+) -> None:
+    """run_doctor 按平台派发工具检查项（快速版，不 spawn 子进程/不扫缓存）."""
+    monkeypatch.setattr("fspack.platform.detect_platform", lambda: platform)
+    # 工具检查全部替换为固定结果：真实实现会 spawn 子进程探测版本（单项 ~150ms）
+    tool_labels = {
+        "_check_pip": "pip",
+        "_check_uv": "uv",
+        "_check_pillow": "Pillow",
+        "_check_mingw": "mingw-w64",
+        "_check_nsis": "NSIS",
+        "_check_clang": "clang",
+        "_check_gcc": "gcc",
+        "_check_wine": "wine",
+        "_check_makensis_on_linux": "NSIS (交叉打包)",
+        "_check_win7_compat": "Win7 兼容",
+    }
+    for fn_name, label in tool_labels.items():
+        monkeypatch.setattr(
+            f"fspack.doctor.runner.{fn_name}",
+            lambda label=label: CheckResult(label, CheckStatus.OK, "mocked"),
+        )
+    # 缓存目录递归扫描替换为固定结果；环境信息其余几项是纯内存读取，保留真实实现
+    monkeypatch.setattr(
+        "fspack.doctor.runner._check_cache_dir",
+        lambda cache_root: CheckResult("缓存目录", CheckStatus.OK, "mocked"),
+    )
+    _mock_cache_content_fns(monkeypatch)
+
+    report = run_doctor()
+
+    names = {r.name for r in report.tool_checks}
+    assert expected <= names
+    assert not (absent & names)
+    # 前 4 项环境信息保持真实实现（Python/平台/fspack/镜像源）
+    env_names = {r.name for r in report.env_info}
+    assert {"Python", "平台", "fspack", "镜像源"} <= env_names
+
+
 @pytest.mark.slow
 def test_run_doctor_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     """run_doctor 在 Windows 平台检查 mingw/NSIS，不查 gcc/wine."""
