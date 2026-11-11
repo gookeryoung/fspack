@@ -28,8 +28,13 @@ _DATA = Path(__file__).parent / "data" / "pip_download"
 
 
 def _read(name: str) -> str:
-    """读取真实 pip 输出 fixture（UTF-8）."""
-    return (_DATA / name).read_text(encoding="utf-8")
+    """读取真实 pip 输出 fixture（UTF-8）.
+
+    fixture 采集自 Windows，``Saved`` 行路径为反斜杠；``Path().name`` 仅在
+    Windows 上把反斜杠当分隔符，Linux/macOS 会得到整串路径而解析不出包名。
+    读取时统一转为正斜杠，保证断言跨平台一致（解析逻辑本身与分隔符无关）。
+    """
+    return (_DATA / name).read_text(encoding="utf-8").replace("\\", "/")
 
 
 def test_pip_stdout_parallel_workers_union_from_real_capture() -> None:

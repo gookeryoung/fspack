@@ -72,10 +72,9 @@ def _build(
     build(project_dir, _MIRROR, dist_dir=project_dir / "dist", target=target, options=options, embed_cache=embed_cache)
 
 
-def _exe_path(project_dir: Path, name: str) -> Path:
-    """产物可执行文件路径（Windows 带 .exe 后缀）."""
-    suffix = ".exe" if sys.platform == "win32" else ""
-    return project_dir / "dist" / f"{name}{suffix}"
+def _exe_path(project_dir: Path, name: str, *, windows: bool = sys.platform == "win32") -> Path:
+    """产物可执行文件路径（后缀由**目标**平台决定，交叉构建同样生效）."""
+    return project_dir / "dist" / f"{name}{'.exe' if windows else ''}"
 
 
 def _run(exe: Path, *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -226,9 +225,9 @@ def test_e2e_cross_target_windows_marker_filtering(tmp_path: Path) -> None:
         ["colorama; sys_platform == 'win32'", "uvloop; sys_platform == 'linux'", "tomli; python_version < '3.11'"],
     )
     _build(project, target=Platform.WINDOWS)
-    exe = _exe_path(project, "cross")
+    exe = _exe_path(project, "cross", windows=True)
     assert exe.read_bytes()[:2] == b"MZ", "未产出 Windows PE 可执行文件"
-    assert (_exe_path(project, "cross").parent / "cross.entry").is_file()
+    assert (exe.parent / "cross.entry").is_file()
     site = project / "dist" / "site-packages"
     names = {p.name.lower() for p in site.iterdir()}
     assert any(name.startswith("colorama") for name in names)
