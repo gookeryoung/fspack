@@ -200,9 +200,14 @@ def _download_online(
     # require_hashes=True：强制走 uv --generate-hashes 路径
     if require_hashes:
         if ctx.uv_path is None:
-            _logger.warning("require_hashes=True 但 uv 不可用，降级为不校验哈希")
-        else:
-            return _download_with_hashes(filtered, ctx)
+            raise DependencyError(
+                "require_hashes=True 需要 uv 生成带哈希的依赖锁定（uv pip compile --generate-hashes），"
+                "但当前环境找不到 uv。请安装 uv（https://docs.astral.sh/uv/）后重试；"
+                "离线环境无法安装 uv 时：先用联网机器执行 `fspack --lock` 生成 requirements.lock，"
+                "再在构建机放置该文件并用 `fspack --frozen` 复用（同输入可复现），"
+                "或显式关闭 require-hashes。"
+            )
+        return _download_with_hashes(filtered, ctx)
 
     # 尝试用 uv 解析依赖图（不带哈希）
     resolved: list[str] | None = None

@@ -2970,30 +2970,17 @@ def test_download_online_require_hashes_uses_hashes_path(tmp_path: Path, monkeyp
     assert not Path(req_file).exists(), "临时 requirements.txt 应被删除"
 
 
-def test_download_online_require_hashes_no_uv_degrades(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
-    """require_hashes=True 但 uv 不可用时降级为不校验（warning），走 pip 完整解析下载."""
+def test_download_online_require_hashes_no_uv_fails_fast(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """require_hashes=True 但 uv 不可用时直接报错（不再静默降级），并提示离线兜底方式."""
     cache = tmp_path / "cache"
     cache.mkdir()
     monkeypatch.setattr("fspack.packaging.wheels.resolver._find_uv", lambda: None)
-    captured: dict[str, list[str]] = {}
-
-    def fake_stream(cmd: list[str]) -> CompletedStub:
-        captured["cmd"] = cmd
-        return CompletedStub()
-
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
     base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
-    with caplog.at_level("WARNING"):
+    with pytest.raises(DependencyError, match="uv") as excinfo:
         _download_online(["numpy>=1.0"], _make_ctx(base_args, cache), require_hashes=True)
-    # 降级后走 pip 完整解析（stream=True），命令含 -i index 但不含 --require-hashes
-    cmd = captured["cmd"]
-    assert "-i" in cmd
-    assert "https://idx/simple" in cmd
-    assert "--require-hashes" not in cmd
-    # warning 记录了降级
-    assert any("require_hashes" in rec.message and "降级" in rec.message for rec in caplog.records)
+    # 错误信息给出离线兜底：--lock 生成锁文件、--frozen 复用
+    assert "--lock" in str(excinfo.value)
+    assert "--frozen" in str(excinfo.value)
 
 
 def test_download_wheels_require_hashes_ignores_deps_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

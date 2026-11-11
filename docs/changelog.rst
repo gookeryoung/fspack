@@ -1,6 +1,17 @@
 更新日志
 =========
 
+未发布
+------
+
+- fix(wheels): ``_parse_pip_download_wheels`` 改取全部 ``Successfully downloaded`` 行并集，修复冷缓存并行下载最终只装成 1 个依赖
+- fix(wheels): 环境标记按目标 Python 版本与目标平台完整求值（``sys_platform``/``platform_system``/``os_name``/``python_full_version``），修复 Linux 目标误下载 ``pywin32``；Windows/Linux 双目标对拍
+- fix(entry): ``_resolve_module_script`` 增加 ``<pkg>/<mod>/__init__.py`` 候选，支持包级 console script（运行语义仍为 ``runpy.run_module``）
+- feat(runtime): embed zip 与 standalone tarball 按 ``runtime/hashes.py`` 清单校验 sha256；``FSPACK_SKIP_RUNTIME_HASH=1`` 可跳过；standalone release tag 支持 ``FSPACK_STANDALONE_RELEASE_TAG`` 覆盖
+- fix(wheels): ``require_hashes`` 在 uv 缺失时 fail-fast，不再静默降级；离线兜底改用 ``--lock``/``--frozen``
+- feat(cli): 新增 ``--lock``/``--frozen`` 生成并校验 ``requirements.lock``（``name==version + sha256``，同输入可复现）
+- docs: 明确最低支持 Python 版本为 3.8（以 ``pyproject.toml`` 的 ``requires-python`` 为准）
+
 v0.6.8
 ------
 
@@ -63,7 +74,7 @@ v0.6.0
 v0.5.14
 -------
 
-- chore: 最低支持 Python 版本升级至 3.13 并清理冗余兼容代码
+- chore: 最低支持 Python 版本升级至 3.13 并清理冗余兼容代码（v0.6.8 已放宽回 3.8，当前最低版本以 ``pyproject.toml`` 为准）
 - refactor: 统一使用 collections.abc 导入抽象类型
 - fix: doctor cache_contents 修复竞态检测与文件类型判断逻辑
 - ci: 更新 CI 配置的 Python 版本至 3.13

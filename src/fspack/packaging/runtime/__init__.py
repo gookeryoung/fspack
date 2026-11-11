@@ -38,6 +38,14 @@ from fspack.packaging.runtime.extract import (
     extract_tar_safe,
     extract_zip_safe,
 )
+from fspack.packaging.runtime.hashes import (
+    EMBED_SHA256,
+    SKIP_RUNTIME_HASH_ENV,
+    STANDALONE_SHA256,
+    expected_runtime_hash,
+    runtime_hash_enabled,
+    runtime_sha256,
+)
 from fspack.packaging.runtime.pth import write_pth
 from fspack.packaging.runtime.stdlib_zip import zip_stdlib
 from fspack.packaging.runtime.trim import (
@@ -54,16 +62,22 @@ from fspack.packaging.runtime.trim import (
 from fspack.packaging.runtime.urls import (
     STANDALONE_BASE_URL,
     STANDALONE_RELEASE_TAG,
+    STANDALONE_RELEASE_TAG_ENV,
     _sha256_file,
     embed_dirname,
     embed_zip_name,
+    standalone_release_tag,
     standalone_tarball_name,
     standalone_url,
 )
 
 __all__ = [
+    "EMBED_SHA256",
+    "SKIP_RUNTIME_HASH_ENV",
     "STANDALONE_BASE_URL",
     "STANDALONE_RELEASE_TAG",
+    "STANDALONE_RELEASE_TAG_ENV",
+    "STANDALONE_SHA256",
     "_STANDALONE_DEV_BIN_FILES",
     "_STDLIB_TRIM_DIRS",
     "_WIN7_COMPAT_DLL_NAME",
@@ -86,10 +100,14 @@ __all__ = [
     "embed_zip_name",
     "ensure_embed",
     "ensure_standalone",
+    "expected_runtime_hash",
     "extract_embed",
     "extract_standalone",
     "extract_tar_safe",
     "extract_zip_safe",
+    "runtime_hash_enabled",
+    "runtime_sha256",
+    "standalone_release_tag",
     "standalone_tarball_name",
     "standalone_url",
     "write_pth",

@@ -245,12 +245,13 @@ class NuitkaStandalone:
         # 惰性导入避免循环依赖
         from fspack.config import is_offline
         from fspack.packaging.net import Downloader
-        from fspack.packaging.runtime import STANDALONE_RELEASE_TAG, standalone_tarball_name, standalone_url
+        from fspack.packaging.runtime import standalone_release_tag, standalone_tarball_name, standalone_url
 
         # build_python_dir = <cache根>/python/<ver>，共享目录挂 cache 根下
         # （与 TkinterBundler 的 cache_dir / "standalone-windows" 一致）
         shared_dir = build_python_dir.parent.parent / "standalone-windows"
-        archive_path = shared_dir / standalone_tarball_name(standalone_version, STANDALONE_RELEASE_TAG, windows=True)
+        release_tag = standalone_release_tag()
+        archive_path = shared_dir / standalone_tarball_name(standalone_version, release_tag, windows=True)
 
         # 共享缓存命中：tkinter 打包阶段或上次构建已下载过，免重复下载
         if archive_path.is_file():
@@ -267,7 +268,7 @@ class NuitkaStandalone:
 
         shared_dir.mkdir(parents=True, exist_ok=True)
 
-        url = standalone_url(standalone_version, STANDALONE_RELEASE_TAG, windows=True)
+        url = standalone_url(standalone_version, release_tag, windows=True)
         _logger.info("下载 standalone python %s: %s", standalone_version, url)
 
         try:

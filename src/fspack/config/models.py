@@ -598,6 +598,12 @@ class BuildOptions:
     # 依赖下载强制哈希校验：透传 pip download --require-hashes，
     # 仅在线模式生效，缓存命中时跳过（缓存目录 wheel 已首次校验）
     require_hashes: bool = False
+    # 构建成功后把本次下载的 wheel 写成项目根目录 requirements.lock
+    # （name==version + wheel sha256），供 CI 提交与 --frozen 校验
+    lock: bool = False
+    # 使用项目根目录 requirements.lock 校验本次下载结果（双向：版本集合与 sha256）；
+    # 锁文件缺失/依赖缺失/哈希不符时构建失败，不静默降级
+    frozen: bool = False
     # 关闭构建结束后的 SBOM 生成：默认输出 SPDX 2.3 兼容 JSON
     no_sbom: bool = False
     # 关闭构建结束后的 manifest 生成：默认输出产物清单 JSON

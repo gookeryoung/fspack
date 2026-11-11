@@ -25,14 +25,14 @@ from fspack.packaging.pyc import (
     _trim_stdlib,
 )
 from fspack.packaging.runtime import (
-    STANDALONE_RELEASE_TAG,
-    embed_dirname,
-)
-from fspack.packaging.runtime import (
     download_embed as _default_download_embed,
 )
 from fspack.packaging.runtime import (
     download_standalone as _default_download_standalone,
+)
+from fspack.packaging.runtime import (
+    embed_dirname,
+    standalone_release_tag,
 )
 from fspack.packaging.runtime import (
     extract_embed as _default_extract_embed,
@@ -242,7 +242,7 @@ def _prepare_standalone_runtime(ctx: BuildContext, *, macos_arch: str | None = N
         else:
             tar_path = download_standalone(
                 ctx.info.py_version,
-                STANDALONE_RELEASE_TAG,
+                standalone_release_tag(),
                 standalone_cache,
                 stage=st,
                 macos_arch=macos_arch,
@@ -350,7 +350,7 @@ def _prepare_windows_t_runtime(ctx: BuildContext) -> Path:
         else:
             tar_path = download_standalone(
                 ctx.info.py_version,
-                STANDALONE_RELEASE_TAG,
+                standalone_release_tag(),
                 standalone_cache_dir(),
                 stage=st,
                 windows=True,

@@ -26,7 +26,7 @@ from fspack.config import is_offline
 from fspack.config.versions import _split_t_suffix
 from fspack.exceptions import BuiltinError, EmbedError
 from fspack.packaging.net import Downloader
-from fspack.packaging.runtime import STANDALONE_BASE_URL, STANDALONE_RELEASE_TAG
+from fspack.packaging.runtime import STANDALONE_BASE_URL, standalone_release_tag
 from fspack.packaging.runtime.extract import _validate_tar_member, extract_zip_safe
 from fspack.platform import Platform
 
@@ -134,7 +134,7 @@ class TkinterBundler:
         standalone_windows_cache = cache_dir / "standalone-windows"
         standalone_windows_cache.mkdir(parents=True, exist_ok=True)
         tarball_path = standalone_windows_cache / cls.standalone_windows_tarball_name(
-            standalone_ver, STANDALONE_RELEASE_TAG
+            standalone_ver, standalone_release_tag()
         )
 
         if not tarball_path.is_file():
@@ -144,7 +144,7 @@ class TkinterBundler:
                     f"离线模式下 standalone Windows tarball 缓存未命中: {tarball_path.name}，"
                     f"请预先下载放入 {standalone_windows_cache} 或取消 FSPACK_OFFLINE 环境变量"
                 )
-            url = cls.standalone_windows_url(standalone_ver, STANDALONE_RELEASE_TAG)
+            url = cls.standalone_windows_url(standalone_ver, standalone_release_tag())
             _logger.info("tkinter 打包: 下载 Windows standalone 构建 %s", standalone_ver)
             downloader = Downloader()
             downloader.download(url, tarball_path, stage=stage, label=f"standalone-windows {standalone_ver}")
@@ -165,7 +165,7 @@ class TkinterBundler:
                     f"离线模式下 standalone tarball 缓存损坏: {tarball_path.name}，"
                     f"请删除 {tarball_path} 后重新运行或取消 FSPACK_OFFLINE 环境变量"
                 ) from e
-            url = cls.standalone_windows_url(standalone_ver, STANDALONE_RELEASE_TAG)
+            url = cls.standalone_windows_url(standalone_ver, standalone_release_tag())
             _logger.info("tkinter 打包: 重新下载 Windows standalone 构建 %s", standalone_ver)
             downloader = Downloader()
             downloader.download(url, tarball_path, stage=stage, label=f"standalone-windows {standalone_ver}")

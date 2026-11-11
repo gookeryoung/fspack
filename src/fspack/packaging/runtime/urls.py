@@ -6,15 +6,27 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from fspack.config.versions import _split_t_suffix
 
 # 阿里云 GitHub 镜像加速国内下载，路径与 GitHub releases 同构。
 STANDALONE_BASE_URL = "https://mirrors.aliyun.com/github/releases/astral-sh/python-build-standalone"
-# 20260718 release 包含 3.13.14；每个 release tag 只含该时间点的最新补丁版本，
-# 故 KNOWN_STANDALONE_VERSIONS 中的版本号必须与本 tag 实际提供的版本号匹配。
+# 默认 release tag；20260718 release 包含 3.13.14。每个 release tag 只含该时间点的
+# 最新补丁版本，故 KNOWN_STANDALONE_VERSIONS 中的版本号必须与本 tag 实际提供的
+# 版本号匹配。可用环境变量 FSPACK_STANDALONE_RELEASE_TAG 覆盖（如内部镜像/离线缓存
+# 使用自建 release）；覆盖后需自行确保 hashes.py 中有对应归档的 sha256 清单。
 STANDALONE_RELEASE_TAG = "20260718"
+STANDALONE_RELEASE_TAG_ENV = "FSPACK_STANDALONE_RELEASE_TAG"
+
+
+def standalone_release_tag() -> str:
+    """返回生效的 python-build-standalone release tag.
+
+    优先读取环境变量 ``FSPACK_STANDALONE_RELEASE_TAG``，未设置时用默认常量。
+    """
+    return os.environ.get(STANDALONE_RELEASE_TAG_ENV, "").strip() or STANDALONE_RELEASE_TAG
 
 
 def embed_dirname(version: str) -> str:

@@ -812,6 +812,19 @@ def test_build_require_hashes_config_fallback(tmp_path: Path, monkeypatch: pytes
     assert called["options"].require_hashes is True
 
 
+def test_build_lock_and_frozen_flags(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`--lock`/`--frozen` 解析为 BuildOptions.lock/frozen；默认均为 False."""
+    _make_minimal_project(tmp_path)
+    called, fake_build = _capture_build()
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    cli.main(["b", str(tmp_path)])
+    assert called["options"].lock is False
+    assert called["options"].frozen is False
+    cli.main(["b", str(tmp_path), "--lock", "--frozen"])
+    assert called["options"].lock is True
+    assert called["options"].frozen is True
+
+
 def test_build_no_sbom_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`fsp b <project> --no-sbom` 解析 ns.no_sbom 为 True，封装到 BuildOptions."""
     _make_minimal_project(tmp_path)

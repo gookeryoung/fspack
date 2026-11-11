@@ -31,8 +31,15 @@ from fspack.config import (
 )
 from fspack.fsutil import atomic_write_text
 from fspack.packaging.builtin import TkinterBundler as _DefaultTkinterBundler
+from fspack.packaging.lockfile import (
+    LOCK_FILE_NAME,
+    RequirementsLock,
+    read_requirements_lock,
+    verify_wheels_against_lock,
+    write_requirements_lock,
+)
 from fspack.packaging.wheels import download_wheels as _default_download_wheels
-from fspack.platform import wheel_platform_tags
+from fspack.platform import Platform, wheel_platform_tags
 
 from .context import BuildContext, fspack_wheel_cache_dir
 
@@ -124,6 +131,41 @@ def _analyze_dependencies(ctx: BuildContext, *, save_cache: bool = True) -> Depe
     return report
 
 
+def _load_frozen_lock(ctx: BuildContext) -> RequirementsLock | None:
+    """``--frozen`` 时读取项目根目录锁文件（缺失即报错），否则返回 None."""
+    if not ctx.opts.frozen:
+        return None
+    lock = read_requirements_lock(ctx.cfg.project_dir / LOCK_FILE_NAME)
+    _logger.info("--frozen: 下载后按 %s 校验（%d 个依赖）", LOCK_FILE_NAME, len(lock.requirements))
+    return lock
+
+
+def _finalize_dependency_lock(
+    ctx: BuildContext,
+    wheels: list[Path],
+    lock: RequirementsLock | None,
+    target: Platform,
+) -> None:
+    """``--frozen`` 校验下载结果，``--lock`` 时写出 ``requirements.lock``."""
+    if lock is not None:
+        verify_wheels_against_lock(wheels, lock)
+    if not ctx.opts.lock:
+        return
+    if not wheels:
+        _logger.info("无第三方依赖，无需写入 %s", LOCK_FILE_NAME)
+        return
+    with ctx.tracker.stage("写入依赖锁") as st:
+        write_requirements_lock(
+            ctx.cfg.project_dir / LOCK_FILE_NAME,
+            wheels,
+            py_version=ctx.info.py_version,
+            platform=target.value,
+            index=ctx.cfg.mirror.pypi_index,
+        )
+        st.processed(1)
+        st.set_detail(f"{LOCK_FILE_NAME}（{len(wheels)} 个 wheel）")
+
+
 def _download_dependencies(ctx: BuildContext, site_packages: Path, report: DependencyReport) -> bool:
     """下载并解压第三方依赖 wheel 到 site-packages，返回是否补充了 tkinter.
 
@@ -165,8 +207,10 @@ def _download_dependencies(ctx: BuildContext, site_packages: Path, report: Depen
     # declared 非空时以声明为准，未声明的依赖通过 report.missing 日志提示用户补充。
     packages_to_download: tuple[str, ...] = report.declared if report.declared else report.ast_third_party
 
+    lock = _load_frozen_lock(ctx)
     build_key = _dependency_build_key(ctx, report)
-    if _site_packages_has_deps(site_packages, packages_to_download, build_key=build_key):
+    # --frozen 需要每次校验实际下载结果，故跳过 site-packages 复用（缓存命中仍很快）
+    if not ctx.opts.frozen and _site_packages_has_deps(site_packages, packages_to_download, build_key=build_key):
         with ctx.tracker.stage("下载依赖") as st:
             st.skip(len(packages_to_download))
             st.set_detail("已存在跳过（构建参数与产物校验通过）")
@@ -189,6 +233,8 @@ def _download_dependencies(ctx: BuildContext, site_packages: Path, report: Depen
             )
     else:
         _logger.info("无第三方依赖，跳过 wheel 下载")
+
+    _finalize_dependency_lock(ctx, wheels, lock, target)
 
     # 暂存目录与旧目录备份都在同一个临时目录内：整体替换成功后临时目录自动清理，
     # 失败时备份仍在（回滚用），且两种情况都不会在 dist 留下中间目录。

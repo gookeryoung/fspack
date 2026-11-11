@@ -14,6 +14,12 @@ tkinter 补充包）只从本地缓存读取，缓存未命中时立即报清晰
 | `FSPACK_OFFLINE=1` | 启用离线模式（值为 `1`/`true`/`yes`/`on`，不区分大小写） | 关闭 |
 | `fsp b -O` / `--offline` | 单次构建启用离线模式（等价 `FSPACK_OFFLINE=1`，仅当前命令生效） | 关闭 |
 | `FSPACK_CACHE_DIR` | 自定义缓存根目录 | `~/.fspack/cache` |
+| `FSPACK_SKIP_RUNTIME_HASH=1` | 跳过运行时归档（embed zip / standalone tarball）sha256 校验；仅在自建镜像或归档不在清单中时使用 | 关闭（默认校验） |
+| `FSPACK_STANDALONE_RELEASE_TAG` | 覆盖 python-build-standalone release tag（默认 `20260718`）；覆盖后需自行保证 `runtime/hashes.py` 有对应归档哈希，否则退化为告警跳过 | 内置 tag |
+
+运行时归档默认按 `src/fspack/packaging/runtime/hashes.py` 的 sha256 清单校验（与 Win7
+兼容 DLL 同一机制），清单未收录的归档只告警不阻断。自建镜像若改写了归档内容，
+可显式设置 `FSPACK_SKIP_RUNTIME_HASH=1`。
 
 缓存目录结构：
 
@@ -87,5 +93,21 @@ fspack.exceptions.DependencyError: 离线模式下依赖缓存未命中: pypdf�
 2. 用 `pip download -d <cache_path> <package>` 预下载缺失的 wheel
 3. 运行时缓存（embed python、standalone）放入对应子目录（`embed/`、`standalone/`）
 4. 若需联网，删除 `FSPACK_OFFLINE` 环境变量即可恢复在线模式
+
+## 离线复用依赖锁（--lock / --frozen）
+
+`--require-hashes` 依赖 `uv` 生成哈希，离线环境无法安装 uv 时会**直接报错**（不再
+静默降级）。离线/内网 CI 的替代流程：
+
+```bash
+# 联网机器：生成并提交锁文件（name==version + 每个 wheel 的 sha256）
+fsp b --lock
+
+# 离线机器：预置 wheel + 锁文件，构建时双向校验依赖集合与 sha256
+fsp b -O --find-links /data/wheels --frozen
+```
+
+`--frozen` 不复用 site-packages，而是每次核对实际下载结果，依赖漂移或哈希不符时
+显式失败，避免静默产出不同的依赖集合。锁文件缺失时错误信息会提示先执行 `--lock`。
 
 缓存健康检查（损坏/过期/孤儿文件）见 [CLI 参考](cli.md) 的 `fsp cache` 一节。

@@ -326,6 +326,20 @@ _BUILD_OPTS: tuple[_Opt, ...] = (
         action="store_true",
     ),
     _Opt(
+        ("--lock",),
+        "构建成功后把本次下载的依赖写成项目根目录 requirements.lock"
+        "（name==version + 每个 wheel 的 sha256，按名称排序，无时间戳）。"
+        "同输入跨日构建结果一致，提交后供 CI 用 --frozen 校验",
+        action="store_true",
+    ),
+    _Opt(
+        ("--frozen",),
+        "按项目根目录 requirements.lock 校验本次下载结果：依赖集合必须完全一致，"
+        "且每个 wheel 的 sha256 必须命中锁文件声明；锁文件缺失/依赖缺失/哈希不符时"
+        "构建失败（不静默降级）。离线环境无法安装 uv 时可替代 --require-hashes",
+        action="store_true",
+    ),
+    _Opt(
         ("--no-sbom",),
         "关闭构建结束后的 SBOM 生成（默认输出 SPDX 2.3 兼容 JSON "
         "到 dist/release/<name>-<version>-sbom.json，含依赖名称/版本/许可证/SHA256）",

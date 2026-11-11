@@ -21,6 +21,7 @@ from fspack.builder import (
 )
 from fspack.config import BuildConfig, BuildOptions, DependencyReport, ProjectInfo, SlimRules, get_mirror
 from fspack.exceptions import DependencyError
+from fspack.packaging.lockfile import LOCK_FILE_NAME, read_requirements_lock
 from fspack.packaging.pipeline.context import BuildContext
 from fspack.packaging.pipeline.deps_stage import _download_dependencies, _save_installed_dependencies
 from fspack.platform import Platform
@@ -326,6 +327,72 @@ def test_dependency_reuse_identity(  # noqa: PLR0912 - 15 个身份要素变体�
     assert (sp / "demo/module.py").is_file()
     assert (sp / "demo/extra.dat").exists() is (change != "exclude")
     assert calls[-1]["require_hashes"] is (change == "hashes")
+
+
+def test_download_dependencies_lock_writes_requirements_lock(
+    dependency_context: tuple[BuildContext, DependencyReport, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--lock：构建成功后写出项目根目录 requirements.lock（name==version + hash）."""
+    ctx, report, wheel = dependency_context
+    ctx = replace(ctx, opts=replace(ctx.opts, lock=True))
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.download_wheels", lambda *a, **kw: [wheel])
+    _download_dependencies(ctx, ctx.cfg.dist_dir / "site-packages", report)
+    lock = read_requirements_lock(ctx.cfg.project_dir / LOCK_FILE_NAME)
+    assert lock.requirements == ("demo==1.0",)
+    assert len(next(iter(lock.hashes["demo"]))) == 64
+    assert lock.metadata["platform"] == "windows"
+
+
+def test_download_dependencies_frozen_skips_reuse_and_verifies(
+    dependency_context: tuple[BuildContext, DependencyReport, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--frozen：即使 site-packages 可复用也重新下载并按锁文件校验."""
+    ctx, report, wheel = dependency_context
+    sp = ctx.cfg.dist_dir / "site-packages"
+    ctx = replace(ctx, opts=replace(ctx.opts, lock=True))
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.download_wheels", lambda *a, **kw: [wheel])
+    _download_dependencies(ctx, sp, report)
+
+    ctx = replace(ctx, opts=replace(ctx.opts, frozen=True))
+    calls: list[str] = []
+
+    def download(*a: Any, **kw: Any) -> list[Path]:
+        calls.append("download")
+        return [wheel]
+
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.download_wheels", download)
+    _download_dependencies(ctx, sp, report)
+    assert calls == ["download"]
+
+
+def test_download_dependencies_frozen_missing_lock_raises(
+    dependency_context: tuple[BuildContext, DependencyReport, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--frozen 但项目根目录没有 requirements.lock：直接报错."""
+    ctx, report, wheel = dependency_context
+    ctx = replace(ctx, opts=replace(ctx.opts, frozen=True))
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.download_wheels", lambda *a, **kw: [wheel])
+    with pytest.raises(DependencyError, match="--lock"):
+        _download_dependencies(ctx, ctx.cfg.dist_dir / "site-packages", report)
+
+
+def test_download_dependencies_frozen_hash_mismatch_raises(
+    dependency_context: tuple[BuildContext, DependencyReport, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--frozen 下载内容与锁文件 sha256 不符时报错（不静默产出不同依赖）."""
+    ctx, report, wheel = dependency_context
+    sp = ctx.cfg.dist_dir / "site-packages"
+    ctx = replace(ctx, opts=replace(ctx.opts, lock=True))
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.download_wheels", lambda *a, **kw: [wheel])
+    _download_dependencies(ctx, sp, report)
+
+    tampered = ctx.cfg.project_dir / "demo-1.0-py3-none-any.whl"
+    with zipfile.ZipFile(tampered, "w") as zf:
+        zf.writestr("demo/__init__.py", "tampered = True\n")
+    ctx = replace(ctx, opts=replace(ctx.opts, frozen=True))
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.download_wheels", lambda *a, **kw: [tampered])
+    with pytest.raises(DependencyError, match=r"sha256 与 requirements\.lock 不符"):
+        _download_dependencies(ctx, sp, report)
 
 
 def test_dependency_removal_clears_old_files(

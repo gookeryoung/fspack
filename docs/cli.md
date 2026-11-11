@@ -22,6 +22,7 @@ fsp b [project] [--mirror <name>] [--py-version <ver>] [--target <platform>]
               [--keep-module <mod>] [--icon <path>] [--no-stdlib-trim]
               [--no-pyc] [--pyc-strip] [--pyc-optimize <0|1|2>] [--no-site] [--nuitka]
               [--extra <name>] [-R|--recursive] [--dry-run] [--no-size-report]
+              [--require-hashes] [--lock] [--frozen]
               [--log-file <path>] [--log-format <text|json>]
               [--profile]
 ```
@@ -43,12 +44,24 @@ fsp b [project] [--mirror <name>] [--py-version <ver>] [--target <platform>]
 | `--extra` | 启用 `[project.optional-dependencies]` 分组（可重复，覆盖 `[tool.fspack] extras`） |
 | `-R`/`--recursive` | 递归扫描子项目依次构建 |
 | `--dry-run` | 仅预览打包计划，不执行实际构建（不下载/不编译/不复制） |
+| `--require-hashes` | 强制依赖哈希校验：用 `uv pip compile --generate-hashes` 生成哈希后下载；uv 不可用时**直接报错**（不再静默降级），离线场景改用 `--lock`/`--frozen` |
+| `--lock` | 构建成功后写出项目根目录 `requirements.lock`（`name==version --hash=sha256:...`，按名称排序、无时间戳；同输入跨日结果一致），供提交与 CI 复用 |
+| `--frozen` | 按 `requirements.lock` 校验本次下载结果：依赖集合必须完全一致，每个 wheel 的 sha256 必须命中锁文件；锁缺失/依赖缺失/哈希不符时构建失败（此时不复用 site-packages，保证每次都校验） |
 | `--no-size-report` | 关闭构建结束后的体积报告 |
 | `--log-file` | 将构建日志写入文件（UTF-8 追加，含时间戳/级别/异常栈） |
 | `--log-format` | 日志文件格式：`text`（默认）/`json`（结构化，便于采集） |
 | `--profile` | 启用耗时分析报告（wall/CPU/内存峰值 + 各阶段占比） |
 
 `--dry-run` 输出打包计划表格（项目信息/依赖分析/构建选项），便于打包前确认配置正确，避免无效构建。
+
+`--lock` 与 `--frozen` 组成可复现依赖流程：
+
+```bash
+fsp b --lock            # 联网构建一次，生成并提交 requirements.lock
+fsp b --frozen          # CI/离线构建：按锁文件双向校验依赖集合与 wheel sha256
+```
+
+锁文件是 pip requirements 兼容子集，可直接用于 `pip install -r requirements.lock --require-hashes`。小步实现说明：`--frozen` 不做“提前钉版本”的解析约束（不替换项目声明的依赖），而是对下载结果做强校验——依赖漂移会让构建显式失败，避免静默产出不同产物。若需完全离线复用，可把已下载 wheel 目录传给 `--find-links`（见配置文档）配合 `--frozen`。
 
 构建完成后默认输出体积报告：runtime/src/site-packages/其他 四类占比 + site-packages Top 10 包体积排序，帮助定位体积热点。`--no-size-report` 可关闭。
 

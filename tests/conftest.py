@@ -11,7 +11,18 @@ from __future__ import annotations
 
 import pytest
 
-__all__ = ["mirror"]
+__all__ = ["mirror", "skip_runtime_hash"]
+
+
+@pytest.fixture(autouse=True)
+def skip_runtime_hash(monkeypatch: pytest.MonkeyPatch) -> None:
+    """默认关闭运行时归档 sha256 校验.
+
+    多数测试用假归档（``b"ZIPDATA"`` 等）模拟下载/缓存，无法匹配真实清单。
+    校验逻辑本身由 ``tests/test_runtime_hash.py`` 显式开启（``monkeypatch.delenv``）
+    覆盖。
+    """
+    monkeypatch.setenv("FSPACK_SKIP_RUNTIME_HASH", "1")
 
 
 @pytest.fixture

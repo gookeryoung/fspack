@@ -25,6 +25,7 @@ from fspack._compat import override
 from fspack.config import MirrorConfig, is_offline
 from fspack.exceptions import EmbedError
 from fspack.packaging.runtime.extract import extract_tar_safe, extract_zip_safe
+from fspack.packaging.runtime.hashes import expected_runtime_hash
 from fspack.packaging.runtime.urls import (
     _sha256_file,
     embed_dirname,
@@ -285,7 +286,13 @@ def download_embed(
     stage: StageRecorder | None = None,
     expected_hash: str | None = None,
 ) -> Path:
-    """从镜像下载 embed zip 到缓存目录，已存在则直接复用."""
+    """从镜像下载 embed zip 到缓存目录，已存在则直接复用.
+
+    ``expected_hash`` 为 None 时按 :mod:`fspack.packaging.runtime.hashes` 清单
+    查询；未收录或 ``FSPACK_SKIP_RUNTIME_HASH=1`` 时跳过校验。
+    """
+    if expected_hash is None:
+        expected_hash = expected_runtime_hash(embed_zip_name(version), f"embed python {version}")
     return EmbedRuntime.download(version, cache_dir, stage=stage, expected_hash=expected_hash, mirror=mirror)
 
 
@@ -344,7 +351,12 @@ def download_standalone(
 
     ``windows=True`` 时下载 Windows msvc 平台 tarball（用于自由线程版本
     Windows 目标——python.org 不提供 freethreaded embed zip）。
+    ``expected_hash`` 为 None 时按 :mod:`fspack.packaging.runtime.hashes` 清单
+    查询；未收录或 ``FSPACK_SKIP_RUNTIME_HASH=1`` 时跳过校验。
     """
+    if expected_hash is None:
+        archive_name = standalone_tarball_name(version, release_tag, windows=windows, macos_arch=macos_arch)
+        expected_hash = expected_runtime_hash(archive_name, f"standalone python {version}")
     return StandaloneRuntime.download(
         version,
         cache_dir,

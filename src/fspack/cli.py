@@ -219,6 +219,8 @@ def _run_build(project: Path, ns: argparse.Namespace) -> None:
         extras=enabled_extras,
         lazy_imports=_parse_lazy_imports(ns.lazy_imports, base.lazy_imports),
         require_hashes=ns.require_hashes or base.require_hashes,
+        lock=ns.lock or base.lock,
+        frozen=ns.frozen or base.frozen,
         no_sbom=ns.no_sbom or base.no_sbom,
         no_manifest=getattr(ns, "no_manifest", False) or base.no_manifest,
         no_win7_scan=getattr(ns, "no_win7_scan", False) or base.no_win7_scan,
