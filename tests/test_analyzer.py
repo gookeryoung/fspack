@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import logging
+import sys
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 
@@ -935,7 +936,8 @@ def test_parse_parallel_broken_pool_preserves_aggregated_results(
     assert len(errors) == 1
     assert errors[0][0] == "b.py"
     assert "BrokenProcessPool" in errors[0][1]
-    assert stub.shutdown_waits == [(False, True)]
+    # 3.8 的 shutdown 不支持 cancel_futures，只能靠 Future.cancel 清理队列
+    assert stub.shutdown_waits == [(False, sys.version_info >= (3, 9))]
 
 
 @pytest.mark.parametrize("version", [(3, 8), (3, 14)])
@@ -1050,7 +1052,7 @@ def test_parse_parallel_timeout_warns_on_slow_worker(
     timeout_logs = [r for r in caplog.records if "超时" in r.message]
     assert len(timeout_logs) == 1
     assert "AST 并行解析" in timeout_logs[0].message
-    assert shutdown_calls == [(False, True)]
+    assert shutdown_calls == [(False, sys.version_info >= (3, 9))]
     assert all_imports_ord == {}
     assert all_stdlib_ord == {}
     assert all_submodules == {}
@@ -1376,7 +1378,7 @@ def test_parallel_failure_marks_missing_batches(monkeypatch: pytest.MonkeyPatch,
     assert [path for path, _ in errors] == [str(path) for path in missing]
     assert all("不完整" in message for _, message in errors)
     assert list(imports) == ([] if phase == "create" else ["kept", "also_kept"] if phase == "result" else ["kept"])
-    assert pool.shutdown_waits == ([] if phase == "create" else [(False, True)])
+    assert pool.shutdown_waits == ([] if phase == "create" else [(False, sys.version_info >= (3, 9))])
 
 
 def test_parallel_empty_input_and_keyboard_interrupt(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1390,4 +1392,4 @@ def test_parallel_empty_input_and_keyboard_interrupt(monkeypatch: pytest.MonkeyP
     assert pool.shutdown_waits == []
     with pytest.raises(KeyboardInterrupt):
         analysis._parse_parallel([Path("a.py")], {}, {}, {}, [])
-    assert pool.shutdown_waits == [(False, True)]
+    assert pool.shutdown_waits == [(False, sys.version_info >= (3, 9))]
