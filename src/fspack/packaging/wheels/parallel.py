@@ -12,9 +12,9 @@
 
 依赖方向：:mod:`fspack.packaging.wheels.uv_bridge`（输出格式转换/平台映射）
 与 :mod:`fspack.packaging.wheels.sdist`（回退构建）为顶层导入；
-:mod:`fspack.packaging.wheels.downloader` 的流式输出与下载监控
-（``_stream_subprocess``/``_DownloadMonitor``）为惰性导入（downloader
-顶层导入 resolver、resolver 顶层导入本模块，顶层导入会成环）。
+:mod:`fspack.packaging.wheels.process` 的流式输出与下载监控
+（``_stream_subprocess``/``_DownloadMonitor``）为惰性导入（通过模块属性访问，
+便于测试 monkeypatch，也避免顶层耦合进程执行块）。
 
 共享参数经 :class:`~fspack.packaging.wheels.resolver.DownloadContext`
 传递（uv 路径、索引、缓存目录、私有包源等），函数签名不超过 5 个参数。
@@ -186,12 +186,12 @@ def _download_one_resolved(
 
     ``stream=False``（默认，并行模式）用 ``subprocess.run`` 捕获 stdout/stderr，
     不流式输出（多进程 stderr 交错混乱）。``stream=True``（单包模式）用
-    :func:`fspack.packaging.wheels.downloader._stream_subprocess` 实时流式输出
+    :func:`fspack.packaging.wheels.process._stream_subprocess` 实时流式输出
     pip 的非进度条输出（如 ``Downloading X.whl`` 行）。
 
     pip 在 ``stderr=PIPE`` 下检测到非 tty **不输出进度条**，流式输出无法获取
     实时下载速度。``stream=True`` 时启动
-    :class:`fspack.packaging.wheels.downloader._DownloadMonitor` 监控
+    :class:`fspack.packaging.wheels.process._DownloadMonitor` 监控
     ``ctx.cache_dir`` 中 ``.whl`` 文件（含 pip 临时文件 ``tmpXXXXXX.whl``）
     总大小变化，用 rich.progress 显示实时下载字节数与速度。
 
@@ -221,7 +221,7 @@ def _download_one_resolved(
         if stream:
             # 单包场景：流式输出 pip 输出 + 监控 cache_dir 文件大小变化显示实时下载速度。
             # 通过模块属性访问 _stream_subprocess/_DownloadMonitor，便于测试 monkeypatch。
-            from fspack.packaging.wheels import downloader as _dl
+            from fspack.packaging.wheels import process as _dl
 
             monitor = _dl._DownloadMonitor(ctx.cache_dir, req)
             try:

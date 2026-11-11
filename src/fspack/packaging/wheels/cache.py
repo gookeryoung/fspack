@@ -1,4 +1,4 @@
-"""Wheel 依赖解析缓存：避免重复调用 pip 解析依赖图。
+"""Wheel 缓存：依赖解析缓存（``.deps-<key>.json``）与缓存目录维护.
 
 缓存文件 ``.deps-<key>.json`` 记录上次 pip 解析出的 wheel 文件名列表。
 命中后逐个校验 wheel 文件仍存在于 cache_dir，任一缺失则视为未命中
@@ -6,6 +6,10 @@
 
 缓存键纳入依赖列表、Python 版本、平台标签与私有包源，确保跨项目/跨版本/
 跨平台/跨私有源不会误命中。
+
+另含缓存目录维护：下载失败时清理本次部分下载的 wheel
+（:func:`_cleanup_partial_wheels`），以及下载阶段的缓存命中统计回写
+（:func:`_record_wheel_stage`）。
 """
 
 from __future__ import annotations
@@ -15,13 +19,19 @@ import json
 import logging
 from collections.abc import Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from fspack.fsutil import atomic_write_text
 from fspack.jsoncache import load_json_dict
 
+if TYPE_CHECKING:
+    from fspack.progress import StageRecorder
+
 __all__ = [
+    "_cleanup_partial_wheels",
     "_deps_cache_key",
     "_load_deps_cache",
+    "_record_wheel_stage",
     "_save_deps_cache",
 ]
 
@@ -109,3 +119,39 @@ def _save_deps_cache(cache_dir: Path, key: str, wheels: Sequence[Path]) -> None:
         )
     except OSError as e:
         _logger.warning("写入依赖解析缓存失败: %s", e)
+
+
+def _cleanup_partial_wheels(cache_dir: Path, before: set[str]) -> None:
+    """清理本次下载产生的部分 wheel 文件.
+
+    pip download 失败时可能已下载部分 wheel 才中断，残留的半成品 wheel 会被
+    下次构建的 ``--no-index`` 离线解析错误命中（认为依赖已就绪但实际不完整），
+    导致依赖缺失。删除本次新增的 wheel（``cache_dir`` 中存在但不在 ``before``
+    集合中的），保留下载前已存在的 wheel（其他项目的依赖缓存）。
+
+    Args:
+        cache_dir: wheel 缓存目录.
+        before: 下载前 ``cache_dir`` 中已有的 wheel 文件名集合.
+    """
+    partial = [f for f in cache_dir.glob("*.whl") if f.name not in before]
+    if not partial:
+        return
+    for whl in partial:
+        try:
+            whl.unlink()
+        except OSError as e:
+            _logger.warning("清理部分下载的 wheel 失败 %s: %s", whl, e)
+    _logger.warning("pip download 失败，已清理 %d 个部分下载的 wheel", len(partial))
+
+
+def _record_wheel_stage(stage: StageRecorder, wheels: list[Path], before: set[str]) -> None:
+    """回写 wheel 下载阶段统计到 stage：新增字节数、缓存命中数、总数."""
+    new_wheels = [w for w in wheels if w.name not in before]
+    existing_wheels = [w for w in wheels if w.name in before]
+    if new_wheels:
+        stage.add_bytes(sum(w.stat().st_size for w in new_wheels))
+    if existing_wheels:
+        stage.hit_cache(len(existing_wheels))
+    stage.processed(len(wheels))
+    cache_status = "缓存命中" if not new_wheels else f"新增 {len(new_wheels)}"
+    stage.set_detail(f"{len(wheels)} wheels, {cache_status}")

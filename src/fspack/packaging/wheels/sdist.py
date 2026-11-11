@@ -5,8 +5,8 @@
 用 ``pip wheel --no-deps`` 从 sdist 构建纯 Python wheel（``py3-none-any``），
 构建产物放入 cache_dir 供后续 ``pip download --find-links`` 使用。
 
-依赖 :mod:`fspack.packaging.wheels.downloader` 提供 ``_stream_subprocess``（惰性导入
-避免循环依赖：``downloader`` 顶层导入本模块，本模块不能顶层导入 ``downloader``）。
+依赖 :mod:`fspack.packaging.wheels.process` 提供 ``_stream_subprocess``（惰性导入，
+调用时读取模块属性以便测试 monkeypatch，同时避免与进程执行块顶层耦合）。
 """
 
 from __future__ import annotations
@@ -87,8 +87,9 @@ def _build_sdist_wheels(  # noqa: PLR0913
     ``extra_index_urls``/``find_links`` 透传给 ``pip wheel``，确保私有包源中的
     sdist 也能被构建。
     """
-    # 惰性导入打破循环依赖：downloader 顶层导入本模块，本模块不能顶层导入 downloader
-    from fspack.packaging.wheels.downloader import _stream_subprocess
+    # 惰性导入：调用时读取 process 模块的当前属性，便于测试 monkeypatch；
+    # 同时避免模块顶层耦合进程执行块
+    from fspack.packaging.wheels.process import _stream_subprocess
 
     extra_args: list[str] = []
     for url in extra_index_urls:

@@ -2,7 +2,8 @@
 
 本模块为 facade，从子模块 re-export 全部公开 API：
 
-- :mod:`fspack.packaging.loader.source`：C 源码模板（Windows/Linux/macOS）
+- :mod:`fspack.packaging.loader.source`：C 源码资源读取（assets/loader/*.c）与
+  splash 注入
 - :mod:`fspack.packaging.loader.compile`：编译器基类、平台子类、编译流程、
   icon 资源处理
 

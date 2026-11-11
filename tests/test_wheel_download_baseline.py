@@ -308,7 +308,7 @@ class TestWheelDownloadBaseline:
         monkeypatch.setattr("fspack.packaging.wheels.downloader._load_deps_cache", lambda *a, **kw: None)
         monkeypatch.setattr("fspack.packaging.wheels.downloader._save_deps_cache", lambda *a, **kw: None)
         monkeypatch.setattr("fspack.packaging.wheels.downloader._find_pip_python", lambda: "python")
-        monkeypatch.setattr("fspack.packaging.wheels.downloader._run_pip", lambda *a, **kw: None)
+        monkeypatch.setattr("fspack.packaging.wheels.process._run_pip", lambda *a, **kw: None)
         monkeypatch.setattr("fspack.packaging.wheels.resolver._find_uv", lambda: "uv")
         monkeypatch.setattr("fspack.packaging.wheels.resolver._uv_supports_download", lambda uv_path: True)
         monkeypatch.setattr(

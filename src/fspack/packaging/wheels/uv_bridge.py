@@ -15,7 +15,7 @@
 - ``_convert_uv_output_to_pip_format``/``_extract_resolved_lines``：uv 输出
   解析（格式转换供 pip wheel 路径解析与下载事件日志复用）
 
-依赖 :mod:`fspack.packaging.wheels.downloader` 的 ``_run_pip`` 由上层
+依赖 :mod:`fspack.packaging.wheels.process` 的 ``_run_pip`` 由上层
 （resolver）惰性调用，本模块不依赖包内其他模块（除异常类型），处于依赖链
 最底层。
 """

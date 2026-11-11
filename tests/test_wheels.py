@@ -125,7 +125,7 @@ def test_download_wheels_fallback_cmd_has_index(tmp_path: Path, monkeypatch: pyt
         return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    monkeypatch.setattr("fspack.packaging.wheels.process._stream_subprocess", fake_stream)
     monkeypatch.setattr("fspack.packaging.wheels.downloader._find_pip_python", lambda: "/py/python")
     monkeypatch.setattr("fspack.packaging.wheels.resolver._find_uv", lambda: None)
     download_wheels(("numpy",), "3.11.9", "https://idx/simple", tmp_path / "cache")
@@ -228,7 +228,7 @@ def test_download_wheels_pip_error(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         raise err
 
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    monkeypatch.setattr("fspack.packaging.wheels.process._stream_subprocess", fake_stream)
     monkeypatch.setattr("fspack.packaging.wheels.downloader._find_pip_python", lambda: "/py/python")
     monkeypatch.setattr("fspack.packaging.wheels.resolver._find_uv", lambda: None)
     with pytest.raises(DependencyError, match="依赖下载失败"):
@@ -257,7 +257,7 @@ def test_download_wheels_pip_error_cleans_partial_wheels(
         raise err
 
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    monkeypatch.setattr("fspack.packaging.wheels.process._stream_subprocess", fake_stream)
     monkeypatch.setattr("fspack.packaging.wheels.downloader._find_pip_python", lambda: "/py/python")
     monkeypatch.setattr("fspack.packaging.wheels.resolver._find_uv", lambda: None)
 
@@ -811,7 +811,7 @@ def test_select_coherent_wheels_picks_metadata_consistent_version(
         "pydantic_core-2.16.3-cp312-none-win_amd64.whl": ["typing-extensions>=4.6.0"],
     }
     monkeypatch.setattr(
-        "fspack.packaging.wheels.downloader._wheel_requires",
+        "fspack.packaging.wheels.output._wheel_requires",
         lambda wheel_path: requires_by_pkg.get(wheel_path.name, []),
     )
 
@@ -835,7 +835,7 @@ def test_select_coherent_wheels_fallback_keeps_last_when_unsolvable(
 
     names = ["pydantic-2.13.5-py3-none-any.whl", "pydantic-2.6.4-py3-none-any.whl"]
     monkeypatch.setattr(
-        "fspack.packaging.wheels.downloader._wheel_requires",
+        "fspack.packaging.wheels.output._wheel_requires",
         lambda wheel_path: [],
     )
     result = _select_coherent_wheels(names, tmp_path)
@@ -894,7 +894,7 @@ def test_download_wheels_cache_hit_selects_coherent_version(tmp_path: Path, monk
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
     monkeypatch.setattr("fspack.packaging.wheels.downloader._find_pip_python", lambda: "/py/python")
     monkeypatch.setattr(
-        "fspack.packaging.wheels.downloader._wheel_requires",
+        "fspack.packaging.wheels.output._wheel_requires",
         lambda wheel_path: requires_by_pkg.get(wheel_path.name, []),
     )
 
@@ -1360,7 +1360,7 @@ def test_build_sdist_wheels_runs_pip_wheel(tmp_path: Path, monkeypatch: pytest.M
         captured.append(cmd)
         return CompletedStub()
 
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    monkeypatch.setattr("fspack.packaging.wheels.process._stream_subprocess", fake_stream)
     cache = tmp_path / "cache"
     cache.mkdir()
     _build_sdist_wheels(["odfpy>=1.4.1"], "/py/python", "https://idx/simple", cache)
@@ -1384,7 +1384,7 @@ def test_build_sdist_wheels_multiple_packages(tmp_path: Path, monkeypatch: pytes
         calls.append(cmd[-1])
         return CompletedStub()
 
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    monkeypatch.setattr("fspack.packaging.wheels.process._stream_subprocess", fake_stream)
     _build_sdist_wheels(["odfpy>=1.4.1", "foo>=1.0"], "/py/python", "https://idx", tmp_path / "cache")
     assert calls == ["odfpy>=1.4.1", "foo>=1.0"]
 
@@ -1395,7 +1395,7 @@ def test_build_sdist_wheels_failure_only_warning(tmp_path: Path, monkeypatch: py
     def fake_stream(cmd: list[str]) -> CompletedStub:
         raise subprocess.CalledProcessError(1, cmd, stderr="build failed")
 
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    monkeypatch.setattr("fspack.packaging.wheels.process._stream_subprocess", fake_stream)
     # 不抛异常即通过
     _build_sdist_wheels(["odfpy>=1.4.1"], "/py/python", "https://idx", tmp_path / "cache")
 
@@ -1403,7 +1403,7 @@ def test_build_sdist_wheels_failure_only_warning(tmp_path: Path, monkeypatch: py
 def test_build_sdist_wheels_pip_missing_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """FileNotFoundError 包装为 DependencyError（pip 解释器不存在）."""
     monkeypatch.setattr(
-        "fspack.packaging.wheels.downloader._stream_subprocess", lambda cmd: (_ for _ in ()).throw(FileNotFoundError())
+        "fspack.packaging.wheels.process._stream_subprocess", lambda cmd: (_ for _ in ()).throw(FileNotFoundError())
     )
     with pytest.raises(DependencyError, match="未找到 pip"):
         _build_sdist_wheels(["odfpy>=1.4.1"], "/missing/python", "https://idx", tmp_path / "cache")
@@ -1493,7 +1493,7 @@ def test_download_wheels_sdist_fallback_retry(tmp_path: Path, monkeypatch: pytes
         return r
 
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    monkeypatch.setattr("fspack.packaging.wheels.process._stream_subprocess", fake_stream)
     monkeypatch.setattr("fspack.packaging.wheels.downloader._find_pip_python", lambda: "/py/python")
     monkeypatch.setattr("fspack.packaging.wheels.resolver._find_uv", lambda: None)
     result = download_wheels(("odfpy>=1.4.1",), "3.8.10", "https://idx/simple", cache)
@@ -1515,7 +1515,7 @@ def test_download_wheels_sdist_fallback_no_missing_reraises(tmp_path: Path, monk
         raise err
 
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    monkeypatch.setattr("fspack.packaging.wheels.process._stream_subprocess", fake_stream)
     monkeypatch.setattr("fspack.packaging.wheels.downloader._find_pip_python", lambda: "/py/python")
     monkeypatch.setattr("fspack.packaging.wheels.resolver._find_uv", lambda: None)
     with pytest.raises(DependencyError, match="依赖下载失败"):
@@ -1710,7 +1710,7 @@ def test_download_online_uv_fails_falls_back_to_pip(tmp_path: Path, monkeypatch:
         captured["cmd"] = cmd
         return CompletedStub()
 
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    monkeypatch.setattr("fspack.packaging.wheels.process._stream_subprocess", fake_stream)
     base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
     _download_online(["numpy"], _make_ctx(base_args, cache))
     cmd = captured["cmd"]
@@ -1740,7 +1740,7 @@ def test_download_online_uv_empty_resolved_falls_back_to_pip(tmp_path: Path, mon
         captured["cmd"] = cmd
         return CompletedStub()
 
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    monkeypatch.setattr("fspack.packaging.wheels.process._stream_subprocess", fake_stream)
     base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
     _download_online(["numpy"], _make_ctx(base_args, cache))
     # 走 pip 完整解析路径：含 -i index，不含并行 --no-deps
@@ -1761,7 +1761,7 @@ def test_download_online_no_uv_uses_pip_full(tmp_path: Path, monkeypatch: pytest
         captured["cmd"] = cmd
         return CompletedStub()
 
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    monkeypatch.setattr("fspack.packaging.wheels.process._stream_subprocess", fake_stream)
     base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
     _download_online(["numpy"], _make_ctx(base_args, cache))
     cmd = captured["cmd"]
@@ -1800,7 +1800,7 @@ def test_download_online_sdist_fallback(tmp_path: Path, monkeypatch: pytest.Monk
         r.stdout = f"Saved {whl_name}\n"
         return r
 
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    monkeypatch.setattr("fspack.packaging.wheels.process._stream_subprocess", fake_stream)
     base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
     _download_online(["odfpy>=1.4.1"], _make_ctx(base_args, cache, py_version="3.8.10"))
     assert call_count["index_download"] == 2
@@ -1836,7 +1836,7 @@ def test_download_wheels_uv_path_integration(tmp_path: Path, monkeypatch: pytest
         return r
 
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_run)
+    monkeypatch.setattr("fspack.packaging.wheels.process._stream_subprocess", fake_run)
     result = download_wheels(("numpy>=1.0",), "3.11.9", "https://idx/simple", cache)
     assert any(p.name == whl_name for p in result)
     assert download_calls["no_index"] == 1
@@ -1888,7 +1888,7 @@ def test_download_online_uv_sdist_fallback(tmp_path: Path, monkeypatch: pytest.M
         return fake_run(cmd)
 
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    monkeypatch.setattr("fspack.packaging.wheels.process._stream_subprocess", fake_stream)
     base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache), "--only-binary=:all:"]
     result = _download_online(["win-unicode-console"], _make_ctx(base_args, cache, py_version="3.8.10"))
     assert call_count["pip_download"] == 2  # 第一次失败，第二次重试成功
@@ -1940,7 +1940,7 @@ def test_download_online_uv_parallel_falls_back_to_pip_full_resolve(
         raise subprocess.CalledProcessError(1, cmd, stderr="not in cache")
 
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_no_index_fail)
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._run_pip", fake_run_pip)
+    monkeypatch.setattr("fspack.packaging.wheels.process._run_pip", fake_run_pip)
     base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache), "--only-binary=:all:"]
     result = _download_online(["psycopg>=3.1.0"], _make_ctx(base_args, cache))
     # 降级后走 _pip_full_resolve，里面有 1 次 pip download（sdist 回退未触发）
@@ -2036,7 +2036,7 @@ def test_download_online_freethreaded_skips_uv(tmp_path: Path, monkeypatch: pyte
         captured["cmd"] = cmd
         return CompletedStub()
 
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    monkeypatch.setattr("fspack.packaging.wheels.process._stream_subprocess", fake_stream)
     base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
     _download_online(["numpy"], _make_ctx(base_args, cache, py_version="3.13.14t"))
     cmd = captured["cmd"]
@@ -2065,7 +2065,7 @@ def test_download_wheels_sanitizes_pypi_index(tmp_path: Path, monkeypatch: pytes
         return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    monkeypatch.setattr("fspack.packaging.wheels.process._stream_subprocess", fake_stream)
     monkeypatch.setattr("fspack.packaging.wheels.downloader._find_pip_python", lambda: "/py/python")
     monkeypatch.setattr("fspack.packaging.wheels.resolver._find_uv", lambda: None)
     download_wheels(("numpy",), "3.11.9", "  `https://idx/simple`  ", tmp_path / "cache")
@@ -2090,7 +2090,7 @@ def test_download_resolved_parallel_single_retry_error_converted(
     def fake_stream(cmd: list[str]) -> CompletedStub:
         raise subprocess.CalledProcessError(1, cmd, stderr="ERROR: No matching distribution found")
 
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    monkeypatch.setattr("fspack.packaging.wheels.process._stream_subprocess", fake_stream)
     monkeypatch.setattr(
         "fspack.packaging.wheels.parallel._handle_sdist_fallback",
         lambda *a, **kw: None,
@@ -2127,7 +2127,7 @@ def test_download_resolved_parallel_uses_configured_pypi_index(tmp_path: Path, m
         return r
 
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_run)
+    monkeypatch.setattr("fspack.packaging.wheels.process._stream_subprocess", fake_run)
     base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
     _download_online(["pygame"], _make_ctx(base_args, cache, pypi_index="https://mirrors.aliyun.com/pypi/simple/"))
     # 单包路径触发 1 次调用，必须含 -i <pypi_index>
@@ -2187,7 +2187,7 @@ def test_download_resolved_parallel_partial_failure_sdist_fallback(
         return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    monkeypatch.setattr("fspack.packaging.wheels.process._stream_subprocess", fake_stream)
     base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache), "--only-binary=:all:"]
     result = _download_online(
         ["numpy>=1.0", "odfpy>=1.4.1"],
@@ -2286,7 +2286,7 @@ def test_download_resolved_parallel_multi_sdist_fallback(tmp_path: Path, monkeyp
         return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    monkeypatch.setattr("fspack.packaging.wheels.process._stream_subprocess", fake_stream)
     base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache), "--only-binary=:all:"]
     result = _download_online(
         ["numpy>=1.0", "odfpy>=1.4.1", "win-unicode-console==0.5"],
@@ -2581,7 +2581,7 @@ def test_run_pip_stream_uses_stream_subprocess(tmp_path: Path, monkeypatch: pyte
         stream_called = True
         return CompletedStub()
 
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    monkeypatch.setattr("fspack.packaging.wheels.process._stream_subprocess", fake_stream)
     monkeypatch.setattr(
         "fspack.packaging.wheels.subprocess.run",
         lambda cmd, **kw: (_ for _ in ()).throw(AssertionError("不应调用 subprocess.run")),
@@ -2603,7 +2603,7 @@ def test_run_pip_stream_false_uses_subprocess_run(tmp_path: Path, monkeypatch: p
 
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
     monkeypatch.setattr(
-        "fspack.packaging.wheels.downloader._stream_subprocess",
+        "fspack.packaging.wheels.process._stream_subprocess",
         lambda cmd: (_ for _ in ()).throw(AssertionError("不应调用 _stream_subprocess")),
     )
     _run_pip(["pip"], "label", stream=False)
@@ -2616,7 +2616,7 @@ def test_run_pip_stream_suppress_error_returns_none(tmp_path: Path, monkeypatch:
     def fake_stream(cmd: list[str]) -> CompletedStub:
         raise subprocess.CalledProcessError(1, cmd, stderr="fail")
 
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    monkeypatch.setattr("fspack.packaging.wheels.process._stream_subprocess", fake_stream)
     result = _run_pip(["pip"], "label", stream=True, suppress_error=True)
     assert result is None
 
@@ -2627,7 +2627,7 @@ def test_run_pip_stream_failure_raises_dependency_error(tmp_path: Path, monkeypa
     def fake_stream(cmd: list[str]) -> CompletedStub:
         raise subprocess.CalledProcessError(1, cmd, stderr="download failed")
 
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    monkeypatch.setattr("fspack.packaging.wheels.process._stream_subprocess", fake_stream)
     with pytest.raises(DependencyError, match="依赖下载失败"):
         _run_pip(["pip"], "label", stream=True)
 
@@ -2635,7 +2635,7 @@ def test_run_pip_stream_failure_raises_dependency_error(tmp_path: Path, monkeypa
 def test_run_pip_stream_file_not_found_raises_dependency_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """stream=True 时 FileNotFoundError 转为 DependencyError."""
     monkeypatch.setattr(
-        "fspack.packaging.wheels.downloader._stream_subprocess", lambda cmd: (_ for _ in ()).throw(FileNotFoundError())
+        "fspack.packaging.wheels.process._stream_subprocess", lambda cmd: (_ for _ in ()).throw(FileNotFoundError())
     )
     with pytest.raises(DependencyError, match="未找到 pip"):
         _run_pip(["/missing/pip"], "label", stream=True)
@@ -2737,7 +2737,7 @@ def test_download_online_uv_resolved_passes_extra_sources(tmp_path: Path, monkey
         return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_run)
+    monkeypatch.setattr("fspack.packaging.wheels.process._stream_subprocess", fake_run)
     base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
     ctx = _make_ctx(
         base_args,
@@ -2767,7 +2767,7 @@ def test_download_online_pip_full_passes_extra_sources(tmp_path: Path, monkeypat
         captured["cmd"] = cmd
         return CompletedStub()
 
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    monkeypatch.setattr("fspack.packaging.wheels.process._stream_subprocess", fake_stream)
     base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
     ctx = _make_ctx(
         base_args,
@@ -2815,7 +2815,7 @@ def test_download_online_sdist_fallback_passes_extra_sources(tmp_path: Path, mon
         r.stdout = f"Saved {whl_name}\n"
         return r
 
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    monkeypatch.setattr("fspack.packaging.wheels.process._stream_subprocess", fake_stream)
     base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
     ctx = _make_ctx(
         base_args,
@@ -2843,7 +2843,7 @@ def test_build_sdist_wheels_with_extra_sources(tmp_path: Path, monkeypatch: pyte
         captured.append(cmd)
         return CompletedStub()
 
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    monkeypatch.setattr("fspack.packaging.wheels.process._stream_subprocess", fake_stream)
     cache = tmp_path / "cache"
     cache.mkdir()
     _build_sdist_wheels(
@@ -2870,7 +2870,7 @@ def test_build_sdist_wheels_no_extra_sources_omits_args(tmp_path: Path, monkeypa
         captured.append(cmd)
         return CompletedStub()
 
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    monkeypatch.setattr("fspack.packaging.wheels.process._stream_subprocess", fake_stream)
     _build_sdist_wheels(["odfpy>=1.4.1"], "/py/python", "https://idx/simple", tmp_path / "cache")
     cmd = captured[0]
     assert "--extra-index-url" not in cmd
@@ -2890,7 +2890,7 @@ def test_download_wheels_passes_extra_sources_to_pip(tmp_path: Path, monkeypatch
         return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    monkeypatch.setattr("fspack.packaging.wheels.process._stream_subprocess", fake_stream)
     monkeypatch.setattr("fspack.packaging.wheels.downloader._find_pip_python", lambda: "/py/python")
     monkeypatch.setattr("fspack.packaging.wheels.resolver._find_uv", lambda: None)
     download_wheels(
@@ -2955,7 +2955,7 @@ def test_download_online_require_hashes_uses_hashes_path(tmp_path: Path, monkeyp
         captured["cmd"] = cmd
         return CompletedStub()
 
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    monkeypatch.setattr("fspack.packaging.wheels.process._stream_subprocess", fake_stream)
     base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
     _download_online(["numpy>=1.0"], _make_ctx(base_args, cache), require_hashes=True)
     cmd = captured["cmd"]
@@ -3035,7 +3035,7 @@ def test_download_with_hashes_cleanup_on_failure(tmp_path: Path, monkeypatch: py
         # 模拟 pip 校验失败（hash mismatch）
         raise subprocess.CalledProcessError(1, cmd, stderr="hash mismatch")
 
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    monkeypatch.setattr("fspack.packaging.wheels.process._stream_subprocess", fake_stream)
     base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
     # _run_pip 把 CalledProcessError 转为 DependencyError
     with pytest.raises(DependencyError, match="hash mismatch"):
@@ -3242,7 +3242,7 @@ def test_download_online_shares_uv_path_detection(tmp_path: Path, monkeypatch: p
         lambda *a, **kw: subprocess.CompletedProcess(args=[], returncode=0, stdout="Saved numpy.whl\n"),
     )
     monkeypatch.setattr(
-        "fspack.packaging.wheels.downloader._stream_subprocess",
+        "fspack.packaging.wheels.process._stream_subprocess",
         lambda cmd: subprocess.CompletedProcess(args=[], returncode=0, stdout="Saved numpy.whl\n"),
     )
     base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
@@ -3309,7 +3309,7 @@ def test_download_online_uv_download_fails_falls_back_to_pip(tmp_path: Path, mon
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="Saved numpy.whl\n", stderr="")
 
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_run)
+    monkeypatch.setattr("fspack.packaging.wheels.process._stream_subprocess", fake_run)
     base_args = ["/py/python", "-m", "pip", "download", "-d", str(cache)]
     result = _download_online(["numpy>=1.0"], _make_ctx(base_args, cache))
     # uv 失败后回退到 pip

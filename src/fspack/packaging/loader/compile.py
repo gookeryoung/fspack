@@ -32,10 +32,10 @@ from fspack.packaging.loader.cache_keys import (
 )
 from fspack.packaging.loader.resource import LoaderVersionInfo
 from fspack.packaging.loader.source import (
-    _LOADER_C_LINUX,
-    _LOADER_C_MACOS,
-    _LOADER_C_WINDOWS,
     apply_splash,
+    loader_linux_source,
+    loader_macos_source,
+    loader_windows_source,
 )
 from fspack.packaging.loader.toolchain import LINUX_GCC, MACOS_CLANG, MINGW_GCC, _compile_resource_obj, _find_mingw_gcc
 from fspack.platform import Platform
@@ -251,7 +251,7 @@ class WindowsLoader(LoaderCompiler):
     def generate_source(cls, py_xy: str) -> str:
         """生成 Windows loader 源码，加载 python3X.dll 并调用 Py_Main。"""
         python_dll = f"runtime\\\\{py_xy}.dll"
-        return _LOADER_C_WINDOWS.format(python_dll=python_dll)
+        return loader_windows_source().replace("{python_dll}", python_dll)
 
     @classmethod
     @override
@@ -318,7 +318,7 @@ class LinuxLoader(LoaderCompiler):
         """生成 Linux loader 源码，dlopen libpython3.X.so 并调用 Py_BytesMain。"""
         dotted = f"{py_xy[6]}.{py_xy[7:]}"
         libpython = f"runtime/python/lib/libpython{dotted}.so"
-        return _LOADER_C_LINUX.format(libpython=libpython)
+        return loader_linux_source().replace("{libpython}", libpython)
 
     @classmethod
     @override
@@ -373,7 +373,7 @@ class MacLoader(LoaderCompiler):
         """生成 macOS loader 源码，dlopen libpython3.X.dylib 并调用 Py_BytesMain。"""
         dotted = f"{py_xy[6]}.{py_xy[7:]}"
         libpython = f"runtime/python/lib/libpython{dotted}.dylib"
-        return _LOADER_C_MACOS.format(libpython=libpython)
+        return loader_macos_source().replace("{libpython}", libpython)
 
     @classmethod
     @override

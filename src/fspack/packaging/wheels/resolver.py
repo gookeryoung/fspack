@@ -16,8 +16,8 @@
 3. ``_download_with_hashes``：``--generate-hashes`` + ``pip download
    --require-hashes`` 哈希校验链
 
-依赖 :mod:`fspack.packaging.wheels.downloader` 提供 ``_run_pip``（惰性导入
-打破循环：downloader 顶层导入本模块，本模块不能顶层导入 downloader）。
+依赖 :mod:`fspack.packaging.wheels.process` 提供 ``_run_pip``（惰性导入，
+调用时读取模块属性以便测试 monkeypatch，同时避免与进程执行块顶层耦合）。
 """
 
 from __future__ import annotations
@@ -128,8 +128,9 @@ def _run_pip_download(
     ``require_hashes=True`` 时离线解析成功仍跳过哈希校验（缓存目录 wheel 已首次
     校验）；离线失败回退到在线时强制走 uv --generate-hashes 路径校验哈希。
     """
-    # 惰性导入打破循环依赖：downloader 顶层导入本模块，本模块不能顶层导入 downloader
-    from fspack.packaging.wheels.downloader import _run_pip
+    # 惰性导入：调用时读取 process 模块的当前属性，便于测试 monkeypatch
+    # ``fspack.packaging.wheels.process._run_pip``；同时避免模块顶层耦合进程执行块
+    from fspack.packaging.wheels.process import _run_pip
 
     # 先用 --no-index 从本地缓存 + 用户 find-links 解析（离线模式），命中则跳过网络查询
     result = _run_pip(
@@ -272,8 +273,9 @@ def _pip_full_resolve(filtered: list[str], ctx: DownloadContext) -> subprocess.C
     - uv 不可用 / uv 解析失败（首次路径）
     - uv 解析的精确版本在镜像上不可用（降级路径，见 ``_download_online``）
     """
-    # 惰性导入打破循环依赖：downloader 顶层导入本模块，本模块不能顶层导入 downloader
-    from fspack.packaging.wheels.downloader import _run_pip
+    # 惰性导入：调用时读取 process 模块的当前属性，便于测试 monkeypatch
+    # ``fspack.packaging.wheels.process._run_pip``；同时避免模块顶层耦合进程执行块
+    from fspack.packaging.wheels.process import _run_pip
 
     try:
         result = _run_pip(

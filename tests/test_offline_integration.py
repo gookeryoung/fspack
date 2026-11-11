@@ -110,7 +110,7 @@ def test_build_offline_wheel_cache_miss_raises_dependency_error(
 
     # mock _run_pip 返回 None（模拟 --no-index 失败，缓存未命中）
     # 不 mock subprocess.run，避免影响 inject_mingw_runtime_dlls 的 gcc 查询
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._run_pip", lambda *a, **kw: None)
+    monkeypatch.setattr("fspack.packaging.wheels.process._run_pip", lambda *a, **kw: None)
     monkeypatch.setattr("fspack.packaging.wheels.downloader._find_pip_python", lambda: "/py/python")
 
     from fspack.builder import build
@@ -289,7 +289,7 @@ def test_build_offline_wheel_cache_miss_raises_dependency_error_linux(
     site_packages = proj / "dist" / "site-packages"
     site_packages.mkdir(parents=True)
 
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._run_pip", lambda *a, **kw: None)
+    monkeypatch.setattr("fspack.packaging.wheels.process._run_pip", lambda *a, **kw: None)
     monkeypatch.setattr("fspack.packaging.wheels.downloader._find_pip_python", lambda: "/py/python")
 
     from fspack.builder import build

@@ -168,7 +168,7 @@ def test_download_wheels_offline_disabled_falls_back(tmp_path: Path, monkeypatch
         return CompletedStub()
 
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._stream_subprocess", fake_stream)
+    monkeypatch.setattr("fspack.packaging.wheels.process._stream_subprocess", fake_stream)
     monkeypatch.setattr("fspack.packaging.wheels.downloader._find_pip_python", lambda: "/py/python")
     monkeypatch.setattr("fspack.packaging.wheels.resolver._find_uv", lambda: None)
     # 不抛异常即通过：成功回退到在线下载
@@ -185,7 +185,7 @@ def test_run_pip_download_offline_cache_miss_direct(tmp_path: Path, monkeypatch:
     def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         raise subprocess.CalledProcessError(1, "pip", stderr="not in cache")
 
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._run_pip", lambda *a, **kw: None)
+    monkeypatch.setattr("fspack.packaging.wheels.process._run_pip", lambda *a, **kw: None)
     with pytest.raises(DependencyError, match=r"离线模式下"):
         _run_pip_download(
             ["numpy"],
@@ -209,7 +209,7 @@ def test_run_pip_download_offline_includes_user_find_links(tmp_path: Path, monke
         captured["cmd"] = cmd
         return CompletedStub()
 
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._run_pip", fake_run_pip)
+    monkeypatch.setattr("fspack.packaging.wheels.process._run_pip", fake_run_pip)
     user_find_links = ["/custom/wheels", "/shared/wheels"]
     _run_pip_download(
         ["numpy"],
@@ -235,7 +235,7 @@ def test_run_pip_download_offline_includes_user_find_links(tmp_path: Path, monke
 def test_run_pip_download_offline_error_lists_searched_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """离线模式报错信息应列出已搜索的所有路径（cache_dir + 用户 find-links）."""
     monkeypatch.setenv("FSPACK_OFFLINE", "1")
-    monkeypatch.setattr("fspack.packaging.wheels.downloader._run_pip", lambda *a, **kw: None)
+    monkeypatch.setattr("fspack.packaging.wheels.process._run_pip", lambda *a, **kw: None)
     user_find_links = ["/custom/wheels"]
     with pytest.raises(DependencyError) as exc_info:
         _run_pip_download(

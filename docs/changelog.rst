@@ -10,6 +10,8 @@
 - feat(runtime): embed zip 与 standalone tarball 按 ``runtime/hashes.py`` 清单校验 sha256；``FSPACK_SKIP_RUNTIME_HASH=1`` 可跳过；standalone release tag 支持 ``FSPACK_STANDALONE_RELEASE_TAG`` 覆盖
 - fix(wheels): ``require_hashes`` 在 uv 缺失时 fail-fast，不再静默降级；离线兜底改用 ``--lock``/``--frozen``
 - feat(cli): 新增 ``--lock``/``--frozen`` 生成并校验 ``requirements.lock``（``name==version + sha256``，同输入可复现）
+- refactor(wheels): ``downloader`` 拆分为参数构造（``pip_args``）、进程执行（``process``）、输出解析（``output``）与缓存（``cache``）四块，``fspack.packaging.wheels.downloader`` 对外导入路径保持不变
+- refactor(loader): 内嵌 C loader 源码迁移到 ``src/fspack/assets/loader/*.c``，构建期按需读取；``data-dirs`` 打包清单同步包含该目录
 - docs: 明确最低支持 Python 版本为 3.8（以 ``pyproject.toml`` 的 ``requires-python`` 为准）
 
 v0.6.8

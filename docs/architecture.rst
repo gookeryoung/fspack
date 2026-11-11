@@ -312,11 +312,11 @@ packaging/ 子包
    * - ``runtime/``（``__init__.py`` / ``download.py`` / ``extract.py`` / ``urls.py`` / ``trim.py`` / ``pth.py``）
      - ``RuntimeDownloader``：embed python / python-build-standalone 下载解压 + 安全解压 + stdlib 精简 + ``._pth`` 生成
    * - ``loader/``（``__init__.py`` / ``source.py`` / ``compile.py`` / ``toolchain.py`` / ``cache_keys.py`` / ``resource.py``）
-     - C loader facade：源码模板 + 编译器基类/平台子类 + 工具链发现 + 缓存键 + icon/版本信息资源
+     - C loader facade：源码资源读取（``assets/loader/*.c``）+ 编译器基类/平台子类 + 工具链发现 + 缓存键 + icon/版本信息资源
    * - ``installer/``（``__init__.py`` / ``base.py`` / ``facade.py`` / ``dist_prep.py`` / ``request.py`` / ``linux.py`` / ``macos.py`` / ``nsis.py`` / ``zip.py``）
      - 安装包 facade：NSIS / .deb + tar.gz / .pkg + .dmg / 跨平台 zip（``ReleaseRequest``/``SignOptions`` 参数收敛）
-   * - ``wheels/``（``__init__.py`` / ``downloader.py`` / ``resolver.py`` / ``uv_bridge.py`` / ``parallel.py`` / ``sdist.py`` / ``cache.py`` / ``markers.py``）
-     - wheel 下载 facade：pip/uv 调用 + sdist 回退 + 并行下载 + 依赖解析缓存 + python_version 标记预过滤
+   * - ``wheels/``（``__init__.py`` / ``downloader.py`` / ``pip_args.py`` / ``process.py`` / ``output.py`` / ``resolver.py`` / ``uv_bridge.py`` / ``parallel.py`` / ``sdist.py`` / ``cache.py`` / ``markers.py``）
+     - wheel 下载 facade：入口编排（``downloader``）+ 参数构造（``pip_args``）+ 进程执行（``process``）+ 输出解析（``output``）+ pip/uv 调用 + sdist 回退 + 并行下载 + 依赖解析缓存 + python_version 标记预过滤
    * - ``nuitka/``（``__init__.py`` / ``compiler.py`` / ``env.py`` / ``standalone.py`` / ``winlibs.py`` / ``ccache.py`` / ``compile.py`` / ``strip.py`` / ``verify.py`` / ``protocol.py`` / ``progress.py``）
      - Nuitka 编译 facade：环境就绪 + standalone python + winlibs gcc 工具链 + ccache + 并行编译调度 + 编译流程 + 产物剥离 + 验证
    * - ``pyc/``（``__init__.py`` / ``compile.py`` / ``stamp.py`` / ``source_strip.py``）

@@ -3,14 +3,19 @@
 本模块是 :mod:`fspack.packaging.wheels` 的入口与 API 索引，无业务逻辑。原
 ``wheels.py``（709 行）按职责拆分到多个模块：
 
-- :mod:`fspack.packaging.wheels.downloader`：``download_wheels`` 入口 + pip
-  解释器查找 + subprocess 包装（``_run_pip``/``_stream_subprocess``）+ wheel
-  文件名解析 + 依赖解析缓存调度
+- :mod:`fspack.packaging.wheels.downloader`：``download_wheels`` 入口编排
+  （缓存调度 + 下载 + 解析组合）与兼容 re-export
+- :mod:`fspack.packaging.wheels.pip_args`：``pip download`` 参数构造
+- :mod:`fspack.packaging.wheels.process`：pip 解释器查找 + subprocess 执行
+  （``_run_pip``/``_stream_subprocess``/``_DownloadMonitor``）
+- :mod:`fspack.packaging.wheels.output`：stdout/目录扫描解析 + 版本消解 +
+  顶层约束校验
 - :mod:`fspack.packaging.wheels.resolver`：在线解析编排 + ``DownloadContext``
 - :mod:`fspack.packaging.wheels.uv_bridge`：uv CLI 集成（检测/解析/输出转换）
 - :mod:`fspack.packaging.wheels.parallel`：单包下载原语（pip/uv）+ 并行编排
 - :mod:`fspack.packaging.wheels.sdist`：sdist 回退构建
 - :mod:`fspack.packaging.wheels.cache`：依赖解析缓存（``.deps-<key>.json``）
+  与缓存目录维护（部分下载清理、阶段统计）
 - :mod:`fspack.packaging.wheels.markers`：``python_version`` 环境标记预过滤
 
 显式 ``import`` 标准库模块（``os``/``re``/``shutil``/``subprocess``/``sys``）

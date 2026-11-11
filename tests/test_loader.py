@@ -203,6 +203,32 @@ def test_generate_loader_source_splash_changes_cache_key() -> None:
     assert len(keys) == 3
 
 
+def test_loader_c_sources_come_from_assets() -> None:
+    """C 源码来自 assets/loader/*.c（不再内嵌于 Python 模块）."""
+    from fspack.packaging.loader import source as loader_source
+
+    for name, loader in (
+        ("loader_windows.c", loader_source.loader_windows_source),
+        ("loader_linux.c", loader_source.loader_linux_source),
+        ("loader_macos.c", loader_source.loader_macos_source),
+        ("splash_windows.c", loader_source.splash_windows_source),
+    ):
+        assert loader() == (loader_source._LOADER_ASSET_DIR / name).read_text(encoding="utf-8")
+
+
+def test_loader_asset_missing_raises_loader_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """assets/loader 缺失时抛出可诊断的 LoaderError（打包清单遗漏信号）."""
+    from fspack.packaging.loader import source as loader_source
+
+    monkeypatch.setattr(loader_source, "_LOADER_ASSET_DIR", tmp_path)
+    loader_source._loader_asset.cache_clear()
+    try:
+        with pytest.raises(LoaderError, match="loader C 源码资源缺失"):
+            loader_source.loader_windows_source()
+    finally:
+        loader_source._loader_asset.cache_clear()
+
+
 def _touch_out(cmd: list[str]) -> None:
     """从命令提取输出路径并 touch（gcc 用 -o，windres 用 --output）。"""
     for flag in ("-o", "--output"):
