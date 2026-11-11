@@ -67,9 +67,8 @@ from fspack.packaging.wheels.downloader import (
     download_wheels,
 )
 from fspack.packaging.wheels.markers import (
-    _MARKER_PY_VER_RE,  # noqa: F401
-    _eval_python_version_marker,  # noqa: F401
-    _eval_single_marker,  # noqa: F401
+    _build_marker_env,  # noqa: F401
+    _eval_marker,  # noqa: F401
     _filter_by_python_version,  # noqa: F401
 )
 

@@ -1078,6 +1078,37 @@ def test_resolve_module_script_flat_preferred_over_src(tmp_path: Path) -> None:
     assert result == (tmp_path / "pkg" / "cli.py").resolve()
 
 
+def test_resolve_module_script_flat_multileg_pkg_init(tmp_path: Path) -> None:
+    """flat layout：多段 module 无 cli.py 时回退到 <project>/pkg/cli/__init__.py."""
+    from fspack.config import _resolve_module_script
+
+    _write_script(tmp_path / "mypkg" / "cli" / "__init__.py")
+    result = _resolve_module_script(tmp_path, "mypkg.cli")
+    assert result is not None
+    assert result == (tmp_path / "mypkg" / "cli" / "__init__.py").resolve()
+
+
+def test_resolve_module_script_src_layout_multileg_pkg_init(tmp_path: Path) -> None:
+    """src layout：多段 module 的包级入口解析为 <project>/src/pkg/cli/__init__.py."""
+    from fspack.config import _resolve_module_script
+
+    _write_script(tmp_path / "src" / "mypkg" / "cli" / "__init__.py")
+    result = _resolve_module_script(tmp_path, "mypkg.cli")
+    assert result is not None
+    assert result == (tmp_path / "src" / "mypkg" / "cli" / "__init__.py").resolve()
+
+
+def test_resolve_module_script_flat_module_preferred_over_pkg_init(tmp_path: Path) -> None:
+    """多段 module 同时存在 cli.py 与 cli/__init__.py 时优先模块文件（向后兼容）."""
+    from fspack.config import _resolve_module_script
+
+    _write_script(tmp_path / "mypkg" / "cli.py")
+    _write_script(tmp_path / "mypkg" / "cli" / "__init__.py")
+    result = _resolve_module_script(tmp_path, "mypkg.cli")
+    assert result is not None
+    assert result == (tmp_path / "mypkg" / "cli.py").resolve()
+
+
 def test_resolve_module_script_not_found_returns_none(tmp_path: Path) -> None:
     """模块对应脚本不存在时返回 None."""
     from fspack.config import _resolve_module_script

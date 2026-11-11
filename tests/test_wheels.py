@@ -14,6 +14,7 @@ import pytest
 from fspack.exceptions import DependencyError
 from fspack.packaging.wheels import (
     _PIP_PYTHON_NAMES,
+    _build_marker_env,
     _build_pip_download_args,
     _build_sdist_wheels,
     _cleanup_partial_wheels,
@@ -23,8 +24,7 @@ from fspack.packaging.wheels import (
     _download_one_with_uv,
     _download_online,
     _download_resolved_parallel,
-    _eval_python_version_marker,
-    _eval_single_marker,
+    _eval_marker,
     _filter_by_python_version,
     _find_pip_python,
     _find_uv,
@@ -766,6 +766,34 @@ def test_parse_pip_download_wheels_success_line_keeps_same_pkg_candidates() -> N
     assert names == ["pydantic-2.13.5-py3-none-any.whl", "pydantic-2.6.4-py3-none-any.whl"]
 
 
+def test_parse_pip_download_wheels_parallel_multiple_success_lines() -> None:
+    """并行下载拼接的 stdout 含多条 Successfully downloaded 行：取全部并集.
+
+    回归：只取首条成功行会把最终包集合误缩成第一个 worker 的包（冷缓存并行
+    pip 下载最终只装 1 个依赖）。
+    """
+    stdout = (
+        "Saved /c/numpy-1.26.0-cp311-win_amd64.whl\nSuccessfully downloaded numpy\n"
+        "Saved /c/requests-2.31.0-py3-none-any.whl\nSuccessfully downloaded requests\n"
+    )
+    assert _parse_pip_download_wheels(stdout) == [
+        "numpy-1.26.0-cp311-win_amd64.whl",
+        "requests-2.31.0-py3-none-any.whl",
+    ]
+
+
+def test_parse_pip_download_wheels_parallel_workers_union() -> None:
+    """_merge_parallel_results 合并的多 worker 输出能被完整解析（多包并行）."""
+    r1 = subprocess.CompletedProcess(
+        args=[], returncode=0, stdout="Saved /c/a-1.0-py3-none-any.whl\nSuccessfully downloaded a\n", stderr=""
+    )
+    r2 = subprocess.CompletedProcess(
+        args=[], returncode=0, stdout="Saved /c/b-2.0-py3-none-any.whl\nSuccessfully downloaded b\n", stderr=""
+    )
+    merged = _merge_parallel_results([("a==1.0", r1), ("b==2.0", r2)])
+    assert _parse_pip_download_wheels(merged.stdout) == ["a-1.0-py3-none-any.whl", "b-2.0-py3-none-any.whl"]
+
+
 def test_select_coherent_wheels_picks_metadata_consistent_version(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1085,12 +1113,38 @@ def test_find_pip_python_timeout_all_candidates_fail(monkeypatch: pytest.MonkeyP
         _find_pip_python()
 
 
-# ---------- _filter_by_python_version ----------
+# ---------- _filter_by_python_version / _build_marker_env / _eval_marker ----------
+
+
+def _marker_host(*, py_version: str = "3.13.0", system: str = "linux") -> dict[str, str]:
+    """构造确定性的宿主 marker 环境（避免断言随 CI 操作系统漂移）."""
+    if system == "windows":
+        platform_vars = {
+            "sys_platform": "win32",
+            "platform_system": "Windows",
+            "os_name": "nt",
+            "platform_machine": "AMD64",
+        }
+    else:
+        platform_vars = {
+            "sys_platform": "linux",
+            "platform_system": "Linux",
+            "os_name": "posix",
+            "platform_machine": "x86_64",
+        }
+    return {
+        "python_version": ".".join(py_version.split(".")[:2]),
+        "python_full_version": py_version,
+        "implementation_name": "cpython",
+        "platform_python_implementation": "CPython",
+        "extra": "",
+        **platform_vars,
+    }
 
 
 def test_filter_by_python_version_no_marker_kept() -> None:
     """无环境标记的依赖原样保留."""
-    result = _filter_by_python_version(["numpy>=1.20", "requests"], "3.8.10")
+    result = _filter_by_python_version(["numpy>=1.20", "requests"], "3.8.10", host_env=_marker_host())
     assert result == ["numpy>=1.20", "requests"]
 
 
@@ -1101,120 +1155,160 @@ def test_filter_by_python_version_skip_higher() -> None:
         "PySide6>=6.5.0; python_version >= '3.11'",
         "PyYAML>=6.0",
     ]
-    result = _filter_by_python_version(pkgs, "3.8.10")
+    result = _filter_by_python_version(pkgs, "3.8.10", ("win_amd64",), host_env=_marker_host())
+    # PySide2 在目标 3.8 为真、宿主 3.13 为假：剥离 marker（否则 pip 按宿主丢弃）
     assert result == ["PySide2>=5.15.2.1", "PyYAML>=6.0"]
 
 
-def test_filter_by_python_version_keep_when_matches() -> None:
-    """目标 3.11 时保留 python_version >= '3.11' 的依赖（去标记）."""
-    pkgs = [
-        "PySide2>=5.15.2.1; python_version <= '3.10'",
-        "PySide6>=6.5.0; python_version >= '3.11'",
-    ]
-    result = _filter_by_python_version(pkgs, "3.11.9")
-    assert result == ["PySide6>=6.5.0"]
+def test_filter_by_python_version_keep_marker_when_host_matches() -> None:
+    """目标与宿主求值同为真时保留 marker 原文."""
+    pkgs = ["PySide6>=6.5.0; python_version >= '3.11'"]
+    result = _filter_by_python_version(pkgs, "3.13.0", ("win_amd64",), host_env=_marker_host())
+    assert result == ["PySide6>=6.5.0; python_version >= '3.11'"]
 
 
 def test_filter_by_python_version_keep_lower_bound_match() -> None:
     """边界值匹配：python_version <= '3.10' 在目标 3.10 时保留."""
-    result = _filter_by_python_version(["PySide2>=5.15.2.1; python_version <= '3.10'"], "3.10.11")
+    result = _filter_by_python_version(
+        ["PySide2>=5.15.2.1; python_version <= '3.10'"], "3.10.11", host_env=_marker_host()
+    )
     assert result == ["PySide2>=5.15.2.1"]
 
 
-def test_filter_by_python_version_keep_non_python_marker() -> None:
-    """非 python_version 标记保守保留（去标记）."""
-    result = _filter_by_python_version(["foo>=1.0; platform_system == 'Windows'"], "3.8.10")
-    assert result == ["foo>=1.0"]
+def test_filter_by_python_version_platform_marker_dual_target() -> None:
+    """Windows/Linux 双目标对拍：平台标记按目标平台求值，不按宿主剥离.
+
+    回归：旧实现把 ``sys_platform == 'win32'`` 的 pywin32 标记剥掉后无条件保留，
+    Linux 目标会误下载 Windows 专用依赖。
+    """
+    pkgs = [
+        "pywin32>=306; sys_platform == 'win32'",
+        "uvloop>=0.19; sys_platform != 'win32'",
+        "colorama; platform_system == 'Windows'",
+        "requests>=2",
+    ]
+    # 目标 Windows、宿主 Windows：Windows 专用依赖保留且 marker 原文保留，
+    # uvloop（sys_platform != 'win32'）按目标环境剔除
+    win_on_win = _filter_by_python_version(
+        pkgs, "3.12.0", ("win_amd64",), host_env=_marker_host(py_version="3.12.0", system="windows")
+    )
+    assert win_on_win == [
+        "pywin32>=306; sys_platform == 'win32'",
+        "colorama; platform_system == 'Windows'",
+        "requests>=2",
+    ]
+    # 目标 Linux、宿主 Windows：剔除 Windows 专用依赖，uvloop 剥离 marker（宿主求值为假）
+    linux_on_win = _filter_by_python_version(
+        pkgs, "3.12.0", ("manylinux2014_x86_64",), host_env=_marker_host(py_version="3.12.0", system="windows")
+    )
+    assert linux_on_win == ["uvloop>=0.19", "requests>=2"]
+    # 目标 Windows、宿主 Linux：pywin32 剥离 marker 后保留（跨平台构建）
+    win_on_linux = _filter_by_python_version(
+        pkgs, "3.12.0", ("win_amd64",), host_env=_marker_host(py_version="3.12.0", system="linux")
+    )
+    assert win_on_linux == ["pywin32>=306", "colorama", "requests>=2"]
 
 
 def test_filter_by_python_version_and_combination() -> None:
     """and 组合：两个条件都满足才保留."""
     pkgs = ["bar>=1.0; python_version >= '3.8' and python_version < '3.12'"]
-    assert _filter_by_python_version(pkgs, "3.10.11") == ["bar>=1.0"]
-    assert _filter_by_python_version(pkgs, "3.12.0") == []
+    host = _marker_host()
+    assert _filter_by_python_version(pkgs, "3.10.11", host_env=host) == ["bar>=1.0"]
+    assert _filter_by_python_version(pkgs, "3.12.0", host_env=host) == []
 
 
 def test_filter_by_python_version_or_combination() -> None:
     """or 组合：任一条件满足即保留."""
     pkgs = ["baz>=1.0; python_version < '3.9' or python_version >= '3.12'"]
-    assert _filter_by_python_version(pkgs, "3.8.10") == ["baz>=1.0"]
-    assert _filter_by_python_version(pkgs, "3.11.9") == []
-    assert _filter_by_python_version(pkgs, "3.12.0") == ["baz>=1.0"]
+    # 宿主 3.11：两个分支都不满足，目标为真时需剥离 marker
+    host = _marker_host(py_version="3.11.0")
+    assert _filter_by_python_version(pkgs, "3.8.10", host_env=host) == ["baz>=1.0"]
+    assert _filter_by_python_version(pkgs, "3.11.9", host_env=host) == []
+    assert _filter_by_python_version(pkgs, "3.12.0", host_env=host) == ["baz>=1.0"]
 
 
 def test_filter_by_python_version_empty_input() -> None:
     """空列表输入返回空列表."""
-    assert _filter_by_python_version([], "3.8.10") == []
+    assert _filter_by_python_version([], "3.8.10", host_env=_marker_host()) == []
 
 
 def test_filter_by_python_version_all_filtered() -> None:
     """所有依赖都被标记过滤时返回空列表."""
     pkgs = ["PySide6>=6.5.0; python_version >= '3.11'"]
-    assert _filter_by_python_version(pkgs, "3.8.10") == []
+    assert _filter_by_python_version(pkgs, "3.8.10", host_env=_marker_host()) == []
 
 
-# ---------- _eval_single_marker / _eval_python_version_marker ----------
+def test_filter_by_python_version_unknown_variable_kept() -> None:
+    """含未知变量的 marker 无法求值：保守保留原文."""
+    pkgs = ["foo>=1.0; platform_unused == 'x'"]
+    assert _filter_by_python_version(pkgs, "3.8.10", host_env=_marker_host()) == pkgs
 
 
-def test_eval_single_marker_ge() -> None:
-    py = (3, 8)
-    assert _eval_single_marker("python_version >= '3.8'", py) is True
-    assert _eval_single_marker("python_version >= '3.9'", py) is False
+def test_filter_by_python_version_invalid_marker_kept() -> None:
+    """语法非法的 marker：保守保留原文，交由 pip 报错."""
+    pkgs = ["foo>=1.0; python_version >="]
+    assert _filter_by_python_version(pkgs, "3.8.10", host_env=_marker_host()) == pkgs
 
 
-def test_eval_single_marker_le() -> None:
-    py = (3, 10)
-    assert _eval_single_marker("python_version <= '3.10'", py) is True
-    assert _eval_single_marker("python_version <= '3.9'", py) is False
+def test_build_marker_env_target_platform() -> None:
+    """目标平台环境按 platform_tags 构造，自由线程后缀剥离."""
+    win = _build_marker_env("3.13t", ("win_amd64",))
+    assert win["python_version"] == "3.13"
+    assert win["python_full_version"] == "3.13.0"
+    assert win["sys_platform"] == "win32"
+    assert win["platform_system"] == "Windows"
+    assert win["os_name"] == "nt"
+    linux = _build_marker_env("3.8.10", ("manylinux2014_x86_64",))
+    assert linux["sys_platform"] == "linux"
+    assert linux["python_full_version"] == "3.8.10"
 
 
-def test_eval_single_marker_lt_gt() -> None:
-    py = (3, 9)
-    assert _eval_single_marker("python_version < '3.10'", py) is True
-    assert _eval_single_marker("python_version > '3.8'", py) is True
-    assert _eval_single_marker("python_version < '3.9'", py) is False
-    assert _eval_single_marker("python_version > '3.9'", py) is False
+def test_eval_marker_version_ordering() -> None:
+    """版本变量按数值段比较（3.10 > 3.9），而非字符串序."""
+    env = _build_marker_env("3.10.11", ("win_amd64",))
+    assert _eval_marker("python_version > '3.9'", env) is True
+    assert _eval_marker("python_version < '3.9'", env) is False
+    assert _eval_marker("python_full_version >= '3.10.0'", env) is True
+    assert _eval_marker("python_version == '3.10'", env) is True
+    assert _eval_marker("python_version != '3.10'", env) is False
 
 
-def test_eval_single_marker_eq_ne() -> None:
-    py = (3, 11)
-    assert _eval_single_marker("python_version == '3.11'", py) is True
-    assert _eval_single_marker("python_version != '3.10'", py) is True
-    assert _eval_single_marker("python_version == '3.10'", py) is False
+def test_eval_marker_string_equality_and_in() -> None:
+    """非版本变量按字符串比较，支持 in/not in."""
+    env = _build_marker_env("3.12.0", ("win_amd64",))
+    assert _eval_marker('sys_platform == "win32"', env) is True
+    assert _eval_marker("sys_platform != 'linux'", env) is True
+    assert _eval_marker("os_name in 'nt posix'", env) is True
+    assert _eval_marker("os_name not in 'nt posix'", env) is False
+    assert _eval_marker("platform_system > 'A'", env) is True
 
 
-def test_eval_single_marker_non_python_returns_true() -> None:
-    """非 python_version 标记保守返回 True."""
-    assert _eval_single_marker("platform_system == 'Windows'", (3, 8)) is True
+def test_eval_marker_parentheses_and_case() -> None:
+    """括号与 and/or 大小写不敏感."""
+    env = _build_marker_env("3.12.0", ("win_amd64",))
+    marker = "(python_version >= '3.10' AND sys_platform == 'win32') OR python_version < '3.9'"
+    assert _eval_marker(marker, env) is True
 
 
-def test_eval_single_marker_double_quotes() -> None:
-    """双引号标记值也能匹配."""
-    assert _eval_single_marker('python_version >= "3.8"', (3, 9)) is True
+def test_eval_marker_non_numeric_version_falls_back_to_string() -> None:
+    """版本值非纯数字时回退字符串比较."""
+    env = _build_marker_env("3.12.0", ("win_amd64",))
+    assert _eval_marker("python_version == '3.x'", env) is False
 
 
-def test_eval_python_version_marker_and() -> None:
-    py = (3, 10)
-    assert _eval_python_version_marker("python_version >= '3.8' and python_version <= '3.10'", py) is True
-    assert _eval_python_version_marker("python_version >= '3.8' and python_version <= '3.9'", py) is False
-
-
-def test_eval_python_version_marker_or() -> None:
-    py = (3, 8)
-    assert _eval_python_version_marker("python_version < '3.9' or python_version >= '3.12'", py) is True
-    assert _eval_python_version_marker("python_version >= '3.9' or python_version >= '3.12'", py) is False
-
-
-def test_eval_python_version_marker_case_insensitive() -> None:
-    """and/or 大小写不敏感."""
-    py = (3, 10)
-    assert _eval_python_version_marker("python_version >= '3.8' AND python_version <= '3.10'", py) is True
-    assert _eval_python_version_marker("python_version < '3.8' OR python_version >= '3.12'", py) is False
-
-
-def test_eval_python_version_marker_non_python_returns_true() -> None:
-    """纯非 python_version 标记保守返回 True."""
-    assert _eval_python_version_marker("platform_system == 'Windows'", (3, 8)) is True
+def test_eval_marker_invalid_raises() -> None:
+    """非法表达式抛 ValueError（调用方保守保留）."""
+    env = _build_marker_env("3.12.0", ("win_amd64",))
+    for marker in (
+        "",
+        "python_version >= ",
+        "(python_version >= '3.8'",
+        "3.8 == python_version",
+        "python_version ~= '3.8'",
+        "extra",
+    ):
+        with pytest.raises(ValueError):
+            _eval_marker(marker, env)
 
 
 # ---------- _parse_missing_packages ----------

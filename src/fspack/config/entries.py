@@ -82,20 +82,22 @@ def _resolve_module_script(project_dir: Path, module_dotted: str) -> Path | None
     查找规则（按优先级尝试，首个命中即返回）：
 
     1. **flat layout**：在 ``project_dir`` 下查找
-       - 多段 ``a.b`` → ``<project>/a/b.py``
+       - 多段 ``a.b`` → ``<project>/a/b.py`` 或 ``<project>/a/b/__init__.py``
        - 单段 ``a`` → ``<project>/a.py`` 或 ``<project>/a/__main__.py``
     2. **src layout**：在 ``project_dir/src`` 下重复上述查找
 
     所有候选路径都不存在时返回 ``None``，由调用方决定报错或回退。
 
     单段 module 优先 ``a.py``（顶层脚本），再 ``a/__main__.py``（包入口），
-    与 :func:`detect_entry` 的优先级一致。
+    与 :func:`detect_entry` 的优先级一致；多段 module 优先 ``a/b.py``（模块），
+    再 ``a/b/__init__.py``（包级入口，支持 ``pkg.mod:func`` 形式的 console script）。
     """
     parts = module_dotted.split(".")
-    # 多段 → <...>/a/b.py；单段 → a.py 或 a/__main__.py
+    # 多段 → <...>/a/b.py 或 a/b/__init__.py；单段 → a.py 或 a/__main__.py
     rel_candidates: list[Path] = []
     if len(parts) >= 2:
         rel_candidates.append(Path(*parts).with_suffix(".py"))
+        rel_candidates.append(Path(*parts, "__init__.py"))
     else:
         first = parts[0]
         rel_candidates.append(Path(f"{first}.py"))

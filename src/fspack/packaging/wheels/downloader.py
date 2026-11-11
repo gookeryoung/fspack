@@ -121,9 +121,10 @@ def download_wheels(  # noqa: PLR0913
     网络查询；缓存不完整或条件依赖未满足（如 pypdf 的 ``typing_extensions`` marker）
     时回退到带 ``-i index`` 的完整下载。
 
-    预过滤 ``python_version`` 环境标记：``pip download --python-version`` 不评估
-    命令行参数中的 marker，需在调用前按目标 Python 版本过滤（如目标 3.8 时跳过
-    ``PySide6>=6.5.0; python_version >= '3.11'``）。
+    预过滤环境标记：``pip download --python-version`` 只用运行 pip 的解释器
+    求值 marker，需在调用前按目标 Python 版本与目标平台（``platform_tags``）
+    完整求值（如目标 3.8 时跳过 ``PySide6>=6.5.0; python_version >= '3.11'``，
+    Linux 目标跳过 ``pywin32; sys_platform == 'win32'``）。
 
     sdist 回退：``--only-binary=:all:`` 无法下载无 wheel 的包（如 odfpy 仅有 sdist），
     回退到 ``pip wheel --no-deps`` 从 sdist 构建纯 Python wheel 后重试。
@@ -159,7 +160,7 @@ def download_wheels(  # noqa: PLR0913
     cache_dir.mkdir(parents=True, exist_ok=True)
     pypi_index = pypi_index.strip(" \t\r\n`'\"")
 
-    filtered = _prefilter_by_python_version(packages, py_version)
+    filtered = _prefilter_by_python_version(packages, py_version, platform_tags)
     if not filtered:
         return []
 
@@ -224,9 +225,13 @@ def download_wheels(  # noqa: PLR0913
     return wheels
 
 
-def _prefilter_by_python_version(packages: tuple[str, ...] | list[str], py_version: str) -> list[str]:
-    """按目标 Python 版本过滤 ``python_version`` 环境标记，返回保留的包列表."""
-    filtered = _filter_by_python_version(packages, py_version)
+def _prefilter_by_python_version(
+    packages: tuple[str, ...] | list[str],
+    py_version: str,
+    platform_tags: Sequence[str] = (),
+) -> list[str]:
+    """按目标版本与目标平台的 marker 求值结果过滤依赖，返回保留的包列表."""
+    filtered = _filter_by_python_version(packages, py_version, platform_tags)
     if len(filtered) < len(packages):
         _logger.info("按 python_version 标记过滤: 保留 %d，跳过 %d 个", len(filtered), len(packages) - len(filtered))
     if not filtered:
@@ -640,12 +645,17 @@ def _parse_pip_download_wheels(stdout: str) -> list[str]:
             if name not in seen:
                 names.append(name)
                 seen.add(name)
-    success_match = _PIP_SUCCESS_LINE_RE.search(stdout)
-    if success_match and names:
+    # 并行下载时各 worker 的 stdout 拼接在一起，每个进程各有一行
+    # "Successfully downloaded ..."；必须取全部成功行的并集（findall），只取
+    # 首行会把最终包集合误缩成第一个 worker 的包（冷缓存下只装 1 个依赖的根因）
+    success_lines = _PIP_SUCCESS_LINE_RE.findall(stdout)
+    if success_lines and names:
         from fspack.packaging.site_packages import normalize_pkg_name
         from fspack.slim.spec import WheelInfo
 
-        final_pkgs = {normalize_pkg_name(n.strip()) for n in success_match.group(1).split()}
+        final_pkgs: set[str] = set()
+        for line in success_lines:
+            final_pkgs.update(normalize_pkg_name(n.strip()) for n in line.split())
         filtered: list[str] = []
         for name in names:
             info = WheelInfo.from_filename(name)
