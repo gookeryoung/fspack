@@ -1334,6 +1334,18 @@ def test_parallel_admission_uses_node_density(tmp_path: Path, monkeypatch: pytes
     assert errors[0][0] == str(paths[-1])
 
 
+def test_estimate_serial_seconds_tolerates_unparseable_samples(tmp_path: Path) -> None:
+    """样本全部不可解析时返回 0（回退串行），部分失败按剩余样本外推."""
+    from fspack.analyzer import analysis
+
+    broken = tmp_path / "broken.py"
+    broken.write_bytes(b"def f(:\n")
+    assert analysis._estimate_serial_seconds([broken], 4096) == 0.0
+    good = tmp_path / "good.py"
+    good.write_text("def f(x):\n    return x\n", encoding="utf-8")
+    assert analysis._estimate_serial_seconds([broken, good], 8192) > 0
+
+
 def test_admission_excludes_qml_and_data_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """大 QML/被排除的源码不得计入并行工作量（文件数与采样都只看 .py）."""
     from fspack.analyzer import analysis
