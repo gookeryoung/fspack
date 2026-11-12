@@ -208,7 +208,7 @@ def test_enforce_win7_loaders_ok(tmp_path: Path) -> None:
 
 
 def _cache_file(dist: Path) -> Path:
-    return dist / "build" / "win7scan.json"
+    return dist / "build" / "action-win7scan.json"
 
 
 def test_scan_second_run_reuses_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -299,7 +299,7 @@ def test_enforce_win7_loaders_caches_pass(tmp_path: Path, monkeypatch: pytest.Mo
     exe = _write_pe(tmp_path / "cli.exe")
     cache_dir = tmp_path / "build"
     enforce_win7_loaders([exe], cache_dir=cache_dir)
-    assert (cache_dir / "win7loaders.json").is_file()
+    assert (cache_dir / "action-win7loaders.json").is_file()
 
     def boom(*args: object, **kwargs: object) -> object:
         raise AssertionError("缓存命中时不应重新解析 loader")
@@ -317,8 +317,8 @@ def test_enforce_win7_loaders_failure_not_cached(tmp_path: Path) -> None:
     for _ in range(2):
         with pytest.raises(Win7ScanError, match="CopyFile2"):
             enforce_win7_loaders([exe], cache_dir=cache_dir)
-    payload_path = cache_dir / "win7loaders.json"
-    assert not payload_path.exists() or json.loads(payload_path.read_text(encoding="utf-8"))["files"] == {}
+    payload_path = cache_dir / "action-win7loaders.json"
+    assert not payload_path.exists() or json.loads(payload_path.read_text(encoding="utf-8"))["payload"]["files"] == {}
 
 
 def test_enforce_win7_loaders_recompiled_invalidates(tmp_path: Path) -> None:

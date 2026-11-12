@@ -243,7 +243,7 @@ def test_ensure_ico_second_call_reuses_cached_ico(tmp_path: Path, monkeypatch: p
     work = tmp_path / "work"
     first = ensure_ico(src, work)
     assert first is not None
-    assert (work / "icon.ico.meta.json").is_file()
+    assert (work / "action-icon.json").is_file()
 
     calls: list[Path] = []
     real_convert = icon_module._convert_image_to_ico
@@ -283,12 +283,12 @@ def test_ensure_ico_corrupt_meta_reconverts(tmp_path: Path) -> None:
     Image.new("RGBA", (32, 32)).save(src, format="PNG")
     work = tmp_path / "work"
     assert ensure_ico(src, work) is not None
-    (work / "icon.ico.meta.json").write_text("{not json", encoding="utf-8")
+    (work / "action-icon.json").write_text("{not json", encoding="utf-8")
     (work / "icon.ico").unlink()
     result = ensure_ico(src, work)
     assert result is not None
     assert result.is_file()
-    assert '"sha1"' in (work / "icon.ico.meta.json").read_text(encoding="utf-8")
+    assert '"version"' in (work / "action-icon.json").read_text(encoding="utf-8")
 
 
 @_skip_no_pil

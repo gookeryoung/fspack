@@ -183,8 +183,14 @@ def test_rewrite_embed_stdlib_zip_idempotent(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# embed zip 精简标记（.slim.json）：命中免重扫 / zip 变化、切档位、标记损坏失效
+# embed zip 精简标记（dist/build/action-slim-embed.json）：命中免重扫 /
+# zip 变化、切档位、标记损坏失效
 # ---------------------------------------------------------------------------
+
+
+def _slim_marker(runtime: Path) -> Path:
+    """精简标记固定写在 build 目录（不能落在 runtime 里混进产物）."""
+    return runtime.parent / "build" / "action-slim-embed.json"
 
 
 def test_slim_marker_skips_second_scan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -195,7 +201,9 @@ def test_slim_marker_skips_second_scan(tmp_path: Path, monkeypatch: pytest.Monke
     _make_embed_zip(runtime, {"pydoc_data/topics.pyc": b"x" * 100, "os.pyc": b"os"})
     st1 = StageRecorder("精简标准库")
     trim_mod._rewrite_embed_stdlib_zip(runtime, "3.11.9", st1)
-    assert (runtime / "python311.zip.slim.json").is_file()
+    assert _slim_marker(runtime).is_file()
+    # 回归守卫：标记不得出现在 runtime（会被打进安装包）
+    assert not list(runtime.glob("*.slim.json"))
 
     real_zipfile = trim_mod.zipfile.ZipFile
 
@@ -246,15 +254,15 @@ def test_slim_marker_corrupt_rechecks(tmp_path: Path) -> None:
     runtime = tmp_path / "runtime"
     _make_embed_zip(runtime, {"os.pyc": b"os"})
     _rewrite_embed_stdlib_zip(runtime, "3.11.9", StageRecorder("精简标准库"))
-    (runtime / "python311.zip.slim.json").write_text("{bad", encoding="utf-8")
+    _slim_marker(runtime).write_text("{bad", encoding="utf-8")
     st = StageRecorder("精简标准库")
     _rewrite_embed_stdlib_zip(runtime, "3.11.9", st)
     assert st._finalize().detail == "已精简，跳过"
-    assert '"version"' in (runtime / "python311.zip.slim.json").read_text(encoding="utf-8")
+    assert '"version"' in _slim_marker(runtime).read_text(encoding="utf-8")
 
 
-def test_slim_marker_blacklist_digest_mismatch_rechecks(tmp_path: Path) -> None:
-    """剥离清单指纹变化（清单调整）时旧标记失效."""
+def test_slim_marker_key_mismatch_rechecks(tmp_path: Path) -> None:
+    """标记键变化（清单/档位/zip 指纹调整）时旧标记失效."""
     import json
 
     from fspack.packaging.runtime.trim import _rewrite_embed_stdlib_zip
@@ -262,14 +270,27 @@ def test_slim_marker_blacklist_digest_mismatch_rechecks(tmp_path: Path) -> None:
     runtime = tmp_path / "runtime"
     _make_embed_zip(runtime, {"pydoc_data/topics.pyc": b"x" * 100, "os.pyc": b"os"})
     _rewrite_embed_stdlib_zip(runtime, "3.11.9", StageRecorder("精简标准库"))
-    marker = runtime / "python311.zip.slim.json"
+    marker = _slim_marker(runtime)
     payload = json.loads(marker.read_text(encoding="utf-8"))
-    payload["blacklist"] = "stale"
+    payload["key"] = "stale"
     marker.write_text(json.dumps(payload), encoding="utf-8")
     st = StageRecorder("精简标准库")
     _rewrite_embed_stdlib_zip(runtime, "3.11.9", st)
     assert st._finalize().detail == "已精简，跳过"
-    assert json.loads(marker.read_text(encoding="utf-8"))["blacklist"] != "stale"
+    assert json.loads(marker.read_text(encoding="utf-8"))["key"] != "stale"
+
+
+def test_slim_marker_legacy_file_removed(tmp_path: Path) -> None:
+    """旧版标记（zip 旁 .slim.json）在下次构建时被清掉，避免随安装包发布."""
+    from fspack.packaging.runtime.trim import _rewrite_embed_stdlib_zip
+
+    runtime = tmp_path / "runtime"
+    _make_embed_zip(runtime, {"os.pyc": b"os"})
+    legacy = runtime / "python311.zip.slim.json"
+    legacy.write_text("{}", encoding="utf-8")
+    _rewrite_embed_stdlib_zip(runtime, "3.11.9", StageRecorder("精简标准库"))
+    assert not legacy.exists()
+    assert _slim_marker(runtime).is_file()
 
 
 def test_rewrite_embed_stdlib_zip_bad_zip_warns(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:

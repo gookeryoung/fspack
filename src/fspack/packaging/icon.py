@@ -19,10 +19,11 @@ Pillow 作为 optional 依赖 ``fspack[image]`` 提供，未安装时不影响 `
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import os
 from pathlib import Path
+
+from fspack.packaging import action_cache
 
 __all__ = ["SUPPORTED_IMAGE_EXTS", "ensure_ico", "find_favicon"]
 
@@ -43,8 +44,9 @@ _FAVICON_EXTS: tuple[str, ...] = (
 # 对外暴露：支持的图片扩展名集合（用于文档/校验）
 SUPPORTED_IMAGE_EXTS: frozenset[str] = frozenset(_FAVICON_EXTS)
 
-# icon 转换缓存元数据版本：转换参数（尺寸档位/PNG 编码）变化时递增使旧缓存失效
-_ICO_CACHE_VERSION = 1
+# icon 转换缓存名（标记版本由 :mod:`fspack.packaging.action_cache` 统一管理；
+# 转换参数——尺寸档位/PNG 编码——变化时提升该模块版本号使旧缓存失效）
+_ICON_CACHE_NAME = "icon"
 
 # favicon 搜索时排除的目录名（避免扫描构建产物/虚拟环境/IDE 配置等）
 _FAVICON_SKIP_DIRS: frozenset[str] = frozenset(
@@ -136,10 +138,14 @@ def ensure_ico(src: Path, work_dir: Path) -> Path | None:
     work_dir.mkdir(parents=True, exist_ok=True)
     dst = work_dir / "icon.ico"
     digest = _source_digest(src)
-    if digest is not None and _ico_cache_hit(work_dir, dst, src, digest):
-        return dst
+    key = action_cache.fingerprint("icon-ico", src.name, digest) if digest is not None else None
+    if key is not None:
+        rec = action_cache.load(work_dir, _ICON_CACHE_NAME)
+        if rec is not None and rec["key"] == key and dst.is_file() and dst.stat().st_size > 0:
+            return dst
     if _convert_image_to_ico(src, dst):
-        _write_ico_cache(work_dir, src, digest)
+        if key is not None:
+            action_cache.save(work_dir, _ICON_CACHE_NAME, key)
         return dst
     return None
 
@@ -150,44 +156,6 @@ def _source_digest(src: Path) -> str | None:
         return hashlib.sha1(src.read_bytes()).hexdigest()
     except OSError:
         return None
-
-
-def _ico_cache_path(work_dir: Path) -> Path:
-    """icon 转换缓存元数据文件路径（与 ``icon.ico`` 同目录）."""
-    return work_dir / "icon.ico.meta.json"
-
-
-def _ico_cache_hit(work_dir: Path, dst: Path, src: Path, digest: str) -> bool:
-    """判定缓存元数据是否与源文件一致且产物存在.
-
-    元数据含转换器版本、源文件名与源内容 sha1；任一不符或元数据损坏
-    （非 JSON/字段缺失）均视为未命中，走重新转换。
-    """
-    if not dst.is_file() or dst.stat().st_size == 0:
-        return False
-    try:
-        meta = json.loads(_ico_cache_path(work_dir).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return False
-    return (
-        isinstance(meta, dict)
-        and meta.get("version") == _ICO_CACHE_VERSION
-        and meta.get("sha1") == digest
-        and meta.get("name") == src.name
-    )
-
-
-def _write_ico_cache(work_dir: Path, src: Path, digest: str | None) -> None:
-    """写入 icon 转换缓存元数据（失败仅告警，不影响本次构建）."""
-    if digest is None:
-        return
-    try:
-        _ico_cache_path(work_dir).write_text(
-            json.dumps({"version": _ICO_CACHE_VERSION, "name": src.name, "sha1": digest}),
-            encoding="utf-8",
-        )
-    except OSError as e:
-        _logger.warning("写入 icon 缓存元数据失败（不影响构建）: %s", e)
 
 
 def _convert_image_to_ico(src: Path, dst: Path) -> bool:

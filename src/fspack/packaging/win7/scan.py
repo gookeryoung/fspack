@@ -32,7 +32,6 @@ api-ms-win-crt-* 依赖提示（Win7 SP1 需 KB2999226 UCRT）。
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import shutil
@@ -42,6 +41,7 @@ from pathlib import Path
 from typing import cast
 
 from fspack.exceptions import FspackError
+from fspack.packaging import action_cache
 from fspack.packaging.win7.check import (
     PeParseError,
     Win7ApiViolation,
@@ -74,8 +74,9 @@ REPORT_FILENAME = "win7-compat-report.txt"
 
 # 扫描结果增量缓存：dist/build/ 下（build 是编译中间产物目录，不参与扫描，
 # 也不会被 NSIS 打进安装包）。缓存键为 (相对路径, size, mtime_ns)。
-_SCAN_CACHE_NAME = "win7scan.json"
-_LOADER_CACHE_NAME = "win7loaders.json"
+_SCAN_CACHE_NAME = "win7scan"
+_LOADER_CACHE_NAME = "win7loaders"
+# 检查语义版本：PE 解析/API 判定逻辑变化时递增，旧条目整体失效
 _SCAN_CACHE_VERSION = 1
 
 
@@ -167,17 +168,12 @@ def _shim_signature(shim: Path | None) -> str:
 
 
 def _load_cache(cache_dir: Path, name: str, signature: str) -> dict[str, dict[str, object]]:
-    """读取 cache_dir 下的增量缓存；版本/shim 签名不符或损坏时返回空表."""
-    path = cache_dir / name
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    """读取 cache_dir 下的增量缓存；键（shim 签名）不符或损坏时返回空表."""
+    rec = action_cache.load(cache_dir, name, version=_SCAN_CACHE_VERSION)
+    if rec is None or rec["key"] != signature:
         return {}
-    if not isinstance(payload, dict):
-        return {}
-    if payload.get("version") != _SCAN_CACHE_VERSION or payload.get("shim") != signature:
-        return {}
-    entries = payload.get("files")
+    payload = rec.get("payload")
+    entries = payload.get("files") if isinstance(payload, dict) else None
     if not isinstance(entries, dict):
         return {}
     return {k: v for k, v in entries.items() if isinstance(k, str) and isinstance(v, dict)}
@@ -185,18 +181,7 @@ def _load_cache(cache_dir: Path, name: str, signature: str) -> dict[str, dict[st
 
 def _save_cache(cache_dir: Path, name: str, signature: str, entries: dict[str, dict[str, object]]) -> None:
     """写入增量缓存（失败仅告警，不阻断构建）."""
-    try:
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        (cache_dir / name).write_text(
-            json.dumps(
-                {"version": _SCAN_CACHE_VERSION, "shim": signature, "files": entries},
-                ensure_ascii=False,
-                sort_keys=True,
-            ),
-            encoding="utf-8",
-        )
-    except OSError as e:
-        _logger.warning("写入 Win7 缓存失败（不影响构建）: %s", e)
+    action_cache.save(cache_dir, name, signature, payload={"files": entries})
 
 
 def _cache_key(path: Path) -> str:
