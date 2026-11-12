@@ -362,8 +362,8 @@ def test_parallel_spawn_ok_guard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr(analysis, "_parse_serial", spy_serial)
     monkeypatch.setattr(analysis, "_parse_parallel", spy_parallel)
-    monkeypatch.setattr(analysis, "_PARALLEL_THRESHOLD", 1)
-    monkeypatch.setattr(analysis, "_PARALLEL_MIN_BYTES", 0)
+    monkeypatch.setattr(analysis, "_PARALLEL_MIN_FILES", 1)
+    monkeypatch.setattr(analysis, "_PARALLEL_MIN_ESTIMATED", 0.0)
     r = analyze_dependencies(tmp_path, "main", ())
     assert calls == ["serial"]
     assert "os" in r.ast_stdlib
@@ -468,11 +468,11 @@ def test_analyze_dependencies_parallel_matches_serial(tmp_path: Path, monkeypatc
         (directory / "ignored.py").write_text("import ignored_dep\n", encoding="utf-8")
         (directory / "Ignored.qml").write_text("import QtCharts 2.15\n", encoding="utf-8")
 
-    monkeypatch.setattr(analysis, "_PARALLEL_THRESHOLD", 10000)
+    monkeypatch.setattr(analysis, "_PARALLEL_MIN_FILES", 10000)
     serial = analyze_dependencies(tmp_path, "main", (), data_dirs=("assets",))
 
-    monkeypatch.setattr(analysis, "_PARALLEL_THRESHOLD", 2)
-    monkeypatch.setattr(analysis, "_PARALLEL_MIN_BYTES", 0)
+    monkeypatch.setattr(analysis, "_PARALLEL_MIN_FILES", 2)
+    monkeypatch.setattr(analysis, "_PARALLEL_MIN_ESTIMATED", 0.0)
     parallel = analyze_dependencies(tmp_path, "main", (), data_dirs=("assets",))
 
     assert serial == parallel
@@ -748,8 +748,8 @@ def test_analyze_dependencies_parallel_records_ast_errors(tmp_path: Path, monkey
     # 错误聚合用同步执行桩覆盖，真 spawn 已由功能等价测试覆盖
     monkeypatch.setattr(analysis, "ProcessPoolExecutor", _InlineExecutor)
     monkeypatch.setattr(analysis, "as_completed", _fake_as_completed)
-    monkeypatch.setattr(analysis, "_PARALLEL_THRESHOLD", 1)
-    monkeypatch.setattr(analysis, "_PARALLEL_MIN_BYTES", 0)
+    monkeypatch.setattr(analysis, "_PARALLEL_MIN_FILES", 1)
+    monkeypatch.setattr(analysis, "_PARALLEL_MIN_ESTIMATED", 0.0)
     r = analyze_dependencies(tmp_path, "good", ())
     assert "os" in r.ast_stdlib
     assert len(r.ast_errors) == 1
@@ -1173,8 +1173,8 @@ def test_parse_parallel_batches_are_deterministic(tmp_path: Path, monkeypatch: p
     pool = _InlineExecutor()
     monkeypatch.setattr(analysis, "ProcessPoolExecutor", lambda **kwargs: pool)
     monkeypatch.setattr(analysis, "as_completed", lambda futures, timeout=None: reversed(list(futures)))
-    monkeypatch.setattr(analysis, "_PARALLEL_THRESHOLD", 1)
-    monkeypatch.setattr(analysis, "_PARALLEL_MIN_BYTES", 0)
+    monkeypatch.setattr(analysis, "_PARALLEL_MIN_FILES", 1)
+    monkeypatch.setattr(analysis, "_PARALLEL_MIN_ESTIMATED", 0.0)
     for _ in range(2):
         parallel = analyze_dependencies(tmp_path, "main", ())
         assert parallel == serial
@@ -1279,7 +1279,7 @@ def test_parse_parallel_partial_timeout_aggregates_completed_results(
 
 @pytest.mark.parametrize("count", [199, 200, 500])
 def test_small_projects_never_start_pool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, count: int) -> None:
-    """旧 200 文件断崖附近的小文件不启动进程池，也不逐文件 stat."""
+    """文件数下限附近的小文件不启动进程池；低于下限时也不逐文件 stat."""
     from fspack.analyzer import analysis
 
     for i in range(count):
@@ -1293,6 +1293,8 @@ def test_small_projects_never_start_pool(tmp_path: Path, monkeypatch: pytest.Mon
     assert result.ast_third_party == ("numpy",)
     assert result.ast_stdlib == ("os",)
     assert result.ast_errors == ()
+    if count >= analysis._PARALLEL_MIN_FILES:
+        return
 
     def no_stat(path: Path, **kwargs: object) -> None:
         pytest.fail("file-count guard should avoid stat")
@@ -1301,30 +1303,39 @@ def test_small_projects_never_start_pool(tmp_path: Path, monkeypatch: pytest.Mon
     assert not analysis._parallel_workload_ok([tmp_path / "small.py"] * count)
 
 
-def test_parallel_admission_uses_actual_bytes(tmp_path: Path) -> None:
-    """真实磁盘大小：两门槛均含等号；同文件数改变大小必须改变决策."""
+def test_parallel_admission_uses_node_density(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """同一文件数下按预估串行成本决策：注释密集不并行、代码密集并行.
+
+    只按字节数决策会把"字节多但解析便宜"的注释密集源码误判成并行候选
+    （实测 1268 文件 / 13 MiB 串行 0.49s、4 worker 0.71s），故用节点密度外推。
+    """
     from fspack.analyzer import analysis
 
-    paths = [tmp_path / f"mod_{i:04d}.py" for i in range(analysis._PARALLEL_THRESHOLD)]
+    comment = tmp_path / "comment.py"
+    comment.write_text("def f(x):\n    return x\n" + "# pad line\n" * 2000, encoding="utf-8")
+    code = tmp_path / "code.py"
+    code.write_text("def f(x):\n    return x + 1\n\n" * 200, encoding="utf-8")
+
+    est_comment = analysis._estimate_serial_seconds([comment], comment.stat().st_size)
+    est_code = analysis._estimate_serial_seconds([code], code.stat().st_size)
+    assert est_comment < 0.001  # 注释密集：字节多、节点少
+    assert est_code > est_comment * 10
+
+    paths = [tmp_path / f"mod_{i:04d}.py" for i in range(analysis._PARALLEL_MIN_FILES)]
     for path in paths:
-        path.write_bytes(b"")
-    assert not analysis._parallel_workload_ok(paths)
-    paths[0].write_bytes(b"#" * (analysis._PARALLEL_MIN_BYTES - 1))
-    assert not analysis._parallel_workload_ok(paths)
-    paths[0].write_bytes(b"#" * analysis._PARALLEL_MIN_BYTES)
+        path.write_text("def f(x):\n    return x\n", encoding="utf-8")
+    monkeypatch.setattr(analysis, "_PARALLEL_MIN_ESTIMATED", 0.0)
     assert analysis._parallel_workload_ok(paths)
-    assert not analysis._parallel_workload_ok(paths[:-1])
-    paths[0].write_bytes(b"#" * (analysis._PARALLEL_MIN_BYTES + 1))
-    assert analysis._parallel_workload_ok(paths)
+    assert not analysis._parallel_workload_ok(paths[:-1])  # 文件数下限
     paths[-1].unlink()
-    assert not analysis._parallel_workload_ok(paths)  # stat 竞态回退而非吞掉文件
+    assert not analysis._parallel_workload_ok(paths)  # stat 竞态回退串行
     errors: list[tuple[str, str]] = []
     analysis._parse_serial([paths[-1]], {}, {}, {}, errors)
     assert errors[0][0] == str(paths[-1])
 
 
 def test_admission_excludes_qml_and_data_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """大 QML/被排除的源码不得计入并行工作量."""
+    """大 QML/被排除的源码不得计入并行工作量（文件数与采样都只看 .py）."""
     from fspack.analyzer import analysis
 
     for i in range(2):
@@ -1334,8 +1345,8 @@ def test_admission_excludes_qml_and_data_bytes(tmp_path: Path, monkeypatch: pyte
         directory = tmp_path / name
         directory.mkdir()
         (directory / "ignored.py").write_bytes(b"import ignored_dep\n" + b"#" * 4096)
-    monkeypatch.setattr(analysis, "_PARALLEL_THRESHOLD", 2)
-    monkeypatch.setattr(analysis, "_PARALLEL_MIN_BYTES", 4096)
+    monkeypatch.setattr(analysis, "_PARALLEL_MIN_FILES", 3)
+    monkeypatch.setattr(analysis, "_PARALLEL_MIN_ESTIMATED", 0.0)
 
     def no_pool(**kwargs: object) -> None:
         pytest.fail("excluded/QML bytes incorrectly admitted to pool")

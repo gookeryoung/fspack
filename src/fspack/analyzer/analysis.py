@@ -77,9 +77,10 @@ def analyze_dependencies(  # noqa: PLR0912 - 分支多是分类与异常处理�
     不应被 AST 扫描误判为项目依赖（如 fspack 打包自身时，``assets/init_templates``
     下的 tkinter 模板不应让 fspack 依赖 tkinter）。
 
-    仅当 Python 文件数和总输入字节数均达到保守阈值时才启用进程池。
-    字节数只是 AST 工作量的粗略代理，不保证任意源码都能提速；小文件项目
-    保持串行，避免 Windows spawn 启动和 IPC 开销超过解析本身。
+    是否并行由"预计串行解析成本"决定（见 :func:`_parallel_workload_ok`）：
+    文件数与采样得到的 AST 节点密度共同估算串行成本，只有预估能省下明显
+    时间时才启用进程池。注释密集型源码字节多但解析便宜（实测 1268 文件 /
+    13 MiB 串行 0.49s，4 worker 反而 0.71s），单看字节数会误判。
 
     QML 文件（``.qml``）中的 ``import QtXxx`` 语句会被解析并映射为 Qt 子模块名
     （如 ``QtQuick`` → ``Quick``），加入对应 Qt 绑定包（PySide2/PySide6/PyQt5/PyQt6）
@@ -178,30 +179,67 @@ def _format_ast_errors(src_dir: Path, errors: list[tuple[str, str]]) -> list[str
     return formatted
 
 
-# 并行门槛与 worker 上限（24 逻辑核 Windows 实测，1000 文件 / 8 MiB）：
-# 200-500 个小文件的解析仅数十 ms，进程池 spawn 成本远超收益，故文件数与
-# 输入字节数双门槛都要满足才放行。worker 上限取 4：同一批文件按解析密度
-# 测得 1/4/8/12/24 worker 的耗时呈"注释密集型 213/265/435/531/513ms、
-# 代码密集型 2485/831/621/644/671ms"两种相反走向——低 worker 对易解析大
-# 项目更稳，高 worker 只难解析项目多赚约 25%，取中间值 4。
-_PARALLEL_THRESHOLD = 1000
-_PARALLEL_MIN_BYTES = 8 * 1024 * 1024
+# 并行门槛（24 逻辑核 Windows 实测标定）：
+# 决定因素是"预计串行解析时间"，而非单纯的文件数或字节数。同一批文件上有
+# 两种相反走向的负载：
+#   * 代码密集（≈187 AST 节点/KiB）：512/848/1268 文件串行 0.70/1.19/1.70s，
+#     4 worker 0.63/0.78/0.98s（1.1×/1.5×/1.7×，节省 0.07/0.41/0.72s）；
+#   * 注释密集（≈20-41 节点/KiB）：1268 文件 6.1/13.2 MiB 串行 0.49s，
+#     4 worker 0.70s——解析便宜且被 Defender 串行化，进程池纯亏 0.2s。
+# 单看字节数会把后者误判为"大工程"（13 MiB 注释 >> 9 MiB 代码），故用等距
+# 采样 8 个文件的节点密度外推串行成本，超过 _PARALLEL_MIN_ESTIMATED 才并行：
+# 按实测拟合（并行 ≈ 0.39×串行 + 0.31s 固定开销）该门槛意为"预计至少省 0.15s"。
+# worker 上限取 4：1/4/8/12/24 worker 实测 4 最稳（2 个场景 1.1×-1.7×，8 已回退）。
+_PARALLEL_MIN_FILES = 200
+_PARALLEL_SAMPLE_FILES = 8
+_PARALLEL_SECONDS_PER_NODE = 0.9e-6
+_PARALLEL_MIN_ESTIMATED = 0.75
 _MAX_PARSE_WORKERS = 4
 _PARSE_BATCH_SIZE = 16
 
 
-def _parallel_workload_ok(py_files: list[Path]) -> bool:
-    """仅统计排除后的 Python 输入；小项目不增加逐文件 stat 开销.
+def _estimate_serial_seconds(py_files: list[Path], total_bytes: int) -> float:
+    """用等距样本的 AST 节点密度外推整棵源码树的串行解析成本（秒）.
 
-    枚举后文件消失/无权限时回退串行，让读取阶段照常记录 AST 错误，
-    不把未知大小当作达到并行阈值。字节数采用磁盘实际大小（含编码/换行）。
+    采样 ``_PARALLEL_SAMPLE_FILES`` 个文件解析并统计 AST 节点数，按
+    "样本节点密度 × 总字节 × 每节点成本"外推。每节点成本取含读入的保守
+    上界（实测代码密集 0.92-0.96 µs/节点）。注释密集型源码密度低一个数量级
+    （20-41 vs 187 节点/KiB），外推值自然落在门槛以下，不会被大字节数误导。
+
+    采样读入的是稍后仍会被串行/并行路径重读的文件；8 个文件的额外读入与
+    解析（约 5-10ms）相对进程池启动成本可忽略。样本解析失败（语法错误、
+    无权限、竞态删除）按零节点计，全样本失败则返回 0 → 回退串行。
     """
-    if len(py_files) < _PARALLEL_THRESHOLD:
+    step = max(1, len(py_files) // _PARALLEL_SAMPLE_FILES)
+    sample_bytes = 0
+    sample_nodes = 0
+    for py in py_files[::step][:_PARALLEL_SAMPLE_FILES]:
+        try:
+            data = py.read_bytes()
+            tree = ast.parse(data)
+        except (SyntaxError, OSError, ValueError, RecursionError, MemoryError):
+            continue
+        sample_bytes += len(data)
+        sample_nodes += sum(1 for _ in ast.walk(tree))
+    if not sample_bytes:
+        return 0.0
+    return sample_nodes / sample_bytes * total_bytes * _PARALLEL_SECONDS_PER_NODE
+
+
+def _parallel_workload_ok(py_files: list[Path]) -> bool:
+    """文件数达下限且预估串行解析成本达门槛时才放行进程池.
+
+    只统计排除后的 Python 输入；文件数不足直接返回，不增加逐文件 stat
+    与采样读入开销。枚举后文件消失/无权限时回退串行，让读取阶段照常记录
+    AST 错误，不把未知大小当作达到门槛。字节数采用磁盘实际大小（含编码/换行）。
+    """
+    if len(py_files) < _PARALLEL_MIN_FILES:
         return False
     try:
-        return sum(py.stat().st_size for py in py_files) >= _PARALLEL_MIN_BYTES
+        total_bytes = sum(py.stat().st_size for py in py_files)
     except OSError:
         return False
+    return _estimate_serial_seconds(py_files, total_bytes) >= _PARALLEL_MIN_ESTIMATED
 
 
 def _parallel_spawn_ok() -> bool:

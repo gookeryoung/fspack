@@ -243,7 +243,7 @@ class TestAstSchedulingBaseline:
         src, count, total_bytes = ast_scheduling_project
         assert not analysis._parallel_workload_ok(sorted(src.glob("*.py")))
         if mode == "serial":
-            monkeypatch.setattr(analysis, "_PARALLEL_THRESHOLD", count + 1)
+            monkeypatch.setattr(analysis, "_PARALLEL_MIN_FILES", count + 1)
         benchmark.extra_info.update(files=count, input_bytes=total_bytes, mode=mode)
         result = benchmark.pedantic(analyze_dependencies, args=(src, "myproj", ()), rounds=5, iterations=1)
         assert result.ast_third_party == ("numpy", "requests", "PySide2")
@@ -265,7 +265,7 @@ class TestAstSchedulingBaseline:
         src, count, total_bytes = ast_scheduling_project
         assert analysis._parallel_workload_ok(sorted(src.glob("*.py")))
         if mode == "serial":
-            monkeypatch.setattr(analysis, "_PARALLEL_THRESHOLD", count + 1)
+            monkeypatch.setattr(analysis, "_PARALLEL_MIN_FILES", count + 1)
         benchmark.extra_info.update(files=count, input_bytes=total_bytes, mode=mode)
         result = benchmark.pedantic(analyze_dependencies, args=(src, "myproj", ()), rounds=3, iterations=1)
         assert result.ast_third_party == ("numpy", "requests", "PySide2")

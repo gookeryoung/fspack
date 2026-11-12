@@ -16,7 +16,7 @@ QML 扫描）位于 :mod:`fspack.analyzer.analysis`；worker 函数
 from __future__ import annotations
 
 from fspack.analyzer.analysis import (  # noqa: F401 — facade re-export（测试/内部引用兼容面）
-    _PARALLEL_THRESHOLD,
+    _PARALLEL_MIN_FILES,
     _PARSE_TOTAL_TIMEOUT,
     _WORKER_STATE,
     _format_ast_errors,
