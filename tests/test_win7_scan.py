@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -199,6 +200,91 @@ def test_enforce_win7_loaders_ok(tmp_path: Path) -> None:
     """Win7 干净的 loader exe 全部通过（含缓存命中复检场景）."""
     exes = [_write_pe(tmp_path / f"{name}.exe") for name in ("cli", "gui")]
     enforce_win7_loaders(exes)
+
+
+# ---------------------------------------------------------------------------
+# scan_dist_win7 增量缓存：命中复用、文件替换失效、缓存损坏/版本不符、shim 失效
+# ---------------------------------------------------------------------------
+
+
+def _cache_file(dist: Path) -> Path:
+    return dist / "build" / "win7scan.json"
+
+
+def test_scan_second_run_reuses_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """文件未变时第二次扫描复用缓存结果，不再解析 PE."""
+    from fspack.packaging.win7 import scan as scan_mod
+
+    _write_pe(tmp_path / "app.exe")
+    _write_pe(tmp_path / "site-packages" / "_rust.pyd", _BAD_IMPORTS)
+    first = scan_dist_win7(tmp_path)
+    assert _cache_file(tmp_path).is_file()
+
+    def boom(*args: object, **kwargs: object) -> object:
+        raise AssertionError("缓存命中时不应重新解析 PE")
+
+    monkeypatch.setattr(scan_mod, "check_win7_imports", boom)
+    second = scan_dist_win7(tmp_path)
+
+    assert second.scanned == first.scanned == 2
+    assert [v.target for v in second.violations[0].violations] == ["KERNEL32.dll!CopyFile2"]
+    assert second.violations[0].path == tmp_path / "site-packages" / "_rust.pyd"
+    assert second.shim_files == first.shim_files
+    assert second.ucrt_files == first.ucrt_files
+
+
+def test_scan_replaced_file_invalidates_cache(tmp_path: Path) -> None:
+    """被替换的 DLL（size/mtime 变化）必须重扫，不能沿用旧的“通过”结论."""
+    _write_pe(tmp_path / "runtime" / "python311.dll")
+    assert scan_dist_win7(tmp_path).ok
+
+    _write_pe(tmp_path / "runtime" / "python311.dll", _BAD_IMPORTS)
+    report = scan_dist_win7(tmp_path)
+    assert not report.ok
+    assert [v.target for v in report.violations[0].violations] == ["KERNEL32.dll!CopyFile2"]
+
+
+def test_scan_corrupt_cache_falls_back_to_full_scan(tmp_path: Path) -> None:
+    """缓存文件损坏（非 JSON）时按全量扫描处理."""
+    _write_pe(tmp_path / "app.exe")
+    assert scan_dist_win7(tmp_path).scanned == 1
+    _cache_file(tmp_path).write_text("{broken", encoding="utf-8")
+    assert scan_dist_win7(tmp_path).scanned == 1
+
+
+def test_scan_cache_version_mismatch_falls_back(tmp_path: Path) -> None:
+    """缓存版本升级后旧条目全部失效（检查语义可能已变化）."""
+    import json
+
+    _write_pe(tmp_path / "app.exe")
+    assert scan_dist_win7(tmp_path).scanned == 1
+    payload = json.loads(_cache_file(tmp_path).read_text(encoding="utf-8"))
+    payload["version"] = 0
+    _cache_file(tmp_path).write_text(json.dumps(payload), encoding="utf-8")
+    assert scan_dist_win7(tmp_path).scanned == 1
+
+
+def test_scan_shim_signature_change_invalidates_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """shim 文件变化（路径/size/mtime）使整张缓存失效，避免沿用旧覆盖校验结论."""
+    from fspack.packaging.win7 import scan as scan_mod
+
+    shim = tmp_path / "shim.dll"
+    shim.write_bytes(_build_pe(exports=[_SHIM_EXPORTED]))
+    dist = tmp_path / "dist"
+    _write_pe(dist / "python311.dll", {"api-ms-win-core-path-l1-1-0.dll": [_SHIM_EXPORTED]})
+    assert scan_dist_win7(dist, shim=shim).ok
+
+    calls: list[Path] = []
+    real_check = scan_mod.check_win7_imports
+
+    def spy(path: Path, *, shim: Path | None = None) -> Any:
+        calls.append(path)
+        return real_check(path, shim=shim)
+
+    monkeypatch.setattr(scan_mod, "check_win7_imports", spy)
+    shim.write_bytes(shim.read_bytes() + b"\x00")
+    assert scan_dist_win7(dist, shim=shim).ok
+    assert calls == [dist / "python311.dll"]
 
 
 # ---------------------------------------------------------------------------

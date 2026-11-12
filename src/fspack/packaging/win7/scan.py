@@ -32,16 +32,19 @@ api-ms-win-crt-* 依赖提示（Win7 SP1 需 KB2999226 UCRT）。
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from fspack.exceptions import FspackError
 from fspack.packaging.win7.check import (
     PeParseError,
+    Win7ApiViolation,
     Win7CheckResult,
     check_win7_imports,
 )
@@ -68,6 +71,11 @@ _EXCLUDE_PARTS = frozenset({"build", "release"})
 
 # 报告输出文件名（write_win7_report 写到 dist/release/ 下）
 REPORT_FILENAME = "win7-compat-report.txt"
+
+# 扫描结果增量缓存：dist/build/ 下（build 是编译中间产物目录，不参与扫描，
+# 也不会被 NSIS 打进安装包）。缓存键为 (相对路径, size, mtime_ns)。
+_SCAN_CACHE_NAME = "win7scan.json"
+_SCAN_CACHE_VERSION = 1
 
 
 class Win7ScanError(FspackError):
@@ -144,29 +152,121 @@ def iter_pe_files(dist_dir: Path) -> list[Path]:
     return sorted(_walk_pe_files(dist_dir, top_level=True))
 
 
+def _shim_signature(shim: Path | None) -> str:
+    """shim 校验输入签名（路径+size+mtime_ns），shim 变化使整张缓存失效."""
+    if shim is None:
+        return ""
+    try:
+        st = shim.stat()
+    except OSError:
+        return f"{shim}:missing"
+    return f"{shim.name}:{st.st_size}:{st.st_mtime_ns}"
+
+
+def _load_scan_cache(dist_dir: Path, signature: str) -> dict[str, dict[str, object]]:
+    """读取 dist/build 下的增量扫描缓存；版本/shim 签名不符或损坏时返回空表."""
+    path = dist_dir / "build" / _SCAN_CACHE_NAME
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    if payload.get("version") != _SCAN_CACHE_VERSION or payload.get("shim") != signature:
+        return {}
+    entries = payload.get("files")
+    if not isinstance(entries, dict):
+        return {}
+    return {k: v for k, v in entries.items() if isinstance(k, str) and isinstance(v, dict)}
+
+
+def _save_scan_cache(dist_dir: Path, signature: str, entries: dict[str, dict[str, object]]) -> None:
+    """写入增量扫描缓存（失败仅告警，不阻断构建）."""
+    out_dir = dist_dir / "build"
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / _SCAN_CACHE_NAME).write_text(
+            json.dumps(
+                {"version": _SCAN_CACHE_VERSION, "shim": signature, "files": entries},
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+    except OSError as e:
+        _logger.warning("写入 Win7 扫描缓存失败（不影响构建）: %s", e)
+
+
+def _cache_key(path: Path) -> str:
+    """文件缓存键：size + mtime_ns（构建产物被替换时 mtime 必变）."""
+    st = path.stat()
+    return f"{st.st_size}:{st.st_mtime_ns}"
+
+
+def _result_to_cache(result: Win7CheckResult, key: str) -> dict[str, object]:
+    """把单文件检查结果序列化为缓存条目."""
+    return {
+        "k": key,
+        "violations": [[v.target, v.reason] for v in result.violations],
+        "shim_dlls": list(result.shim_dlls),
+        "shim_missing": list(result.shim_missing),
+        "notes": list(result.notes),
+    }
+
+
+def _result_from_cache(entry: dict[str, object], path: Path) -> Win7CheckResult:
+    """从缓存条目还原检查结果（键已校验，结构由 _result_to_cache 保证）."""
+    violations = cast("list[list[str]]", entry.get("violations") or [])
+    return Win7CheckResult(
+        path=path,
+        violations=tuple(Win7ApiViolation(str(v[0]), str(v[1])) for v in violations),
+        shim_dlls=tuple(cast("list[str]", entry.get("shim_dlls") or [])),
+        shim_missing=tuple(cast("list[str]", entry.get("shim_missing") or [])),
+        notes=tuple(cast("list[str]", entry.get("notes") or [])),
+    )
+
+
 def scan_dist_win7(dist_dir: Path, *, shim: Path | None = WIN7_SHIM_DLL_PATH) -> Win7ScanReport:
     """扫描 dist 下全部 .dll/.pyd/.exe 的导入表 Win7 兼容性.
 
     单文件解析失败（非 PE/截断）跳过并记入 ``skipped``，不中断扫描；
     违规聚合到 ``violations``，由调用方决定输出报告（不阻断构建）。
 
+    增量：每文件结果按 (size, mtime_ns) 缓存到 ``dist/build/win7scan.json``，
+    未变更文件直接复用上次结果（热构建省去重复 PE 解析）。``shim`` 变化、
+    缓存版本升级或文件被替换时对应条目失效重扫；解析失败的文件不缓存。
+
     Args:
         dist_dir: dist 根目录（内含 runtime/、site-packages/、loader exe 等）。
         shim: api-ms-win-core-path shim 路径，用于校验 PathCch* 导出覆盖；
             传 None 跳过 shim 覆盖校验。
     """
+    signature = _shim_signature(shim)
+    cached = _load_scan_cache(dist_dir, signature)
+    fresh: dict[str, dict[str, object]] = {}
     scanned = 0
     skipped: list[str] = []
     violations: list[Win7CheckResult] = []
     shim_files = 0
     ucrt_files = 0
     for path in iter_pe_files(dist_dir):
+        rel = path.relative_to(dist_dir).as_posix()
         try:
-            result = check_win7_imports(path, shim=shim)
-        except PeParseError as exc:
-            skipped.append(path.name)
-            _logger.warning("Win7 扫描跳过非 PE 文件 %s: %s", path, exc)
+            key = _cache_key(path)
+        except OSError:
             continue
+        entry = cached.get(rel)
+        if entry is not None and entry.get("k") == key:
+            result = _result_from_cache(entry, path)
+            fresh[rel] = entry
+        else:
+            try:
+                result = check_win7_imports(path, shim=shim)
+            except PeParseError as exc:
+                skipped.append(path.name)
+                _logger.warning("Win7 扫描跳过非 PE 文件 %s: %s", path, exc)
+                continue
+            fresh[rel] = _result_to_cache(result, key)
         scanned += 1
         if result.shim_dlls:
             shim_files += 1
@@ -174,6 +274,8 @@ def scan_dist_win7(dist_dir: Path, *, shim: Path | None = WIN7_SHIM_DLL_PATH) ->
             ucrt_files += 1
         if not result.ok:
             violations.append(result)
+    if fresh != cached:
+        _save_scan_cache(dist_dir, signature, fresh)
     return Win7ScanReport(
         scanned=scanned,
         skipped=tuple(skipped),
