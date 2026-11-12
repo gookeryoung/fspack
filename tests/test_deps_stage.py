@@ -94,6 +94,48 @@ def test_installed_state_validation(tmp_path: Path, change: str) -> None:
     assert _site_packages_has_deps(sp, packages, build_key=key) is (change == "none")
 
 
+def test_installed_fingerprint_none_when_missing(tmp_path: Path) -> None:
+    """site-packages 不存在时无法验证，返回 None."""
+    from fspack.packaging.pipeline.deps_stage import _installed_fingerprint
+
+    assert _installed_fingerprint(tmp_path / "no-site-packages") is None
+
+
+def test_installed_fingerprint_none_on_symlink(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """含符号链接时指纹不可靠，返回 None 迫使调用方重新解包."""
+    import contextlib
+
+    from fspack.packaging.pipeline import deps_stage
+
+    sp = tmp_path / "site-packages"
+    sp.mkdir()
+
+    class _LinkEntry:
+        name = "link.py"
+        path = str(sp / "link.py")
+
+        @staticmethod
+        def is_symlink() -> bool:
+            return True
+
+    monkeypatch.setattr(deps_stage.os, "scandir", lambda path: contextlib.nullcontext([_LinkEntry()]))
+    assert deps_stage._installed_fingerprint(sp) is None
+
+
+def test_installed_fingerprint_none_on_scandir_oserror(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """枚举遇 OSError（权限/并发删除）返回 None，绝不在不确定时复用产物."""
+    from fspack.packaging.pipeline import deps_stage
+
+    sp = tmp_path / "site-packages"
+    sp.mkdir()
+
+    def _raise_oserror(path: Path) -> None:
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(deps_stage.os, "scandir", _raise_oserror)
+    assert deps_stage._installed_fingerprint(sp) is None
+
+
 def test_unpack_wheels(tmp_path: Path) -> None:
     wh = tmp_path / "wh"
     wh.mkdir()

@@ -201,6 +201,84 @@ def test_enforce_win7_loaders_ok(tmp_path: Path) -> None:
     enforce_win7_loaders(exes)
 
 
+# ---------------------------------------------------------------------------
+# inject_win7_shims：runtime 缺失 / 无需注入 / 源缺失 / 已存在跳过 / 成功注入
+# ---------------------------------------------------------------------------
+
+_RUST_WHEEL_IMPORTS = {"bcryptprimitives.dll": ["ProcessPrng"]}
+
+
+def _write_rust_wheel_pyd(dist: Path) -> Path:
+    """写入导入 bcryptprimitives（Rust 1.78+ 硬依赖）的合成 pyd."""
+    return _write_pe(dist / "site-packages" / "pkg" / "native.pyd", _RUST_WHEEL_IMPORTS)
+
+
+def test_inject_win7_shims_no_runtime_dir_returns_empty(tmp_path: Path) -> None:
+    """runtime 目录缺失（dist 结构异常）时跳过注入，不抛错."""
+    from fspack.packaging.win7.scan import inject_win7_shims
+
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    _write_rust_wheel_pyd(dist)
+
+    assert inject_win7_shims(dist) == ()
+
+
+def test_inject_win7_shims_nothing_needed_returns_empty(tmp_path: Path) -> None:
+    """dist 中无 PE 需要 shim 时直接返回空元组."""
+    from fspack.packaging.win7.scan import inject_win7_shims
+
+    dist = tmp_path / "dist"
+    (dist / "runtime").mkdir(parents=True)
+    _write_pe(dist / "app.exe")
+
+    assert inject_win7_shims(dist) == ()
+
+
+def test_inject_win7_shims_copies_needed_shim(tmp_path: Path) -> None:
+    """需要 shim 时复制内置 DLL 到 runtime/ 并返回注入的文件名."""
+    from fspack.packaging.win7.dll import WIN7_SYSTEM_SHIMS
+    from fspack.packaging.win7.scan import inject_win7_shims
+
+    dist = tmp_path / "dist"
+    (dist / "runtime").mkdir(parents=True)
+    _write_rust_wheel_pyd(dist)
+
+    injected = inject_win7_shims(dist)
+
+    assert injected == ("bcryptprimitives.dll",)
+    dest = dist / "runtime" / "bcryptprimitives.dll"
+    assert dest.read_bytes() == WIN7_SYSTEM_SHIMS["bcryptprimitives.dll"].read_bytes()
+
+
+def test_inject_win7_shims_skips_existing_dest(tmp_path: Path) -> None:
+    """runtime/ 中已存在同名 shim 时跳过（幂等），不覆盖已有文件."""
+    from fspack.packaging.win7.scan import inject_win7_shims
+
+    dist = tmp_path / "dist"
+    runtime = dist / "runtime"
+    runtime.mkdir(parents=True)
+    existing = runtime / "bcryptprimitives.dll"
+    existing.write_bytes(b"already-injected")
+    _write_rust_wheel_pyd(dist)
+
+    assert inject_win7_shims(dist) == ()
+    assert existing.read_bytes() == b"already-injected"
+
+
+def test_inject_win7_shims_missing_source_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """内置 shim 源文件缺失属硬错误，抛 OSError 阻断构建."""
+    from fspack.packaging.win7 import scan
+
+    dist = tmp_path / "dist"
+    (dist / "runtime").mkdir(parents=True)
+    _write_rust_wheel_pyd(dist)
+    monkeypatch.setattr(scan, "WIN7_SYSTEM_SHIMS", {"bcryptprimitives.dll": tmp_path / "missing.dll"})
+
+    with pytest.raises(OSError, match="Win7 shim 源文件缺失"):
+        scan.inject_win7_shims(dist)
+
+
 def test_enforce_win7_loaders_blocks(tmp_path: Path) -> None:
     """违规 exe 抛 Win7ScanError 且消息含 API 明细."""
     exe = _write_pe(tmp_path / "app.exe", _BAD_IMPORTS)

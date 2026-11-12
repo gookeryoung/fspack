@@ -786,6 +786,81 @@ def test_select_coherent_wheels_fallback_keeps_last_when_unsolvable(
     assert result == ["pydantic-2.6.4-py3-none-any.whl"]
 
 
+def _make_wheel(cache: Path, filename: str, requires: Sequence[str] | None = None) -> Path:
+    """构造真实 wheel zip；``requires`` 非 None 时写入 ``.dist-info/METADATA``."""
+    import zipfile
+
+    path = cache / filename
+    with zipfile.ZipFile(path, "w") as zf:
+        if requires is None:
+            zf.writestr("placeholder.txt", "x")
+        else:
+            name, version = filename.split("-")[:2]
+            body = "Metadata-Version: 2.1\n" + "".join(f"Requires-Dist: {req}\n" for req in requires)
+            zf.writestr(f"{name}-{version}.dist-info/METADATA", body)
+    return path
+
+
+def test_wheel_requires_reads_real_metadata(tmp_path: Path) -> None:
+    """真实 wheel zip 中 METADATA 的 Requires-Dist 被逐行解析."""
+    from fspack.packaging.wheels.output import _wheel_requires
+
+    path = _make_wheel(
+        tmp_path,
+        "pydantic-2.13.5-py3-none-any.whl",
+        ["pydantic-core==2.41.5", "annotated-types>=0.4.0"],
+    )
+    assert _wheel_requires(path) == ["pydantic-core==2.41.5", "annotated-types>=0.4.0"]
+
+
+def test_wheel_requires_degrades_to_empty(tmp_path: Path) -> None:
+    """无 METADATA、坏 zip、文件缺失都返回空列表（不阻断构建）."""
+    from fspack.packaging.wheels.output import _wheel_requires
+
+    no_meta = _make_wheel(tmp_path, "nometa-1.0-py3-none-any.whl")
+    broken = tmp_path / "broken-1.0-py3-none-any.whl"
+    broken.write_bytes(b"not a zip")
+
+    assert _wheel_requires(no_meta) == []
+    assert _wheel_requires(broken) == []
+    assert _wheel_requires(tmp_path / "missing-1.0-py3-none-any.whl") == []
+
+
+def test_select_coherent_wheels_keeps_unparseable_names(tmp_path: Path) -> None:
+    """文件名解析不出的 wheel 不参与分组，原样保留."""
+    from fspack.packaging.wheels.downloader import _select_coherent_wheels
+
+    names = ["broken.whl", "pydantic-2.13.5-py3-none-any.whl", "pydantic-2.6.4-py3-none-any.whl"]
+    _make_wheel(tmp_path, names[1], [])
+    _make_wheel(tmp_path, names[2], [])
+
+    result = _select_coherent_wheels(names, tmp_path)
+    assert result == ["broken.whl", "pydantic-2.6.4-py3-none-any.whl"]
+
+
+def test_select_coherent_wheels_falls_back_when_version_invalid(tmp_path: Path) -> None:
+    """候选版本号非 PEP 440（如 ``1.0..0``）时消解整体回退为保留每组最后一个."""
+    from fspack.packaging.wheels.downloader import _select_coherent_wheels
+
+    names = ["broken.whl", "pkg-1.0.0-py3-none-any.whl", "pkg-1.0..0-py3-none-any.whl"]
+    assert _select_coherent_wheels(names, tmp_path) == ["broken.whl", "pkg-1.0..0-py3-none-any.whl"]
+
+
+def test_select_coherent_wheels_backtrack_unsolvable_falls_back(tmp_path: Path) -> None:
+    """约束互相矛盾（pydantic-core 只接受 1.0）时回溯无解，回退保留每组最后一个."""
+    from fspack.packaging.wheels.downloader import _select_coherent_wheels
+
+    new_whl = "pydantic-2.13.5-py3-none-any.whl"
+    old_whl = "pydantic-2.6.4-py3-none-any.whl"
+    core_whl = "pydantic_core-2.16.3-cp311-none-win_amd64.whl"
+    _make_wheel(tmp_path, new_whl, ["pydantic-core>=2.41.5"])
+    _make_wheel(tmp_path, old_whl, ["pydantic-core>=2.16.3"])
+    _make_wheel(tmp_path, core_whl, ["pydantic==1.0"])
+
+    result = _select_coherent_wheels([new_whl, old_whl, core_whl], tmp_path)
+    assert result == [old_whl, core_whl]
+
+
 def test_validate_declared_constraints_rejects_out_of_range() -> None:
     """选中 wheel 版本超出顶层声明范围时报 DependencyError."""
     import pytest
@@ -1207,6 +1282,57 @@ def test_build_marker_env_target_platform() -> None:
     assert linux["python_full_version"] == "3.8.10"
 
 
+def test_system_of_tags_maps_platform_tags() -> None:
+    """平台标签按 win/linux/macosx 推断目标系统（大小写不敏感）."""
+    from fspack.packaging.wheels.markers import _system_of_tags
+
+    assert _system_of_tags(("win_amd64",)) == "windows"
+    assert _system_of_tags(("manylinux2014_x86_64", "linux_x86_64")) == "linux"
+    assert _system_of_tags(("macosx_11_0_arm64",)) == "darwin"
+
+
+def test_system_of_tags_empty_falls_back_to_host() -> None:
+    """无平台标签时回退宿主系统（按 sys.platform 推导，避免 CI 平台漂移）."""
+    from fspack.packaging.wheels.markers import _system_of_tags
+
+    expected = "windows" if sys.platform == "win32" else ("darwin" if sys.platform == "darwin" else "linux")
+    assert _system_of_tags(()) == expected
+
+
+def test_system_env_target_defaults_ignore_host_arch() -> None:
+    """目标环境（host=False）的机器名固定，不随宿主架构变化."""
+    from fspack.packaging.wheels.markers import _system_env
+
+    assert _system_env("windows", host=False) == {
+        "sys_platform": "win32",
+        "platform_system": "Windows",
+        "os_name": "nt",
+        "platform_machine": "AMD64",
+    }
+    assert _system_env("darwin", host=False) == {
+        "sys_platform": "darwin",
+        "platform_system": "Darwin",
+        "os_name": "posix",
+        "platform_machine": "x86_64",
+    }
+    assert _system_env("linux", host=False) == {
+        "sys_platform": "linux",
+        "platform_system": "Linux",
+        "os_name": "posix",
+        "platform_machine": "x86_64",
+    }
+
+
+def test_system_env_host_uses_real_machine() -> None:
+    """宿主环境（host=True）的机器名取真实 ``platform.machine()``."""
+    import platform as _platform
+
+    from fspack.packaging.wheels.markers import _system_env
+
+    for system in ("windows", "darwin", "linux"):
+        assert _system_env(system, host=True)["platform_machine"] == _platform.machine()
+
+
 def test_eval_marker_version_ordering() -> None:
     """版本变量按数值段比较（3.10 > 3.9），而非字符串序."""
     env = _build_marker_env("3.10.11", ("win_amd64",))
@@ -1238,6 +1364,33 @@ def test_eval_marker_non_numeric_version_falls_back_to_string() -> None:
     """版本值非纯数字时回退字符串比较."""
     env = _build_marker_env("3.12.0", ("win_amd64",))
     assert _eval_marker("python_version == '3.x'", env) is False
+
+
+@pytest.mark.parametrize(
+    ("marker", "expected"),
+    [
+        pytest.param("python_version >= '3.8' and", "意外结束", id="unexpected-end"),
+        pytest.param("(python_version >= '3.8' sys_platform == 'win32'", "括号不匹配", id="parenthesis-mismatch"),
+        pytest.param("'3.8' == python_version", "缺少变量名", id="missing-name"),
+        pytest.param("python_version >= and", "缺少比较值", id="missing-value"),
+        pytest.param("python_version >= '3.8' '3.9'", "多余内容", id="trailing-token"),
+        pytest.param("python_version and '3.8'", "运算符无效", id="invalid-operator"),
+        pytest.param("python_version not '3.8'", "运算符无效", id="not-without-in"),
+    ],
+)
+def test_eval_marker_error_message_branches(marker: str, expected: str) -> None:
+    """语法错误各分支抛出对应的解析错误信息（调用方据此保守保留原文）."""
+    from fspack.packaging.wheels.markers import _MarkerError
+
+    env = _build_marker_env("3.12.0", ("win_amd64",))
+    with pytest.raises(_MarkerError, match=expected):
+        _eval_marker(marker, env)
+
+
+def test_filter_by_python_version_host_eval_failure_strips_marker() -> None:
+    """目标可求值但宿主环境缺变量时剥离 marker（否则 pip 按宿主复评会丢弃）."""
+    pkgs = ["foo>=1.0; platform_machine == 'AMD64'"]
+    assert _filter_by_python_version(pkgs, "3.12.0", ("win_amd64",), host_env={}) == ["foo>=1.0"]
 
 
 def test_eval_marker_invalid_raises() -> None:
@@ -3307,6 +3460,14 @@ def test_dedup_wheels_by_pkg_pep503_normalize(tmp_path: Path) -> None:
     result = _dedup_wheels_by_pkg([whl1, whl2])
     assert len(result) == 1
     assert result[0] == whl2  # 6.0.1 > 6.0
+
+
+def test_dedup_wheels_by_pkg_skips_unparseable_name() -> None:
+    """文件名解析不出的 wheel 无法按包名分组，被跳过而不参与去重."""
+    from fspack.packaging.wheels.downloader import _dedup_wheels_by_pkg
+
+    wheels = ["broken.whl", "numpy-1.26.0-cp311-cp311-win_amd64.whl"]
+    assert _dedup_wheels_by_pkg(wheels) == ["numpy-1.26.0-cp311-cp311-win_amd64.whl"]
 
 
 def test_parse_wheel_names_fallback_dedups_cache_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
