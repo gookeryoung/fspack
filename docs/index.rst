@@ -38,6 +38,7 @@ pre-compiled bytecode for fast startup.
    cli
    configuration
    architecture
+   adr/0001-layering
    api
    changelog
 

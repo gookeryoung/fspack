@@ -7,63 +7,96 @@
 构建流水线
 ----------
 
-``fsp b`` 构建流水线共 12 个阶段：
+``fsp b`` 构建流水线按下列顺序执行（下表为 Windows 热构建 profile 的实测
+阶段名与顺序，带「可选」的仅在对应条件成立时出现）：
 
-1. **解析** ``pyproject.toml``，识别项目名、版本、入口模块、CLI/GUI 类型
-2. **下载运行时**：Windows 下载 embed python zip 并解压到 ``dist/runtime/``；
-   Linux/macOS 下载 python-build-standalone tar.gz 并解压到 ``dist/runtime/python/``；
-   macOS 目标仅支持 macOS 构建机（clang 无法可靠交叉产出 Mach-O，其余目标
-   报错拦截）
-3. **分析依赖**：AST 扫描源码 import，分类标准库/本地/第三方，与
+1. **解析项目**：解析 ``pyproject.toml``，识别项目名、版本、入口模块、
+   CLI/GUI 类型，解析 Python 版本（``--py-version`` > ``.python-version``
+   > ``requires-python`` > 平台默认），合并 CLI 私有包源
+2. **构建前端**（可选）：识别 web 结构（``web-static-dirs`` 配置或
+   ``package.json`` 结构扫描），产物缺失时在复制源码前就地构建——否则打出的
+   应用会在终端用户机器上尝试安装前端依赖（无 node 环境，必然失败）
+3. **下载运行时**：Windows 下载 embed python zip；Linux/macOS 下载
+   python-build-standalone tar.gz。macOS 目标仅支持 macOS 构建机、Linux 目标
+   仅支持 Linux 构建机（clang 无法可靠交叉产出 Mach-O，macOS 的 gcc 是 clang
+   垫片、Windows 的 gcc 是 mingw，均无法产出 ELF；Windows 目标支持任意构建机）
+4. **解压运行时**：安全解压（拒绝越界路径条目）到 ``dist/runtime/``
+5. **精简标准库**：Windows 按版本 + 黑名单指纹精简 embed zip（action 缓存
+   命中跳过）；Linux/macOS 剥离 standalone 的 test/ensurepip/idlelib 等，
+   ``--no-stdlib-trim`` 可关闭
+6. **分析依赖**：AST 扫描源码 import，分类标准库/本地/第三方，与
    ``pyproject.toml`` 声明依赖比对；结果按源码指纹缓存，未改动跳过。
    ``[project.optional-dependencies]`` 分组经 ``--extra`` / ``[tool.fspack] extras``
    启用后合并到声明依赖集合：自引用 ``"my-pkg[extra]"`` 递归展开，第三方
    ``"pkg[extra]"`` 原样透传 pip；扩展后依赖参与缓存键，extras 变化触发缓存失效
-4. **补充内置库**（仅 Windows）：AST 检出 ``tkinter`` 使用时，从
-   python-build-standalone Windows 构建提取 tkinter 组件（纯 Python 包 +
-   ``_tkinter.pyd`` + Tcl/Tk 运行时脚本）补充到 runtime，按版本缓存 zip 避免重复下载
-5. **下载 wheel**：用 ``uv`` 解析精确版本与平台 wheel，再 ``pip download --no-deps``
-   并行下载（ThreadPoolExecutor，I/O 密集网络下载提速 ~17%），解包到
-   ``dist/runtime/Lib/site-packages/``（Windows）或
+7. **下载依赖**：先用 ``uv pip compile --no-index`` 在本地 wheel 缓存
+   （+ 用户 ``--find-links``）上快速解析精确版本（热缓存约 40ms，替代原先
+   ``pip download --no-index`` 预检的 1.5–2.7s；uv 不可用、含 sdist、direct
+   URL 等无法确定的情形一律回退原 pip 预检）；本地不足时用 ``uv`` 解析精确
+   版本与平台 wheel，再 ``pip download --no-deps`` 并行下载，失败包自动 sdist
+   回退构建，解包到 ``dist/runtime/Lib/site-packages/``（Windows）或
    ``dist/runtime/python/lib/python3.X/site-packages/``（Linux/macOS）。
    解包时按 AST 收集的子模块使用信息选择性保留（wheel 精简）：Qt 库按依赖闭包
    （如 ``QtWidgets`` → ``Gui``/``Core``）保留对应 ``.pyd``/``.dll``，剥离未用子模块、
    translations/include/metatypes 开发资源、``.exe`` 工具、``.pyi`` 类型 stub；
-   ``slim-include``/``slim-exclude`` 用户规则覆盖自动分类
-6. **写 _pth**（仅 Windows）：覆盖 ``runtime/python3X._pth``，注册 site-packages 与
-   ``..\src`` 路径；``--no-site`` 时省略 ``import site`` 行节省启动时间
-7. **复制源码**：项目源码复制到 ``dist/src/``，排除 dist/build/.venv 等构建产物；
-   按 mtime 跳过未改动文件
-8. **标准库精简**（默认，仅 Linux/macOS）：剥离 standalone 的 test/ensurepip/idlelib 等
-   无用模块；``--no-stdlib-trim`` 可关闭
-9. **字节码预编译**（默认）：``compileall`` 预编译 src+site-packages 为 ``.pyc``
+   ``slim-include``/``slim-exclude`` 用户规则覆盖自动分类。AST 检出 ``tkinter``
+   使用时，从 python-build-standalone Windows 构建提取 tkinter 组件（纯 Python
+   包 + ``_tkinter.pyd`` + Tcl/Tk 运行时脚本）补充到 runtime，按版本缓存 zip
+   避免重复下载。Windows 目标随后覆盖 ``python3X._pth``，注册 site-packages
+   与 ``..\src`` 路径；``--no-site`` 时省略 ``import site`` 行并剥离
+   site-packages 下 ``.pth`` 文件（site.py 不加载时它们只是垃圾文件）
+8. **复制源码**：项目源码增量同步到 ``dist/src/``，排除 dist/build/.venv 等构建产物
+   与测试/文档/凭证；已有产物时只删除源中已不存在的文件、覆盖新增与改动文件，
+   保留 ``__pycache__`` 以复用 ``.pyc``
+9. **预编译字节码**（默认）：``compileall`` 预编译 src+site-packages 为 ``.pyc``
    加速首次启动；stamp 缓存命中跳过；``--pyc-optimize`` 控制 -O/-OO 级别；
    ``--pyc-strip`` 进一步剥离 ``.py`` 仅留 ``.pyc``
-10. **Nuitka 编译**（可选，``--nuitka``）：用户源码编译为 ``.pyd`` 本机执行；
-    按 Python 版本锁定 Nuitka 版本（3.8/3.9→2.5.1，3.10+→4.1.3），自动装到
-    ``~/.fspack/cache/nuitka/``；Windows 优先复用构建机自身 python（major.minor
-    与目标一致时免下载），否则用缓存于 ``~/.fspack/cache/python/`` 的 standalone
-    python 运行编译（embed python 不完整会触发 reExecute fork bomb），tarball 与
-    tkinter 打包共享 ``standalone-windows/`` 缓存；Nuitka 编译中间缓存
-    （clcache/scons-config 等）经 ``NUITKA_CACHE_DIR`` 全量重定向到
-    ``nuitka-work/``，与系统默认位置隔离（历史污染的坏 clcache 条目
-    被反复命中会导致 .pyd 大量损坏）；Windows 编译器由 Nuitka 下载缓存
-    提供（注入 ``NUITKA_CACHE_DIR_DOWNLOADS`` 重定向到
-    ``nuitka-winlibs-mingw/``：检测到 MSVC（vswhere 探测 Visual Studio
-    C++ 工具链，优先级最高）时跳过 winlibs 预填充且不加 force flag，
-    否则预填充 winlibs gcc——py<3.13 scons 默认即 winlibs，py>=3.13 且
-    无 MSVC 时经 ``--experimental=force-mingw64`` 强制——zig 编译的 .pyd
-    可能损坏不再使用；预填充时识别缓存目录下用户手动放置的 winlibs zip
-    解压替代下载，损坏归档删除后回退下载；系统 mingw 会被 scons 拒绝
-    不使用）；编译产物验证异常数量 ≥3 且过半时自动清 ``nuitka-work/``
-    编译缓存重试一轮（自愈，winlibs 工具链不受影响）；入口文件保留
-    ``.py`` 不编译（``runpy.run_path()`` 兼容）；
-    stamp 缓存键 = ``nuitka_version|py_version|src_fingerprint|entry_rels``，
-    命中跳过整个阶段；交叉构建自动跳过
-11. **Win7 兼容 DLL 注入**（Windows，Python 3.9+）：注入 api-ms-win-core-path
-    替代 DLL，支持在 Win7/Win2008R2 运行
-12. **生成 C loader**：按平台模板生成 C 源码（烧入入口脚本相对路径），
-    mingw（Windows）、gcc（Linux）或 clang（macOS）编译为可执行文件
+10. **标准库 zip 化**（Linux/macOS 生效）：把 standalone 标准库打成 zip 缩减
+    文件数；Windows 目标该阶段为空操作
+11. **精简 runtime**（Linux/macOS 生效）：strip libpython 调试符号、删 python
+    二进制/include/share，非 tkinter 项目剥离 Tcl/Tk；``--no-slim-runtime`` 关闭
+12. **解析图标**：CLI ``--icon`` > ``[tool.fspack] icon`` > ``favicon.*`` > 默认
+    ``assets/icons/app.ico``；非 ``.ico`` 经 Pillow 转换（同一源图按内容摘要
+    缓存，命中跳过转换）。仅 Windows 目标生效
+13. **生成 C loader**：按平台模板生成 C 源码（烧入入口脚本相对路径），
+    mingw（Windows）、gcc（Linux）或 clang（macOS）编译为可执行文件；编译产物
+    按源码哈希缓存
+14. **Win7 loader 校验**（Windows）：loader exe 导入表若引入 Win8+ API 属
+    fspack 回归，违规阻断构建（硬门禁）
+15. **二进制依赖分析**（可选 ``--analyze-deps``）：解析 ``.dll``/``.so``/
+    ``.dylib`` 依赖树，剥离无引用文件
+16. **Win7 兼容扫描**（Windows，默认启用，``--no-win7-scan`` 关闭）：先对 dist
+    下全部 PE 执行导入表原地改名（kernel32 Win8+ API → Win7 原生等价函数），
+    再全量扫描复核、注入内置 Win7 shim（api-ms-win-core-path +
+    bcryptprimitives.ProcessPrng），剩余违规写报告提示（软门禁，不阻断）
+17. **生成 SBOM**（默认启用，``--no-sbom`` 关闭）：扫描 ``*.dist-info`` 生成
+    SPDX 2.3 JSON 到 ``dist/release/``；失败降级告警
+18. **生成产物清单**（默认启用，``--no-manifest`` 关闭）：扫描 dist 文件记录
+    大小/SHA256（按 (size, mtime) 备忘录复用哈希），生成 JSON 供
+    ``fsp manifest diff`` 对比版本差异
+
+可选编译阶段（``--nuitka``）在「预编译字节码」处替代用户源码的 ``.pyc``：
+用户源码编译为 ``.pyd`` 本机执行；按 Python 版本锁定 Nuitka 版本
+（3.8/3.9→2.5.1，3.10+→4.1.3），自动装到 ``~/.fspack/cache/nuitka/``；Windows
+优先复用构建机自身 python（major.minor 与目标一致时免下载），否则用缓存于
+``~/.fspack/cache/python/`` 的 standalone python 运行编译（embed python 不完整
+会触发 reExecute fork bomb），tarball 与 tkinter 打包共享 ``standalone-windows/``
+缓存；Nuitka 编译中间缓存（clcache/scons-config 等）经 ``NUITKA_CACHE_DIR``
+全量重定向到 ``nuitka-work/``，与系统默认位置隔离（历史污染的坏 clcache 条目
+被反复命中会导致 .pyd 大量损坏）；Windows 编译器由 Nuitka 下载缓存提供（注入
+``NUITKA_CACHE_DIR_DOWNLOADS`` 重定向到 ``nuitka-winlibs-mingw/``：检测到 MSVC
+（vswhere 探测 Visual Studio C++ 工具链，优先级最高）时跳过 winlibs 预填充且
+不加 force flag，否则预填充 winlibs gcc——py<3.13 scons 默认即 winlibs，
+py>=3.13 且无 MSVC 时经 ``--experimental=force-mingw64`` 强制——zig 编译的
+.pyd 可能损坏不再使用；预填充时识别缓存目录下用户手动放置的 winlibs zip 解压
+替代下载，损坏归档删除后回退下载；系统 mingw 会被 scons 拒绝不使用）；编译
+产物验证异常数量 ≥3 且过半时自动清 ``nuitka-work/`` 编译缓存重试一轮（自愈，
+winlibs 工具链不受影响）；入口文件保留 ``.py`` 不编译（``runpy.run_path()``
+兼容，多入口时每个入口一个不上编译的包装脚本）；
+stamp 缓存键 = ``nuitka_version|py_version|src_fingerprint|entry_rels``，
+命中跳过整个阶段；交叉构建自动跳过。Python 3.9+ 的 Win7 兼容 DLL 注入
+（api-ms-win-core-path 替代 DLL）在 Nuitka 模式下与重编译版 runtime 互斥，
+显式 ``--nuitka`` 时自动关闭 Win7 组件替换（产物收窄为 Win8+，日志告警）
 
 dist 布局
 ---------
@@ -153,9 +186,15 @@ fspack 支持通过环境变量或 CLI 标志启用的离线模式，适用于�
    ├── nuitka-work/          # Nuitka 编译中间缓存（NUITKA_CACHE_DIR 重定向，含 clcache/
    │                         #   scons-config 等；与系统默认位置隔离防历史污染，损坏率
    │                         #   过高时自动清空重试）
-   ├── loaders/              # C loader 编译缓存（按 source hash 命名）
+   ├── loaders/              # C loader 编译缓存（按源码 hash 命名）
    ├── ccache/               # ccache 二进制与编译缓存
-   └── tkinter/              # tkinter 补充包缓存（按 standalone 版本命名的 zip）
+   ├── tkinter/              # tkinter 补充包缓存（按 standalone 版本命名的 zip）
+   └── win7-dll/             # Win7 重编译版 python3XX.dll 的 embed zip 缓存
+
+增量 action 标记（图标转换、embed stdlib 精简、Win7 dist 扫描、loader 校验、
+manifest 哈希备忘录）不放在缓存根目录，而是写到 ``<dist>/build/action-*.json``：
+``build/`` 不进入安装包、也不参与 dist 扫描，标记随构建产物一起被
+``fsp c`` 清理，避免"缓存认旧产物"的跨项目串味。
 
 子模块缓存目录通过 :mod:`fspack.config.cache` 的 ``embed_cache_dir()``/
 ``standalone_cache_dir()``/``wheel_cache_dir()``/``nuitka_cache_dir()``/
@@ -256,7 +295,8 @@ fspack 支持通过环境变量或 CLI 标志启用的离线模式，适用于�
 --------
 
 源码位于 ``src/fspack/``，按职责分包，每个子包通过 facade 模式暴露公开 API
-（详见各 ``__init__.py`` docstring）。
+（详见各 ``__init__.py`` docstring）。层间依赖方向、"叶子模块"清单与
+facade 例外见 :doc:`adr/0001-layering`，由 ``tests/test_layout.py`` 机械守卫。
 
 顶层模块
 ~~~~~~~~
@@ -271,8 +311,10 @@ fspack 支持通过环境变量或 CLI 标志启用的离线模式，适用于�
      - CLI 入口（cargo 风格短命令 ``fsp b/c/r/p``），延迟导入重模块使 ``--help`` 提速
    * - ``builder.py``
      - 高层构建 facade，re-export ``pipeline.build``/``runtime``/``loader``/``sync`` 等
-   * - ``analyzer.py``
-     - AST 扫描源码 import，分类标准库/本地/第三方依赖
+   * - ``analyzer/``（子包：``analysis`` / ``ast_scan`` / ``fingerprint``）
+     - AST 扫描源码 import，分类标准库/本地/第三方依赖；``analysis`` 负责编排与
+       串行/并行调度（按采样预估的串行成本决定是否启用进程池），``ast_scan`` 负责
+       单文件 AST 与 QML 解析，``fingerprint`` 负责源码指纹
    * - ``runner.py``
      - 运行已打包项目（Linux 原生，Windows 自动用 wine）
    * - ``console.py``
@@ -280,7 +322,17 @@ fspack 支持通过环境变量或 CLI 标志启用的离线模式，适用于�
    * - ``platform.py``
      - 平台检测（Windows/Linux）与 ``Platform`` 枚举
    * - ``progress.py``
-     - ``BuildTracker``/``StageRecorder``/``spinner`` 进度显示
+     - ``BuildTracker``（阶段进度与汇总）与 ``spinner`` 进度显示
+   * - ``metrics.py``
+     - ``StageRecord``/``StageRecorder`` 阶段指标数据结构（从 ``progress`` 拆出的叶子模块）
+   * - ``astutil.py``
+     - ``collect_imports``：单棵 AST 的导入收集。``config``（推断 app 类型）与
+       ``analyzer`` 都向下依赖本叶子模块，消除 config ↔ analyzer 跨层往返
+   * - ``archive.py``
+     - zip 条目安全校验原语（拒绝绝对路径/路径穿越/盘符/符号链接），
+       ``runtime.extract`` 与 ``slim.unpack`` 共用，避免精简层反向依赖运行时层
+   * - ``jsoncache.py``
+     - JSON 缓存读取骨架（解析 → 根 dict 校验 → 损坏删除/忽略），供依赖解析缓存等复用
    * - ``exceptions.py``
      - 自定义异常层次（``FspackError``/``DependencyError``/``NuitkaError`` 等）
    * - ``_compat.py``
@@ -333,6 +385,26 @@ packaging/ 子包
      - favicon 自动搜索与图片格式转换（Pillow 可选，支持透明通道）
    * - ``net.py``
      - ``Downloader``：HTTP 下载器（SSL + 进度条）
+   * - ``action_cache.py``
+     - 通用增量 action 缓存（输入指纹 → ``<dist>/build/action-<name>.json``）：
+       图标转换、embed stdlib 精简、Win7 dist 扫描、loader 校验、manifest 哈希
+       备忘录共用一套键/版本/损坏容忍语义
+   * - ``manifest.py`` / ``sbom.py``
+     - 产物清单（大小 + SHA256，哈希按 (size, mtime_ns) 备忘录复用）与 SPDX 2.3 SBOM 生成
+   * - ``site_packages.py``
+     - site-packages 目录定位与包名归一化（``normalize_pkg_name``）
+   * - ``lockfile.py``
+     - 依赖锁文件（``requirements.lock``）：``--lock`` 构建成功后写出实际
+       wheel 的 ``name==version --hash=sha256:...``，``--frozen`` 按锁文件下载
+       并校验哈希，缺失/不符直接报错
+   * - ``profile.py`` / ``profile_log.py`` / ``log_file.py``
+     - 构建耗时/内存 profile 采集与渲染、性能日志落盘与历史对比、构建日志文件
+       （TEXT/JSON 格式，``try/finally`` 清理）
+   * - ``size_report.py``
+     - 构建产物按目录/类型汇总体积与 Top-N 明细
+   * - ``dep_analyzer/``（``common`` / ``graph`` / ``pe`` / ``elf`` / ``macho``）
+     - 二进制依赖分析（``--analyze-deps``）：按平台解析 PE/ELF/Mach-O 导入表
+       构图并剥离无引用文件
 
 slim/ 子包
 ~~~~~~~~~~
@@ -349,11 +421,25 @@ wheel 精简 facade：
 
 fspack 内置多层性能优化：
 
-- **增量构建缓存**：源码指纹 + 预编译 stamp + Nuitka stamp 三层缓存，未改动文件跳过复制与重编
+- **增量缓存**：源码指纹缓存（依赖分析结果）、``.pyc`` stamp、Nuitka stamp、
+  C loader 源码哈希、图标转换摘要、embed stdlib 精简指纹、Win7 扫描/loader
+  校验签名、manifest 哈希备忘录（按 (size, mtime_ns) 复用 SHA256）。缓存命中
+  只跳过对应的"昂贵动作"，热构建仍需枚举源码、解包/校验 dist 与扫描全量 PE——
+  不是"只重做变更文件"：``Win7 兼容扫描`` 在热构建里通常是最大单项（34 个 PE
+  约 90ms），因为它必须复核整棵 dist 的导入表
+- **通用 action 缓存**：上述标记统一由 :mod:`fspack.packaging.action_cache`
+  管理（键 = 输入指纹，值 = ``<dist>/build/action-<name>.json``，版本号/损坏
+  即视为未命中），避免四套各自实现漂移
 - **CLI 懒加载**：``fsp`` 入口延迟导入重模块（``config``/``console``/``platform``），
-  ``fsp --help`` 冷启动从 ~100ms 降到 ~61ms
+  ``fsp --help`` 冷启动远低于全量导入
+- **wheel 本地解析**：依赖缓存未命中时先用 ``uv pip compile --no-index`` 在本地
+  缓存上解析（热缓存约 40ms），替代 ``pip download --no-index`` 预检的
+  1.5–2.7s，无法确定时回退原预检
 - **wheel 并行下载**：``uv`` 解析精确版本后用 ``ThreadPoolExecutor`` 并行
   ``pip download --no-deps``，失败包自动 sdist 回退构建
+- **AST 并行门槛**：按等距采样的 AST 节点密度预估串行解析成本，只有预估能省
+  下明显时间（≥0.75s）才启用 4 进程池——注释密集型源码（字节多、节点少）
+  保持串行，实测 1268 文件 / 13 MiB 串行 0.49s 优于 4 worker 0.71s
 - **Win7 兼容**：Python 3.9+ 注入 api-ms-win-core-path 替代 DLL，支持在 Win7/Win2008R2 运行
 - **国内镜像**：默认阿里云源 PyPI 与 embed python 镜像，``--mirror`` 切换（aliyun/huawei/tsinghua）
 - **彩色进度显示**：rich 驱动的步骤进度（> 准备运行时 / √ 构建完成），
