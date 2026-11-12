@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -45,6 +46,7 @@ __all__ = [
     "_extract_resolved_lines",
     "_find_uv",
     "_resolve_with_uv",
+    "_resolve_with_uv_offline",
     "_uv_python_platform",
     "_uv_supports_download",
 ]
@@ -61,6 +63,9 @@ _UV_DOWNLOAD_WHEEL_RE = re.compile(r"(?:Downloaded|Cached)\s+(.+?\.whl)", re.IGN
 
 # uv pip download --help 检测超时（秒）：uv 启动 ~10ms，5s 裕量覆盖慢速 CI
 _UV_HELP_TIMEOUT = 5.0
+
+# 本地离线解析超时（秒）：只读本地 wheel，正常 <1s；异常（磁盘/杀软扫描）兜底
+_UV_OFFLINE_TIMEOUT = 60.0
 
 
 def _find_uv() -> str | None:
@@ -226,4 +231,69 @@ def _resolve_with_uv(ctx: DownloadContext, packages: Sequence[str], *, generate_
     if not result.stdout.strip():
         raise DependencyError(f"uv pip compile 未解析出任何依赖:\n{result.stderr}")
     _logger.info("uv 解析完成，输出 %d 字节", len(result.stdout))
+    return result.stdout
+
+
+def _resolve_with_uv_offline(ctx: DownloadContext, packages: Sequence[str], *, cache_dir: Path) -> str:
+    """``uv pip compile --no-index``：只在本地 wheel 目录内解析依赖图.
+
+    用于替代代价高昂的 ``pip download --no-index`` 预检：uv 是 Rust 实现，
+    热缓存下约 40ms（pip 进程启动就要 ~480ms，还要对缓存目录全量解析）。
+
+    ``UV_CACHE_DIR`` 指向 ``cache_dir`` 同级目录（``<cache root>/uv``）：
+    用户环境的默认 uv 缓存可能不可写（实测 ``F:\\DevCache\\uv`` 权限拒绝会
+    直接让 uv 退出），使用 fspack 自己的缓存目录可自愈；该缓存只存本地
+    wheel 元数据，体积很小，随 fspack 缓存目录一起清理。
+
+    Args:
+        ctx: 下载上下文（``uv_path``/``py_version``/``platform_tags``/``find_links``）。
+        packages: 已按目标版本过滤的依赖声明列表。
+        cache_dir: 本地 wheel 目录（同时作为 ``--find-links`` 首项）。
+
+    Returns:
+        uv 原始 stdout（用 :func:`_extract_resolved_lines` 提取 ``name==version``）。
+
+    Raises:
+        DependencyError: uv 不可用、命令超时或非零退出（调用方回退 pip 预检）。
+    """
+    if ctx.uv_path is None:
+        raise DependencyError("未找到 uv，无法执行本地离线解析")
+    base, _ = _split_t_suffix(ctx.py_version)
+    parts = base.split(".")[:2]
+    if len(parts) != 2 or not all(p.isdigit() for p in parts):
+        raise DependencyError(f"无法解析目标 Python 版本: {ctx.py_version}")
+    py_ver_arg = f"{parts[0]}.{parts[1]}"
+    cmd: list[str] = [
+        ctx.uv_path,
+        "pip",
+        "compile",
+        "--python-version",
+        py_ver_arg,
+        "--python-platform",
+        _uv_python_platform(ctx.platform_tags),
+        "--no-header",
+        "--no-index",
+        "--find-links",
+        str(cache_dir),
+    ]
+    for link in ctx.find_links:
+        cmd.extend(["--find-links", link])
+    cmd.append("-")
+    env = dict(os.environ)
+    env["UV_CACHE_DIR"] = str(cache_dir.parent / "uv")
+    try:
+        result = subprocess.run(
+            cmd,
+            input="\n".join(packages) + "\n",
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=_UV_OFFLINE_TIMEOUT,
+            env=env,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise DependencyError(f"uv 本地离线解析失败: {e}") from e
+    if result.returncode != 0:
+        raise DependencyError(f"uv 本地离线解析退出码 {result.returncode}: {result.stderr.strip()[:400]}")
     return result.stdout

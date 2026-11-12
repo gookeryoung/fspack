@@ -86,6 +86,22 @@ def _clear_pip_python_cache() -> None:
     _find_pip_python.cache_clear()
 
 
+@pytest.fixture(autouse=True)
+def _disable_local_fast_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """关闭 M1 本地快速解析，保持本文件对 pip 预检命令的断言.
+
+    本地快速解析会真实探测构建机的 ``uv`` 并扫描缓存目录，命中时直接返回
+    构造结果、不再调用 pip——本文件大量用例用假解释器 ``/py/python`` +
+    patch ``subprocess.run`` 断言 pip 命令行，必须固定走原路径。M1 自身
+    逻辑由 ``tests/test_local_resolve.py`` 覆盖。
+    """
+    monkeypatch.setattr(
+        "fspack.packaging.wheels.resolver._try_local_resolution",
+        lambda *a: None,
+        raising=True,
+    )
+
+
 def test_download_wheels_cmd_construction(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """--no-index 成功路径：命令含 --no-index，不含 -i index."""
     captured: dict[str, list[str]] = {}

@@ -30,6 +30,7 @@ from pathlib import Path
 
 from fspack.config import is_offline
 from fspack.exceptions import DependencyError
+from fspack.packaging.wheels.local_cache import _try_local_resolution
 from fspack.packaging.wheels.parallel import _PARALLEL_DOWNLOAD_WORKERS, _download_resolved_parallel
 from fspack.packaging.wheels.sdist import _handle_sdist_fallback
 from fspack.packaging.wheels.uv_bridge import (
@@ -127,10 +128,28 @@ def _run_pip_download(
 
     ``require_hashes=True`` 时离线解析成功仍跳过哈希校验（缓存目录 wheel 已首次
     校验）；离线失败回退到在线时强制走 uv --generate-hashes 路径校验哈希。
+
+    本地快速路径（M1）：先尝试 ``uv pip compile --no-index`` 在 cache_dir /
+    本地 find-links 内解析并映射 wheel 文件（热缓存约 40ms），命中则完全跳过
+    pip 预检（pip 进程启动约 480ms + 全目录解析，400 wheel 时 1.5–2.7s）。
+    本地顶层 wheel 全缺时直接判定缓存不足，跳过注定失败的 pip 预检；其余
+    不确定情形仍回退到下方 pip ``--no-index`` 预检，行为不变。
     """
     # 惰性导入：调用时读取 process 模块的当前属性，便于测试 monkeypatch
     # ``fspack.packaging.wheels.process._run_pip``；同时避免模块顶层耦合进程执行块
     from fspack.packaging.wheels.process import _run_pip
+
+    if not require_hashes and not ctx.py_version.endswith("t"):
+        ctx.uv_path = ctx.uv_path or _find_uv()
+        local = _try_local_resolution(filtered, ctx)
+        if local == []:
+            _logger.info("本地无任何顶层依赖 wheel，跳过注定失败的 pip 离线预检")
+            if is_offline():
+                _raise_cache_miss(filtered, ctx)
+            return _download_online(filtered, ctx, require_hashes=require_hashes)
+        if local:
+            _logger.info("本地快速解析命中 %d 个 wheel，跳过 pip 离线预检", len(local))
+            return _local_download_result(local)
 
     # 先用 --no-index 从本地缓存 + 用户 find-links 解析（离线模式），命中则跳过网络查询
     result = _run_pip(
@@ -140,17 +159,28 @@ def _run_pip_download(
     )
     if result is None:
         if is_offline():
-            searched = [str(ctx.cache_dir), *ctx.find_links]
-            raise DependencyError(
-                f"离线模式下依赖缓存未命中: {', '.join(filtered)}，"
-                f"已搜索路径: {'; '.join(searched)}。"
-                f"请预先下载 wheel 放入上述路径之一，或通过 --find-links 指定本地 wheel 目录，"
-                f"或取消 FSPACK_OFFLINE 环境变量"
-            )
+            _raise_cache_miss(filtered, ctx)
         _logger.info("缓存解析失败，回退到在线解析下载")
         return _download_online(filtered, ctx, require_hashes=require_hashes)
     _logger.info("缓存解析成功，跳过网络查询")
     return result
+
+
+def _raise_cache_miss(filtered: list[str], ctx: DownloadContext) -> None:
+    """离线模式下缓存未命中的统一错误（列出依赖与已搜索路径）."""
+    searched = [str(ctx.cache_dir), *ctx.find_links]
+    raise DependencyError(
+        f"离线模式下依赖缓存未命中: {', '.join(filtered)}，"
+        f"已搜索路径: {'; '.join(searched)}。"
+        f"请预先下载 wheel 放入上述路径之一，或通过 --find-links 指定本地 wheel 目录，"
+        f"或取消 FSPACK_OFFLINE 环境变量"
+    )
+
+
+def _local_download_result(wheels: Sequence[Path]) -> subprocess.CompletedProcess[str]:
+    """把本地解析结果包装成 pip 兼容的 ``Saved <wheel>`` 输出（下游按同一格式解析）."""
+    stdout = "".join(f"Saved {p.name}\n" for p in wheels)
+    return subprocess.CompletedProcess(args=["local-resolve"], returncode=0, stdout=stdout, stderr="")
 
 
 def _download_online(

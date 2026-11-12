@@ -38,6 +38,17 @@ from fspack.platform import Platform
 from fspack.progress import StageRecorder
 from tests._stubs import CompletedStub, fail_urlopen
 
+
+@pytest.fixture(autouse=True)
+def _disable_local_fast_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """关闭 M1 本地快速解析：本文件用假 pip 模拟缓存命中/未命中，需固定走原路径."""
+    monkeypatch.setattr(
+        "fspack.packaging.wheels.resolver._try_local_resolution",
+        lambda *a: None,
+        raising=True,
+    )
+
+
 # ---- runtime.py：embed / standalone 离线模式 ----
 
 
