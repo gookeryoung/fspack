@@ -459,3 +459,80 @@ def test_enforce_win7_loaders_skips_non_pe(tmp_path: Path) -> None:
 def test_enforce_win7_loaders_missing_file_skipped(tmp_path: Path) -> None:
     """文件缺失（测试 stub 未生成 exe）同样告警跳过，不抛错."""
     enforce_win7_loaders([tmp_path / "not-exist.exe"])
+
+
+# ---------------------------------------------------------------------------
+# 命中计数 / 规则自动失效 / 与 patch 共用 PE 枚举
+# ---------------------------------------------------------------------------
+
+
+def test_scan_reports_cache_hits(tmp_path: Path) -> None:
+    """首次全扫命中 0，未变更时第二次全部命中（该计数驱动 stage detail）."""
+    _write_pe(tmp_path / "app.exe")
+    _write_pe(tmp_path / "runtime" / "python311.dll")
+
+    first = scan_dist_win7(tmp_path)
+    second = scan_dist_win7(tmp_path)
+
+    assert first.cache_hits == 0
+    assert second.cache_hits == second.scanned == 2
+
+
+def test_scan_rules_change_invalidates_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """规则源码签名变化时整表失效，重新解析（不再依赖手升版本号）."""
+    from fspack.packaging.win7 import scan as scan_mod
+
+    _write_pe(tmp_path / "app.exe")
+    assert scan_dist_win7(tmp_path).cache_hits == 0
+
+    calls: list[Path] = []
+    real_check = scan_mod.check_win7_imports
+
+    def spy(path: Path, *, shim: Path | None = None) -> Any:
+        calls.append(path)
+        return real_check(path, shim=shim)
+
+    monkeypatch.setattr(scan_mod, "_rules_signature", lambda: "rules-changed")
+    monkeypatch.setattr(scan_mod, "check_win7_imports", spy)
+    report = scan_dist_win7(tmp_path)
+
+    assert calls == [tmp_path / "app.exe"]
+    assert report.cache_hits == 0
+
+
+def test_enforce_win7_loaders_rules_change_invalidates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """loader 通过结论缓存同样跟随规则签名，规则变化必须重新校验."""
+    from fspack.packaging.win7 import scan as scan_mod
+
+    exe = _write_pe(tmp_path / "cli.exe")
+    cache_dir = tmp_path / "build"
+    enforce_win7_loaders([exe], cache_dir=cache_dir)
+
+    calls: list[Path] = []
+    real_check = scan_mod.check_win7_imports
+
+    def spy(path: Path, *, shim: Path | None = None) -> Any:
+        calls.append(path)
+        return real_check(path, shim=shim)
+
+    monkeypatch.setattr(scan_mod, "_rules_signature", lambda: "rules-changed")
+    monkeypatch.setattr(scan_mod, "check_win7_imports", spy)
+    enforce_win7_loaders([exe], cache_dir=cache_dir)
+
+    assert calls == [exe]
+
+
+def test_scan_accepts_precomputed_pe_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """传入共享 PE 列表时不再自行遍历（patch 与 scan 合并为一次枚举）."""
+    from fspack.packaging.win7 import scan as scan_mod
+
+    pe = _write_pe(tmp_path / "app.exe")
+
+    def boom(*args: object, **kwargs: object) -> object:
+        raise AssertionError("传入 pe_files 后不应重新遍历 dist")
+
+    monkeypatch.setattr(scan_mod, "iter_pe_files", boom)
+    report = scan_dist_win7(tmp_path, pe_files=[pe])
+
+    assert report.scanned == 1
+    assert report.ok

@@ -524,14 +524,17 @@ def _execute_build(  # noqa: PLR0912, PLR0913
         from fspack.packaging.win7.patch import patch_dist_win7
         from fspack.packaging.win7.scan import (
             inject_win7_shims,
+            iter_pe_files,
             scan_dist_win7,
             write_win7_report,
         )
 
         with tracker.stage("Win7 兼容扫描") as st:
+            # 枚举一次、patch 与 scan 共用：两次全树遍历合并为一次
+            pe_files = iter_pe_files(cfg.dist_dir)
             # 改名必须在扫描之前：报告反映改写后的最终兼容状态
-            patched = patch_dist_win7(cfg.dist_dir)
-            report = scan_dist_win7(cfg.dist_dir)
+            patched = patch_dist_win7(cfg.dist_dir, pe_files=pe_files)
+            report = scan_dist_win7(cfg.dist_dir, pe_files=pe_files)
             if patched:
                 report = replace(report, patched=patched)
             # 扫描后自动注入 shim DLL（runtime 目录，与 loader 的 DLL 搜索路径一致）
@@ -540,9 +543,12 @@ def _execute_build(  # noqa: PLR0912, PLR0913
                 report = replace(report, injected_shims=injected)
             report_path = write_win7_report(report, cfg.dist_dir)
             st.processed(report.scanned)
+            st.hit_cache(report.cache_hits)
             details: list[str] = []
             if patched:
                 details.append(f"改名: {len(patched)} 个文件")
+            if report.cache_hits:
+                details.append(f"缓存命中: {report.cache_hits}/{report.scanned}")
             if injected:
                 details.append(f"shim: {', '.join(injected)}")
             if report.violations:

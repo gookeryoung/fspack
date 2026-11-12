@@ -7,6 +7,7 @@ fixture 为纯标准库构造的最小 PE64（含普通导入 + 可选延迟加�
 
 from __future__ import annotations
 
+import os
 import shutil
 import struct
 from dataclasses import replace as dc_replace
@@ -377,6 +378,78 @@ class TestPatchDistWin7:
 
     def test_empty_dist(self, tmp_path: Path) -> None:
         assert patch_dist_win7(tmp_path) == ()
+
+    def test_clean_file_result_is_cached(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """无命中结论按 stat 缓存，第二次构建不再读 PE 字节."""
+        safe = tmp_path / "runtime" / "python313.dll"
+        safe.parent.mkdir(parents=True)
+        safe.write_bytes(_build_pe64(_KERNEL32_SAFE_IMPORTS))
+        assert patch_dist_win7(tmp_path) == ()
+        cache_file = tmp_path / "build" / "action-win7patch.json"
+        assert cache_file.is_file()
+
+        def boom(*args: object, **kwargs: object) -> object:
+            raise AssertionError("缓存命中时不应重新解析 PE")
+
+        monkeypatch.setattr(patch, "patch_bytes", boom)
+        assert patch_dist_win7(tmp_path) == ()
+
+    def test_patched_file_result_is_cached(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """改写后按写回后的 stat 记账：下一次构建命中缓存，且不重复报告改名."""
+        hit = tmp_path / "site-packages" / "_pydantic_core.pyd"
+        hit.parent.mkdir(parents=True)
+        hit.write_bytes(_build_pe64(_KERNEL32_IMPORTS))
+        assert len(patch_dist_win7(tmp_path)) == 1
+
+        def boom(*args: object, **kwargs: object) -> object:
+            raise AssertionError("缓存命中时不应重新解析 PE")
+
+        monkeypatch.setattr(patch, "patch_bytes", boom)
+        assert patch_dist_win7(tmp_path) == ()
+        assert check_win7_imports(hit).ok
+
+    def test_replaced_file_is_repatch(self, tmp_path: Path) -> None:
+        """dist 被重新解压覆盖（mtime 变化）后必须重新改写."""
+        hit = tmp_path / "site-packages" / "_pydantic_core.pyd"
+        hit.parent.mkdir(parents=True)
+        hit.write_bytes(_build_pe64(_KERNEL32_IMPORTS))
+        assert len(patch_dist_win7(tmp_path)) == 1
+
+        hit.write_bytes(_build_pe64(_KERNEL32_IMPORTS))
+        os.utime(hit, ns=(1_000_000_000, 1_000_000_000))
+        assert len(patch_dist_win7(tmp_path)) == 1
+        assert check_win7_imports(hit).ok
+
+    def test_rules_change_invalidates_cache(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """改名规则签名变化时整表失效（规则/逻辑改动无需手升版本号）."""
+        safe = tmp_path / "runtime" / "python313.dll"
+        safe.parent.mkdir(parents=True)
+        safe.write_bytes(_build_pe64(_KERNEL32_SAFE_IMPORTS))
+        assert patch_dist_win7(tmp_path) == ()
+
+        calls: list[bytes] = []
+        real_patch = patch.patch_bytes
+
+        def spy(data: bytes) -> object:
+            calls.append(data)
+            return real_patch(data)
+
+        monkeypatch.setattr(patch, "_patch_signature", lambda: "rules-changed")
+        monkeypatch.setattr(patch, "patch_bytes", spy)
+        assert patch_dist_win7(tmp_path) == ()
+        assert len(calls) == 1
+
+    def test_accepts_shared_pe_files(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """传入共享 PE 列表时不再自行遍历（patch 与 scan 合并为一次枚举）."""
+        hit = tmp_path / "site-packages" / "_pydantic_core.pyd"
+        hit.parent.mkdir(parents=True)
+        hit.write_bytes(_build_pe64(_KERNEL32_IMPORTS))
+
+        def boom(*args: object, **kwargs: object) -> object:
+            raise AssertionError("传入 pe_files 后不应重新遍历 dist")
+
+        monkeypatch.setattr(patch, "iter_pe_files", boom)
+        assert len(patch_dist_win7(tmp_path, pe_files=[hit])) == 1
 
 
 # ---------------------------------------------------------------------------

@@ -47,10 +47,12 @@ import argparse
 import logging
 import struct
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
+from fspack.packaging import action_cache
 from fspack.packaging.win7.scan import iter_pe_files
 
 __all__ = [
@@ -395,7 +397,12 @@ def patch_file(target: Path, *, output: Path | None = None) -> PatchResult:
     return PatchResult(target_path=target, output_path=out_path, renamed=renamed, changed=True)
 
 
-def patch_dist_win7(dist_dir: Path) -> tuple[tuple[str, tuple[str, ...]], ...]:
+def patch_dist_win7(
+    dist_dir: Path,
+    *,
+    cache_dir: Path | None = None,
+    pe_files: Iterable[Path] | None = None,
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
     """遍历 dist 全部 PE 文件执行原地改名，返回 (相对路径, 改名记录) 列表.
 
     只改写命中改名规则的文件；非 PE 文件（解析失败）静默跳过——由
@@ -403,12 +410,36 @@ def patch_dist_win7(dist_dir: Path) -> tuple[tuple[str, tuple[str, ...]], ...]:
     必须在 :func:`scan_dist_win7` **之前**调用，扫描报告才反映改写后的
     最终兼容状态。
 
+    增量：每文件结论按 (size, mtime_ns) + 规则源码签名缓存到
+    ``<dist>/build/action-win7patch.json``（``cache_dir`` 可覆盖），未变更
+    文件直接复用"无需改写"或"已改写"结论，省去重复读 PE 字节。改写后按
+    **写回后的** stat 记账，下一次构建才能命中；文件被重新解压覆盖时 mtime
+    变化即重扫。只有本次真正发生改写的文件才出现在返回值里。
+
+    Args:
+        dist_dir: dist 根目录。
+        cache_dir: 缓存目录；None 表示 ``dist_dir/build``。
+        pe_files: 已枚举的 PE 列表（与扫描阶段共用一次遍历）；None 时现场遍历。
+
     Returns:
         ((相对路径, (("KERNEL32.dll!旧名→新名", ...)), ...) 元组；空元组
-        表示 dist 内无文件需要改写。
+        表示本次没有文件需要改写。
     """
+    cache_dir = cache_dir if cache_dir is not None else dist_dir / "build"
+    signature = _patch_signature()
+    cached = _load_patch_cache(cache_dir, signature)
+    fresh: dict[str, dict[str, Any]] = {}
     results: list[tuple[str, tuple[str, ...]]] = []
-    for path in iter_pe_files(dist_dir):
+    for path in iter_pe_files(dist_dir) if pe_files is None else pe_files:
+        rel = path.relative_to(dist_dir).as_posix()
+        try:
+            key = _stat_key(path)
+        except OSError:
+            continue
+        entry = cached.get(rel)
+        if entry is not None and entry.get("k") == key:
+            fresh[rel] = entry
+            continue
         try:
             data = path.read_bytes()
             patched, renamed = patch_bytes(data)
@@ -416,13 +447,47 @@ def patch_dist_win7(dist_dir: Path) -> tuple[tuple[str, tuple[str, ...]], ...]:
             _logger.debug("跳过非 PE 文件 %s: %s", path, exc)
             continue
         if not renamed:
+            fresh[rel] = {"k": key, "records": []}
             continue
         path.write_bytes(patched)
-        rel = path.relative_to(dist_dir).as_posix()
         records = tuple(f"{dll}!{old}→{new}" for dll, old, new in renamed)
         _logger.info("Win7 导入改名 %s: %s", rel, "；".join(records))
+        try:
+            fresh[rel] = {"k": _stat_key(path), "records": list(records)}
+        except OSError:
+            fresh[rel] = {"k": key, "records": list(records)}
         results.append((rel, records))
+    if fresh != cached:
+        _save_patch_cache(cache_dir, signature, fresh)
     return tuple(results)
+
+
+def _patch_signature() -> str:
+    """改写规则签名：本模块源码（改名表 + 改写逻辑）变化即整表失效."""
+    return action_cache.fingerprint("win7-patch", action_cache.source_digest(sys.modules[__name__]))
+
+
+def _stat_key(path: Path) -> str:
+    """文件缓存键：size + mtime_ns（原地改写只变 mtime，被覆盖解压则两者都可能变）."""
+    st = path.stat()
+    return f"{st.st_size}:{st.st_mtime_ns}"
+
+
+def _load_patch_cache(cache_dir: Path, signature: str) -> dict[str, dict[str, Any]]:
+    """读取改名缓存；签名不符、损坏或结构异常时返回空表."""
+    rec = action_cache.load(cache_dir, "win7patch")
+    if rec is None or rec["key"] != signature:
+        return {}
+    payload = rec.get("payload")
+    entries = payload.get("files") if isinstance(payload, dict) else None
+    if not isinstance(entries, dict):
+        return {}
+    return {k: v for k, v in entries.items() if isinstance(k, str) and isinstance(v, dict)}
+
+
+def _save_patch_cache(cache_dir: Path, signature: str, entries: dict[str, dict[str, Any]]) -> None:
+    """写入改名缓存（失败仅告警，下次退化为重扫）."""
+    action_cache.save(cache_dir, "win7patch", signature, payload={"files": entries})
 
 
 # ---------------------------------------------------------------------------

@@ -22,6 +22,7 @@ import hashlib
 import json
 import logging
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
 __all__ = [
@@ -30,6 +31,7 @@ __all__ = [
     "load",
     "marker_path",
     "save",
+    "source_digest",
 ]
 
 _logger = logging.getLogger(__name__)
@@ -51,6 +53,23 @@ def fingerprint(*parts: object) -> str:
 def marker_path(cache_dir: Path, name: str) -> Path:
     """标记文件路径：``<cache_dir>/action-<name>.json``."""
     return cache_dir / f"action-{name}.json"
+
+
+def source_digest(module: ModuleType) -> str:
+    """模块源码内容摘要，用作缓存键里"规则可能已变"的自动失效杠杆.
+
+    判定规则（API 黑名单、导入表改写表）与解析逻辑都写在模块源码里，靠人工
+    递增版本号容易漏升；直接对源码字节取 sha1 可让任何规则/逻辑改动自动生效，
+    代价是每次构建多读一次模块文件（数十 KB，微秒级）。模块无文件路径
+    （frozen/zipimport 非常规安装）时退回空串，只损失自动失效能力，不误命中。
+    """
+    source = getattr(module, "__file__", None)
+    if not source:
+        return ""
+    try:
+        return hashlib.sha1(Path(source).read_bytes()).hexdigest()
+    except OSError:
+        return ""
 
 
 def load(cache_dir: Path, name: str, *, version: int = ACTION_CACHE_VERSION) -> dict[str, Any] | None:

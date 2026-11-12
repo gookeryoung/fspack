@@ -505,14 +505,14 @@ def report_pipeline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(executor, "_build_entry_loaders", lambda *a: [dist / "app.exe"])
     monkeypatch.setattr("fspack.packaging.win7.scan.enforce_win7_loaders", lambda *a, **kw: None)
 
-    def patch_binary(dist_dir: Path) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    def patch_binary(dist_dir: Path, **kwargs: object) -> tuple[tuple[str, tuple[str, ...]], ...]:
         assert dist_dir == dist
         binary = dist / "site-packages/pkg/native.pyd"
         assert binary.read_bytes() == b"old-imports"
         binary.write_bytes(b"new-imports")
         return (("site-packages/pkg/native.pyd", ("old-imports→new-imports",)),)
 
-    def scan_binary(dist_dir: Path) -> Win7ScanReport:
+    def scan_binary(dist_dir: Path, **kwargs: object) -> Win7ScanReport:
         assert dist_dir == dist
         assert (dist / "site-packages/pkg/native.pyd").read_bytes() == b"new-imports"
         return Win7ScanReport(scanned=3, dist_dir=dist)
