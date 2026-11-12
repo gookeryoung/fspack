@@ -182,6 +182,96 @@ def test_rewrite_embed_stdlib_zip_idempotent(tmp_path: Path) -> None:
         assert "os.pyc" in zf.namelist()
 
 
+# ---------------------------------------------------------------------------
+# embed zip 精简标记（.slim.json）：命中免重扫 / zip 变化、切档位、标记损坏失效
+# ---------------------------------------------------------------------------
+
+
+def test_slim_marker_skips_second_scan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """首次精简后写标记，二次调用不再打开 zip（直接跳过）."""
+    from fspack.packaging.runtime import trim as trim_mod
+
+    runtime = tmp_path / "runtime"
+    _make_embed_zip(runtime, {"pydoc_data/topics.pyc": b"x" * 100, "os.pyc": b"os"})
+    st1 = StageRecorder("精简标准库")
+    trim_mod._rewrite_embed_stdlib_zip(runtime, "3.11.9", st1)
+    assert (runtime / "python311.zip.slim.json").is_file()
+
+    real_zipfile = trim_mod.zipfile.ZipFile
+
+    def boom(*args: object, **kwargs: object) -> object:
+        raise AssertionError("标记命中时不应再次打开 zip")
+
+    monkeypatch.setattr(trim_mod.zipfile, "ZipFile", boom)
+    st2 = StageRecorder("精简标准库")
+    trim_mod._rewrite_embed_stdlib_zip(runtime, "3.11.9", st2)
+    monkeypatch.setattr(trim_mod.zipfile, "ZipFile", real_zipfile)
+    record = st2._finalize()
+    assert record.bytes_saved == 0
+    assert record.detail == "已精简，跳过"
+
+
+def test_slim_marker_invalidated_by_zip_change(tmp_path: Path) -> None:
+    """zip 被替换（size/mtime 变化）后必须重新扫描，不能沿用旧标记."""
+    from fspack.packaging.runtime.trim import _rewrite_embed_stdlib_zip
+
+    runtime = tmp_path / "runtime"
+    zip_path = _make_embed_zip(runtime, {"os.pyc": b"os"})
+    _rewrite_embed_stdlib_zip(runtime, "3.11.9", StageRecorder("精简标准库"))
+
+    # 模拟 zip 被重新解压覆盖：重新写入含黑名单条目的 zip
+    zip_path.unlink()
+    _make_embed_zip(runtime, {"pydoc_data/topics.pyc": b"x" * 100, "os.pyc": b"os"})
+    st = StageRecorder("精简标准库")
+    _rewrite_embed_stdlib_zip(runtime, "3.11.9", st)
+    assert st._finalize().skipped == 1
+
+
+def test_slim_marker_invalidated_by_aggressive_flag(tmp_path: Path) -> None:
+    """保守档标记不覆盖激进档：切档位后重新按激进清单剥离."""
+    from fspack.packaging.runtime.trim import _rewrite_embed_stdlib_zip
+
+    runtime = tmp_path / "runtime"
+    _make_embed_zip(runtime, {"xml/__init__.pyc": b"y" * 100, "os.pyc": b"os"})
+    _rewrite_embed_stdlib_zip(runtime, "3.11.9", StageRecorder("精简标准库"))
+    st = StageRecorder("精简标准库")
+    _rewrite_embed_stdlib_zip(runtime, "3.11.9", st, aggressive=True)
+    assert st._finalize().skipped == 1
+
+
+def test_slim_marker_corrupt_rechecks(tmp_path: Path) -> None:
+    """标记损坏（非 JSON）时按未命中处理，重新扫描 zip."""
+    from fspack.packaging.runtime.trim import _rewrite_embed_stdlib_zip
+
+    runtime = tmp_path / "runtime"
+    _make_embed_zip(runtime, {"os.pyc": b"os"})
+    _rewrite_embed_stdlib_zip(runtime, "3.11.9", StageRecorder("精简标准库"))
+    (runtime / "python311.zip.slim.json").write_text("{bad", encoding="utf-8")
+    st = StageRecorder("精简标准库")
+    _rewrite_embed_stdlib_zip(runtime, "3.11.9", st)
+    assert st._finalize().detail == "已精简，跳过"
+    assert '"version"' in (runtime / "python311.zip.slim.json").read_text(encoding="utf-8")
+
+
+def test_slim_marker_blacklist_digest_mismatch_rechecks(tmp_path: Path) -> None:
+    """剥离清单指纹变化（清单调整）时旧标记失效."""
+    import json
+
+    from fspack.packaging.runtime.trim import _rewrite_embed_stdlib_zip
+
+    runtime = tmp_path / "runtime"
+    _make_embed_zip(runtime, {"pydoc_data/topics.pyc": b"x" * 100, "os.pyc": b"os"})
+    _rewrite_embed_stdlib_zip(runtime, "3.11.9", StageRecorder("精简标准库"))
+    marker = runtime / "python311.zip.slim.json"
+    payload = json.loads(marker.read_text(encoding="utf-8"))
+    payload["blacklist"] = "stale"
+    marker.write_text(json.dumps(payload), encoding="utf-8")
+    st = StageRecorder("精简标准库")
+    _rewrite_embed_stdlib_zip(runtime, "3.11.9", st)
+    assert st._finalize().detail == "已精简，跳过"
+    assert json.loads(marker.read_text(encoding="utf-8"))["blacklist"] != "stale"
+
+
 def test_rewrite_embed_stdlib_zip_bad_zip_warns(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """畸形 zip 警告跳过不抛异常，原文件保留."""
     from fspack.packaging.runtime.trim import _rewrite_embed_stdlib_zip

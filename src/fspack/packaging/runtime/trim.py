@@ -15,6 +15,8 @@ subprocess.run，因此本模块通过 :func:`_P` 延迟从 pyc facade 解析 ``
 from __future__ import annotations
 
 import contextlib
+import hashlib
+import json
 import logging
 import shutil
 import subprocess as _default_subprocess
@@ -103,6 +105,9 @@ _EMBED_TRIM_AGGRESSIVE = _EMBED_TRIM_CONSERVATIVE | frozenset(
         "mailbox",
     }
 )
+
+# embed zip 精简标记版本：标记结构/语义变化时递增使旧标记失效
+_SLIM_MARKER_VERSION = 1
 
 # Linux/macOS standalone 运行时精简：剥离构建期需要但运行时无用的文件
 # python3.X 二进制（53MB）：loader 用 dlopen+Py_BytesMain，从不 exec python3.X；
@@ -267,6 +272,57 @@ def _embed_entry_blacklisted(name: str, blacklist: frozenset[str]) -> bool:
     return stem in blacklist
 
 
+def _slim_marker_path(zip_path: Path) -> Path:
+    """embed stdlib zip 的精简标记文件路径（与 zip 同目录）."""
+    return zip_path.with_name(f"{zip_path.name}.slim.json")
+
+
+def _blacklist_digest(blacklist: frozenset[str]) -> str:
+    """剥离清单指纹：清单内容变化时旧标记自动失效（无需手升版本号）."""
+    return hashlib.sha1("\n".join(sorted(blacklist)).encode("utf-8")).hexdigest()
+
+
+def _slim_marker_matches(zip_path: Path, blacklist: frozenset[str], aggressive: bool) -> bool:
+    """标记是否可证明“该 zip 已按当前清单精简过且此后未变”.
+
+    键 = 标记版本 + zip size/mtime_ns + 档位 + 剥离清单指纹。zip 被重新解压
+    或写入（mtime 变化）、切档位、清单调整都会失配重扫；标记损坏视为未命中。
+    """
+    try:
+        meta = json.loads(_slim_marker_path(zip_path).read_text(encoding="utf-8"))
+        st = zip_path.stat()
+    except (OSError, ValueError):
+        return False
+    return (
+        isinstance(meta, dict)
+        and meta.get("version") == _SLIM_MARKER_VERSION
+        and meta.get("size") == st.st_size
+        and meta.get("mtime_ns") == st.st_mtime_ns
+        and meta.get("aggressive") is aggressive
+        and meta.get("blacklist") == _blacklist_digest(blacklist)
+    )
+
+
+def _write_slim_marker(zip_path: Path, blacklist: frozenset[str], aggressive: bool) -> None:
+    """写入精简标记（失败仅告警：下次构建退化为重新解析 zip）."""
+    try:
+        st = zip_path.stat()
+        _slim_marker_path(zip_path).write_text(
+            json.dumps(
+                {
+                    "version": _SLIM_MARKER_VERSION,
+                    "size": st.st_size,
+                    "mtime_ns": st.st_mtime_ns,
+                    "aggressive": aggressive,
+                    "blacklist": _blacklist_digest(blacklist),
+                }
+            ),
+            encoding="utf-8",
+        )
+    except OSError as e:
+        _logger.warning("写入 embed zip 精简标记失败（不影响构建）: %s", e)
+
+
 def _rewrite_embed_stdlib_zip(
     runtime_dir: Path,
     py_version: str,
@@ -295,6 +351,11 @@ def _rewrite_embed_stdlib_zip(
         stage.set_detail("embed stdlib zip 不存在，跳过")
         return
     blacklist = _EMBED_TRIM_AGGRESSIVE if aggressive else _EMBED_TRIM_CONSERVATIVE
+    if _slim_marker_matches(zip_path, blacklist, aggressive):
+        # 标记可证明 zip 未被改动且已按当前清单精简：跳过整包读取/解压（热构建 ~50ms）
+        _logger.info("embed stdlib zip 已精简且未变化，跳过重扫: %s", zip_path.name)
+        stage.set_detail("已精简，跳过")
+        return
     try:
         with zipfile.ZipFile(zip_path) as zf:
             infos = zf.infolist()
@@ -309,6 +370,7 @@ def _rewrite_embed_stdlib_zip(
         return
     removed = len(infos) - len(keep)
     if removed == 0:
+        _write_slim_marker(zip_path, blacklist, aggressive)
         stage.set_detail("已精简，跳过")
         return
     size_before = zip_path.stat().st_size
@@ -326,6 +388,7 @@ def _rewrite_embed_stdlib_zip(
         stage.set_detail("zip 写入失败，跳过")
         return
     saved = max(0, size_before - zip_path.stat().st_size)
+    _write_slim_marker(zip_path, blacklist, aggressive)
     stage.skip(removed)
     stage.add_saved_bytes(saved)
     level = "激进" if aggressive else "保守"
