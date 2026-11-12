@@ -8,11 +8,12 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -308,6 +309,35 @@ def test_run_with_profile_timeout_terminates_long_run(capsys: pytest.CaptureFixt
     assert elapsed < 4.0
     # 被 terminate 的进程退出码非 0（Windows 1 / POSIX -15），透传返回
     assert rc != 0
+    out = capsys.readouterr().out
+    assert "进程超时被强制终止，数据不完整" in out
+
+
+def test_terminate_on_timeout_marks_and_terminates() -> None:
+    """watchdog 回调置 timed_out 并调用 terminate（不等待进程退出）."""
+    from fspack.runner_profile import _terminate_on_timeout
+
+    calls: list[str] = []
+
+    class _FakeProc:
+        def terminate(self) -> None:
+            calls.append("terminate")
+
+    sample = ProfileSample()
+    _terminate_on_timeout(cast("subprocess.Popen[bytes]", _FakeProc()), sample)
+
+    assert sample.timed_out is True
+    assert calls == ["terminate"]
+
+
+def test_print_summary_marks_timed_out_run(capsys: pytest.CaptureFixture[str]) -> None:
+    """timed_out 样本汇总时标注数据不完整（GUI 长跑/未知框架）."""
+    sample = ProfileSample()
+    sample.timed_out = True
+    sample.wall_ms = 1234.0
+    sample.returncode = 1
+
+    _print_summary(sample)
     out = capsys.readouterr().out
     assert "进程超时被强制终止，数据不完整" in out
 

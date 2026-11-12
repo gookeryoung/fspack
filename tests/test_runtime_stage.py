@@ -393,12 +393,19 @@ def _make_windows_t_context(
     no_stdlib_trim: bool = False,
 ) -> tuple[BuildContext, Path]:
     """构造 Windows 自由线程版本 BuildContext 用于 _prepare_windows_t_runtime 测试."""
-    from fspack.config import BuildConfig
+    from fspack.config import AppType, BuildConfig
     from fspack.progress import BuildTracker
 
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
-    info = ProjectInfo.from_dir(tmp_path, py_version)
+    info = ProjectInfo(
+        name="app",
+        version="0.1",
+        src_dir=tmp_path,
+        entry_module="app",
+        entry_file=tmp_path / "app.py",
+        app_type=AppType.CLI,
+        dependencies=(),
+        py_version=py_version,
+    )
     cfg = BuildConfig(
         project_dir=tmp_path,
         dist_dir=tmp_path / "dist",
@@ -437,8 +444,8 @@ def test_prepare_windows_t_runtime_cache_hit(tmp_path: Path, monkeypatch: pytest
     def fake_extract(_tar: Path, _dest: Path) -> None:
         extract_calls.append(_tar)
 
-    monkeypatch.setattr(runtime_stage, "_default_download_standalone", fake_download)
-    monkeypatch.setattr(runtime_stage, "_default_extract_standalone", fake_extract)
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.download_standalone", fake_download)
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.extract_standalone", fake_extract)
     monkeypatch.setattr(runtime_stage, "needs_win7_dll", lambda v: False)
 
     site_packages = runtime_stage._prepare_windows_t_runtime(ctx)
@@ -447,7 +454,6 @@ def test_prepare_windows_t_runtime_cache_hit(tmp_path: Path, monkeypatch: pytest
     assert site_packages == ctx.cfg.dist_dir / "site-packages"
 
 
-@pytest.mark.slow()
 def test_prepare_windows_t_runtime_download_extract_flatten(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """runtime 未就绪时下载 standalone freethreaded tarball 并扁平化 python/ 子目录."""
     from fspack.packaging.pipeline import runtime_stage
@@ -472,8 +478,8 @@ def test_prepare_windows_t_runtime_download_extract_flatten(tmp_path: Path, monk
         (python_sub / "Lib" / "os.py").write_text("")
         (python_sub / "DLLs").mkdir()
 
-    monkeypatch.setattr(runtime_stage, "_default_download_standalone", fake_download)
-    monkeypatch.setattr(runtime_stage, "_default_extract_standalone", fake_extract)
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.download_standalone", fake_download)
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.extract_standalone", fake_extract)
     monkeypatch.setattr(runtime_stage, "needs_win7_dll", lambda v: False)
 
     site_packages = runtime_stage._prepare_windows_t_runtime(ctx)

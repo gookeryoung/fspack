@@ -68,6 +68,24 @@ def _make_http_error(code: int, msg: str = "Error") -> urllib.error.HTTPError:
     )
 
 
+class _TruncatedResp:
+    """声明 Content-Length 大于实际响应体，模拟代理/弱网静默截断（读循环无异常）."""
+
+    def __init__(self, data: bytes, total: int) -> None:
+        self.headers = {"Content-Length": str(total)}
+        self._data = data
+
+    def read(self, n: int = -1) -> bytes:
+        data, self._data = self._data, b""
+        return data
+
+    def __enter__(self) -> _TruncatedResp:
+        return self
+
+    def __exit__(self, *args: object) -> bool:
+        return False
+
+
 @pytest.fixture(autouse=True)
 def _patch_retry_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
     """跳过重试等待，避免测试耗时（首次 + 2 次重试退避约 1s/2s）."""
@@ -274,6 +292,44 @@ class TestDownloaderRetry:
         assert written == len(b"recovered data")
         assert dest.read_bytes() == b"recovered data"
         assert len(calls) == 2
+
+    def test_truncated_body_retried_then_succeeds(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Content-Length 对账发现截断 → IncompleteRead 重试 → 第二次完整写入."""
+        calls: list[int] = []
+
+        def fake_urlopen(req: Request, timeout: int, **kwargs: object) -> object:
+            calls.append(len(calls) + 1)
+            if len(calls) == 1:
+                return _TruncatedResp(b"short", total=10)
+            return FakeResp(b"0123456789")
+
+        monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+        dest = tmp_path / "f.zip"
+        downloader = Downloader(ssl_ctx=ssl.create_default_context())
+        written = downloader.download("https://x/truncated", dest)
+        assert written == 10
+        assert dest.read_bytes() == b"0123456789"
+        assert len(calls) == 2
+        assert not (tmp_path / "f.zip.part").exists()
+
+    def test_truncated_body_exhausted_cleans_part(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """每次响应都截断：重试 3 次后抛 IncompleteRead，并清理 .part 半成品."""
+        import http.client
+
+        calls: list[int] = []
+
+        def fake_urlopen(req: Request, timeout: int, **kwargs: object) -> object:
+            calls.append(len(calls) + 1)
+            return _TruncatedResp(b"short", total=10)
+
+        monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+        dest = tmp_path / "f.zip"
+        downloader = Downloader(ssl_ctx=ssl.create_default_context())
+        with pytest.raises(http.client.IncompleteRead):
+            downloader.download("https://x/truncated", dest)
+        assert len(calls) == _MAX_ATTEMPTS
+        assert not dest.exists()
+        assert not (tmp_path / "f.zip.part").exists()
 
     def test_http_404_not_retried(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """HTTP 404 立即失败，不重试."""
