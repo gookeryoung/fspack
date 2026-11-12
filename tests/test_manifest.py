@@ -502,7 +502,7 @@ def report_pipeline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     ):
         monkeypatch.setattr(executor, name, lambda *a, **kw: None)
     monkeypatch.setattr(executor, "_build_entry_loaders", lambda *a: [dist / "app.exe"])
-    monkeypatch.setattr("fspack.packaging.win7.scan.enforce_win7_loaders", lambda *a: None)
+    monkeypatch.setattr("fspack.packaging.win7.scan.enforce_win7_loaders", lambda *a, **kw: None)
 
     def patch_binary(dist_dir: Path) -> tuple[tuple[str, tuple[str, ...]], ...]:
         assert dist_dir == dist
