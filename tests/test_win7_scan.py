@@ -396,6 +396,24 @@ def test_inject_win7_shims_skips_existing_dest(tmp_path: Path) -> None:
     assert existing.read_bytes() == b"already-injected"
 
 
+def test_inject_win7_shims_reuses_scan_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """传入已扫描的 shim 需求名时不再整树重扫（复用 scan_dist_win7 结果）."""
+    from fspack.packaging.win7 import scan as scan_mod
+    from fspack.packaging.win7.scan import inject_win7_shims
+
+    dist = tmp_path / "dist"
+    (dist / "runtime").mkdir(parents=True)
+    _write_rust_wheel_pyd(dist)
+    report = scan_dist_win7(dist)
+    assert report.shim_names == frozenset({"bcryptprimitives.dll"})
+
+    def boom(*args: object, **kwargs: object) -> object:
+        raise AssertionError("传入 needed 后不应重新扫描 dist")
+
+    monkeypatch.setattr(scan_mod, "check_win7_imports", boom)
+    assert inject_win7_shims(dist, needed=report.shim_names) == ("bcryptprimitives.dll",)
+
+
 def test_inject_win7_shims_missing_source_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """内置 shim 源文件缺失属硬错误，抛 OSError 阻断构建."""
     from fspack.packaging.win7 import scan

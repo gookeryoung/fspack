@@ -535,7 +535,7 @@ def _execute_build(  # noqa: PLR0912, PLR0913
             if patched:
                 report = replace(report, patched=patched)
             # 扫描后自动注入 shim DLL（runtime 目录，与 loader 的 DLL 搜索路径一致）
-            injected = inject_win7_shims(cfg.dist_dir)
+            injected = inject_win7_shims(cfg.dist_dir, needed=report.shim_names)
             if injected:
                 report = replace(report, injected_shims=injected)
             report_path = write_win7_report(report, cfg.dist_dir)

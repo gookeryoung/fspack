@@ -91,7 +91,8 @@ class Win7ScanReport:
     截断）的文件名；violations 为存在违规的文件结果（ok=False）；
     injected_shims 为本次注入的 shim DLL 文件名（dist 根目录下已存在的
     shim 也包含在内）；patched 为扫描前导入表原地改名的文件记录
-    （(相对路径, ("KERNEL32.dll!旧名→新名", ...)) 元组）。
+    （(相对路径, ("KERNEL32.dll!旧名→新名", ...)) 元组）；shim_names 为
+    扫描发现的 shim 需求名（小写，供 inject_win7_shims 复用免重扫）。
     """
 
     scanned: int = 0
@@ -101,6 +102,7 @@ class Win7ScanReport:
     ucrt_files: int = 0
     injected_shims: tuple[str, ...] = ()
     patched: tuple[tuple[str, tuple[str, ...]], ...] = ()
+    shim_names: frozenset[str] = frozenset()
     dist_dir: Path | None = None
 
     @property
@@ -249,6 +251,7 @@ def scan_dist_win7(dist_dir: Path, *, shim: Path | None = WIN7_SHIM_DLL_PATH) ->
     violations: list[Win7CheckResult] = []
     shim_files = 0
     ucrt_files = 0
+    shim_names: set[str] = set()
     for path in iter_pe_files(dist_dir):
         rel = path.relative_to(dist_dir).as_posix()
         try:
@@ -270,6 +273,7 @@ def scan_dist_win7(dist_dir: Path, *, shim: Path | None = WIN7_SHIM_DLL_PATH) ->
         scanned += 1
         if result.shim_dlls:
             shim_files += 1
+            shim_names.update(d.lower() for d in result.shim_dlls)
         if any("api-ms-win-crt" in note for note in result.notes):
             ucrt_files += 1
         if not result.ok:
@@ -282,6 +286,7 @@ def scan_dist_win7(dist_dir: Path, *, shim: Path | None = WIN7_SHIM_DLL_PATH) ->
         violations=tuple(violations),
         shim_files=shim_files,
         ucrt_files=ucrt_files,
+        shim_names=frozenset(shim_names),
         dist_dir=dist_dir,
     )
 
@@ -345,7 +350,7 @@ def enforce_win7_loaders(
         )
 
 
-def inject_win7_shims(dist_dir: Path) -> tuple[str, ...]:
+def inject_win7_shims(dist_dir: Path, *, needed: frozenset[str] | set[str] | None = None) -> tuple[str, ...]:
     """扫描 dist PE 导入表，自动注入内置 Win7 兼容 shim DLL 到 runtime 目录.
 
     覆盖三类已知 Win7 不兼容场景：
@@ -366,9 +371,14 @@ def inject_win7_shims(dist_dir: Path) -> tuple[str, ...]:
     python3XX.dll 及其传递依赖（含 site-packages 中 .pyd）只在 runtime/ 中
     查找——dist 根目录的 shim 不会被找到。runtime 级别的注入由
     :func:`fspack.packaging.win7.dll.inject_win7_shims` 在 runtime 准备阶段
-    无条件完成（所有 3 个 shim），本函数作为 executor 阶段的补充：先扫描
-    dist 全量 PE 再按需注入，确保 site-packages 中后来解压的 Rust wheel
-    所需 shim 不遗漏。
+    无条件完成（所有 3 个 shim），本函数作为 executor 阶段的补充：拿到本次
+    扫描的 shim 需求名（``needed``）后按需注入，确保 site-packages 中后来
+    解压的 Rust wheel 所需 shim 不遗漏，且不重复整树扫描。
+
+    Args:
+        dist_dir: dist 根目录。
+        needed: 已扫描出的 shim DLL 名集合（``Win7ScanReport.shim_names``）；
+            传 None 时回退为现场扫描 dist 全量 PE（兼容独立调用）。
 
     Returns:
         本次注入的 shim DLL 文件名元组（不含已存在跳过的）。返回空元组
@@ -382,17 +392,19 @@ def inject_win7_shims(dist_dir: Path) -> tuple[str, ...]:
         _logger.warning("runtime 目录不存在 %s，跳过 Win7 shim 注入（dist 结构异常）", runtime_dir)
         return ()
 
-    # 扫描 dist PE 导入表，收集需要 shim 的 DLL 名
-    needed: set[str] = set()
-    for path in iter_pe_files(dist_dir):
-        try:
-            result = check_win7_imports(path)
-        except PeParseError:
-            continue
-        for shim_dll in result.shim_dlls:
-            low = shim_dll.lower()
-            if low in WIN7_SYSTEM_SHIMS:
-                needed.add(low)
+    # 扫描 dist PE 导入表，收集需要 shim 的 DLL 名（调用方已有扫描结果时直接复用）
+    if needed is None:
+        found: set[str] = set()
+        for path in iter_pe_files(dist_dir):
+            try:
+                result = check_win7_imports(path)
+            except PeParseError:
+                continue
+            for shim_dll in result.shim_dlls:
+                low = shim_dll.lower()
+                if low in WIN7_SYSTEM_SHIMS:
+                    found.add(low)
+        needed = found
 
     if not needed:
         _logger.info("dist 下无 PE 需额外 Win7 shim，跳过注入")
