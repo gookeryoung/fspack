@@ -516,7 +516,7 @@ def report_pipeline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         assert (dist / "site-packages/pkg/native.pyd").read_bytes() == b"new-imports"
         return Win7ScanReport(scanned=3, dist_dir=dist)
 
-    def inject_shim(dist_dir: Path) -> tuple[str, ...]:
+    def inject_shim(dist_dir: Path, *, needed: object = None) -> tuple[str, ...]:
         assert dist_dir == dist
         (dist / "runtime/bcryptprimitives.dll").write_bytes(b"injected shim")
         return ("bcryptprimitives.dll",)
