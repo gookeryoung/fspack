@@ -10,6 +10,7 @@ from typing import Any, cast
 import pytest
 
 from fspack.builder import _DEFAULT_ICON, _resolve_project_icon
+from fspack.packaging import icon as icon_module
 from fspack.packaging.icon import (
     SUPPORTED_IMAGE_EXTS,
     _convert_image_to_ico,
@@ -227,6 +228,81 @@ def test_ensure_ico_creates_workdir(tmp_path: Path) -> None:
     result = ensure_ico(src, work)
     assert result is not None
     assert work.is_dir()
+
+
+# --- ensure_ico 缓存测试 ---
+
+
+@_skip_no_pil
+def test_ensure_ico_second_call_reuses_cached_ico(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """源文件未变时二次调用复用缓存产物，不重复转换."""
+    from PIL import Image
+
+    src = tmp_path / "favicon.png"
+    Image.new("RGBA", (32, 32), (255, 0, 0, 255)).save(src, format="PNG")
+    work = tmp_path / "work"
+    first = ensure_ico(src, work)
+    assert first is not None
+    assert (work / "icon.ico.meta.json").is_file()
+
+    calls: list[Path] = []
+    real_convert = icon_module._convert_image_to_ico
+
+    def spy(s: Path, d: Path) -> bool:
+        calls.append(s)
+        return real_convert(s, d)
+
+    monkeypatch.setattr(icon_module, "_convert_image_to_ico", spy)
+    second = ensure_ico(src, work)
+    assert second == first
+    assert calls == []
+
+
+@_skip_no_pil
+def test_ensure_ico_changed_source_reconverts(tmp_path: Path) -> None:
+    """源图片内容变化后必须重新转换（缓存按内容 sha1 失效）."""
+    from PIL import Image
+
+    src = tmp_path / "favicon.png"
+    Image.new("RGBA", (32, 32), (255, 0, 0, 255)).save(src, format="PNG")
+    work = tmp_path / "work"
+    assert ensure_ico(src, work) is not None
+    stale = (work / "icon.ico").read_bytes()
+
+    Image.new("RGBA", (32, 32), (0, 0, 255, 255)).save(src, format="PNG")
+    assert ensure_ico(src, work) is not None
+    assert (work / "icon.ico").read_bytes() != stale
+
+
+@_skip_no_pil
+def test_ensure_ico_corrupt_meta_reconverts(tmp_path: Path) -> None:
+    """缓存元数据损坏时按未命中处理，重新转换."""
+    from PIL import Image
+
+    src = tmp_path / "favicon.png"
+    Image.new("RGBA", (32, 32)).save(src, format="PNG")
+    work = tmp_path / "work"
+    assert ensure_ico(src, work) is not None
+    (work / "icon.ico.meta.json").write_text("{not json", encoding="utf-8")
+    (work / "icon.ico").unlink()
+    result = ensure_ico(src, work)
+    assert result is not None
+    assert result.is_file()
+    assert '"sha1"' in (work / "icon.ico.meta.json").read_text(encoding="utf-8")
+
+
+@_skip_no_pil
+def test_ensure_ico_missing_ico_with_meta_reconverts(tmp_path: Path) -> None:
+    """元数据存在但产物缺失时重新转换."""
+    from PIL import Image
+
+    src = tmp_path / "favicon.png"
+    Image.new("RGBA", (32, 32)).save(src, format="PNG")
+    work = tmp_path / "work"
+    assert ensure_ico(src, work) is not None
+    (work / "icon.ico").unlink()
+    assert ensure_ico(src, work) is not None
+    assert (work / "icon.ico").is_file()
 
 
 # --- _convert_image_to_ico 测试 ---
