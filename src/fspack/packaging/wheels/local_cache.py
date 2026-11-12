@@ -121,8 +121,9 @@ def _wheel_compatible(info: WheelInfo, py_version: str, platform_tags: Sequence[
                 return True
         elif abi == "abi3":
             # abi3 wheel 可用于更高 minor；cp3X 中的 X 必须 <= 目标 minor
-            suffix = py_tag.removeprefix(cp_prefix)
-            if py_tag.startswith(cp_prefix) and suffix.isdigit() and int(suffix) <= minor:
+            # 不用 str.removeprefix（3.9+），保持 3.8 兼容
+            suffix = py_tag[len(cp_prefix) :] if py_tag.startswith(cp_prefix) else ""
+            if suffix.isdigit() and int(suffix) <= minor:
                 return True
     return False
 
