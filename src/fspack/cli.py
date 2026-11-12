@@ -23,6 +23,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from fspack import __version__
 from fspack.cli_parser import build_parser
 from fspack.exceptions import FspackError
 
@@ -59,6 +60,42 @@ _RECURSIVE_SKIP_DIRS: frozenset[str] = frozenset(
 )
 
 
+def _help_snapshot_usable() -> bool:
+    """静态 help 快照是否可安全替代 argparse 输出.
+
+    三个条件缺一不可：
+
+    - 解释器次版本与快照生成版本一致（argparse 的 section 标题/换行随版本变化）
+    - 未设置 ``COLUMNS``（argparse 会按该值换行，快照固定 80 列）
+    - stdout 非 TTY（交互式终端按实际宽度换行，交给 argparse 保证观感）
+    """
+    from fspack.cli_help import HELP_SNAPSHOT_PY
+
+    return sys.version_info[:2] == HELP_SNAPSHOT_PY and not os.environ.get("COLUMNS") and not sys.stdout.isatty()
+
+
+def _try_fast_path(argv: list[str]) -> bool:
+    """``-V/--version``、``-h/--help`` 单参数快速路径，命中即打印并 ``SystemExit(0)``.
+
+    argparse 的 version/help action 本身就是打印后 ``SystemExit(0)``，此处保持
+    相同退出语义（调用方/测试仍可 ``pytest.raises(SystemExit)``）。``--help``
+    需要 parser 声明；``build_parser()`` 在 3.14 上约 59ms，非交互场景直接输出
+    静态快照，交互式或版本/宽度不匹配时回退 argparse。
+    """
+    if len(argv) != 1:
+        return False
+    flag = argv[0]
+    if flag in ("-V", "--version"):
+        print(f"fspack {__version__}")
+        raise SystemExit(0)
+    if flag in ("-h", "--help") and _help_snapshot_usable():
+        from fspack.cli_help import HELP_TEXT
+
+        sys.stdout.write(HELP_TEXT)
+        raise SystemExit(0)
+    return False
+
+
 def main(argv: list[str] | None = None) -> None:
     """主入口，解析参数并分发到子命令.
 
@@ -69,6 +106,9 @@ def main(argv: list[str] | None = None) -> None:
     捕获后继续，不会传播到此处；``SystemExit`` 原样放行（argparse ``--help``
     与显式退出码）。
     """
+    if _try_fast_path(sys.argv[1:] if argv is None else list(argv)):
+        return
+
     parser = build_parser()
     ns = parser.parse_args(argv)
     command = ns.command

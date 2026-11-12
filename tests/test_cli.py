@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from fspack import __version__, cli
+from fspack.cli_help import HELP_SNAPSHOT_PY, HELP_TEXT
 from fspack.config import BuildOptions, get_mirror
 from fspack.packaging.profile_log import ProfileOptions
 from fspack.platform import Platform
@@ -39,6 +40,56 @@ def test_version(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit):
         cli.main(["-V"])
     assert __version__ in capsys.readouterr().out
+
+
+def test_version_long_flag(capsys: pytest.CaptureFixture[str]) -> None:
+    """``--version`` 同样走快速路径且输出与 argparse 一致（fspack + 版本号）."""
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main(["--version"])
+    assert excinfo.value.code == 0
+    assert capsys.readouterr().out == f"fspack {__version__}\n"
+
+
+@pytest.mark.skipif(
+    sys.version_info[:2] != HELP_SNAPSHOT_PY,
+    reason="help 快照绑定生成时的 Python 次版本，其它版本走 argparse",
+)
+def test_help_snapshot_matches_parser() -> None:
+    """静态 help 快照必须与 build_parser().format_help() 逐字一致（防 CLI 改动后漂移）."""
+    assert cli.build_parser().format_help() == HELP_TEXT
+
+
+@pytest.mark.skipif(
+    sys.version_info[:2] != HELP_SNAPSHOT_PY,
+    reason="help 快照绑定生成时的 Python 次版本，其它版本走 argparse",
+)
+def test_help_fast_path_non_tty(capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    """非 TTY 且无 COLUMNS 时 --help 走静态快照，不构建 parser."""
+    monkeypatch.delenv("COLUMNS", raising=False)
+
+    def boom() -> object:
+        raise AssertionError("非 TTY 下 --help 不应构建 parser")
+
+    monkeypatch.setattr(cli, "build_parser", boom)
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main(["--help"])
+    assert excinfo.value.code == 0
+    assert capsys.readouterr().out == HELP_TEXT
+
+
+def test_help_falls_back_with_columns(capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    """设置 COLUMNS 时回退 argparse（按该宽度换行），输出仍以 usage 开头."""
+    monkeypatch.setenv("COLUMNS", "120")
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main(["--help"])
+    assert excinfo.value.code == 0
+    assert capsys.readouterr().out.startswith("usage: fspack")
+
+
+def test_fast_path_requires_single_flag() -> None:
+    """多参数（如 ``--help extra``）不走快速路径，交给 argparse 报错/处理."""
+    assert cli._try_fast_path(["--help", "extra"]) is False
+    assert cli._try_fast_path(["build"]) is False
 
 
 def test_no_command_prints_help(capsys: pytest.CaptureFixture[str]) -> None:
