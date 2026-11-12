@@ -498,28 +498,6 @@ def test_load_deps_cache_miss_when_wheel_deleted(tmp_path: Path) -> None:
     assert _load_deps_cache(cache, "abc123") is None
 
 
-def test_load_deps_cache_handles_corrupt_json(tmp_path: Path) -> None:
-    """缓存文件 JSON 损坏时返回 None 不抛异常（iter-128 起删除损坏文件）."""
-    cache = tmp_path / "cache"
-    cache.mkdir()
-    corrupt_file = cache / ".deps-corrupt.json"
-    corrupt_file.write_text("{bad json", encoding="utf-8")
-    assert _load_deps_cache(cache, "corrupt") is None
-    # iter-128：损坏的缓存文件被删除，避免下次构建重复告警
-    assert not corrupt_file.is_file()
-
-
-def test_load_deps_cache_deletes_corrupt_non_dict_json(tmp_path: Path) -> None:
-    """缓存根对象非 dict（如 list/int）时删除文件（iter-128）."""
-    cache = tmp_path / "cache"
-    cache.mkdir()
-    corrupt_file = cache / ".deps-corrupt.json"
-    # JSON 合法但结构不对：根对象是 list 而非 dict
-    corrupt_file.write_text("[1, 2, 3]", encoding="utf-8")
-    assert _load_deps_cache(cache, "corrupt") is None
-    assert not corrupt_file.is_file()
-
-
 def test_load_deps_cache_deletes_corrupt_wheels_field(tmp_path: Path) -> None:
     """wheels 字段类型错误（非 list）时删除文件（iter-128）."""
     cache = tmp_path / "cache"
@@ -544,39 +522,6 @@ def test_load_deps_cache_deletes_non_str_wheel_element(tmp_path: Path) -> None:
     corrupt_file.write_text('{"wheels": ["numpy-1.0.whl", 123]}', encoding="utf-8")
     assert _load_deps_cache(cache, "corrupt") is None
     assert not corrupt_file.is_file()
-
-
-def test_load_deps_cache_deletes_invalid_utf8(tmp_path: Path) -> None:
-    """缓存文件含非法 UTF-8 字节时删除文件（iter-128）.
-
-    UnicodeDecodeError 是 ValueError 子类，被 except (json.JSONDecodeError, ValueError) 捕获。
-    """
-    cache = tmp_path / "cache"
-    cache.mkdir()
-    corrupt_file = cache / ".deps-corrupt.json"
-    # 写入非法 UTF-8 字节序列（0xff 不是合法 UTF-8 起始字节）
-    corrupt_file.write_bytes(b"\xff\xfe{bad}")
-    assert _load_deps_cache(cache, "corrupt") is None
-    assert not corrupt_file.is_file()
-
-
-def test_load_deps_cache_oserror_keeps_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """read_text 抛 OSError（文件系统错误）时不删除文件（iter-128）.
-
-    OSError 可能是瞬时文件系统问题（权限/磁盘 I/O），删除反而误伤可恢复的缓存。
-    """
-    cache = tmp_path / "cache"
-    cache.mkdir()
-    cache_file = cache / ".deps-corrupt.json"
-    cache_file.write_text('{"wheels": ["x.whl"]}', encoding="utf-8")
-
-    def raise_oserror(self: Path, *args: object, **kwargs: object) -> str:
-        raise OSError("permission denied")
-
-    monkeypatch.setattr(Path, "read_text", raise_oserror)
-    assert _load_deps_cache(cache, "corrupt") is None
-    # OSError 不删除文件：可能是瞬时问题，下次构建重试
-    assert cache_file.is_file()
 
 
 def test_save_deps_cache_best_effort(tmp_path: Path) -> None:
@@ -768,31 +713,29 @@ def test_parse_pip_download_wheels_success_line_keeps_same_pkg_candidates() -> N
 
 
 def test_parse_pip_download_wheels_parallel_multiple_success_lines() -> None:
-    """并行下载拼接的 stdout 含多条 Successfully downloaded 行：取全部并集.
+    """_merge_parallel_results 合并的多 worker stdout 中多条成功行取全部并集.
 
     回归：只取首条成功行会把最终包集合误缩成第一个 worker 的包（冷缓存并行
     pip 下载最终只装 1 个依赖）。
     """
-    stdout = (
-        "Saved /c/numpy-1.26.0-cp311-win_amd64.whl\nSuccessfully downloaded numpy\n"
-        "Saved /c/requests-2.31.0-py3-none-any.whl\nSuccessfully downloaded requests\n"
-    )
-    assert _parse_pip_download_wheels(stdout) == [
-        "numpy-1.26.0-cp311-win_amd64.whl",
-        "requests-2.31.0-py3-none-any.whl",
-    ]
-
-
-def test_parse_pip_download_wheels_parallel_workers_union() -> None:
-    """_merge_parallel_results 合并的多 worker 输出能被完整解析（多包并行）."""
     r1 = subprocess.CompletedProcess(
-        args=[], returncode=0, stdout="Saved /c/a-1.0-py3-none-any.whl\nSuccessfully downloaded a\n", stderr=""
+        args=[],
+        returncode=0,
+        stdout=(
+            "Saved /c/a-1.0-py3-none-any.whl\nSuccessfully downloaded a\n"
+            "Saved /c/b-2.0-py3-none-any.whl\nSuccessfully downloaded b\n"
+        ),
+        stderr="",
     )
     r2 = subprocess.CompletedProcess(
-        args=[], returncode=0, stdout="Saved /c/b-2.0-py3-none-any.whl\nSuccessfully downloaded b\n", stderr=""
+        args=[], returncode=0, stdout="Saved /c/c-3.0-py3-none-any.whl\nSuccessfully downloaded c\n", stderr=""
     )
-    merged = _merge_parallel_results([("a==1.0", r1), ("b==2.0", r2)])
-    assert _parse_pip_download_wheels(merged.stdout) == ["a-1.0-py3-none-any.whl", "b-2.0-py3-none-any.whl"]
+    merged = _merge_parallel_results([("a==1.0", r1), ("c==3.0", r2)])
+    assert _parse_pip_download_wheels(merged.stdout) == [
+        "a-1.0-py3-none-any.whl",
+        "b-2.0-py3-none-any.whl",
+        "c-3.0-py3-none-any.whl",
+    ]
 
 
 def test_select_coherent_wheels_picks_metadata_consistent_version(

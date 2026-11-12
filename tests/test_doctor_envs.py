@@ -119,160 +119,59 @@ def test_check_cache_integrity_empty_dir(tmp_path: Path) -> None:
     assert "无依赖解析缓存文件与 wheel 文件" in result.detail
 
 
-def test_check_cache_integrity_orphan_wheel_only(tmp_path: Path) -> None:
-    """只有 wheel 文件无 deps 引用时返回 WARN（孤儿 wheel，iter-139）."""
+@pytest.mark.parametrize(
+    ("counts", "expectation"),
+    [
+        pytest.param((1, 0, 0, 0), (CheckStatus.OK, ("1 有效", "1 个 wheel"), None), id="all-valid"),
+        pytest.param((0, 1, 0, 0), (CheckStatus.WARN, ("1 损坏",), "1 个损坏 deps 待清理"), id="corrupt-only"),
+        pytest.param(
+            (1, 0, 1, 0),
+            (CheckStatus.WARN, ("1 stale 引用缺失 wheel", "1 个 wheel"), "fsp cache clean"),
+            id="stale-with-valid-wheel",
+        ),
+        pytest.param((0, 0, 0, 1), (CheckStatus.WARN, ("1 孤儿",), "fsp cache clean"), id="orphan-only"),
+    ],
+)
+def test_check_cache_integrity_reports_issues(
+    tmp_path: Path,
+    counts: tuple[int, int, int, int],
+    expectation: tuple[CheckStatus, tuple[str, ...], str | None],
+) -> None:
+    """``_check_cache_integrity`` 的计数与文案（有效/损坏/stale/孤儿四种形态）.
+
+    扫描分支矩阵（损坏判定、stale 引用、orphan 识别）统一在
+    ``test_doctor_cache_health.py`` 的真实扫描用例覆盖；此处只验证包装层的
+    明细拼接与建议文案，并确认诊断阶段只读、不删除任何文件。
+    """
     from fspack.doctor import _check_cache_integrity
 
+    valid, corrupt, stale, orphan = counts
+    status, detail_parts, suggestion_part = expectation
     cache = tmp_path / "cache"
     cache.mkdir()
-    (cache / "numpy-1.0.whl").write_bytes(b"x")
+    for i in range(valid):
+        (cache / f".deps-good{i}.json").write_text('{"wheels": ["good.whl"]}', encoding="utf-8")
+        (cache / "good.whl").write_bytes(b"x")
+    corrupt_file = None
+    for i in range(corrupt):
+        corrupt_file = cache / f".deps-bad{i}.json"
+        corrupt_file.write_text("{bad json", encoding="utf-8")
+    for i in range(stale):
+        (cache / f".deps-stale{i}.json").write_text('{"wheels": ["missing.whl"]}', encoding="utf-8")
+    for i in range(orphan):
+        (cache / f"orphan{i}.whl").write_bytes(b"yy")
 
     result = _check_cache_integrity(cache)
-    assert result.status is CheckStatus.WARN
-    assert "1 个 wheel" in result.detail
-    assert "1 孤儿" in result.detail
-    assert "fsp cache clean" in result.suggestion
-
-
-def test_check_cache_integrity_all_valid(tmp_path: Path) -> None:
-    """所有缓存文件结构有效且引用的 wheel 都存在时返回 OK."""
-    from fspack.doctor import _check_cache_integrity
-
-    cache = tmp_path / "cache"
-    cache.mkdir()
-    (cache / ".deps-key1.json").write_text('{"wheels": ["numpy-1.0.whl"]}', encoding="utf-8")
-    (cache / ".deps-key2.json").write_text('{"wheels": ["rich-1.0.whl", "click-1.0.whl"]}', encoding="utf-8")
-    # 创建对应的 wheel 文件，使 deps 引用有效（iter-139 扩展检查 wheel 存在性）
-    (cache / "numpy-1.0.whl").write_bytes(b"x")
-    (cache / "rich-1.0.whl").write_bytes(b"x")
-    (cache / "click-1.0.whl").write_bytes(b"x")
-
-    result = _check_cache_integrity(cache)
-    assert result.status is CheckStatus.OK
-    assert "扫描 2 个 deps 缓存" in result.detail
-    assert "2 有效" in result.detail
-    assert "3 个 wheel" in result.detail
-    # 有效文件保留
-    assert (cache / ".deps-key1.json").is_file()
-    assert (cache / ".deps-key2.json").is_file()
-
-
-def test_check_cache_integrity_corrupt_json_deleted(tmp_path: Path) -> None:
-    """JSON 损坏的缓存文件计入 WARN，诊断阶段不删除（只读路径）."""
-    from fspack.doctor import _check_cache_integrity
-
-    cache = tmp_path / "cache"
-    cache.mkdir()
-    (cache / ".deps-good.json").write_text('{"wheels": ["numpy-1.0.whl"]}', encoding="utf-8")
-    (cache / "numpy-1.0.whl").write_bytes(b"x")  # 创建 wheel 避免 stale
-    corrupt = cache / ".deps-bad.json"
-    corrupt.write_text("{bad json", encoding="utf-8")
-
-    result = _check_cache_integrity(cache)
-    assert result.status is CheckStatus.WARN
-    assert "1 有效" in result.detail
-    assert "1 损坏" in result.detail
-    assert "1 个损坏 deps 待清理" in result.suggestion
-    # 诊断阶段不删除损坏文件（由 fsp cache clean 清理）
-    assert corrupt.is_file()
-    # 有效文件保留
-    assert (cache / ".deps-good.json").is_file()
-
-
-def test_check_cache_integrity_non_dict_root_deleted(tmp_path: Path) -> None:
-    """JSON 根对象非 dict（如 list）计入损坏，诊断阶段不删除."""
-    from fspack.doctor import _check_cache_integrity
-
-    cache = tmp_path / "cache"
-    cache.mkdir()
-    corrupt = cache / ".deps-corrupt.json"
-    corrupt.write_text("[1, 2, 3]", encoding="utf-8")
-
-    result = _check_cache_integrity(cache)
-    assert result.status is CheckStatus.WARN
-    assert "1 损坏" in result.detail
-    assert corrupt.is_file()
-
-
-def test_check_cache_integrity_wrong_wheels_type_deleted(tmp_path: Path) -> None:
-    """wheels 字段非 list 的缓存文件计入损坏，诊断阶段不删除."""
-    from fspack.doctor import _check_cache_integrity
-
-    cache = tmp_path / "cache"
-    cache.mkdir()
-    corrupt = cache / ".deps-corrupt.json"
-    corrupt.write_text('{"wheels": "not-a-list"}', encoding="utf-8")
-
-    result = _check_cache_integrity(cache)
-    assert result.status is CheckStatus.WARN
-    assert "1 损坏" in result.detail
-    assert corrupt.is_file()
-
-
-def test_check_cache_integrity_multiple_corrupt_count(tmp_path: Path) -> None:
-    """多个损坏文件时详情显示总数（iter-139 改为概要，文件名列表在 fsp cache status）."""
-    from fspack.doctor import _check_cache_integrity
-
-    cache = tmp_path / "cache"
-    cache.mkdir()
-    for i in range(5):
-        (cache / f".deps-bad{i}.json").write_text("{bad", encoding="utf-8")
-
-    result = _check_cache_integrity(cache)
-    assert result.status is CheckStatus.WARN
-    assert "5 损坏" in result.detail
-
-
-def test_check_cache_integrity_oserror_skipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """read_text 抛 OSError 时不计为损坏（可能是瞬时文件系统问题）."""
-    from fspack.doctor import _check_cache_integrity
-
-    cache = tmp_path / "cache"
-    cache.mkdir()
-    cache_file = cache / ".deps-key.json"
-    cache_file.write_text('{"wheels": ["x.whl"]}', encoding="utf-8")
-
-    def raise_oserror(self: Path, *args: object, **kwargs: object) -> str:
-        raise OSError("permission denied")
-
-    monkeypatch.setattr(Path, "read_text", raise_oserror)
-    result = _check_cache_integrity(cache)
-    # OSError 不计为损坏，0 损坏 -> OK（iter-139：详情用 "deps 缓存" 格式）
-    assert result.status is CheckStatus.OK
-    assert "扫描 1 个 deps 缓存" in result.detail
-    assert "1 有效" in result.detail
-    # 文件未被删除
-    assert cache_file.is_file()
-
-
-def test_check_cache_integrity_stale_deps_warns(tmp_path: Path) -> None:
-    """deps 引用的 wheel 不存在时返回 WARN（stale deps，iter-139）."""
-    from fspack.doctor import _check_cache_integrity
-
-    cache = tmp_path / "cache"
-    cache.mkdir()
-    (cache / ".deps-key.json").write_text('{"wheels": ["missing.whl"]}', encoding="utf-8")
-
-    result = _check_cache_integrity(cache)
-    assert result.status is CheckStatus.WARN
-    assert "1 stale 引用缺失 wheel" in result.detail
-    assert "fsp cache clean" in result.suggestion
-
-
-def test_check_cache_integrity_orphan_wheel_with_valid_deps(tmp_path: Path) -> None:
-    """有有效 deps 但存在未被引用的孤儿 wheel 时返回 WARN（iter-139）."""
-    from fspack.doctor import _check_cache_integrity
-
-    cache = tmp_path / "cache"
-    cache.mkdir()
-    (cache / ".deps-key.json").write_text('{"wheels": ["numpy-1.0.whl"]}', encoding="utf-8")
-    (cache / "numpy-1.0.whl").write_bytes(b"x")
-    (cache / "orphan-1.0.whl").write_bytes(b"yy")
-
-    result = _check_cache_integrity(cache)
-    assert result.status is CheckStatus.WARN
-    assert "1 孤儿" in result.detail
-    assert "fsp cache clean" in result.suggestion
+    assert result.status is status
+    for part in detail_parts:
+        assert part in result.detail
+    if suggestion_part is None:
+        assert not result.suggestion
+    else:
+        assert suggestion_part in result.suggestion
+    # 诊断阶段只读：损坏文件保留，交由 fsp cache clean 清理
+    if corrupt_file is not None:
+        assert corrupt_file.is_file()
 
 
 # ---- _dir_size ----

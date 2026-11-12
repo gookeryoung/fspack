@@ -183,6 +183,81 @@ def test_scan_cache_health_non_string_wheels_ignored(tmp_path: Path) -> None:
     assert not report.has_issues
 
 
+@pytest.mark.parametrize(
+    "content",
+    [
+        pytest.param(b'{"wheels": ', id="truncated-json"),
+        pytest.param(b"[1, 2]", id="non-dict-root"),
+        pytest.param(b'{"wheels": "not-a-list"}', id="wheels-not-list"),
+        pytest.param(b'{"wheels": ["\xff\xfe.whl"]}', id="invalid-utf8"),
+    ],
+)
+def test_scan_cache_health_real_corrupt_deps_variants(tmp_path: Path, content: bytes) -> None:
+    """真实文件写入的各类损坏内容都计入 corrupt_deps_files 且默认不删除."""
+    from fspack.doctor import _scan_cache_health
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    bad = cache / ".deps-bad.json"
+    bad.write_bytes(content)
+
+    report = _scan_cache_health(cache)
+    assert report.corrupt_deps_files == (".deps-bad.json",)
+    assert bad.is_file()
+    assert report.has_issues
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        pytest.param(b'{"wheels": ["\xff\xfe.whl"]}', id="invalid-utf8"),
+        pytest.param(b'{"wheels": "not-a-list"}', id="wheels-not-list"),
+    ],
+)
+def test_scan_cache_health_real_corrupt_deps_deleted_when_cleanup(tmp_path: Path, content: bytes) -> None:
+    """清理路径下解码失败与 wheels 字段非 list 的损坏文件同样被删除."""
+    from fspack.doctor import _scan_cache_health
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    bad = cache / ".deps-bad.json"
+    bad.write_bytes(content)
+
+    report = _scan_cache_health(cache, delete_corrupt=True)
+    assert report.corrupt_deps_files == (".deps-bad.json",)
+    assert not bad.is_file()
+    assert report.has_issues
+
+
+def test_scan_cache_health_read_failure_skips_without_flagging(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """glob 后被删除（FileNotFoundError）与瞬时 IO 失败（OSError）都不计损坏也不删除."""
+    from fspack.doctor import _scan_cache_health
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    gone = cache / ".deps-gone.json"
+    gone.write_text('{"wheels": []}', encoding="utf-8")
+    locked = cache / ".deps-locked.json"
+    locked.write_text('{"wheels": []}', encoding="utf-8")
+
+    real_read_text = Path.read_text
+
+    def flaky_read_text(self: Path, *args: str, **kwargs: str) -> str:
+        if self.name == ".deps-gone.json":
+            raise FileNotFoundError("deleted between glob and read")
+        if self.name == ".deps-locked.json":
+            raise PermissionError("locked by antivirus")
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", flaky_read_text)
+
+    report = _scan_cache_health(cache)
+    assert report.corrupt_deps_files == ()
+    assert gone.is_file()
+    assert locked.is_file()
+    assert not report.has_issues
+
+
 # ---- _clean_cache_issues（iter-139） ----
 
 

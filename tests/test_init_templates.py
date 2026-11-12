@@ -37,12 +37,6 @@ GUI_TEMPLATE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
 QML_TEMPLATE_IDS = ("pyside6-qml",)
 
 
-def test_gui_templates_registered() -> None:
-    """4 个 GUI 模板都已注册到 registry."""
-    for tpl_id in GUI_TEMPLATE_IDS:
-        assert get_template(tpl_id) is not None, f"GUI 模板 {tpl_id!r} 未注册"
-
-
 @pytest.mark.parametrize("tpl_id", GUI_TEMPLATE_IDS)
 def test_gui_template_metadata(tpl_id: str) -> None:
     """GUI 模板元数据：category=gui, app_type=gui."""
@@ -201,12 +195,6 @@ ITER84_ALL_IDS = GAME_TEMPLATE_IDS + SCI_TEMPLATE_IDS + WEB_TEMPLATE_IDS + CONFI
 
 
 @pytest.mark.parametrize("tpl_id", ITER84_ALL_IDS)
-def test_iter84_templates_registered(tpl_id: str) -> None:
-    """7 个模板都已注册."""
-    assert get_template(tpl_id) is not None, f"模板 {tpl_id!r} 未注册"
-
-
-@pytest.mark.parametrize("tpl_id", ITER84_ALL_IDS)
 def test_iter84_template_dependencies(tpl_id: str) -> None:
     """模板依赖声明与设计一致."""
     tpl = get_template(tpl_id)
@@ -319,12 +307,6 @@ def test_init_project_pyinstaller(tmp_path: Path) -> None:
 ITER85_TEMPLATE_IDS = ("multi-entry", "full-config")
 
 
-@pytest.mark.parametrize("tpl_id", ITER85_TEMPLATE_IDS)
-def test_iter85_templates_registered(tpl_id: str) -> None:
-    """2 个模板都已注册."""
-    assert get_template(tpl_id) is not None, f"模板 {tpl_id!r} 未注册"
-
-
 def test_multi_entry_template_contains_entries_config() -> None:
     """multi-entry 模板的 pyproject.toml 含 [project.scripts] 声明（推荐默认）."""
     tpl = get_template("multi-entry")
@@ -428,11 +410,15 @@ def test_template_count_final() -> None:
 
 WEB_SEPARATED_TEMPLATE_IDS = ("web-fastapi-react",)
 
+# 全部分类模板的注册检查合并为一处：原先按批次分散在 gui/iter84/iter85/web
+# 四个函数里，断言完全相同（get_template 非 None），只按迭代批次切分无额外价值。
+ALL_TEMPLATE_IDS = GUI_TEMPLATE_IDS + ITER84_ALL_IDS + ITER85_TEMPLATE_IDS + WEB_SEPARATED_TEMPLATE_IDS
 
-@pytest.mark.parametrize("tpl_id", WEB_SEPARATED_TEMPLATE_IDS)
-def test_web_separated_templates_registered(tpl_id: str) -> None:
-    """前后端分离 Web 模板已注册到 registry."""
-    assert get_template(tpl_id) is not None, f"Web 模板 {tpl_id!r} 未注册"
+
+@pytest.mark.parametrize("tpl_id", ALL_TEMPLATE_IDS)
+def test_all_templates_registered(tpl_id: str) -> None:
+    """各分类模板都已注册到 registry."""
+    assert get_template(tpl_id) is not None, f"模板 {tpl_id!r} 未注册"
 
 
 @pytest.mark.parametrize("tpl_id", WEB_SEPARATED_TEMPLATE_IDS)
