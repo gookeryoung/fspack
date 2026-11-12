@@ -36,9 +36,6 @@ from __future__ import annotations
 # subprocess 为单例模块，patch 设置属性后对 base/dist_prep/facade/nsis/linux/macos/zip 同样生效。
 import subprocess  # noqa: F401
 
-from fspack.builder import (
-    build,  # noqa: F401  # re-export：测试 patch "fspack.packaging.installer.build"（dist_prep 经 _facade 动态查找）
-)
 from fspack.packaging.installer.base import (  # noqa: F401
     Installer,
     _run_stage,

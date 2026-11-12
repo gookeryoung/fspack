@@ -405,7 +405,7 @@ def test_build_mac_installer_with_build(tmp_path: Path, monkeypatch: pytest.Monk
             py_version=py_version,
         )
 
-    monkeypatch.setattr("fspack.packaging.installer.build", fake_build)
+    monkeypatch.setattr("fspack.builder.build", fake_build)
     monkeypatch.setattr("fspack.packaging.installer.macos.build_pkg", lambda *a, **kw: tmp_path / "x.pkg")
     monkeypatch.setattr(
         "fspack.packaging.installer.macos.build_dmg",

@@ -16,7 +16,6 @@ import shutil
 from dataclasses import replace
 from pathlib import Path
 
-from fspack.builder import resolve_project_info
 from fspack.config import ProjectInfo, build_options_from_defaults
 from fspack.exceptions import InstallerError
 from fspack.packaging.installer.request import ReleaseRequest
@@ -62,6 +61,9 @@ def _prepare_dist(req: ReleaseRequest, target: Platform) -> tuple[Path, ProjectI
     dist = req.dist_dir or project_dir / "dist"
 
     def _resolve_and_maybe_build() -> tuple[Path, ProjectInfo]:
+        # 延迟导入 builder：installer 包导入期不反向依赖构建编排层（分层约束）
+        from fspack.builder import resolve_project_info
+
         if req.no_build:
             if not dist.is_dir():
                 raise InstallerError(f"未找到 dist 目录: {dist}（请先执行 fsp b）")
@@ -74,8 +76,11 @@ def _prepare_dist(req: ReleaseRequest, target: Platform) -> tuple[Path, ProjectI
         options = build_options_from_defaults(info.build_defaults)
         if req.extras is not None:
             options = replace(options, extras=frozenset(req.extras))
-        # 经 _facade 查找 build：兼容测试 monkeypatch "fspack.packaging.installer.build"
-        info = _facade.build(project_dir, req.mirror, req.py_version, dist_dir=dist, target=target, options=options)
+        # 延迟导入 builder.build：installer 包导入期不反向依赖构建编排层（分层约束），
+        # 同时让测试 patch "fspack.builder.build" 在本调用点生效
+        from fspack.builder import build
+
+        info = build(project_dir, req.mirror, req.py_version, dist_dir=dist, target=target, options=options)
         return dist, info
 
     if req.tracker is None:
@@ -221,11 +226,3 @@ def _make_staged_archive(  # noqa: PLR0913
     if not keep_staging:
         shutil.rmtree(staging)
     return Path(archive)
-
-
-# ---- 末尾导入避免循环依赖 ----
-# 通过 facade 解析可 patch 函数：兼容测试 monkeypatch "fspack.packaging.installer.build"
-# 路径。dist_prep 顶层 import 的 build 为原始引用，测试 patch 指向
-# :mod:`fspack.packaging.installer`（__init__.py），故 ``_prepare_dist`` 内部调用经
-# ``_facade.build`` 在运行时动态查找，使 patch 生效。
-import fspack.packaging.installer as _facade  # noqa: E402

@@ -230,7 +230,7 @@ def test_build_linux_installer_with_build(tmp_path: Path, monkeypatch: pytest.Mo
             py_version=py_version,
         )
 
-    monkeypatch.setattr("fspack.packaging.installer.build", fake_build)
+    monkeypatch.setattr("fspack.builder.build", fake_build)
     monkeypatch.setattr("fspack.packaging.installer.linux.build_tarball", lambda *a, **kw: tmp_path / "x.tar.gz")
     monkeypatch.setattr(
         "fspack.packaging.installer.linux.build_deb",
