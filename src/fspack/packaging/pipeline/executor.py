@@ -506,7 +506,7 @@ def _execute_build(  # noqa: PLR0912, PLR0913
         from fspack.packaging.win7.scan import enforce_win7_loaders
 
         with tracker.stage("Win7 loader 校验") as st:
-            enforce_win7_loaders(exes)
+            enforce_win7_loaders(exes, cache_dir=cfg.dist_dir / "build")
             st.set_detail(f"{len(exes)} 个 exe 通过")
 
     # 二进制依赖分析（可选）：解析 .dll/.so/.dylib 依赖树，剥离无引用文件。

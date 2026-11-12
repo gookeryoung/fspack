@@ -288,6 +288,50 @@ def test_scan_shim_signature_change_invalidates_cache(tmp_path: Path, monkeypatc
 
 
 # ---------------------------------------------------------------------------
+# enforce_win7_loaders 通过结论缓存
+# ---------------------------------------------------------------------------
+
+
+def test_enforce_win7_loaders_caches_pass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """loader 未变化时第二次校验直接读缓存，不重复解析 PE."""
+    from fspack.packaging.win7 import scan as scan_mod
+
+    exe = _write_pe(tmp_path / "cli.exe")
+    cache_dir = tmp_path / "build"
+    enforce_win7_loaders([exe], cache_dir=cache_dir)
+    assert (cache_dir / "win7loaders.json").is_file()
+
+    def boom(*args: object, **kwargs: object) -> object:
+        raise AssertionError("缓存命中时不应重新解析 loader")
+
+    monkeypatch.setattr(scan_mod, "check_win7_imports", boom)
+    enforce_win7_loaders([exe], cache_dir=cache_dir)
+
+
+def test_enforce_win7_loaders_failure_not_cached(tmp_path: Path) -> None:
+    """违规 loader 不写缓存：每次构建都必须重新报错，不能因缓存放行."""
+    import json
+
+    exe = _write_pe(tmp_path / "cli.exe", _BAD_IMPORTS)
+    cache_dir = tmp_path / "build"
+    for _ in range(2):
+        with pytest.raises(Win7ScanError, match="CopyFile2"):
+            enforce_win7_loaders([exe], cache_dir=cache_dir)
+    payload_path = cache_dir / "win7loaders.json"
+    assert not payload_path.exists() or json.loads(payload_path.read_text(encoding="utf-8"))["files"] == {}
+
+
+def test_enforce_win7_loaders_recompiled_invalidates(tmp_path: Path) -> None:
+    """loader 重新编译（size/mtime 变化）后重新校验并发现新增违规."""
+    exe = _write_pe(tmp_path / "cli.exe")
+    cache_dir = tmp_path / "build"
+    enforce_win7_loaders([exe], cache_dir=cache_dir)
+    _write_pe(exe, _BAD_IMPORTS)
+    with pytest.raises(Win7ScanError, match="CopyFile2"):
+        enforce_win7_loaders([exe], cache_dir=cache_dir)
+
+
+# ---------------------------------------------------------------------------
 # inject_win7_shims：runtime 缺失 / 无需注入 / 源缺失 / 已存在跳过 / 成功注入
 # ---------------------------------------------------------------------------
 

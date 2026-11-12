@@ -75,6 +75,7 @@ REPORT_FILENAME = "win7-compat-report.txt"
 # 扫描结果增量缓存：dist/build/ 下（build 是编译中间产物目录，不参与扫描，
 # 也不会被 NSIS 打进安装包）。缓存键为 (相对路径, size, mtime_ns)。
 _SCAN_CACHE_NAME = "win7scan.json"
+_LOADER_CACHE_NAME = "win7loaders.json"
 _SCAN_CACHE_VERSION = 1
 
 
@@ -163,9 +164,9 @@ def _shim_signature(shim: Path | None) -> str:
     return f"{shim.name}:{st.st_size}:{st.st_mtime_ns}"
 
 
-def _load_scan_cache(dist_dir: Path, signature: str) -> dict[str, dict[str, object]]:
-    """读取 dist/build 下的增量扫描缓存；版本/shim 签名不符或损坏时返回空表."""
-    path = dist_dir / "build" / _SCAN_CACHE_NAME
+def _load_cache(cache_dir: Path, name: str, signature: str) -> dict[str, dict[str, object]]:
+    """读取 cache_dir 下的增量缓存；版本/shim 签名不符或损坏时返回空表."""
+    path = cache_dir / name
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -180,12 +181,11 @@ def _load_scan_cache(dist_dir: Path, signature: str) -> dict[str, dict[str, obje
     return {k: v for k, v in entries.items() if isinstance(k, str) and isinstance(v, dict)}
 
 
-def _save_scan_cache(dist_dir: Path, signature: str, entries: dict[str, dict[str, object]]) -> None:
-    """写入增量扫描缓存（失败仅告警，不阻断构建）."""
-    out_dir = dist_dir / "build"
+def _save_cache(cache_dir: Path, name: str, signature: str, entries: dict[str, dict[str, object]]) -> None:
+    """写入增量缓存（失败仅告警，不阻断构建）."""
     try:
-        out_dir.mkdir(parents=True, exist_ok=True)
-        (out_dir / _SCAN_CACHE_NAME).write_text(
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        (cache_dir / name).write_text(
             json.dumps(
                 {"version": _SCAN_CACHE_VERSION, "shim": signature, "files": entries},
                 ensure_ascii=False,
@@ -194,7 +194,7 @@ def _save_scan_cache(dist_dir: Path, signature: str, entries: dict[str, dict[str
             encoding="utf-8",
         )
     except OSError as e:
-        _logger.warning("写入 Win7 扫描缓存失败（不影响构建）: %s", e)
+        _logger.warning("写入 Win7 缓存失败（不影响构建）: %s", e)
 
 
 def _cache_key(path: Path) -> str:
@@ -242,7 +242,7 @@ def scan_dist_win7(dist_dir: Path, *, shim: Path | None = WIN7_SHIM_DLL_PATH) ->
             传 None 跳过 shim 覆盖校验。
     """
     signature = _shim_signature(shim)
-    cached = _load_scan_cache(dist_dir, signature)
+    cached = _load_cache(dist_dir / "build", _SCAN_CACHE_NAME, signature)
     fresh: dict[str, dict[str, object]] = {}
     scanned = 0
     skipped: list[str] = []
@@ -275,7 +275,7 @@ def scan_dist_win7(dist_dir: Path, *, shim: Path | None = WIN7_SHIM_DLL_PATH) ->
         if not result.ok:
             violations.append(result)
     if fresh != cached:
-        _save_scan_cache(dist_dir, signature, fresh)
+        _save_cache(dist_dir / "build", _SCAN_CACHE_NAME, signature, fresh)
     return Win7ScanReport(
         scanned=scanned,
         skipped=tuple(skipped),
@@ -286,7 +286,12 @@ def scan_dist_win7(dist_dir: Path, *, shim: Path | None = WIN7_SHIM_DLL_PATH) ->
     )
 
 
-def enforce_win7_loaders(exes: list[Path] | tuple[Path, ...], *, shim: Path | None = WIN7_SHIM_DLL_PATH) -> None:
+def enforce_win7_loaders(
+    exes: list[Path] | tuple[Path, ...],
+    *,
+    shim: Path | None = WIN7_SHIM_DLL_PATH,
+    cache_dir: Path | None = None,
+) -> None:
     """校验 loader exe 导入表 Win7 兼容性，违规抛 :class:`Win7ScanError` 阻断构建.
 
     loader 由 fspack 内置 C 源码 + mingw 交叉编译，正常只依赖 Win7 可用
@@ -297,19 +302,42 @@ def enforce_win7_loaders(exes: list[Path] | tuple[Path, ...], *, shim: Path | No
     合法 PE，缺失仅出现在测试 stub 等场景，宽容处理避免误伤；核心门禁
     （Win8+ API 拦截）不受影响。
 
+    ``cache_dir`` 非 None 时按 (size, mtime_ns) + shim 签名缓存**通过**结论到
+    ``cache_dir/win7loaders.json``：loader 每次构建由 loader 缓存 ``copy2``
+    到 dist（保留 mtime），未重新编译时键不变，可省去重复 PE 解析；未通过
+    的 exe 不写缓存，保证每次构建都会重新报错。
+
     Raises:
         Win7ScanError: 任一 exe 含 Win8+ 静态导入（消息含全部违规明细）。
     """
+    signature = _shim_signature(shim)
+    cached: dict[str, dict[str, object]] = (
+        _load_cache(cache_dir, _LOADER_CACHE_NAME, signature) if cache_dir is not None else {}
+    )
+    fresh: dict[str, dict[str, object]] = {}
     failures: list[str] = []
     for exe in exes:
+        try:
+            key = _cache_key(exe)
+        except OSError as exc:
+            _logger.warning("Win7 门禁跳过非 PE loader %s: %s", exe, exc)
+            continue
+        entry = cached.get(str(exe))
+        if entry is not None and entry.get("k") == key:
+            fresh[str(exe)] = entry
+            continue
         try:
             result = check_win7_imports(exe, shim=shim)
         except (PeParseError, OSError) as exc:
             _logger.warning("Win7 门禁跳过非 PE loader %s: %s", exe, exc)
             continue
-        if not result.ok:
-            detail = "；".join(f"{v.target}（{v.reason}）" for v in result.violations)
-            failures.append(f"{exe.name}: {detail}")
+        if result.ok:
+            fresh[str(exe)] = {"k": key}
+            continue
+        detail = "；".join(f"{v.target}（{v.reason}）" for v in result.violations)
+        failures.append(f"{exe.name}: {detail}")
+    if cache_dir is not None and fresh != cached:
+        _save_cache(cache_dir, _LOADER_CACHE_NAME, signature, fresh)
     if failures:
         raise Win7ScanError(
             "loader exe 导入表含 Win8+ 依赖，无法在 Win7 上加载（fspack 回归，请修复 loader 源码或工具链）:\n  "
