@@ -22,6 +22,7 @@ from typing import Any
 import pytest
 
 from fspack.config import AppType, BuildOptions, MirrorConfig, ProjectInfo
+from fspack.packaging import manifest as _manifest_mod
 from fspack.packaging.manifest import (
     ManifestDiff,
     ManifestEntry,
@@ -575,7 +576,14 @@ def test_pipeline_manifest_records_final_win7_files(
     assert "release/win7-compat-report.txt" in entries
     assert (dist / ".build_ok").is_file()
     assert not (dist / ".build_failed").exists()
-    excluded = {".build_ok", ".build_failed", "release/app-1.0-manifest.json", "release/app-1.0-sbom.json"}
+    excluded = {
+        ".build_ok",
+        ".build_failed",
+        "release/app-1.0-manifest.json",
+        "release/app-1.0-sbom.json",
+        # 哈希备忘录是构建缓存，按设计不进 manifest
+        "build/action-manifest-hashes.json",
+    }
     disk_files = {p.relative_to(dist).as_posix(): p for p in dist.rglob("*") if p.is_file()}
     expected_files = {rel: p for rel, p in disk_files.items() if rel not in excluded}
     assert set(entries) == set(expected_files)
@@ -670,3 +678,84 @@ def test_pipeline_report_flags_without_win7_scan(
     if not no_manifest:
         entries = {e["path"]: e for e in load_manifest(manifest_path)["entries"]}
         assert entries["site-packages/pkg/native.pyd"]["sha256"] == hashlib.sha256(b"old-imports").hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# M3：SHA256 备忘录复用（dist/build/action-manifest-hashes.json）
+# ---------------------------------------------------------------------------
+
+
+def test_manifest_hash_memo_reuses_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """二次收集时未变化文件不再读盘计算 SHA256（备忘录命中）."""
+    dist = tmp_path / "dist"
+    info = _make_info(tmp_path)
+    _make_dist_tree(dist)
+    first = collect_manifest(dist, info)
+    assert (dist / "build" / "action-manifest-hashes.json").is_file()
+
+    def boom(_path: Path) -> str:
+        raise AssertionError("未变化文件不应重算 SHA256")
+
+    monkeypatch.setattr("fspack.packaging.manifest._sha256_file", boom)
+    second = collect_manifest(dist, info)
+    assert second["entries"] == first["entries"]
+    assert second["summary"] == first["summary"]
+
+
+def test_manifest_hash_memo_recomputes_changed(tmp_path: Path) -> None:
+    """size/mtime 变化的文件重新计算哈希（备忘录按键失配重算）."""
+    dist = tmp_path / "dist"
+    info = _make_info(tmp_path)
+    _make_dist_tree(dist)
+    collect_manifest(dist, info)
+    target = dist / "src" / "app" / "main.py"
+    target.write_bytes(b"def main():\n    return 2  # changed\n")
+    data = collect_manifest(dist, info)
+    entry = next(e for e in data["entries"] if e["path"] == "src/app/main.py")
+    assert entry["sha256"] == hashlib.sha256(target.read_bytes()).hexdigest()
+    assert entry["size"] == len(target.read_bytes())
+
+
+def test_manifest_hash_memo_matches_full_recompute(tmp_path: Path) -> None:
+    """缓存口径与全量重算结果逐条一致（审计可交叉验证）."""
+    dist = tmp_path / "dist"
+    info = _make_info(tmp_path)
+    _make_dist_tree(dist)
+    collect_manifest(dist, info)
+    (dist / "src" / "app" / "main.py").write_bytes(b"changed-content")
+    (dist / "src" / "app" / "new.py").write_bytes(b"new file")
+    reused = collect_manifest(dist, info)
+    full = collect_manifest(dist, info, reuse_hashes=False)
+    assert reused["entries"] == full["entries"]
+    assert reused["summary"] == full["summary"]
+
+
+def test_manifest_hash_memo_corrupt_falls_back(tmp_path: Path) -> None:
+    """备忘录损坏时退化为全量重算，结果仍正确."""
+    dist = tmp_path / "dist"
+    info = _make_info(tmp_path)
+    _make_dist_tree(dist)
+    baseline = collect_manifest(dist, info, reuse_hashes=False)
+    (dist / "build" / "action-manifest-hashes.json").write_text("{bad", encoding="utf-8")
+    data = collect_manifest(dist, info)
+    assert data["entries"] == baseline["entries"]
+    assert (dist / "build" / "action-manifest-hashes.json").is_file()
+
+
+def test_manifest_hash_memo_disabled_hashes_everything(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """reuse_hashes=False 时逐个重算（开关用于审计/测试对比）."""
+    dist = tmp_path / "dist"
+    info = _make_info(tmp_path)
+    _make_dist_tree(dist)
+    calls: list[Path] = []
+    real = _manifest_mod._sha256_file
+
+    def spy(path: Path) -> str:
+        calls.append(path)
+        return real(path)
+
+    monkeypatch.setattr("fspack.packaging.manifest._sha256_file", spy)
+    collect_manifest(dist, info, reuse_hashes=False)
+    expected = sum(1 for p in dist.rglob("*") if p.is_file() and not p.is_symlink())
+    assert len(calls) == expected
+    assert not (dist / "build" / "action-manifest-hashes.json").exists()
