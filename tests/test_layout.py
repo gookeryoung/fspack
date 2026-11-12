@@ -52,7 +52,7 @@ ALLOWED_DISPLAY_IMPORTERS = frozenset(
         "packaging/wheels/process.py",
     }
 )
-LEAF_MODULES = ("metrics.py", "astutil.py", "archive.py")
+LEAF_MODULES = ("metrics.py", "astutil.py", "archive.py", "jsoncache.py")
 
 
 def _iter_sources() -> list[Path]:
