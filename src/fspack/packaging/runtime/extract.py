@@ -8,13 +8,13 @@
 from __future__ import annotations
 
 import logging
-import stat
 import tarfile
 import zipfile
 import zlib
 from pathlib import Path
 from typing import Literal
 
+from fspack.archive import validate_zip_member
 from fspack.exceptions import EmbedError
 
 _logger = logging.getLogger(__name__)
@@ -80,17 +80,13 @@ def _validate_tar_member(member: tarfile.TarInfo) -> None:
 
 
 def _validate_zip_member(info: zipfile.ZipInfo) -> None:
-    """校验 zip 条目路径安全：拒绝绝对路径、路径穿越（``..``）、符号链接."""
-    name = info.filename.replace("\\", "/")
-    if name.startswith("/"):
-        raise EmbedError(f"embed zip 含绝对路径条目: {info.filename}")
-    if len(name) >= 2 and name[1] == ":":
-        raise EmbedError(f"embed zip 含盘符条目: {info.filename}")
-    if ".." in name.split("/"):
-        raise EmbedError(f"embed zip 含路径穿越条目: {info.filename}")
-    mode = info.external_attr >> 16
-    if mode and stat.S_ISLNK(mode):
-        raise EmbedError(f"embed zip 含符号链接条目: {info.filename}")
+    """校验 zip 条目路径安全：拒绝绝对路径、路径穿越（``..``）、符号链接.
+
+    实现在叶子模块 :func:`fspack.archive.validate_zip_member`，供 ``slim`` 解包
+    共用以避免 slim -> packaging 的层级倒挂；此处保留同名封装维持既有导入点
+    （``packaging.runtime.__init__`` 仍导出该名称）。
+    """
+    validate_zip_member(info)
 
 
 def extract_zip_safe(archive_path: Path, runtime_dir: Path, label: str) -> None:

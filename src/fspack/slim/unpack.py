@@ -20,10 +20,11 @@ import zipfile
 from collections.abc import Sequence
 from pathlib import Path
 
+from fspack.archive import validate_zip_member
 from fspack.config import DEFAULT_SLIM_RULES, SlimRules
 from fspack.exceptions import DependencyError
-from fspack.packaging.runtime.extract import _validate_zip_member
-from fspack.progress import StageRecorder, iter_with_progress, parallel_map_with_progress
+from fspack.metrics import StageRecorder
+from fspack.progress import iter_with_progress, parallel_map_with_progress
 from fspack.slim.spec import WheelInfo, get_spec, normalize_name
 
 __all__ = ["slim_unpack"]
@@ -70,7 +71,7 @@ def _full_unpack(whl: Path, dest: Path) -> None:
     try:
         with zipfile.ZipFile(whl) as zf:
             for info in zf.infolist():
-                _validate_zip_member(info)
+                validate_zip_member(info)
             try:
                 zf.extractall(dest)
             except FileExistsError:  # pragma: no cover - 并发竞争边缘场景
@@ -191,7 +192,7 @@ def _unpack_one_wheel(
     try:
         with zipfile.ZipFile(whl) as zf:
             for info in zf.infolist():
-                _validate_zip_member(info)
+                validate_zip_member(info)
             top_pkg = _detect_top_pkg(zf, whl_pkg)
             if top_pkg is None:
                 # wheel 顶层目录与归一化包名不匹配 → 兜底全量解压

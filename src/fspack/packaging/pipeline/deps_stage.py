@@ -44,7 +44,7 @@ from fspack.platform import Platform, wheel_platform_tags
 from .context import BuildContext, fspack_wheel_cache_dir
 
 if TYPE_CHECKING:
-    from fspack.progress import StageRecorder
+    from fspack.metrics import StageRecorder
 
 __all__ = [
     "_analyze_dependencies",
@@ -98,7 +98,7 @@ def _analyze_dependencies(ctx: BuildContext, *, save_cache: bool = True) -> Depe
     project_dir = ctx.cfg.project_dir
     with ctx.tracker.stage("分析依赖") as st:
         # 源码指纹缓存：源码未变时跳过 AST 分析，重复构建加速 ~478ms
-        from fspack.analyzer import source_fingerprint
+        from fspack.analyzer import analyze_dependencies, source_fingerprint
         from fspack.analyzer.fingerprint import clear_fingerprint_cache
         from fspack.config import expand_extras
 
@@ -120,7 +120,7 @@ def _analyze_dependencies(ctx: BuildContext, *, save_cache: bool = True) -> Depe
             ast_count = len(report.ast_third_party)
             st.set_detail(f"缓存命中，AST {ast_count} 个第三方")
         else:
-            report = DependencyReport.from_src(project_dir, ctx.info.name, expanded_deps, ctx.info.data_dirs)
+            report = analyze_dependencies(project_dir, ctx.info.name, expanded_deps, ctx.info.data_dirs)
             if save_cache:
                 _dep_cache_save(ctx.cfg.dist_dir, fingerprint, report)
             if report.missing:

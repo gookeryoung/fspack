@@ -33,7 +33,7 @@ from fspack.platform import Platform
 if TYPE_CHECKING:
     # StageRecorder 仅用于类型注解；顶部不导入 fspack.progress 避免连锁触发
     # rich.progress 加载（``import fspack.builder`` 热路径不打包 tkinter）。
-    from fspack.progress import StageRecorder
+    from fspack.metrics import StageRecorder
 
 __all__ = ["TkinterBundler"]
 

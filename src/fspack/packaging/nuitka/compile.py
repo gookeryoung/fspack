@@ -38,6 +38,7 @@ from typing import TYPE_CHECKING
 from fspack.config import MirrorConfig, nuitka_version_for
 from fspack.exceptions import NuitkaError
 from fspack.fsutil import atomic_write_text, safe_unlink
+from fspack.metrics import StageRecorder
 
 # -- 索引相关函数/常量：从 indexes.py re-export，维持 patch 路径。
 # 注意：``_atomic_write_text`` / ``_safe_unlink`` **单独在本模块定义薄封装**（直接调 util 层），
@@ -61,7 +62,6 @@ from fspack.packaging.nuitka.progress import (  # noqa: F401 - re-export for pat
 )
 from fspack.packaging.pyc.source_strip import _is_in_data_dirs
 from fspack.platform import Platform
-from fspack.progress import StageRecorder
 
 if TYPE_CHECKING:
     from fspack.packaging.nuitka.protocol import NuitkaCompilerProtocol

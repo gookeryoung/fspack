@@ -40,7 +40,7 @@ from typing import TYPE_CHECKING
 from fspack.platform import Platform
 
 if TYPE_CHECKING:
-    from fspack.progress import StageRecorder
+    from fspack.metrics import StageRecorder
 
 __all__ = ["zip_stdlib"]
 

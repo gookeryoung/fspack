@@ -19,6 +19,8 @@ import re
 import sys
 from pathlib import Path
 
+from fspack.astutil import collect_imports as _collect_imports
+
 __all__ = [
     "_qml_module_to_qt_sub",
     "collect_imports",
@@ -166,17 +168,11 @@ def collect_imports_and_submodules(tree: ast.AST) -> tuple[list[str], dict[str, 
 def collect_imports(tree: ast.AST) -> list[str]:
     """收集 AST 中所有 import 的顶层模块名，去重保序.
 
-    内存优化：用 ``dict`` 作保序集合（3.7+ ``dict`` 插入序稳定），同时承担
-    "已见集合"与"结果保序"两份职责，省掉独立 ``set`` + ``list`` 双结构对象。
+    实现在叶子模块 :func:`fspack.astutil.collect_imports`（供 ``config``
+    app_type 推断共用，避免 config ↔ analyzer 跨层依赖）；此处保留同名引用
+    以维持 ``fspack.analyzer.collect_imports`` 的公开 API。
     """
-    ord_dict: dict[str, None] = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                ord_dict.setdefault(alias.name.split(".")[0], None)
-        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-            ord_dict.setdefault(node.module.split(".")[0], None)
-    return list(ord_dict.keys())
+    return _collect_imports(tree)
 
 
 def collect_submodule_imports(tree: ast.AST) -> dict[str, frozenset[str]]:

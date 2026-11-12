@@ -38,7 +38,7 @@ from fspack.packaging.runtime.urls import embed_dirname, embed_zip_name
 from fspack.packaging.win7.check import PeParseError, Win7CheckResult, check_win7_imports
 
 if TYPE_CHECKING:
-    from fspack.progress import StageRecorder
+    from fspack.metrics import StageRecorder
 
 __all__ = [
     "WIN7_EMBED_SHA256",

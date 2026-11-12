@@ -57,7 +57,7 @@ from fspack.platform import Platform
 from .context import BuildContext
 
 if TYPE_CHECKING:
-    from fspack.progress import StageRecorder
+    from fspack.metrics import StageRecorder
 
 __all__ = [
     "_flatten_python_dir",

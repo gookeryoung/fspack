@@ -25,7 +25,7 @@ from fspack.fsutil import atomic_write_text
 from fspack.jsoncache import load_json_dict
 
 if TYPE_CHECKING:
-    from fspack.progress import StageRecorder
+    from fspack.metrics import StageRecorder
 
 __all__ = [
     "_cleanup_partial_wheels",

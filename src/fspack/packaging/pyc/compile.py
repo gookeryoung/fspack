@@ -29,7 +29,7 @@ from .source_strip import _strip_compiled_py
 from .stamp import _pyc_stamp_key, _pyc_stamp_path
 
 if TYPE_CHECKING:
-    from fspack.progress import StageRecorder
+    from fspack.metrics import StageRecorder
 
 _logger = logging.getLogger(__name__)
 

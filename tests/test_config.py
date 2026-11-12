@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from fspack.analyzer import analyze_dependencies
 from fspack.config import (
     DEFAULT_MIRROR,
     DEFAULT_NUITKA_VERSION,
@@ -108,10 +109,10 @@ def test_project_info_from_dir_pyside2_qml_dashboard() -> None:
     assert info.app_type is AppType.GUI
 
 
-def test_dependency_report_from_src_classification(tmp_path: Path) -> None:
-    """from_src 类方法扫描源码并分类依赖."""
+def test_analyze_dependencies_classification(tmp_path: Path) -> None:
+    """analyze_dependencies 扫描源码并分类依赖."""
     (tmp_path / "main.py").write_text("import os\nimport numpy\nimport requests\nfrom json import loads\n")
-    r = DependencyReport.from_src(tmp_path, "main", ("numpy>=1.0",))
+    r = analyze_dependencies(tmp_path, "main", ("numpy>=1.0",))
     assert "os" in r.ast_stdlib
     assert "json" in r.ast_stdlib
     assert "numpy" in r.ast_third_party
@@ -120,10 +121,10 @@ def test_dependency_report_from_src_classification(tmp_path: Path) -> None:
     assert "numpy" not in r.missing
 
 
-def test_dependency_report_from_src_submodules(tmp_path: Path) -> None:
-    """from_src 收集子模块 import."""
+def test_analyze_dependencies_submodules(tmp_path: Path) -> None:
+    """analyze_dependencies 收集子模块 import."""
     (tmp_path / "main.py").write_text("from PySide2.QtCore import QTimer\nfrom PySide2.QtWidgets import QApplication\n")
-    r = DependencyReport.from_src(tmp_path, "main", ())
+    r = analyze_dependencies(tmp_path, "main", ())
     assert r.ast_submodules["PySide2"] == frozenset({"QtCore", "QtWidgets"})
 
 

@@ -42,7 +42,8 @@ if TYPE_CHECKING:
     # annotations`` 使注解不在运行时求值），顶部不导入 fspack.progress 避免连锁
     # 触发 rich.progress/rich.table 加载（省 ~12ms）。fmt_bytes 在
     # print_profile_report 函数内延迟导入（实际渲染时才加载）。
-    from fspack.progress import BuildTracker, StageRecord
+    from fspack.metrics import StageRecord
+from fspack.progress import BuildTracker
 
 __all__ = [
     "ProfileContext",

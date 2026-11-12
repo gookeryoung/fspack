@@ -36,7 +36,7 @@ from fspack.platform import detect_platform as _default_detect_platform
 from .context import _DEFAULT_ICON, _MAX_LOADER_WORKERS, BuildContext
 
 if TYPE_CHECKING:
-    from fspack.progress import StageRecorder
+    from fspack.metrics import StageRecorder
 
 __all__ = [
     "_analyze_binary_dependencies",

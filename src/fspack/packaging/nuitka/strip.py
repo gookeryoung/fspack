@@ -26,7 +26,7 @@ import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from fspack.progress import StageRecorder
+from fspack.metrics import StageRecorder
 
 if TYPE_CHECKING:
     from fspack.packaging.nuitka.protocol import NuitkaCompilerProtocol

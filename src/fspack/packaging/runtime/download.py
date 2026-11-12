@@ -35,7 +35,7 @@ from fspack.packaging.runtime.urls import (
 )
 
 if TYPE_CHECKING:
-    from fspack.progress import StageRecorder
+    from fspack.metrics import StageRecorder
 
 _logger = logging.getLogger(__name__)
 

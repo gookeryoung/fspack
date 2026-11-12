@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     # 避免连锁触发 rich.progress 加载。
     from ssl import SSLContext
 
-    from fspack.progress import StageRecorder
+    from fspack.metrics import StageRecorder
 
 __all__ = ["Downloader"]
 

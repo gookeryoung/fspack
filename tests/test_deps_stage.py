@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import json
 import zipfile
-from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import pytest
 
+from fspack.analyzer import analyze_dependencies as _original_analyze
 from fspack.builder import (
     _dep_cache_load,
     _dep_cache_path,
@@ -257,18 +257,15 @@ def test_build_dep_cache_hit_skips_ast_analysis(tmp_path: Path, monkeypatch: pyt
     cache = _dep_cache_path(proj / "dist")
     assert cache.is_file(), "第一次构建应生成 .dep_cache.json"
 
-    # 第二次构建：缓存命中
+    # 第二次构建：缓存命中（_original_analyze 为顶部导入的原始实现，用于包装追踪）
     analyze_called = False
-    # cast 类型参数用字符串前向引用：3.8 的 collections.abc.Callable 不支持下标，
-    # 非字符串形式会在运行时求值 TypeError（cast(str_type, ...) 不求值）
-    original_from_src = cast("Callable[..., DependencyReport]", DependencyReport.from_src.__func__)
 
-    def tracking_from_src(cls: Any, *args: Any, **kwargs: Any) -> DependencyReport:
+    def tracking_analyze(*args: Any, **kwargs: Any) -> DependencyReport:
         nonlocal analyze_called
         analyze_called = True
-        return original_from_src(*args, **kwargs)
+        return _original_analyze(*args, **kwargs)
 
-    monkeypatch.setattr("fspack.config.DependencyReport.from_src", classmethod(tracking_from_src))
+    monkeypatch.setattr("fspack.analyzer.analyze_dependencies", tracking_analyze)
     build(proj, get_mirror("huawei"), "3.11.9", target=Platform.WINDOWS)
     assert not analyze_called, "缓存命中时不应调用 AST 分析"
 

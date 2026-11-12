@@ -30,7 +30,7 @@ from fspack.packaging.sync import _dir_size
 from fspack.platform import Platform
 
 if TYPE_CHECKING:
-    from fspack.progress import StageRecorder
+    from fspack.metrics import StageRecorder
 
 _logger = logging.getLogger(__name__)
 

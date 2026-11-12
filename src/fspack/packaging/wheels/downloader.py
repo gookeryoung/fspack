@@ -67,7 +67,7 @@ if TYPE_CHECKING:
     # StageRecorder 仅用于类型注解（``from __future__ import annotations`` 使
     # 注解不在运行时求值），顶部不导入 fspack.progress 避免连锁触发
     # rich.progress/rich.table 加载（省 ~12ms）。
-    from fspack.progress import StageRecorder
+    from fspack.metrics import StageRecorder
 from fspack.packaging.wheels.output import (  # noqa: F401
     _PIP_SUCCESS_LINE_RE,
     _PIP_WHEEL_LINE_RE,
