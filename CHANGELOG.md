@@ -14,18 +14,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.6.14] - 2026-11-13
 
 ### Added
-- 新增模板一致性护栏测试：校验 `template.toml` 与 `pyproject.toml` 的依赖、`app_type`、`requires-python` 口径，模板增删必须显式更新契约期望
-- 新增 `tests/_projects.py` 场景工厂，统一测试侧最小/中等工程夹具，收敛散落的内联 `pyproject.toml` 构造
+- 新增 `tests/test_template_consistency.py` 护栏：以人工维护的契约期望表为独立 oracle，校验 init/doctor 模板 id 集合、分类、`app_type`、依赖与 `requires-python`，模板增删必须显式更新期望
+- 新增 `tests/_projects.py` fixture 工厂（`write_project` / `doctor_template_dir` / `copy_doctor_project`），迁移 5 个测试文件的重复工程构造
 
 ### Changed
-- 统一 18 个 init 模板的 `requires-python` 为 `>=3.8`（与根 `pyproject.toml`、CI 矩阵 3.8–3.14 及运行时支持范围一致；PySide2 因无 3.10+ wheel 保留 `>=3.8,<3.10` 例外）；`Template` 默认约束从 `>=3.13` 修正为 `>=3.8`，`cli_init` 详情区基线改为引用该常量。doctor 模板保留各自运行时段（3.14 / >=3.13 / <3.13 等），仅未声明者回退新默认值
+- 统一 18 个 init 模板的 `requires-python` 为 `>=3.8`（依据根 `pyproject.toml`、CI 矩阵 3.8–3.14、运行时 embed 3.8–3.14 / standalone 3.10–3.14）；PySide2 因无 3.10+ wheel 保留 `>=3.8,<3.10` 例外。`Template` 默认约束从 `>=3.13` 修正为 `>=3.8`，`cli_init` 详情区基线改为引用 `DEFAULT_REQUIRES_PYTHON`
+- doctor 模板保留各自运行时段（`==3.14.*` / `>=3.13` / `>=3.8,<3.13` 等），不做归一；未声明 `requires-python` 的 `tk_app` 回退新默认 `>=3.8`
+- 退役 `ProjectTemplate` 兼容 shim（删除 95 行），doctor 模板统一经 `list_templates(role="doctor")` / `get_template(id, role)` 加载；`test_template_loader` 改写为注册表 doctor 加载路径测试并补充缓存隔离
 - 已生成项目不受影响：`fsp init` 不改写既有 `pyproject.toml`，新口径只作用于之后生成的项目
-- 退役 `ProjectTemplate` 兼容 shim，doctor 模板统一通过 `list_templates(role="doctor")` 加载
-- 测试不再手抄模板依赖与 `app_type` 期望，改为「模板 → 生成 → 断言」；关键契约保留一份人工评审的独立期望表
 
 ### Fixed
-- 修复 `game/snake`（`<3.12`）与 `game/pygame_snake`（`>=3.13`）对同一示例给出互斥 Python 版本约束的问题
-- 修复 `test_init_smoke` 注释仍写「24 个模板」、断言仅要求 `>= 18` 导致模板误删无法发现的漂移
+- 修复 init `game/snake` 的 `<3.12` 上界与 doctor `game/pygame_snake`（`>=3.13`）对同一示例给出互斥约束
+- 修复 `test_init_smoke` 注释仍写「24 个模板」、断言仅要求 `>= 18` 导致模板误删无法发现
+
+### Docs
+- 新增 `docs/analysis/2026-11-13-template-test-fixture-consolidation-analysis.md` 模板与测试示例工程整合分析
+- `docs/cli.md` 补充 init 模板 `requires-python` 默认值与 PySide2 例外，并说明已有项目不受影响
 
 ## [0.6.13] - 2026-11-13
 

@@ -12,14 +12,15 @@
 v0.6.14
 -------
 
-- test(templates): 新增模板一致性护栏——校验 ``template.toml`` 与 ``pyproject.toml`` 的依赖、``app_type``、``requires-python`` 口径，模板增删必须显式更新契约期望
-- test(templates): 新增 ``tests/_projects.py`` 场景工厂，统一测试侧最小/中等工程夹具，收敛内联 ``pyproject.toml`` 构造
-- refactor(templates): 统一 18 个 init 模板的 ``requires-python`` 为 ``>=3.8``（对齐根 ``pyproject.toml``、CI 矩阵与运行时支持范围；PySide2 保留 ``>=3.8,<3.10`` 例外），``Template`` 默认约束改为 ``>=3.8``，``cli_init`` 基线改为引用该常量；doctor 模板保留各自运行时段，不断言归一
-- docs: 说明已有生成项目不受影响——``fsp init`` 不改写既有 ``pyproject.toml``，新口径仅作用于之后生成的项目
-- refactor(templates): 退役 ``ProjectTemplate`` 兼容 shim，doctor 模板统一通过 ``list_templates(role="doctor")`` 加载
-- fix(templates): 修复 ``game/snake``（``<3.12``）与 ``game/pygame_snake``（``>=3.13``）对同一示例给出互斥 Python 版本约束
-- fix(test): 修复 ``test_init_smoke`` 注释仍写「24 个模板」、断言仅要求 ``>= 18`` 导致模板误删无法发现的漂移
-- docs: 新增模板与测试示例工程的冗余盘点及整合方案分析
+- test(templates): 新增模板一致性护栏——以人工维护的契约期望表为独立 oracle，校验 init/doctor 模板 id 集合、分类、``app_type``、依赖与 ``requires-python``，模板增删必须显式更新期望
+- test(templates): 新增 ``tests/_projects.py`` fixture 工厂（``write_project`` / ``doctor_template_dir`` / ``copy_doctor_project``），迁移 5 个测试文件的重复工程构造
+- refactor(templates): 统一 18 个 init 模板的 ``requires-python`` 为 ``>=3.8``（依据根 ``pyproject.toml``、CI 矩阵 3.8–3.14、运行时 embed/standalone 支持范围；PySide2 保留 ``>=3.8,<3.10`` 例外），``Template`` 默认约束改为 ``>=3.8``，``cli_init`` 基线改为引用 ``DEFAULT_REQUIRES_PYTHON``
+- refactor(templates): doctor 模板保留各自运行时段（``==3.14.*`` / ``>=3.13`` / ``>=3.8,<3.13`` 等），不做归一；未声明者回退新默认 ``>=3.8``
+- refactor(templates): 退役 ``ProjectTemplate`` 兼容 shim（删除 95 行），doctor 模板统一经 ``list_templates(role="doctor")`` / ``get_template(id, role)`` 加载；``test_template_loader`` 改写为注册表 doctor 加载路径测试并补充缓存隔离
+- fix(templates): 修复 init ``game/snake`` 的 ``<3.12`` 上界与 doctor ``game/pygame_snake``（``>=3.13``）对同一示例给出互斥约束
+- fix(test): 修复 ``test_init_smoke`` 注释仍写「24 个模板」、断言仅要求 ``>= 18`` 导致模板误删无法发现
+- docs: 说明已有生成项目不受影响——``fsp init`` 不改写既有 ``pyproject.toml``，新口径仅作用于之后生成的项目；``docs/cli.md`` 补充默认值与 PySide2 例外
+- docs: 新增 ``docs/analysis/2026-11-13-template-test-fixture-consolidation-analysis.md`` 模板与测试示例工程整合分析
 
 v0.6.13
 -------
