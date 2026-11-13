@@ -179,6 +179,16 @@ class ConsoleUI:
         """静默模式：只保留错误与最终结果行."""
         return self._quiet
 
+    @property
+    def path_width(self) -> int:
+        """日志路径的显示列预算（终端宽度扣除前缀、正文与常见后缀）.
+
+        80 列重定向终端返回 24，120 列交互终端返回 64；:mod:`fspack.logutil`
+        再收敛到 [24, 72]。预算按「标签 + 路径」整体落单行留白，避免路径本身
+        截断后仍被后缀顶到第二行。
+        """
+        return max(24, self._console.width - 56)
+
     def setup_output(self, *, machine: bool = False, quiet: bool = False) -> None:
         """按输出场景重建人类可读 Console.
 

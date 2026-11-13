@@ -29,6 +29,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from fspack import logutil
 from fspack._compat import override
 from fspack.config.versions import _split_t_suffix
 from fspack.exceptions import EmbedError, FspackError
@@ -127,12 +128,13 @@ def inject_win7_shims(dest_dir: Path, *, shims: dict[str, Path] | None = None) -
     for dll_name, src_path in sorted(shims.items()):
         dest = dest_dir / dll_name
         if dest.is_file():
-            _logger.info("Win7 shim 已存在，跳过: %s", dest)
+            _logger.debug("Win7 shim 已存在，跳过: %s", dest)
             continue
         if not src_path.is_file():
             raise FileNotFoundError(f"Win7 shim 源文件缺失: {src_path}（dll: {dll_name}）")
         shutil.copy2(src_path, dest)
-        _logger.info("注入 Win7 shim: %s (%d bytes)", dest, src_path.stat().st_size)
+        _logger.info("注入 Win7 shim: %s", logutil.short_path(dest))
+        _logger.debug("Win7 shim 大小: %d bytes", src_path.stat().st_size)
         injected.append(dll_name)
     return tuple(injected)
 
@@ -254,7 +256,8 @@ def extract_win7_dll(zip_path: Path, dest_dir: Path, version: str) -> Path:
     dll = dest_dir / win7_dll_name(version)
     if not dll.is_file():
         raise Win7DllError(f"win7 embed zip 内缺少 {win7_dll_name(version)}: {zip_path}")
-    _logger.info("全量提取 win7 组件到 %s（%s 就绪）", dest_dir, dll.name)
+    _logger.info("全量提取 win7 组件到 %s", logutil.short_path(dest_dir))
+    _logger.debug("%s 就绪", dll.name)
     return dll
 
 
@@ -307,7 +310,7 @@ def ensure_win7_dll(
             dll.unlink(missing_ok=True)
             marker.unlink(missing_ok=True)
         else:
-            _logger.info("win7 runtime 组件已就绪并校验通过: %s", dll)
+            _logger.debug("win7 runtime 组件已就绪并校验通过: %s", dll)
             if stage is not None:
                 stage.hit_cache()
             return dll
@@ -324,7 +327,8 @@ def ensure_win7_dll(
         dll.unlink(missing_ok=True)
         raise
     marker.write_text(version, encoding="ascii")
-    _logger.info("win7 组件全量替换完成并校验通过: %s（需 shim: %s）", dll, ", ".join(result.shim_dlls) or "无")
+    _logger.info("win7 组件替换完成: %s", logutil.short_path(dll))
+    _logger.debug("win7 组件需 shim: %s", ", ".join(result.shim_dlls) or "无")
     return dll
 
 

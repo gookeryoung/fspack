@@ -1235,11 +1235,13 @@ class TestSlimUnpack:
             },
         )
         dest = tmp_path / "sp"
-        with caplog.at_level("INFO", logger="fspack.slim.base"):
+        # 每 wheel 的剥离统计默认不占输出行（阶段级），-v/日志文件（DEBUG）可见
+        with caplog.at_level("DEBUG", logger="fspack.slim.base"):
             slim_unpack([whl], dest, {"PySide6": frozenset({"QtCore"})})
         # 统计日志包含"剥离 N 个文件，节省 X.YMB"
         stats_logs = [r for r in caplog.records if "剥离" in r.getMessage() and "节省" in r.getMessage()]
         assert len(stats_logs) == 1
+        assert stats_logs[0].levelname == "DEBUG"
         msg = stats_logs[0].getMessage()
         assert "剥离 3 个文件" in msg  # designer.exe + Qt3DCore.pyd + examples/dummy.py
         assert "节省" in msg

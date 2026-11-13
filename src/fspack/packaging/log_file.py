@@ -31,6 +31,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from fspack import logutil
 from fspack._compat import override
 
 __all__ = [
@@ -175,7 +176,7 @@ def setup_log_file(path: Path, fmt: LogFormat = LogFormat.TEXT) -> LogFileHandle
     if previous_level > logging.DEBUG:
         root.setLevel(logging.DEBUG)
     root.addHandler(handler)
-    _logger.info("日志文件已启用: %s（格式: %s）", path, fmt.value)
+    _logger.info("日志文件已启用: %s（格式: %s）", logutil.short_path(path), fmt.value)
     return LogFileHandler(handler=handler, path=path, previous_root_level=previous_level)
 
 

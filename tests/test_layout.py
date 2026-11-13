@@ -46,6 +46,8 @@ ALLOWED_DISPLAY_IMPORTERS = frozenset(
         # 属于「阶段执行 + 展示」入口，不是纯逻辑模块。
         "packaging/nuitka/progress.py",
         "packaging/pipeline/frontend_stage.py",
+        # windres 资源编译同样回传捕获输出到 DEBUG（[loader]）
+        "packaging/loader/toolchain.py",
         "packaging/pipeline/context.py",
         "packaging/pipeline/dist_helpers.py",
         "packaging/pipeline/executor.py",
@@ -56,7 +58,7 @@ ALLOWED_DISPLAY_IMPORTERS = frozenset(
         "packaging/wheels/process.py",
     }
 )
-LEAF_MODULES = ("metrics.py", "astutil.py", "archive.py", "jsoncache.py")
+LEAF_MODULES = ("metrics.py", "astutil.py", "archive.py", "jsoncache.py", "logutil.py")
 
 
 def _iter_sources() -> list[Path]:

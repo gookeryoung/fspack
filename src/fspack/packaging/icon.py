@@ -23,6 +23,7 @@ import logging
 import os
 from pathlib import Path
 
+from fspack import logutil
 from fspack.packaging import action_cache
 
 __all__ = ["SUPPORTED_IMAGE_EXTS", "ensure_ico", "find_favicon"]
@@ -104,7 +105,7 @@ def find_favicon(project_dir: Path) -> Path | None:
             fname = lower_map.get(target)
             if fname is not None:
                 path = Path(root) / fname
-                _logger.info("发现 favicon: %s", path)
+                _logger.info("发现 favicon: %s", logutil.short_path(path))
                 return path
     return None
 
@@ -198,7 +199,7 @@ def _convert_image_to_ico(src: Path, dst: Path) -> bool:
         # bitmap_format="png" 强制所有尺寸用 PNG 格式保存，保留完整 8-bit alpha；
         # 默认 BMP 格式的小尺寸条目仅用 1-bit AND mask，会丢失半透明信息
         img.save(dst, format="ICO", sizes=sizes, bitmap_format="png")
-        _logger.info("图片转换 .ico 成功: %s -> %s", src, dst)
+        _logger.info("图片转换 .ico 成功: %s -> %s", logutil.short_path(src), logutil.short_path(dst))
         return True
     except (OSError, ValueError) as e:
         _logger.warning("图片转换 .ico 失败，跳过: %s\n%s", src, e)

@@ -104,7 +104,7 @@ class TkinterBundler:
         if tkinter_marker.is_file():
             stage.hit_cache()
             stage.set_detail("tkinter 已就绪")
-            _logger.info("tkinter 打包: runtime 已含 tkinter，跳过")
+            _logger.debug("tkinter 打包: runtime 已含 tkinter，跳过")
             return
 
         # embed 版本 → 同 minor 的 standalone 版本（ABI 兼容，避免拼出不存在的 URL）
@@ -120,7 +120,7 @@ class TkinterBundler:
 
         if cache_zip.is_file():
             stage.set_detail("从缓存解压 tkinter")
-            _logger.info("tkinter 打包: 从缓存解压 %s", cache_zip.name)
+            _logger.debug("tkinter 打包: 从缓存解压 %s", cache_zip.name)
             try:
                 cls._unpack_tkinter_zip(cache_zip, runtime_dir)
                 stage.processed(1)
@@ -150,7 +150,7 @@ class TkinterBundler:
             downloader.download(url, tarball_path, stage=stage, label=f"standalone-windows {standalone_ver}")
         else:
             stage.hit_cache()
-            _logger.info("tkinter 打包: standalone tarball 已缓存")
+            _logger.debug("tkinter 打包: standalone tarball 已缓存")
 
         # 从 tarball 提取 tkinter 组件，生成缓存 zip
         _logger.info("tkinter 打包: 从 tarball 提取 tkinter 组件")

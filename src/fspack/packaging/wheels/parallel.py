@@ -158,7 +158,8 @@ def _download_one_with_uv(
         cmd.extend(["--index-url", ctx.pypi_index])
     cmd.extend(ctx.extra_args)
     cmd.append(req)
-    _logger.info("uv 下载 %s（镜像 %s）", req, ctx.pypi_index if with_index else "默认")
+    # 每包一条的"开始下载"不占默认输出：完成事件（``已下载``）已足够表达进展
+    _logger.debug("uv 下载 %s（镜像 %s）", req, ctx.pypi_index if with_index else "默认")
     start = time.perf_counter()
     try:
         # 安全：cmd 由代码构造（固定 uv pip download + 用户配置 PyPI 镜像地址），
@@ -172,6 +173,11 @@ def _download_one_with_uv(
     # 路径：pip_stdout 转换后是 "Saved X.whl"（仅文件名），is_file() 会失败；
     # uv 原始输出 "Downloaded X.whl" 也是文件名，但拼接 cache_dir 后能定位文件取大小
     _log_download_event(req, result.stdout, result.stderr, time.perf_counter() - start, ctx.cache_dir)
+    # uv 是 pip download 的后端实现，被捕获的输出统一按 ``[pip]`` 前缀转发
+    # （默认不显示，``-v``/CI 日志文件可见）
+    from fspack.packaging.wheels.process import _forward_tool_output
+
+    _forward_tool_output("pip", result)
     return subprocess.CompletedProcess(args=cmd, returncode=0, stdout=pip_stdout, stderr=result.stderr)
 
 
@@ -216,7 +222,7 @@ def _download_one_resolved(
         cmd = [*ctx.base_args, "--no-deps", "-i", ctx.pypi_index, *ctx.extra_args, req]
     else:
         cmd = [*ctx.base_args, "--no-deps", *ctx.extra_args, req]
-    _logger.info("pip 下载 %s（镜像 %s）", req, ctx.pypi_index if with_index else "默认")
+    _logger.debug("pip 下载 %s（镜像 %s）", req, ctx.pypi_index if with_index else "默认")
     start = time.perf_counter()
     try:
         if stream:
@@ -242,6 +248,9 @@ def _download_one_resolved(
         # 重新抛出原异常，保留 stderr 供 sdist 回退解析
         raise
     _log_download_event(req, result.stdout, result.stderr, time.perf_counter() - start)
+    from fspack.packaging.wheels.process import _forward_tool_output
+
+    _forward_tool_output("pip", result)
     return result
 
 

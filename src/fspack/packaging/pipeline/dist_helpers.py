@@ -23,6 +23,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from fspack import logutil
 from fspack.fsutil import atomic_write_text, rmtree_longpath
 from fspack.jsoncache import load_json_dict
 
@@ -291,7 +292,7 @@ def _clean_dist_dir(dist_dir: Path, *, keep_diagnostics: bool) -> None:
             except OSError:
                 # 目录非空说明有文件未能恢复，保留现场便于人工找回
                 _logger.warning("临时保留目录未清空: %s", keep_dir)
-    _logger.info("已清理: %s", dist_dir)
+    _logger.info("已清理: %s", logutil.short_path(dist_dir))
 
 
 def clean_dist(project: Path) -> None:
@@ -310,6 +311,6 @@ def clean_dist(project: Path) -> None:
     """
     dist = Path(project) / "dist"
     if not dist.is_dir():
-        _logger.info("无 dist 目录可清理: %s", dist)
+        _logger.debug("无 dist 目录可清理: %s", dist)
         return
     _clean_dist_dir(dist, keep_diagnostics=True)

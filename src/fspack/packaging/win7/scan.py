@@ -41,6 +41,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from fspack import logutil
 from fspack.exceptions import FspackError
 from fspack.packaging import action_cache
 from fspack.packaging.win7 import check as _check_mod
@@ -418,7 +419,7 @@ def inject_win7_shims(dist_dir: Path, *, needed: frozenset[str] | set[str] | Non
         needed = found
 
     if not needed:
-        _logger.info("dist 下无 PE 需额外 Win7 shim，跳过注入")
+        _logger.debug("dist 下无 PE 需额外 Win7 shim，跳过注入")
         return ()
 
     injected: list[str] = []
@@ -428,10 +429,11 @@ def inject_win7_shims(dist_dir: Path, *, needed: frozenset[str] | set[str] | Non
             raise OSError(f"Win7 shim 源文件缺失: {src}（dll: {dll_name}）")
         dest = runtime_dir / dll_name
         if dest.is_file():
-            _logger.info("Win7 shim 已在 runtime/ 中存在，跳过: %s", dest)
+            _logger.debug("Win7 shim 已在 runtime/ 中存在，跳过: %s", dest)
             continue
         shutil.copy2(src, dest)
-        _logger.info("注入 Win7 shim 到 runtime/: %s（%d bytes）", dest, src.stat().st_size)
+        _logger.info("注入 Win7 shim 到 runtime/: %s", logutil.short_path(dest))
+        _logger.debug("Win7 shim 大小: %d bytes", src.stat().st_size)
         injected.append(dll_name)
 
     return tuple(injected)
@@ -480,5 +482,5 @@ def write_win7_report(report: Win7ScanReport, dist_dir: Path) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / REPORT_FILENAME
     out_path.write_text(render_win7_report(report), encoding="utf-8")
-    _logger.info("Win7 兼容报告已写入: %s", out_path)
+    _logger.info("Win7 兼容报告已写入: %s", logutil.short_path(out_path))
     return out_path

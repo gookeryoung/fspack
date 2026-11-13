@@ -257,7 +257,7 @@ def parallel_map_with_progress(
         return []
     workers = max_workers or min(8, total)
     results: list[R] = []
-    use_progress = console.rich.is_terminal and total > 1
+    use_progress = console.is_interactive and not console.quiet and total > 1
     if not use_progress:
         # 无进度条开销的快速路径
         with ThreadPoolExecutor(max_workers=workers) as pool:

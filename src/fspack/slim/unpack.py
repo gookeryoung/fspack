@@ -157,7 +157,7 @@ def _slim_extract(
         saved_mb = skipped_bytes / 1024 / 1024
         total_mb = total_bytes / 1024 / 1024
         pct = (skipped_bytes / total_bytes * 100) if total_bytes else 0
-        _logger.info(
+        _logger.debug(
             "精简 %s: 剥离 %d 个文件，节省 %.1fMB / %.1fMB (%.0f%%)",
             Path(zf.filename).name,
             skipped_files,
@@ -203,10 +203,10 @@ def _unpack_one_wheel(
             # 用 top_pkg 的归一化名查找 keep_subs，支持拆分 wheel 共享主包保留集合
             keep_subs = merged.get(normalize_name(top_pkg), set())
             if keep_subs:
-                _logger.info("精简解压 %s: 保留子模块 %s", whl.name, ", ".join(sorted(keep_subs)))
+                _logger.debug("精简解压 %s: 保留子模块 %s", whl.name, ", ".join(sorted(keep_subs)))
             else:
                 # keep_subs 为空：仅应用剥离规则（examples/docs/tests 等），子模块文件全保留
-                _logger.info("解压 %s（应用剥离规则）", whl.name)
+                _logger.debug("解压 %s（应用剥离规则）", whl.name)
             return _slim_extract(zf, dest, top_pkg, keep_subs, slim_rules)
     except zipfile.BadZipFile as e:
         raise DependencyError(f"wheel 损坏: {whl}") from e

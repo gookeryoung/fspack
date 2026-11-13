@@ -123,6 +123,11 @@ def main(argv: list[str] | None = None) -> None:
     console.setup_output(machine=json_mode, quiet=bool(getattr(ns, "quiet", False)))
     console.setup_logging(verbose=ns.verbose)
 
+    # 默认把日志里的绝对路径缩成单行（-v 保持完整路径），宽度按终端列数收敛
+    from fspack import logutil
+
+    logutil.configure(verbose=ns.verbose, path_width=console.path_width)
+
     # -O/--offline 单次约定：设 FSPACK_OFFLINE 使 is_offline() 生效，
     # 与环境变量 FSPACK_OFFLINE=1 等价，仅当前命令进程内有效
     if getattr(ns, "offline", False):
@@ -154,6 +159,7 @@ def main(argv: list[str] | None = None) -> None:
             _emit_json(command, ns)
     finally:
         console.reset_output()
+        logutil.reset()
 
 
 _JSON_COMMANDS: dict[str, str] = {
@@ -625,6 +631,7 @@ def _run_generate(ns: argparse.Namespace) -> None:
     """执行 manifest generate：扫描 dist 重新生成 manifest."""
     import json
 
+    from fspack import logutil
     from fspack.config import ProjectInfo
     from fspack.console import console
     from fspack.exceptions import ProjectError
@@ -654,13 +661,13 @@ def _run_generate(ns: argparse.Namespace) -> None:
         release_dir.mkdir(parents=True, exist_ok=True)
         output = release_dir / f"{info.name}-{info.version}-py{info.py_version}-{target.value}-manifest.json"
     atomic_write_text(output, json.dumps(data, ensure_ascii=False, indent=2))
-    _logger.info(
-        "产物清单已生成: %s（%d 个文件，共 %s）",
-        output,
+    _logger.info("产物清单已生成: %s", logutil.short_path(output))
+    _logger.debug(
+        "产物清单统计: %d 个文件，共 %s",
         data["summary"]["total_files"],
         _format_size(data["summary"]["total_size"]),
     )
-    console.success(f"manifest 已生成: {output}")
+    console.success(f"manifest 已生成: {logutil.short_path(output)}")
 
 
 def _run_diff(ns: argparse.Namespace) -> None:

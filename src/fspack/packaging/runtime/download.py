@@ -135,12 +135,12 @@ class RuntimeDownloader(abc.ABC):
                     )
                     archive_path.unlink(missing_ok=True)
                 else:
-                    _logger.info("%s 已缓存且 hash 匹配: %s", cls.runtime_label, archive_path)
+                    _logger.debug("%s 已缓存且 hash 匹配: %s", cls.runtime_label, archive_path)
                     if stage is not None:
                         stage.hit_cache()
                     return archive_path
             else:
-                _logger.info("%s 已缓存: %s", cls.runtime_label, archive_path)
+                _logger.debug("%s 已缓存: %s", cls.runtime_label, archive_path)
                 if stage is not None:
                     stage.hit_cache()
                 return archive_path
@@ -327,7 +327,7 @@ def ensure_embed(
     """
     dll_marker = EmbedRuntime.marker_path(runtime_dir, version)
     if dll_marker.is_file():
-        _logger.info("embed python 已就绪: %s", runtime_dir)
+        _logger.debug("embed python 已就绪: %s", runtime_dir)
         if stage is not None:
             stage.hit_cache()
     else:
@@ -400,7 +400,7 @@ def ensure_standalone(
     """
     python_bin = StandaloneRuntime.marker_path(runtime_dir, version)
     if python_bin.is_file():
-        _logger.info("python-build-standalone 已就绪: %s", runtime_dir)
+        _logger.debug("python-build-standalone 已就绪: %s", runtime_dir)
         if stage is not None:
             stage.hit_cache()
     else:

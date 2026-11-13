@@ -42,6 +42,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from fspack import logutil
 from fspack._compat import UTC
 from fspack.config import ProjectInfo
 from fspack.fsutil import atomic_write_text, scandir_tree
@@ -227,9 +228,9 @@ def generate_manifest(dist_dir: Path, info: ProjectInfo, target: Platform | None
     manifest_path = release_dir / f"{info.name}-{info.version}-py{info.py_version}-{target.value}-manifest.json"
     data = collect_manifest(dist_dir, info)
     atomic_write_text(manifest_path, json.dumps(data, ensure_ascii=False, indent=2))
-    _logger.info(
-        "产物清单已生成: %s（%d 个文件，共 %s）",
-        manifest_path,
+    _logger.info("产物清单已生成: %s", logutil.short_path(manifest_path))
+    _logger.debug(
+        "产物清单统计: %d 个文件，共 %s",
         data["summary"]["total_files"],
         _format_size(data["summary"]["total_size"]),
     )

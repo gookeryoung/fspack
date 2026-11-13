@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -1244,3 +1245,35 @@ def test_compile_loader_version_info_triggers_compile(tmp_path: Path, monkeypatc
     )
     # gcc 命令末尾链接 resource.o
     assert captured["cmd"][-1].endswith("resource.o")
+
+
+# ---- 编译器原始输出转发（[loader]） ----
+
+
+def test_forward_compile_output_logs_loader_debug(caplog: pytest.LogCaptureFixture) -> None:
+    """gcc 成功路径为静默；一旦有输出（告警）以 [loader] 前缀进入 DEBUG."""
+    from fspack.packaging.loader.compile import _forward_tool_output
+
+    completed = subprocess.CompletedProcess(["gcc"], 0, stdout="", stderr="warning: unused variable\n")
+    with caplog.at_level(logging.DEBUG, logger="fspack.console"):
+        _forward_tool_output(completed)
+    assert "[loader] warning: unused variable" in caplog.text
+
+
+def test_forward_compile_output_silent_at_info(caplog: pytest.LogCaptureFixture) -> None:
+    """默认（INFO）输出不显示编译器原始输出."""
+    from fspack.packaging.loader.compile import _forward_tool_output
+
+    completed = subprocess.CompletedProcess(["gcc"], 0, stdout="collect2 notes\n", stderr="")
+    with caplog.at_level(logging.INFO, logger="fspack.console"):
+        _forward_tool_output(completed)
+    assert "collect2 notes" not in caplog.text
+
+
+def test_forward_compile_output_empty_is_noop(caplog: pytest.LogCaptureFixture) -> None:
+    """无输出时不产生日志记录."""
+    from fspack.packaging.loader.compile import _forward_tool_output
+
+    with caplog.at_level(logging.DEBUG, logger="fspack.console"):
+        _forward_tool_output(subprocess.CompletedProcess(["gcc"], 0, stdout="", stderr=""))
+    assert caplog.records == []

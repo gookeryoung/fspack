@@ -143,12 +143,12 @@ def _run_pip_download(
         ctx.uv_path = ctx.uv_path or _find_uv()
         local = _try_local_resolution(filtered, ctx)
         if local == []:
-            _logger.info("本地无任何顶层依赖 wheel，跳过注定失败的 pip 离线预检")
+            _logger.debug("本地无任何顶层依赖 wheel，跳过注定失败的 pip 离线预检")
             if is_offline():
                 _raise_cache_miss(filtered, ctx)
             return _download_online(filtered, ctx, require_hashes=require_hashes)
         if local:
-            _logger.info("本地快速解析命中 %d 个 wheel，跳过 pip 离线预检", len(local))
+            _logger.debug("本地快速解析命中 %d 个 wheel，跳过 pip 离线预检", len(local))
             return _local_download_result(local)
 
     # 先用 --no-index 从本地缓存 + 用户 find-links 解析（离线模式），命中则跳过网络查询
@@ -162,7 +162,7 @@ def _run_pip_download(
             _raise_cache_miss(filtered, ctx)
         _logger.info("缓存解析失败，回退到在线解析下载")
         return _download_online(filtered, ctx, require_hashes=require_hashes)
-    _logger.info("缓存解析成功，跳过网络查询")
+    _logger.debug("缓存解析成功，跳过网络查询")
     return result
 
 

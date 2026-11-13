@@ -44,6 +44,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from fspack import logutil
 from fspack._compat import UTC
 from fspack.config import ProjectInfo
 from fspack.fsutil import atomic_write_text
@@ -162,7 +163,7 @@ def generate_sbom(dist_dir: Path, info: ProjectInfo, target: Platform | None = N
     sbom_path = release_dir / f"{info.name}-{info.version}-py{info.py_version}-{target.value}-sbom.json"
     sbom_data = collect_sbom(dist_dir, info)
     atomic_write_text(sbom_path, json.dumps(sbom_data, ensure_ascii=False, indent=2))
-    _logger.info("SBOM 已生成: %s（%d 个包）", sbom_path, len(sbom_data["packages"]))
+    _logger.info("SBOM 已生成: %s（%d 个包）", logutil.short_path(sbom_path), len(sbom_data["packages"]))
     return sbom_path
 
 

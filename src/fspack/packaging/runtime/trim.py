@@ -23,6 +23,7 @@ import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from fspack import logutil
 from fspack.config.versions import _split_t_suffix
 from fspack.packaging import action_cache
 from fspack.packaging.runtime.urls import embed_dirname
@@ -196,14 +197,14 @@ def _inject_win7_compat_dll(runtime_dir: Path) -> None:
     _WIN7_COMPAT_DLL_NAME_dispatch: str = _P("_WIN7_COMPAT_DLL_NAME", _WIN7_COMPAT_DLL_NAME)
     dest = runtime_dir / _WIN7_COMPAT_DLL_NAME_dispatch
     if dest.is_file():
-        _logger.info("Win7 兼容 DLL 已就绪: %s", dest)
+        _logger.debug("Win7 兼容 DLL 已就绪: %s", dest)
         return
     src = Path(__file__).parent.parent.parent / "assets" / "runtime" / _WIN7_COMPAT_DLL_NAME_dispatch
     if not src.is_file():
         _logger.warning("Win7 兼容 DLL 缺失: %s，跳过注入", src)
         return
     shutil.copy2(src, dest)
-    _logger.info("注入 Win7 兼容 DLL: %s", dest)
+    _logger.info("注入 Win7 兼容 DLL: %s", logutil.short_path(dest))
 
 
 def _trim_stdlib(
@@ -349,7 +350,7 @@ def _rewrite_embed_stdlib_zip(
     blacklist = _EMBED_TRIM_AGGRESSIVE if aggressive else _EMBED_TRIM_CONSERVATIVE
     if _slim_marker_matches(runtime_dir, zip_path, blacklist, aggressive):
         # 标记可证明 zip 未被改动且已按当前清单精简：跳过整包读取/解压（热构建 ~50ms）
-        _logger.info("embed stdlib zip 已精简且未变化，跳过重扫: %s", zip_path.name)
+        _logger.debug("embed stdlib zip 已精简且未变化，跳过重扫: %s", zip_path.name)
         stage.set_detail("已精简，跳过")
         return
     try:

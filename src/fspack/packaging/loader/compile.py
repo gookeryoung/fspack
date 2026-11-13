@@ -171,7 +171,7 @@ class LoaderCompiler(abc.ABC):
         cached_exe = cache / f"{key}{cls.exe_suffix}"
 
         if cached_exe.is_file():
-            _logger.info("loader 缓存命中: %s", cached_exe.name)
+            _logger.debug("loader 缓存命中: %s", cached_exe.name)
             shutil.copy2(cached_exe, out_exe)
             if stage is not None:
                 stage.hit_cache()
@@ -186,13 +186,13 @@ class LoaderCompiler(abc.ABC):
 
         resource_obj = cls._prepare_resources(icon, version_info, work_dir)
         cmd = cls._build_command(c_file, out_exe, app_type, resource_obj)
-        _logger.info("编译 loader: %s", " ".join(cmd))
+        _logger.debug("编译 loader: %s", " ".join(cmd))
         try:
             # 延迟导入：避免 ``import fspack.builder`` 触发 fspack.progress 加载
             from fspack.progress import spinner
 
             with spinner(f"编译 loader ({cls.compiler_name})"):
-                subprocess.run(
+                completed = subprocess.run(
                     cmd,
                     check=True,
                     capture_output=True,
@@ -200,6 +200,7 @@ class LoaderCompiler(abc.ABC):
                     errors="replace",
                     timeout=_LOADER_COMPILE_TIMEOUT,
                 )
+            _forward_tool_output(completed)
         except FileNotFoundError as e:
             raise LoaderError(f"未找到编译器 {cls.compiler_name}，请安装 {cls.install_hint}") from e
         except subprocess.TimeoutExpired as e:
@@ -208,6 +209,7 @@ class LoaderCompiler(abc.ABC):
                 "请检查杀软是否锁定输出文件后重试"
             ) from e
         except subprocess.CalledProcessError as e:
+            _forward_tool_output(subprocess.CompletedProcess(cmd, e.returncode, e.stdout, e.stderr))
             raise LoaderError(f"loader 编译失败:\n{e.stderr}") from e
         # 资源编译失败（windres 不可用或 rc 语法错误）时不缓存 exe：
         # 此 exe 缺少 icon/版本信息/manifest 资源段，缓存后修复 resource.py
@@ -229,6 +231,22 @@ class LoaderCompiler(abc.ABC):
 
 
 # ---- 子类 ----
+
+
+def _forward_tool_output(completed: subprocess.CompletedProcess[str]) -> None:
+    """把 gcc 的原始输出转发到 DEBUG（``[loader]`` 前缀，默认不显示）.
+
+    编译器在成功路径上常年静默（无 warning 时 stdout/stderr 为空），失败时由
+    :class:`LoaderError` 携带 stderr。转发保证 ``-v`` 与 CI 日志文件里能拿到
+    完整命令行/告警/告警上下文，而默认输出仍然只有阶段级一行。
+    """
+    if not completed.stdout and not completed.stderr:
+        return
+    from fspack.console import console
+
+    for text in (completed.stdout, completed.stderr):
+        if text:
+            console.tool_output("loader", text.encode("utf-8"))
 
 
 class WindowsLoader(LoaderCompiler):

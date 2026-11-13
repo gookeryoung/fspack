@@ -648,8 +648,10 @@ def test_download_wheels_writes_deps_cache_after_pip(tmp_path: Path, monkeypatch
     assert whl_name in data["wheels"]
 
 
-def test_download_wheels_deps_cache_hit_no_stage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """依赖解析缓存命中且 stage=None 时不报错."""
+def test_download_wheels_deps_cache_hit_no_stage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """依赖解析缓存命中且 stage=None 时不报错；命中提示只在 DEBUG（默认输出不占行）."""
     cache = tmp_path / "cache"
     cache.mkdir()
     whl_name = "numpy-1.24.0-cp311-cp311-win_amd64.whl"
@@ -667,9 +669,16 @@ def test_download_wheels_deps_cache_hit_no_stage(tmp_path: Path, monkeypatch: py
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
     monkeypatch.setattr("fspack.packaging.wheels.downloader._find_pip_python", lambda: "/py/python")
 
-    result = download_wheels(("numpy",), "3.11.9", "https://idx/simple", cache)
+    with caplog.at_level(logging.DEBUG, logger="fspack.packaging.wheels.downloader"):
+        result = download_wheels(("numpy",), "3.11.9", "https://idx/simple", cache)
     assert not pip_called
     assert len(result) == 1
+    assert "依赖解析缓存命中" in caplog.text
+
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="fspack.packaging.wheels.downloader"):
+        download_wheels(("numpy",), "3.11.9", "https://idx/simple", cache)
+    assert "依赖解析缓存命中" not in caplog.text
 
 
 def test_save_deps_cache_oserror_warning(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2650,6 +2659,8 @@ def test_stream_subprocess_success(monkeypatch: pytest.MonkeyPatch, caplog: pyte
     assert result.stderr == "Downloading pkg"
     # stderr 不再直写 sys.stderr，而是以 [pip] 前缀进入 DEBUG（-v/日志文件可见）
     assert "[pip] Downloading pkg" in caplog.text
+    # pip 的日志行走 stdout（进度条才走 stderr），此前只解析 wheel 列表就丢弃
+    assert "[pip] saved wheel" in caplog.text
 
 
 def test_stream_subprocess_failure(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2667,6 +2678,38 @@ def test_stream_subprocess_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     assert exc_info.value.returncode == 1
     assert exc_info.value.stdout == "out"
     assert exc_info.value.stderr == "err msg"
+
+
+def test_forward_tool_output_logs_captured_output_at_debug(caplog: pytest.LogCaptureFixture) -> None:
+    """并行 pip 下载被捕获的 stdout/stderr 以 [pip] 前缀进入 DEBUG（-v/日志文件可见）."""
+    from fspack.packaging.wheels.process import _forward_tool_output
+
+    completed = subprocess.CompletedProcess(
+        ["pip", "download"], 0, stdout="Saved a.whl\n", stderr="Looking in indexes: https://idx\n"
+    )
+    with caplog.at_level(logging.DEBUG, logger="fspack.console"):
+        _forward_tool_output("pip", completed)
+    assert "[pip] Saved a.whl" in caplog.text
+    assert "[pip] Looking in indexes: https://idx" in caplog.text
+
+
+def test_forward_tool_output_silent_at_info(caplog: pytest.LogCaptureFixture) -> None:
+    """默认（INFO）输出不显示被捕获的工具输出."""
+    from fspack.packaging.wheels.process import _forward_tool_output
+
+    completed = subprocess.CompletedProcess(["pip"], 0, stdout="", stderr="Looking in indexes\n")
+    with caplog.at_level(logging.INFO, logger="fspack.console"):
+        _forward_tool_output("pip", completed)
+    assert "Looking in indexes" not in caplog.text
+
+
+def test_forward_tool_output_empty_is_noop(caplog: pytest.LogCaptureFixture) -> None:
+    """stdout/stderr 均空时不产生任何日志记录."""
+    from fspack.packaging.wheels.process import _forward_tool_output
+
+    with caplog.at_level(logging.DEBUG, logger="fspack.console"):
+        _forward_tool_output("pip", subprocess.CompletedProcess(["pip"], 0, stdout="", stderr=""))
+    assert caplog.records == []
 
 
 def test_stream_subprocess_file_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -3277,6 +3320,25 @@ def test_download_one_with_uv_with_index(tmp_path: Path, monkeypatch: pytest.Mon
     cmd = captured["cmd"]
     assert "--index-url" in cmd
     assert "https://idx/simple" in cmd
+
+
+def test_download_one_with_uv_forwards_output_as_pip_debug(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """uv 后端被捕获的输出按 [pip] 前缀进 DEBUG；每包"开始下载"不再是 INFO."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+
+    def fake_run(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args=cmd, returncode=0, stdout="Downloaded numpy-1.24.0-cp311-cp311-win_amd64.whl\n", stderr=""
+        )
+
+    monkeypatch.setattr("fspack.packaging.wheels.subprocess.run", fake_run)
+    with caplog.at_level(logging.DEBUG, logger="fspack"):
+        _download_one_with_uv("numpy==1.24.0", _make_ctx([], cache, uv_path="/usr/bin/uv"), with_index=False)
+    assert "[pip] Downloaded numpy-1.24.0-cp311-cp311-win_amd64.whl" in caplog.text
+    assert not [r for r in caplog.records if r.levelname == "INFO" and "uv 下载" in r.getMessage()]
 
 
 def test_download_one_with_uv_failure_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

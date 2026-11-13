@@ -108,9 +108,9 @@ def _compile_resource_obj(
     manifest_file.write_text(manifest_content, encoding="utf-8")
     obj_file = work_dir / "resource.o"
     cmd = [windres, "--input", str(rc_file), "--output", str(obj_file), "--output-format=coff"]
-    _logger.info("编译 Windows 资源: %s", " ".join(cmd))
+    _logger.debug("编译 Windows 资源: %s", " ".join(cmd))
     try:
-        subprocess.run(
+        completed = subprocess.run(
             cmd,
             check=True,
             capture_output=True,
@@ -119,6 +119,7 @@ def _compile_resource_obj(
             cwd=work_dir,
             timeout=_WINDRES_TIMEOUT,
         )
+        _forward_tool_output(completed.stdout, completed.stderr)
     except FileNotFoundError as e:
         _logger.warning("windres 不可用，跳过资源嵌入: %s", e)
         return None
@@ -126,6 +127,18 @@ def _compile_resource_obj(
         _logger.warning("资源编译超时（%ds），跳过资源嵌入", int(_WINDRES_TIMEOUT))
         return None
     except subprocess.CalledProcessError as e:
+        _forward_tool_output(e.stdout, e.stderr)
         _logger.warning("资源编译失败，跳过资源嵌入:\n%s", e.stderr)
         return None
     return obj_file
+
+
+def _forward_tool_output(stdout: str | None, stderr: str | None) -> None:
+    """把 windres 原始输出转发到 DEBUG（``[loader]`` 前缀，默认不显示）."""
+    if not stdout and not stderr:
+        return
+    from fspack.console import console
+
+    for text in (stdout, stderr):
+        if text:
+            console.tool_output("loader", text.encode("utf-8"))

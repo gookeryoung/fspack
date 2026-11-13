@@ -152,7 +152,7 @@ def _finalize_dependency_lock(
     if not ctx.opts.lock:
         return
     if not wheels:
-        _logger.info("无第三方依赖，无需写入 %s", LOCK_FILE_NAME)
+        _logger.debug("无第三方依赖，无需写入 %s", LOCK_FILE_NAME)
         return
     with ctx.tracker.stage("写入依赖锁") as st:
         write_requirements_lock(
@@ -232,7 +232,7 @@ def _download_dependencies(ctx: BuildContext, site_packages: Path, report: Depen
                 require_hashes=ctx.opts.require_hashes,
             )
     else:
-        _logger.info("无第三方依赖，跳过 wheel 下载")
+        _logger.debug("无第三方依赖，跳过 wheel 下载")
 
     _finalize_dependency_lock(ctx, wheels, lock, target)
 

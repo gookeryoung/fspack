@@ -19,6 +19,7 @@ from concurrent.futures import ThreadPoolExecutor as _DefaultThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from fspack import logutil
 from fspack.config import AppType, EntryPoint, nuitka_cache_dir
 from fspack.packaging.entry import EntryWrapper
 from fspack.packaging.icon import ensure_ico, find_favicon
@@ -443,7 +444,7 @@ def _resolve_project_icon(
     if candidate is None:
         candidate = find_favicon(project_dir)
         if candidate is not None:
-            _logger.info("使用 favicon 作为 icon: %s", candidate)
+            _logger.info("使用 favicon 作为 icon: %s", logutil.short_path(candidate))
 
     # 无任何候选 → 默认 icon（.ico，无需转换）
     if candidate is None:

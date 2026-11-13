@@ -173,7 +173,7 @@ def download_wheels(  # noqa: PLR0913
     )
     cached_wheels = None if require_hashes else _load_deps_cache(cache_dir, deps_key)
     if cached_wheels is not None:
-        _logger.info("依赖解析缓存命中，跳过 pip 调用")
+        _logger.debug("依赖解析缓存命中，跳过 pip 调用")
         # 历史缓存可能含 pip 回溯残留的同包多版本 wheel（旧版本 fspack 写入），
         # 命中后同样做冲突消解与顶层约束校验，自动修复污染缓存
         cached_names = _select_coherent_wheels([w.name for w in cached_wheels], cache_dir)
@@ -198,7 +198,7 @@ def download_wheels(  # noqa: PLR0913
         find_links=tuple(find_links),
     )
 
-    _logger.info("下载依赖 wheel: %s（镜像 %s）", " ".join(filtered), pypi_index)
+    _logger.debug("下载依赖 wheel: %s（镜像 %s）", " ".join(filtered), pypi_index)
     before = {f.name for f in cache_dir.glob("*.whl")}
 
     try:

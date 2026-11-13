@@ -239,11 +239,28 @@ def _stream_subprocess(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     stdout_bytes = process.stdout.read() if process.stdout else b""
     returncode = process.wait()
     thread.join()
+    # pip 的日志行走 stdout（进度条才走 stderr），此前只解析 wheel 列表就丢弃；
+    # 结束后按 ``[pip]`` 前缀转发到 DEBUG，``-v``/CI 日志文件可还原完整输出
+    if stdout_bytes:
+        console.tool_output("pip", stdout_bytes)
     stdout = stdout_bytes.decode("utf-8", errors="replace")
     stderr = b"".join(stderr_chunks).decode("utf-8", errors="replace")
     if returncode != 0:
         raise subprocess.CalledProcessError(returncode, cmd, stdout, stderr)
     return subprocess.CompletedProcess(cmd, returncode, stdout, stderr)
+
+
+def _forward_tool_output(tool: str, completed: subprocess.CompletedProcess[str]) -> None:
+    """把被捕获的工具输出按行转发到 DEBUG（``[tool]`` 前缀）.
+
+    默认输出不显示（root 为 INFO），``-v`` 与 CI 日志文件（root 置 DEBUG）可见；
+    用于 pip/loader 这类「静默捕获、只在失败时读 stderr」的路径，避免完整丢弃。
+    """
+    from fspack.console import console
+
+    for text in (completed.stdout, completed.stderr):
+        if text:
+            console.tool_output(tool, text.encode("utf-8"))
 
 
 def _run_pip(
@@ -272,7 +289,9 @@ def _run_pip(
         if stream:
             return _stream_subprocess(cmd)
         with spinner(label):
-            return subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8", errors="replace")
+            completed = subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8", errors="replace")
+        _forward_tool_output("pip", completed)
+        return completed
     except FileNotFoundError as e:
         raise DependencyError(f"未找到 pip: {cmd[0]}") from e
     except subprocess.CalledProcessError as e:
