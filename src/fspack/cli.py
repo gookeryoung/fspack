@@ -133,6 +133,7 @@ def main(argv: list[str] | None = None) -> None:
         # 依赖下载失败等）已携带清晰中文消息：打印后以退出码 2 退出，不暴露原始栈。
         # 完整堆栈仅在 --verbose（DEBUG）时记录，便于排查而不干扰普通用户。
         console.error(str(exc))
+        console.result(False, str(exc))
         import logging
 
         logging.getLogger(__name__).debug("命令 %s 执行失败", command, exc_info=exc)
@@ -217,6 +218,11 @@ def _resolve_mirror(value: str | None) -> MirrorConfig:
         raise SystemExit(2) from None
 
 
+def _in_ci_environment() -> bool:
+    """是否运行在 CI（GitHub Actions/GitLab/Jenkins/Azure 等）."""
+    return any(os.environ.get(name) for name in ("CI", "GITHUB_ACTIONS", "GITLAB_CI", "BUILD_NUMBER", "TF_BUILD"))
+
+
 def _run_build(project: Path, ns: argparse.Namespace) -> None:
     """执行单项目 build 子命令."""
     from dataclasses import replace
@@ -270,7 +276,13 @@ def _run_build(project: Path, ns: argparse.Namespace) -> None:
         open_browser=ns.open_browser or base.open_browser,
         compiler=ns.compiler if getattr(ns, "compiler", None) is not None else base.compiler,
     )
-    log_file = Path(ns.log_file).resolve() if ns.log_file else None
+    if ns.log_file:
+        log_file = Path(ns.log_file).resolve()
+    elif not getattr(ns, "no_log_file", False) and _in_ci_environment():
+        # CI 日志默认落盘，失败时可直接上传/翻查；本地交互构建不产生额外文件。
+        log_file = project / ".fspack" / "build.log"
+    else:
+        log_file = None
     log_format = LogFormat.parse(ns.log_format)
     if (ns.profile_out or ns.profile_compare) and not ns.profile:
         raise ProjectError("--profile-out/--profile-compare 需配合 --profile 使用")

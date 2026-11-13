@@ -68,18 +68,55 @@ def test_stage_header_and_finish_interactive(monkeypatch: pytest.MonkeyPatch) ->
     assert "缓存命中" in out
 
 
-def test_stage_non_tty_emits_single_line(monkeypatch: pytest.MonkeyPatch) -> None:
-    """非 TTY：跳过标题行，完成行带 [i] 前缀单行输出（CI 可 grep）."""
-    from fspack.console import ConsoleUI
+def test_stage_non_tty_emits_start_and_finish(monkeypatch: pytest.MonkeyPatch) -> None:
+    """非 TTY：开始行 + 完成行各一条，带 [i] 前缀（CI 可 grep，长阶段不静默）."""
+    from fspack.console import CICompat, ConsoleUI
 
+    monkeypatch.setattr(CICompat, "is_github_actions", staticmethod(lambda: False))
     monkeypatch.setattr(ConsoleUI, "is_interactive", property(lambda self: False))
     ui = ConsoleUI()
     with ui.rich.capture() as capture:
         ui.stage_header(3, "分析依赖")
         ui.stage_finish(3, "分析依赖", "0.48s", "缓存命中")
     out = capture.get()
-    assert out.count("分析依赖") == 1
+    assert "[3] 分析依赖 ..." in out
     assert "[3] 分析依赖 ... ok 0.48s (缓存命中)" in out
+
+
+def test_stage_github_actions_uses_groups(monkeypatch: pytest.MonkeyPatch) -> None:
+    """GitHub Actions：阶段开始/结束输出 ::group:: / ::endgroup:: 折叠."""
+    from fspack.console import CICompat, ConsoleUI
+
+    monkeypatch.setattr(CICompat, "is_github_actions", staticmethod(lambda: True))
+    monkeypatch.setattr(ConsoleUI, "is_interactive", property(lambda self: False))
+    ui = ConsoleUI()
+    with ui.rich.capture() as capture:
+        ui.stage_header(2, "下载依赖")
+        ui.stage_finish(2, "下载依赖", "3.10s")
+    out = capture.get()
+    assert "::group::[2] 下载依赖" in out
+    assert "::endgroup::" in out
+
+
+def test_result_line_only_when_non_tty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """最终结果行只在非交互场景输出，交互终端沿用 success/error."""
+    from fspack.console import CICompat, ConsoleUI
+
+    monkeypatch.setattr(CICompat, "is_github_actions", staticmethod(lambda: False))
+    monkeypatch.setattr(ConsoleUI, "is_interactive", property(lambda self: False))
+    ui = ConsoleUI()
+    with ui.rich.capture() as capture:
+        ui.result(True, "total=95.2s artifacts=2")
+        ui.result(False, "依赖下载失败")
+    out = capture.get()
+    assert "RESULT ok total=95.2s artifacts=2" in out
+    assert "RESULT fail 依赖下载失败" in out
+
+    monkeypatch.setattr(ConsoleUI, "is_interactive", property(lambda self: True))
+    interactive = ConsoleUI()
+    with interactive.rich.capture() as capture:
+        interactive.result(True, "ignored")
+    assert capture.get() == ""
 
 
 def test_stage_finish_non_tty_failure_marked(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -251,9 +251,15 @@ _BUILD_OPTS: tuple[_Opt, ...] = (
     _Opt(
         ("--log-file",),
         "将构建日志写入文件（含时间戳、级别、logger 名、消息、异常栈），便于 CI 上传与问题排查。"
-        "文件以追加模式写入，UTF-8 编码；构建开始时创建、结束时自动关闭",
+        "文件以追加模式写入，UTF-8 编码；构建开始时创建、结束时自动关闭。"
+        "检测到 CI 环境变量（CI/GITHUB_ACTIONS/…）时默认写入 <项目>/.fspack/build.log",
         default=None,
         metavar="PATH",
+    ),
+    _Opt(
+        ("--no-log-file",),
+        "关闭 CI 环境下自动启用的日志文件（显式指定 --log-file 时不受影响）",
+        action="store_true",
     ),
     _Opt(
         ("--log-format",),

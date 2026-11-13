@@ -508,8 +508,10 @@ def test_cli_build_log_format_json_passed_to_build(tmp_path: Path, monkeypatch: 
 
 
 def test_cli_build_without_log_file_passes_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """未指定 --log-file 时 log_file=None."""
+    """非 CI 且未指定 --log-file 时 log_file=None."""
     _make_minimal_project(tmp_path)
+    for name in ("CI", "GITHUB_ACTIONS", "GITLAB_CI", "BUILD_NUMBER", "TF_BUILD"):
+        monkeypatch.delenv(name, raising=False)
     captured: dict[str, Any] = {}
 
     def fake_build(  # noqa: PLR0913
@@ -537,6 +539,68 @@ def test_cli_build_without_log_file_passes_none(tmp_path: Path, monkeypatch: pyt
     cli.main(["b", str(tmp_path)])
     assert captured["log_file"] is None
     assert captured["log_format"] is LogFormat.TEXT
+
+
+def test_cli_build_ci_enables_log_file_by_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """CI 环境下未显式指定 --log-file 时默认写入 <项目>/.fspack/build.log."""
+    _make_minimal_project(tmp_path)
+    monkeypatch.setenv("CI", "true")
+    captured: dict[str, Any] = {}
+
+    def fake_build(  # noqa: PLR0913
+        project: Path,
+        mirror: object = None,
+        py_version: str | None = None,
+        dist_dir: Path | None = None,
+        embed_cache: Path | None = None,
+        target: object = None,
+        options: object = None,
+        extra_index_urls: tuple[str, ...] = (),
+        find_links: tuple[str, ...] = (),
+        dry_run: bool = False,
+        log_file: Path | None = None,
+        log_format: object = None,
+        profile: bool = False,
+        profile_out: Path | None = None,
+        profile_compare: str | None = None,
+        auto_clean: bool = False,
+    ) -> None:
+        captured["log_file"] = log_file
+
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    cli.main(["b", str(tmp_path)])
+    assert captured["log_file"] == tmp_path.resolve() / ".fspack" / "build.log"
+
+
+def test_cli_build_no_log_file_disables_ci_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``--no-log-file`` 可关闭 CI 自动日志文件."""
+    _make_minimal_project(tmp_path)
+    monkeypatch.setenv("CI", "true")
+    captured: dict[str, Any] = {}
+
+    def fake_build(  # noqa: PLR0913
+        project: Path,
+        mirror: object = None,
+        py_version: str | None = None,
+        dist_dir: Path | None = None,
+        embed_cache: Path | None = None,
+        target: object = None,
+        options: object = None,
+        extra_index_urls: tuple[str, ...] = (),
+        find_links: tuple[str, ...] = (),
+        dry_run: bool = False,
+        log_file: Path | None = None,
+        log_format: object = None,
+        profile: bool = False,
+        profile_out: Path | None = None,
+        profile_compare: str | None = None,
+        auto_clean: bool = False,
+    ) -> None:
+        captured["log_file"] = log_file
+
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    cli.main(["b", str(tmp_path), "--no-log-file"])
+    assert captured["log_file"] is None
 
 
 def test_cli_build_log_format_invalid_rejected(tmp_path: Path) -> None:

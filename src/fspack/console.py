@@ -106,6 +106,11 @@ class CICompat:
         except (ImportError, AttributeError, OSError, ValueError):
             return False
 
+    @staticmethod
+    def is_github_actions() -> bool:
+        """是否运行在 GitHub Actions 中（用于 ``::group::`` 日志折叠）."""
+        return os.environ.get("GITHUB_ACTIONS", "").lower() in ("1", "true")
+
     @classmethod
     def make_console(cls) -> Console:
         """创建 rich Console 实例。
@@ -151,6 +156,7 @@ class ConsoleUI:
 
     def __init__(self) -> None:
         self._legacy_console = CICompat.is_legacy_windows_console()
+        self._gha = CICompat.is_github_actions()
         self._console: Console = CICompat.make_console()
 
     @property
@@ -198,6 +204,13 @@ class ConsoleUI:
         因此只给序号不给总数，避免显示错误的 ``i/n``。
         """
         if not self.is_interactive:
+            if self._gha:
+                # GitHub Actions：阶段标题作为可折叠分组，阶段内的心跳与
+                # -v 细节全部收进组内，失败时仍可展开定位。
+                self._console.print(f"::group::[{index}] {name}", markup=False)
+            else:
+                # 普通重定向：开始行保证长阶段不会「看起来卡死」。
+                self._console.print(f"[{index}] {markup_escape(name)} ...")
             return
         self._console.print(f"[step]> [{index}] {markup_escape(name)}[/]")
 
@@ -220,6 +233,8 @@ class ConsoleUI:
         if not self.is_interactive:
             status = "FAIL" if failed else "ok"
             self._console.print(f"[{index}] {markup_escape(name)} ... {status} {elapsed_text}{markup_escape(suffix)}")
+            if self._gha:
+                self._console.print("::endgroup::", markup=False)
             return
         mark = "x" if self._legacy_console else "×"
         if failed:
@@ -240,6 +255,18 @@ class ConsoleUI:
         for line in text.splitlines():
             if line.strip():
                 _logger.debug("[%s] %s", tool, line)
+
+    def result(self, ok: bool, detail: str = "") -> None:
+        """非交互场景输出最终结果行（交互终端已有 success/error 收尾，不重复）.
+
+        形如 ``RESULT ok total=95.2s artifacts=2``；失败时 ``RESULT fail …``。
+        CI 可直接 grep ``^RESULT `` 判定结果，不再依赖进度条最后一帧。
+        """
+        if self.is_interactive:
+            return
+        status = "ok" if ok else "fail"
+        suffix = f" {detail}" if detail else ""
+        self._console.print(f"RESULT {status}{markup_escape(suffix)}")
 
     def success(self, msg: str) -> None:
         """打印成功消息（legacy 控制台用 ASCII ``v`` 避免 Ambiguous 宽度偏移）.

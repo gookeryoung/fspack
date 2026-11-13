@@ -643,6 +643,7 @@ def _execute_build(  # noqa: PLR0912, PLR0913
         console.success(f"构建完成: {len(exes)} 个入口")
         for exe in exes:
             console.rich.print(f"  - {exe}")
+    console.result(True, f"total={tracker.total_elapsed:.1f}s artifacts={len(exes)}")
     return info
 
 
