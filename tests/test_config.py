@@ -38,10 +38,7 @@ from fspack.config import (
 )
 from fspack.exceptions import ProjectError
 from fspack.platform import Platform
-from fspack.templates.project_template import ProjectTemplate
-
-_EXAMPLES = ProjectTemplate.root_dir()
-
+from tests._projects import doctor_template_dir, write_project
 
 # --- 镜像源测试 ---
 
@@ -81,7 +78,7 @@ def test_mirror_config_embed_url() -> None:
 
 def test_project_info_from_dir_tk_app() -> None:
     """from_dir 类方法解析 tk_app 示例（无第三方依赖的 GUI 模板）."""
-    info = ProjectInfo.from_dir(_EXAMPLES / "gui" / "tk_app")
+    info = ProjectInfo.from_dir(doctor_template_dir("tk_app"))
     assert info.name == "tk_app"
     assert info.entry_module == "tk_app"
     assert info.entry_file.name == "tk_app.py"
@@ -92,8 +89,7 @@ def test_project_info_from_dir_tk_app() -> None:
 
 def test_project_info_from_dir_with_explicit_py_version(tmp_path: Path) -> None:
     """from_dir 接受 py_version 参数透传给 parse_project."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "p"\nversion = "0.1"\n')
-    (tmp_path / "p.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path, name="p", entry_file="p.py")
     info = ProjectInfo.from_dir(tmp_path, "3.10.0")
     assert info.py_version == "3.10.0"
 
@@ -104,7 +100,7 @@ def test_project_info_from_dir_pyside2_qml_dashboard() -> None:
     原 pyside2_app 模板已精简删除，等价场景（同约束）迁移到
     pyside2_qml_dashboard。
     """
-    info = ProjectInfo.from_dir(_EXAMPLES / "gui" / "pyside2_qml_dashboard")
+    info = ProjectInfo.from_dir(doctor_template_dir("pyside2_qml_dashboard"))
     assert info.requires_python == ">=3.8,<3.11"
     assert info.app_type is AppType.GUI
 
@@ -352,7 +348,7 @@ def test_project_info_all_entries_multi() -> None:
 
 def test_project_info_from_dir_multi_entry() -> None:
     """from_dir 解析 multi_entry 示例返回多个入口."""
-    info = ProjectInfo.from_dir(_EXAMPLES / "config" / "multi_entry")
+    info = ProjectInfo.from_dir(doctor_template_dir("multi_entry"))
     assert len(info.entries) == 3
     assert info.all_entries == info.entries
     assert info.all_entries[0].name == "cli"
@@ -381,9 +377,7 @@ def test_project_info_exe_name_multi_entry_uses_default_entry() -> None:
 def test_scripts_exe_name_matches_build_output(tmp_path: Path) -> None:
     """[project.scripts] 声明入口后 exe_name 与构建产物名一致（入口名而非项目名）."""
     _write_script(tmp_path / "cli.py", content="def main():\n    pass\n")
-    (tmp_path / "pyproject.toml").write_text(
-        '[project]\nname = "app"\nversion = "0.1"\n\n[project.scripts]\nwebview_app = "cli:main"\n'
-    )
+    write_project(tmp_path, scripts={"webview_app": "cli:main"}, entry_source=None)
     clear_project_cache()
     info = parse_project(tmp_path)
     assert len(info.entries) == 1
@@ -395,7 +389,7 @@ def test_scripts_exe_name_matches_build_output(tmp_path: Path) -> None:
 
 def test_parse_project_tk_app() -> None:
     """解析 tk_app 示例：无 requires-python 时用默认版本."""
-    info = parse_project(_EXAMPLES / "gui" / "tk_app")
+    info = parse_project(doctor_template_dir("tk_app"))
     assert info.name == "tk_app"
     assert info.entry_module == "tk_app"
     assert info.entry_file.name == "tk_app.py"
@@ -411,7 +405,7 @@ def test_parse_project_pyside2_qml_dashboard_requires_python() -> None:
 
     原 pyside2_app 模板已精简删除，等价场景迁移到 pyside2_qml_dashboard。
     """
-    info = parse_project(_EXAMPLES / "gui" / "pyside2_qml_dashboard")
+    info = parse_project(doctor_template_dir("pyside2_qml_dashboard"))
     assert info.requires_python == ">=3.8,<3.11"
     assert info.app_type is AppType.GUI
 
@@ -761,8 +755,8 @@ def test_resolve_py_version_multi_entry_example() -> None:
     原 pyside2_app 模板已精简删除，等价场景（同约束 + 同 .python-version 钉扎）
     迁移到 multi_entry。
     """
-    info = parse_project(_EXAMPLES / "config" / "multi_entry")
-    resolved = resolve_py_version(_EXAMPLES / "config" / "multi_entry", None, info.requires_python)
+    info = parse_project(doctor_template_dir("multi_entry"))
+    resolved = resolve_py_version(doctor_template_dir("multi_entry"), None, info.requires_python)
     assert resolved == "3.10.11"
 
 
@@ -902,7 +896,7 @@ def test_resolve_py_version_wildcard_requires_python(tmp_path: Path) -> None:
 
 def test_parse_project_multi_entry_example() -> None:
     """multi_entry 示例：[project.scripts] 解析为三个入口."""
-    info = parse_project(_EXAMPLES / "config" / "multi_entry")
+    info = parse_project(doctor_template_dir("multi_entry"))
     assert len(info.entries) == 3
     assert [ep.name for ep in info.entries] == ["cli", "gui", "web"]
     # 首个入口作为主入口（向后兼容）
@@ -918,8 +912,7 @@ def test_parse_project_multi_entry_example() -> None:
 
 def test_parse_project_multi_entry_single_declared_compat(tmp_path: Path) -> None:
     """无 [project.scripts] 时走单入口 detect_entry 路径，entries 为空."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path)
     info = parse_project(tmp_path)
     assert info.entries == ()
     assert info.entry_module == "app"
@@ -1426,7 +1419,7 @@ def test_multi_entry_template_uses_project_scripts() -> None:
     解析为顶层脚本路径。
     """
     clear_project_cache()
-    info = parse_project(_EXAMPLES / "config" / "multi_entry")
+    info = parse_project(doctor_template_dir("multi_entry"))
     assert len(info.entries) == 3
     assert [ep.name for ep in info.entries] == ["cli", "gui", "web"]
     # cli 是 CLI，gui 是 GUI（import PySide2），web 是 WEB（import flask）
@@ -1497,7 +1490,7 @@ def test_infer_app_type_non_utf8_falls_back_to_declared(tmp_path: Path) -> None:
 
 def test_parse_project_pygame_snake_is_gui() -> None:
     """pygame_snake 示例被识别为 GUI."""
-    info = parse_project(_EXAMPLES / "game" / "pygame_snake")
+    info = parse_project(doctor_template_dir("pygame_snake"))
     assert info.app_type is AppType.GUI
 
 
@@ -1580,8 +1573,7 @@ def test_resolve_icon_strips_whitespace(tmp_path: Path) -> None:
 
 def test_parse_project_no_icon_returns_none(tmp_path: Path) -> None:
     """无 [tool.fspack] icon 配置时 ProjectInfo.icon 为 None."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path)
     info = parse_project(tmp_path)
     assert info.icon is None
 
@@ -1625,8 +1617,7 @@ def test_parse_project_with_icon_in_multi_entry(tmp_path: Path) -> None:
 
 def test_parse_project_no_exclude_returns_empty(tmp_path: Path) -> None:
     """无 [tool.fspack] exclude 配置时 exclude_dirs 为空元组."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path)
     info = parse_project(tmp_path)
     assert info.exclude_dirs == ()
 
@@ -1666,8 +1657,7 @@ def test_parse_project_exclude_empty_string_element_raises(tmp_path: Path) -> No
 
 def test_parse_project_no_data_dirs_returns_empty(tmp_path: Path) -> None:
     """无 [tool.fspack] data-dirs 配置时 data_dirs 为空元组（默认行为不变）."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path)
     info = parse_project(tmp_path)
     assert info.data_dirs == ()
 
@@ -1708,8 +1698,7 @@ def test_parse_project_data_dirs_empty_string_element_raises(tmp_path: Path) -> 
 
 def test_parse_project_no_include_dirs_returns_empty(tmp_path: Path) -> None:
     """无 [tool.fspack] include-dirs 配置时 include_dirs 为空元组（默认行为不变）."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path)
     info = parse_project(tmp_path)
     assert info.include_dirs == ()
 
@@ -1748,8 +1737,7 @@ def test_parse_project_no_build_defaults_returns_all_none(tmp_path: Path) -> Non
     """无 [tool.fspack] 构建默认值时 build_defaults 所有字段为 None."""
     from fspack.config import BuildDefaults
 
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path)
     info = parse_project(tmp_path)
     assert info.build_defaults == BuildDefaults()
 
@@ -1797,8 +1785,7 @@ def test_parse_project_slim_stdlib_config(tmp_path: Path) -> None:
 
 def test_parse_project_slim_stdlib_default_none(tmp_path: Path) -> None:
     """未配置 slim-stdlib 时默认 None，BuildOptions 回退 default（保守档）."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path)
     info = parse_project(tmp_path)
     assert info.build_defaults.slim_stdlib is None
     assert build_options_from_defaults(info.build_defaults).slim_stdlib == "default"
@@ -1816,8 +1803,7 @@ def test_parse_project_slim_stdlib_invalid_raises(tmp_path: Path) -> None:
 
 def test_parse_project_lazy_imports_default_empty(tmp_path: Path) -> None:
     """未配置 lazy_imports 时默认空元组."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path)
     info = parse_project(tmp_path)
     assert info.build_defaults.lazy_imports == ()
 
@@ -1870,8 +1856,7 @@ def test_parse_project_exclude_and_defaults_in_multi_entry(tmp_path: Path) -> No
 
 def test_parse_project_no_private_sources_returns_empty(tmp_path: Path) -> None:
     """无 [tool.fspack] 私有包源配置时 extra_index_urls/find_links 为空元组."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path)
     info = parse_project(tmp_path)
     assert info.extra_index_urls == ()
     assert info.find_links == ()
@@ -1968,8 +1953,7 @@ def test_parse_project_slim_exclude_empty_element_raises(tmp_path: Path) -> None
 
 def test_parse_project_slim_rules_defaults_empty(tmp_path: Path) -> None:
     """未配置 slim-include/slim-exclude 时 SlimRules 为空规则."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path)
     info = parse_project(tmp_path)
     assert info.slim_rules.include == ()
     assert info.slim_rules.exclude == ()
@@ -2739,8 +2723,7 @@ def test_parse_web_static_dirs_valid(tmp_path: Path) -> None:
 
 def test_parse_web_static_dirs_empty(tmp_path: Path) -> None:
     """无 [tool.fspack] web-static-dirs 配置时 web_static_dirs 为空元组."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path)
     info = parse_project(tmp_path)
     assert info.web_static_dirs == ()
 

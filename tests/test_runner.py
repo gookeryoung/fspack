@@ -15,18 +15,17 @@ from fspack.config import AppType, EntryPoint, ProjectInfo
 from fspack.exceptions import FspackError
 from fspack.runner import RunOptions, _build_cmd, _find_exe, _select_entry
 from fspack.runner import run as run_run
+from tests._projects import write_project
 
 
 def test_run_run_missing_exe(tmp_path: Path) -> None:
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path, version=None)
     with pytest.raises(FspackError, match="未找到已构建"):
         run_run(tmp_path)
 
 
 def test_run_run_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path, version=None)
     exe = tmp_path / "dist" / "app.exe"
     exe.parent.mkdir()
     exe.write_bytes(b"")
@@ -49,8 +48,7 @@ def test_run_run_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def test_run_run_nonzero_exit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path, version=None)
     exe = tmp_path / "dist" / "app.exe"
     exe.parent.mkdir()
     exe.write_bytes(b"")
@@ -66,8 +64,7 @@ def test_run_run_nonzero_exit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
 
 def test_run_run_debug_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """debug 模式 Windows 用 embed python.exe 直跑入口包装器."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path, version=None)
     dist = tmp_path / "dist"
     (dist / "runtime").mkdir(parents=True)
     (dist / "src").mkdir(parents=True)
@@ -99,8 +96,7 @@ def test_run_run_debug_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
 def test_run_run_debug_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """debug 模式 Linux 用 standalone python + PYTHONHOME."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path, version=None)
     dist = tmp_path / "dist"
     bin_dir = dist / "runtime" / "python" / "bin"
     bin_dir.mkdir(parents=True)
@@ -134,8 +130,7 @@ def test_run_run_debug_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 
 def test_run_run_debug_missing_python(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """debug 模式 embed python 不存在时报错."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path, version=None)
     dist = tmp_path / "dist"
     (dist / "src").mkdir(parents=True)
     (dist / "src" / "app.py").write_text("")
@@ -148,8 +143,7 @@ def test_run_run_debug_missing_python(tmp_path: Path, monkeypatch: pytest.Monkey
 
 def test_run_run_debug_missing_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """debug 模式入口包装器不存在时报错."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path, version=None)
     dist = tmp_path / "dist"
     (dist / "runtime").mkdir(parents=True)
     (dist / "runtime" / "python.exe").write_bytes(b"")
@@ -162,8 +156,7 @@ def test_run_run_gui_nonzero_hints_debug(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """GUI 应用非零退出码时提示用 --debug."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\ndependencies = ["PySide6"]\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path, version=None, dependencies=("PySide6",))
     exe = tmp_path / "dist" / "app.exe"
     exe.parent.mkdir()
     exe.write_bytes(b"")
@@ -246,8 +239,7 @@ def test_find_exe_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
 
 def test_run_run_linux_native(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Linux 原生可执行文件直接运行（不调 wine）."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path, version=None)
     exe = tmp_path / "dist" / "app"
     exe.parent.mkdir()
     exe.write_bytes(b"")
@@ -412,8 +404,11 @@ def test_default_entry_single_project_returns_only_entry() -> None:
 
 def test_run_run_multi_entry_select(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """fspack r --entry gui 运行对应入口的 exe."""
-    (tmp_path / "pyproject.toml").write_text(
-        '[project]\nname = "multi"\nversion = "0.1"\n\n[project.scripts]\ncli = "cli:main"\ngui = "gui:main"\n'
+    write_project(
+        tmp_path,
+        name="multi",
+        scripts={"cli": "cli:main", "gui": "gui:main"},
+        entry_source=None,
     )
     (tmp_path / "cli.py").write_text("def main():\n    pass\n")
     (tmp_path / "gui.py").write_text("def main():\n    pass\n")
@@ -445,8 +440,12 @@ def test_run_run_web_nonzero_hints_debug(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """WEB 应用非零退出码时提示用 --debug（与 GUI 一样关闭控制台）."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\ndependencies = ["flask"]\n')
-    (tmp_path / "app.py").write_text("from flask import Flask\ndef main():\n    pass\n")
+    write_project(
+        tmp_path,
+        version=None,
+        dependencies=("flask",),
+        entry_source="from flask import Flask\ndef main():\n    pass\n",
+    )
     exe = tmp_path / "dist" / "app.exe"
     exe.parent.mkdir()
     exe.write_bytes(b"")

@@ -10,7 +10,6 @@
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 from typing import Any
 
@@ -22,10 +21,7 @@ from fspack.console import console
 from fspack.packaging.pipeline import BuildContext, build
 from fspack.packaging.pipeline.executor import _print_build_plan
 from fspack.platform import Platform
-from fspack.templates.project_template import ProjectTemplate
-
-_EXAMPLES = ProjectTemplate.root_dir()
-
+from tests._projects import copy_doctor_project, write_project
 
 # ---- pipeline.build(dry_run=True) 不执行写操作 ----
 
@@ -34,8 +30,7 @@ def test_build_dry_run_skips_runtime_download(tmp_path: Path, monkeypatch: pytes
     """dry_run=True 不调用 download_embed/extract_embed."""
     proj = tmp_path / "app"
     proj.mkdir()
-    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
-    (proj / "app.py").write_text("def main():\n    pass\n")
+    write_project(proj)
 
     download_called = False
     extract_called = False
@@ -75,8 +70,7 @@ def test_build_dry_run_skips_linux_runtime_download(tmp_path: Path, monkeypatch:
     """dry_run=True 在 Linux 目标也不调用 download_standalone/extract_standalone."""
     proj = tmp_path / "app"
     proj.mkdir()
-    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
-    (proj / "app.py").write_text("def main():\n    pass\n")
+    write_project(proj)
 
     download_called = False
     extract_called = False
@@ -114,7 +108,7 @@ def test_build_dry_run_skips_linux_runtime_download(tmp_path: Path, monkeypatch:
 def test_build_dry_run_returns_project_info(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """dry_run=True 返回 ProjectInfo，字段与项目配置一致."""
     proj = tmp_path / "tk_app"
-    shutil.copytree(_EXAMPLES / "gui" / "tk_app", proj)
+    copy_doctor_project("tk_app", proj)
 
     # 拦截所有写操作
     for fn in ("download_embed", "download_standalone", "download_wheels"):
@@ -138,7 +132,7 @@ def test_build_dry_run_returns_project_info(tmp_path: Path, monkeypatch: pytest.
 def test_build_dry_run_prints_plan_summary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """dry_run=True 输出 '打包计划就绪' 汇总与 dry-run 提示."""
     proj = tmp_path / "tk_app"
-    shutil.copytree(_EXAMPLES / "gui" / "tk_app", proj)
+    copy_doctor_project("tk_app", proj)
 
     for fn in ("download_embed", "download_standalone", "download_wheels"):
         monkeypatch.setattr(f"fspack.packaging.pipeline.stages.{fn}", lambda *a, **k: tmp_path / "fake")
@@ -169,12 +163,8 @@ def test_build_dry_run_includes_missing_dependencies(tmp_path: Path, monkeypatch
     """dry_run=True 在依赖分析表中显示 AST 发现但未声明的依赖（missing）."""
     proj = tmp_path / "app"
     proj.mkdir()
-    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
     # 源码 import rich 但 pyproject.toml 未声明 → missing
-    (proj / "app.py").write_text(
-        "import rich\n\n\ndef main():\n    print('hi')\n",
-        encoding="utf-8",
-    )
+    write_project(proj, entry_source="import rich\n\n\ndef main():\n    print('hi')\n")
 
     for fn in ("download_embed", "download_wheels"):
         monkeypatch.setattr(f"fspack.packaging.pipeline.stages.{fn}", lambda *a, **k: tmp_path / "fake")
@@ -197,7 +187,7 @@ def test_build_dry_run_includes_missing_dependencies(tmp_path: Path, monkeypatch
 def test_build_dry_run_no_write_operations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """dry_run=True 不创建 dist/runtime、dist/src、dist/.entry 等任何产物."""
     proj = tmp_path / "tk_app"
-    shutil.copytree(_EXAMPLES / "gui" / "tk_app", proj)
+    copy_doctor_project("tk_app", proj)
 
     for fn in ("download_embed", "download_wheels"):
         monkeypatch.setattr(f"fspack.packaging.pipeline.stages.{fn}", lambda *a, **k: tmp_path / "fake")
@@ -220,11 +210,7 @@ def test_build_dry_run_merges_private_sources(tmp_path: Path, monkeypatch: pytes
     """dry_run=True 仍合并 CLI 私有包源到 info（在解析阶段完成，dry-run 不绕过）."""
     proj = tmp_path / "app"
     proj.mkdir()
-    (proj / "pyproject.toml").write_text(
-        '[project]\nname = "app"\nversion = "0.1"\n[tool.fspack]\nextra-index-urls = ["https://config.example.com/"]\n',
-        encoding="utf-8",
-    )
-    (proj / "app.py").write_text("def main():\n    pass\n")
+    write_project(proj, tool_fspack='extra-index-urls = ["https://config.example.com/"]')
 
     for fn in ("download_embed", "download_wheels"):
         monkeypatch.setattr(f"fspack.packaging.pipeline.stages.{fn}", lambda *a, **k: tmp_path / "fake")
@@ -265,8 +251,7 @@ def _make_build_context(tmp_path: Path, *, target: Platform = Platform.WINDOWS) 
     from fspack.config import BuildConfig, BuildOptions, ProjectInfo
     from fspack.progress import BuildTracker
 
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path)
     info = ProjectInfo.from_dir(tmp_path, "3.11.9")
     cfg = BuildConfig(
         project_dir=tmp_path,
@@ -391,16 +376,9 @@ def test_print_build_plan_shows_private_sources(tmp_path: Path) -> None:
 # ---- CLI 层 --dry-run 标志 ----
 
 
-def _make_minimal_project(tmp_path: Path) -> Path:
-    """创建最小可解析项目（pyproject.toml + 入口脚本）."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n', encoding="utf-8")
-    (tmp_path / "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
-    return tmp_path
-
-
 def test_cli_build_dry_run_flag_passed_to_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``fsp b --dry-run`` 透传 dry_run=True 给 build()."""
-    _make_minimal_project(tmp_path)
+    write_project(tmp_path)
     captured: dict[str, Any] = {}
 
     def fake_build(  # noqa: PLR0913
@@ -430,7 +408,7 @@ def test_cli_build_dry_run_flag_passed_to_build(tmp_path: Path, monkeypatch: pyt
 
 def test_cli_build_without_dry_run_flag_defaults_false(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """未指定 --dry-run 时 dry_run=False（默认行为）."""
-    _make_minimal_project(tmp_path)
+    write_project(tmp_path)
     captured: dict[str, Any] = {}
 
     def fake_build(  # noqa: PLR0913
@@ -460,7 +438,7 @@ def test_cli_build_without_dry_run_flag_defaults_false(tmp_path: Path, monkeypat
 
 def test_cli_build_dry_run_alias_b(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``fsp b --dry-run`` 别名 b 同样透传 dry_run=True."""
-    _make_minimal_project(tmp_path)
+    write_project(tmp_path)
     captured: dict[str, Any] = {}
 
     def fake_build(  # noqa: PLR0913
@@ -538,8 +516,7 @@ def test_build_macos_target_dry_run_allowed_on_windows(tmp_path: Path, monkeypat
     """dry_run 预览放行：Windows 构建机可 dry-run macOS 目标查看打包计划."""
     proj = tmp_path / "app"
     proj.mkdir()
-    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n', encoding="utf-8")
-    (proj / "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
+    write_project(proj)
 
     monkeypatch.setattr("fspack.packaging.pipeline.executor.detect_platform", lambda: Platform.WINDOWS)
     monkeypatch.setattr("fspack.packaging.pipeline.stages.download_standalone", lambda *a, **k: tmp_path / "f.tar.gz")

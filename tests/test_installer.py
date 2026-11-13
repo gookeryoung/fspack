@@ -30,6 +30,7 @@ from fspack.packaging.installer import (
 from fspack.packaging.installer.nsis import dist_needs_ucrt, sign_exe_file, sign_exe_files
 from fspack.platform import Platform
 from fspack.progress import BuildTracker
+from tests._projects import write_project
 from tests._stubs import CompletedStub
 
 
@@ -276,16 +277,14 @@ def test_build_installer_no_build_missing_dist(tmp_path: Path) -> None:
 
 
 def test_build_installer_no_build_missing_exe(tmp_path: Path) -> None:
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path, version=None)
     (tmp_path / "dist").mkdir()
     with pytest.raises(InstallerError, match="未找到已构建"):
         build_installer(ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True))
 
 
 def test_build_installer_no_build_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path, version="1.0")
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "app.exe").write_bytes(b"")
@@ -304,8 +303,7 @@ def test_build_installer_no_build_success(tmp_path: Path, monkeypatch: pytest.Mo
 
 
 def test_build_installer_with_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path, version="1.0")
     dist = tmp_path / "dist"
     out_setup = dist / "release" / "app-1.0-py3.11.9-windows-slim-setup.exe"
 
@@ -545,8 +543,7 @@ def test_build_zip_no_build_missing_dist(tmp_path: Path) -> None:
 
 def test_build_zip_no_build_missing_exe(tmp_path: Path) -> None:
     """no_build=True 且 dist 中无 exe 报错."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path, version=None)
     (tmp_path / "dist").mkdir()
     with pytest.raises(InstallerError, match="未找到已构建"):
         build_zip(ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True))
@@ -554,8 +551,7 @@ def test_build_zip_no_build_missing_exe(tmp_path: Path) -> None:
 
 def test_build_zip_no_build_success(tmp_path: Path) -> None:
     """no_build=True 且 dist 已就绪时生成 zip."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path, version="1.0")
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "app.exe").write_bytes(b"")
@@ -566,8 +562,7 @@ def test_build_zip_no_build_success(tmp_path: Path) -> None:
 
 def test_build_zip_with_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """no_build=False 时调用 build() 构建后生成 zip."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path, version="1.0")
 
     def fake_build(  # noqa: PLR0913
         project_dir: Path,
@@ -675,8 +670,7 @@ def test_make_7z_missing_tool_raises(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
 def test_build_sevenzip_no_build_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """build_sevenzip 编排：no_build=True 且 dist 就绪 → 产出 .7z."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path, version="1.0")
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "app.exe").write_bytes(b"")
@@ -696,8 +690,7 @@ def test_build_sevenzip_no_build_success(tmp_path: Path, monkeypatch: pytest.Mon
 
 def test_build_sevenzip_linux_platform_suffix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """build_sevenzip + Linux 目标 → 文件名用 linux 平台后缀."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path, version="1.0")
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "app").write_bytes(b"")
@@ -718,8 +711,7 @@ def test_build_sevenzip_linux_platform_suffix(tmp_path: Path, monkeypatch: pytes
 
 def test_build_release_7z_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """fmt=7z → 仅生成 7z，不调用 NSIS 等其他格式."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path, version="1.0")
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "app.exe").write_bytes(b"")
@@ -740,8 +732,7 @@ def test_build_release_7z_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
 def test_build_tarball_release_no_build_success(tmp_path: Path) -> None:
     """build_tarball_release 直接生成 tar.gz（无外部工具依赖），排除构建中间文件."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path, version="1.0")
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "app").write_bytes(b"")  # Linux 可执行文件无后缀
@@ -767,8 +758,7 @@ def test_build_tarball_release_no_build_success(tmp_path: Path) -> None:
 
 def test_build_tarball_release_missing_exe(tmp_path: Path) -> None:
     """build_tarball_release 在 dist 中无 Linux 可执行文件时报错."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path, version=None)
     (tmp_path / "dist").mkdir()
     with pytest.raises(InstallerError, match="未找到已构建"):
         build_tarball_release(ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True))
@@ -779,8 +769,7 @@ def test_build_tarball_release_missing_exe(tmp_path: Path) -> None:
 
 def test_build_deb_release_no_build_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """build_deb_release 调用 dpkg-deb 生成 .deb."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path, version="1.0")
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "app").write_bytes(b"")
@@ -804,8 +793,7 @@ def test_build_deb_release_no_build_success(tmp_path: Path, monkeypatch: pytest.
 
 def test_build_release_auto_windows_dispatches_nsis(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """fmt=auto + Windows → 仅调用 NsisInstaller.build_installer."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path, version="1.0")
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "app.exe").write_bytes(b"")
@@ -831,8 +819,7 @@ def test_build_release_auto_windows_dispatches_nsis(tmp_path: Path, monkeypatch:
 
 def test_build_release_zip_only(tmp_path: Path) -> None:
     """fmt=zip → 仅生成 zip，不调用 NSIS/dpkg-deb."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path, version="1.0")
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "app.exe").write_bytes(b"")
@@ -845,8 +832,7 @@ def test_build_release_zip_only(tmp_path: Path) -> None:
 
 def test_build_release_all_windows_generates_three_formats(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """fmt=all + Windows → 生成 nsis + zip + 7z 三种格式，复用同一 dist."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path, version="1.0")
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "app.exe").write_bytes(b"")
@@ -895,8 +881,7 @@ def test_build_release_all_linux_shares_tar_zip_staging(tmp_path: Path, monkeypa
     """fmt=all + Linux → tar.gz/zip/7z 共享同一 staging（copytree 仅 tar/deb 各一次）."""
     import shutil as _shutil
 
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path, version="1.0")
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "app").write_bytes(b"#!/bin/sh\nexit 0\n")
@@ -959,8 +944,7 @@ def test_build_release_platform_mismatch_raises(tmp_path: Path) -> None:
 
 def test_build_release_auto_macos_dispatches_pkg_dmg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """fmt=auto + macOS → 调用 build_pkg_release + build_dmg_release，codesign 透传."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path, version="1.0")
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "app").write_bytes(b"")
@@ -996,8 +980,7 @@ def test_build_release_auto_macos_dispatches_pkg_dmg(tmp_path: Path, monkeypatch
 
 def test_build_release_pkg_only_macos(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """fmt=pkg + macOS → 仅调用 build_pkg_release."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path, version="1.0")
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "app").write_bytes(b"")
@@ -1034,11 +1017,11 @@ def test_prepare_dist_passes_build_defaults_to_build(tmp_path: Path, monkeypatch
     验证 ``[tool.fspack] nuitka = true`` 等配置在 ``build_release``/``build_installer``
     路径上生效（修复 ``fsp p`` 不应用 nuitka 配置的 bug）。
     """
-    (tmp_path / "pyproject.toml").write_text(
-        '[project]\nname = "app"\nversion = "1.0"\n'
-        "[tool.fspack]\nnuitka = true\npyc_strip = true\nno_site = true\npyc_optimize = 1\n"
+    write_project(
+        tmp_path,
+        version="1.0",
+        tool_fspack="nuitka = true\npyc_strip = true\nno_site = true\npyc_optimize = 1",
     )
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
 
     captured_options: list[BuildOptions | None] = []
 
@@ -1093,8 +1076,7 @@ def test_prepare_dist_passes_build_defaults_to_build(tmp_path: Path, monkeypatch
 
 def test_prepare_dist_no_config_uses_default_options(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """无 ``[tool.fspack]`` 配置时 ``fsp p`` 使用 :class:`BuildOptions` 默认值."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path, version="1.0")
 
     captured_options: list[BuildOptions | None] = []
 
@@ -1165,8 +1147,7 @@ def test_prepare_dist_skips_build_when_dist_and_exe_ready(tmp_path: Path, monkey
 
     验证 ``fsp b`` 后 ``fsp p`` 不再重新跑 build（尤其 Nuitka 启用场景耗时较长）。
     """
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path, version="1.0")
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "app.exe").write_bytes(b"")  # 模拟 fsp b 已产出的可执行文件
@@ -1200,8 +1181,7 @@ def test_prepare_dist_rebuilds_when_dist_exists_but_exe_missing(
 
     避免用户手动 ``fsp c`` 清理，dist 部分损坏时 ``fsp p`` 自动重建。
     """
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path, version="1.0")
     dist = tmp_path / "dist"
     dist.mkdir()
     # dist 存在但 app.exe 缺失（部分损坏）
@@ -1249,8 +1229,7 @@ def test_prepare_dist_rebuilds_when_dist_exists_but_exe_missing(
 
 def test_prepare_dist_no_build_true_still_errors_on_missing_dist(tmp_path: Path) -> None:
     """``--no-build`` 显式声明且 dist 不存在时仍报错（保持原语义）."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "1.0"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path, version="1.0")
     with pytest.raises(InstallerError, match="未找到 dist"):
         build_installer(ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True))
 

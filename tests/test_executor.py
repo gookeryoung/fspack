@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 from typing import Any
 
@@ -17,18 +16,15 @@ from fspack.console import console
 from fspack.packaging.pipeline.stages import BuildContext
 from fspack.platform import Platform
 from fspack.progress import StageRecorder
-from fspack.templates.project_template import ProjectTemplate
+from tests._projects import copy_doctor_project, write_project
 from tests._stubs import CompletedStub, fake_compileall_runner, setup_embed_mocks
-
-_EXAMPLES = ProjectTemplate.root_dir()
 
 
 def test_build_skips_runtime_when_already_prepared_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """runtime 已就绪（dll 存在）时跳过下载和解压，两 stage 均 hit_cache."""
     proj = tmp_path / "app"
     proj.mkdir()
-    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
-    (proj / "app.py").write_text("def main():\n    pass\n")
+    write_project(proj)
 
     # 预创建 runtime 目录与 dll 标记
     runtime_dir = proj / "dist" / "runtime"
@@ -67,8 +63,7 @@ def test_build_skips_runtime_when_already_prepared_linux(tmp_path: Path, monkeyp
     """runtime 已就绪（python bin 存在）时跳过下载和解压."""
     proj = tmp_path / "app"
     proj.mkdir()
-    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
-    (proj / "app.py").write_text("def main():\n    pass\n")
+    write_project(proj)
 
     # 预创建 runtime 目录与 python bin 标记
     runtime_dir = proj / "dist" / "runtime"
@@ -112,8 +107,7 @@ def test_build_forwards_keep_modules(tmp_path: Path, monkeypatch: pytest.MonkeyP
     """build() 将 keep_modules 和 ast_submodules 透传给 unpack_wheels."""
     proj = tmp_path / "app"
     proj.mkdir()
-    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
-    (proj / "app.py").write_text("import requests\nfrom requests import get\ndef main():\n    pass\n")
+    write_project(proj, entry_source="import requests\nfrom requests import get\ndef main():\n    pass\n")
 
     monkeypatch.setattr(
         "fspack.packaging.pipeline.stages.download_embed",
@@ -163,7 +157,7 @@ def test_build_forwards_keep_modules(tmp_path: Path, monkeypatch: pytest.MonkeyP
 def test_build_orchestration_tk_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """无第三方依赖的真实模板（tk_app）走完整 Windows 编排."""
     proj = tmp_path / "tk_app"
-    shutil.copytree(_EXAMPLES / "gui" / "tk_app", proj, ignore=shutil.ignore_patterns("dist", "__pycache__"))
+    copy_doctor_project("tk_app", proj)
     calls: dict[str, Any] = {}
 
     def fake_extract_embed(zip_path: object, runtime_dir: Path) -> None:
@@ -227,8 +221,7 @@ def test_build_orchestration_tk_app(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 def test_build_orchestration_with_deps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     proj = tmp_path / "app"
     proj.mkdir()
-    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
-    (proj / "app.py").write_text("import requests\ndef main():\n    pass\n")
+    write_project(proj, entry_source="import requests\ndef main():\n    pass\n")
 
     monkeypatch.setattr(
         "fspack.packaging.pipeline.stages.download_embed",
@@ -270,10 +263,11 @@ def test_build_prefers_declared_over_ast(tmp_path: Path, monkeypatch: pytest.Mon
     """
     proj = tmp_path / "app"
     proj.mkdir()
-    (proj / "pyproject.toml").write_text(
-        '[project]\nname = "app"\nversion = "0.1"\ndependencies = ["ordered-set", "lxml"]\n'
+    write_project(
+        proj,
+        dependencies=("ordered-set", "lxml"),
+        entry_source="import orderedset\nimport lxml\ndef main():\n    pass\n",
     )
-    (proj / "app.py").write_text("import orderedset\nimport lxml\ndef main():\n    pass\n")
 
     monkeypatch.setattr("fspack.packaging.pipeline.stages.download_embed", lambda v, m, c, **kw: tmp_path / "fake.zip")
     monkeypatch.setattr(
@@ -311,13 +305,15 @@ def test_build_merges_cli_private_sources_with_config(tmp_path: Path, monkeypatc
     """build() 将 CLI 私有包源与 [tool.fspack] 配置合并（CLI 追加在后，去重）."""
     proj = tmp_path / "app"
     proj.mkdir()
-    (proj / "pyproject.toml").write_text(
-        '[project]\nname = "app"\nversion = "0.1"\ndependencies = ["requests"]\n\n'
-        "[tool.fspack]\n"
-        'extra-index-urls = ["https://pypi.company.com/simple/", "https://mirror.example.com/pypi"]\n'
-        'find-links = ["./wheels"]\n'
+    write_project(
+        proj,
+        dependencies=("requests",),
+        entry_source="import requests\ndef main():\n    pass\n",
+        tool_fspack=(
+            'extra-index-urls = ["https://pypi.company.com/simple/", "https://mirror.example.com/pypi"]\n'
+            'find-links = ["./wheels"]'
+        ),
     )
-    (proj / "app.py").write_text("import requests\ndef main():\n    pass\n")
 
     monkeypatch.setattr("fspack.packaging.pipeline.stages.download_embed", lambda v, m, c, **kw: tmp_path / "fake.zip")
     monkeypatch.setattr(
@@ -369,13 +365,12 @@ def test_build_passes_config_private_sources_without_cli(tmp_path: Path, monkeyp
     """无 CLI 私有包源时，build() 仅用 [tool.fspack] 配置的私有包源."""
     proj = tmp_path / "app"
     proj.mkdir()
-    (proj / "pyproject.toml").write_text(
-        '[project]\nname = "app"\nversion = "0.1"\ndependencies = ["requests"]\n\n'
-        "[tool.fspack]\n"
-        'extra-index-urls = ["https://pypi.company.com/simple/"]\n'
-        'find-links = ["./wheels"]\n'
+    write_project(
+        proj,
+        dependencies=("requests",),
+        entry_source="import requests\ndef main():\n    pass\n",
+        tool_fspack=('extra-index-urls = ["https://pypi.company.com/simple/"]\nfind-links = ["./wheels"]'),
     )
-    (proj / "app.py").write_text("import requests\ndef main():\n    pass\n")
 
     monkeypatch.setattr("fspack.packaging.pipeline.stages.download_embed", lambda v, m, c, **kw: tmp_path / "fake.zip")
     monkeypatch.setattr(
@@ -413,8 +408,7 @@ def test_build_passes_config_private_sources_without_cli(tmp_path: Path, monkeyp
 def test_build_requires_verified_dependency_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     proj = tmp_path / "app"
     proj.mkdir()
-    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
-    (proj / "app.py").write_text("import requests\ndef main():\n    pass\n")
+    write_project(proj, entry_source="import requests\ndef main():\n    pass\n")
 
     def fake_extract_embed(zip_path: object, runtime_dir: Path) -> None:
         runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -455,7 +449,7 @@ def test_build_requires_verified_dependency_state(tmp_path: Path, monkeypatch: p
 def test_build_orchestration_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """无第三方依赖的真实模板（tk_app）走完整 Linux 编排（standalone runtime）."""
     proj = tmp_path / "tk_app"
-    shutil.copytree(_EXAMPLES / "gui" / "tk_app", proj, ignore=shutil.ignore_patterns("dist", "__pycache__"))
+    copy_doctor_project("tk_app", proj)
     calls: dict[str, Any] = {}
 
     def fake_extract_standalone(tar_path: object, runtime_dir: Path) -> None:
@@ -505,8 +499,7 @@ def test_build_supplements_tkinter_when_needed(tmp_path: Path, monkeypatch: pyte
     """AST 检出 tkinter 且目标 Windows 时触发 TkinterBundler.ensure，wrapper 注入 TCL/TK 环境变量."""
     proj = tmp_path / "app"
     proj.mkdir()
-    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
-    (proj / "app.py").write_text("import tkinter\ndef main():\n    pass\n")
+    write_project(proj, entry_source="import tkinter\ndef main():\n    pass\n")
 
     monkeypatch.setattr("fspack.packaging.pipeline.stages.download_embed", lambda v, m, c, **kw: tmp_path / "fake.zip")
     monkeypatch.setattr(
@@ -545,8 +538,7 @@ def test_build_skips_tkinter_when_not_used(tmp_path: Path, monkeypatch: pytest.M
     """AST 未检出 tkinter 时不触发 TkinterBundler.ensure，wrapper 注入 `if False:`."""
     proj = tmp_path / "app"
     proj.mkdir()
-    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
-    (proj / "app.py").write_text("import os\ndef main():\n    pass\n")
+    write_project(proj, entry_source="import os\ndef main():\n    pass\n")
 
     monkeypatch.setattr("fspack.packaging.pipeline.stages.download_embed", lambda v, m, c, **kw: tmp_path / "fake.zip")
     monkeypatch.setattr(
@@ -609,8 +601,7 @@ def test_build_includes_new_stages_in_summary(tmp_path: Path, monkeypatch: pytes
     """build() 阶段汇总含「精简标准库」「预编译字节码」「解压 wheel(精简)」."""
     proj = tmp_path / "app"
     proj.mkdir()
-    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\ndependencies = ["rich"]\n')
-    (proj / "app.py").write_text("import rich\n\ndef main():\n    pass\n")
+    write_project(proj, dependencies=("rich",), entry_source="import rich\n\ndef main():\n    pass\n")
 
     setup_embed_mocks(tmp_path, monkeypatch, "3.11.9")
     # 覆盖 download_wheels 返回非空列表，触发「解压 wheel(精简)」阶段
@@ -631,8 +622,7 @@ def test_build_no_pyc_skips_precompile_stage(tmp_path: Path, monkeypatch: pytest
     """no_pyc=True 时跳过「预编译字节码」阶段."""
     proj = tmp_path / "app"
     proj.mkdir()
-    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
-    (proj / "app.py").write_text("def main():\n    pass\n")
+    write_project(proj)
 
     setup_embed_mocks(tmp_path, monkeypatch, "3.11.9")
     monkeypatch.setattr("subprocess.run", lambda cmd, **kw: CompletedStub())
@@ -648,8 +638,7 @@ def test_build_no_stdlib_trim_skips_trim_stage(tmp_path: Path, monkeypatch: pyte
     """no_stdlib_trim=True 时跳过「精简标准库」阶段."""
     proj = tmp_path / "app"
     proj.mkdir()
-    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
-    (proj / "app.py").write_text("def main():\n    pass\n")
+    write_project(proj)
 
     setup_embed_mocks(tmp_path, monkeypatch, "3.11.9")
     monkeypatch.setattr("subprocess.run", lambda cmd, **kw: CompletedStub())
@@ -672,8 +661,7 @@ def test_build_pyc_strip_deletes_non_init_py(tmp_path: Path, monkeypatch: pytest
     """
     proj = tmp_path / "app"
     proj.mkdir()
-    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
-    (proj / "app.py").write_text("def main():\n    pass\n")
+    write_project(proj)
     # 非入口 .py 文件，应被剥离
     (proj / "helper.py").write_text("x = 1")
 
@@ -701,8 +689,7 @@ def test_build_default_keeps_py_source(tmp_path: Path, monkeypatch: pytest.Monke
     """默认（无 pyc_strip）保留 .py 源码，仅生成 .pyc 加速."""
     proj = tmp_path / "app"
     proj.mkdir()
-    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
-    (proj / "app.py").write_text("def main():\n    pass\n")
+    write_project(proj)
 
     setup_embed_mocks(tmp_path, monkeypatch, "3.11.9")
     runtime = proj / "dist" / "runtime"
@@ -720,10 +707,7 @@ def test_build_with_nuitka_invokes_compiler(tmp_path: Path, monkeypatch: pytest.
     """nuitka=True 时 build() 调用 NuitkaCompiler.compile_with_stamp 编译用户源码."""
     proj = tmp_path / "app"
     proj.mkdir()
-    (proj / "pyproject.toml").write_text(
-        '[project]\nname = "app"\nversion = "0.1"\n\n[tool.fspack]\ndata-dirs = ["assets"]\n'
-    )
-    (proj / "app.py").write_text("def main():\n    pass\n")
+    write_project(proj, tool_fspack='data-dirs = ["assets"]')
     # data-dirs 数据资源目录：含示例 .py，Nuitka 编译应跳过
     (proj / "assets" / "templates").mkdir(parents=True)
     (proj / "assets" / "templates" / "demo.py").write_text("x = 1")
@@ -793,8 +777,7 @@ def test_build_nuitka_skipped_on_cross_compile(tmp_path: Path, monkeypatch: pyte
     """交叉构建时（构建机平台 ≠ 目标平台）Nuitka 跳过，不调用编译器."""
     proj = tmp_path / "app"
     proj.mkdir()
-    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
-    (proj / "app.py").write_text("def main():\n    pass\n")
+    write_project(proj)
 
     setup_embed_mocks(tmp_path, monkeypatch, "3.11.9")
     runtime = proj / "dist" / "runtime"
@@ -831,8 +814,7 @@ def test_compile_user_sources_skips_nuitka_on_win7_runtime(tmp_path: Path, monke
     from fspack.packaging.pipeline.compile_stage import _compile_user_sources
     from fspack.progress import BuildTracker
 
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path)
     src_dst = tmp_path / "dist" / "src"
     src_dst.mkdir(parents=True)
     (src_dst / "app.py").write_text("def main():\n    pass\n")
@@ -947,8 +929,7 @@ def test_build_nuitka_disables_win7_dll_replacement(
 
     proj = tmp_path / "app"
     proj.mkdir()
-    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
-    (proj / "app.py").write_text("def main():\n    pass\n")
+    write_project(proj)
 
     setup_embed_mocks(tmp_path, monkeypatch, "3.13.14")
     runtime = proj / "dist" / "runtime"
@@ -985,8 +966,7 @@ def test_prepare_windows_runtime_recovers_win7_residue(tmp_path: Path, monkeypat
     from fspack.packaging.pipeline.runtime_stage import _prepare_windows_runtime
     from fspack.progress import BuildTracker
 
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
-    (tmp_path / "app.py").write_text("def main():\n    pass\n")
+    write_project(tmp_path)
     runtime_dir = tmp_path / "dist" / "runtime"
     runtime_dir.mkdir(parents=True)
     # 构造 win7 残留：官方 dll 占位（runtime_ready 判定）+ 标记 + 残留文件
