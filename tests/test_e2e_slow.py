@@ -10,6 +10,7 @@
 - 平台 marker 过滤：Linux 上 ``--target windows``，win-only 依赖在、linux-only
   与 python_version 不满足的依赖不在（P0「marker 剥离」端到端回归）
 - ``--lock``/``--frozen``：真实构建写锁 → 篡改 hash 后 frozen 构建必须失败
+- macOS 原生构建：macOS runner 上产出 Mach-O 产物，校验机器类型并运行
 
 运行方式（联网 + 需要 gcc/mingw，单次数十秒）::
 
@@ -19,7 +20,7 @@ CI 中由独立 job 执行，避免拖慢 ``-m "not slow"`` 主门禁。
 
 已知限制（无法在当前矩阵验证，见 docs 或提交说明）：
 - Linux 上产出的 Windows exe 需要 wine 才能执行，本文件只做 PE/entry 结构断言
-- macOS 目标与 pkg/dmg 安装包只能在 macOS runner 验证，未纳入本文件
+- macOS x86_64 需 macos-13 runner，当前只在 macos-latest（arm64）跑单格
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ from fspack.cli_init import init_project
 from fspack.config import BuildOptions, get_mirror
 from fspack.exceptions import DependencyError
 from fspack.packaging.pipeline import build
+from fspack.packaging.verify import host_arch, verify_artifact
 from fspack.platform import Platform
 
 pytestmark = [pytest.mark.slow, pytest.mark.e2e]
@@ -267,3 +269,21 @@ def test_e2e_lock_then_frozen_rejects_tampered_hash(tmp_path: Path) -> None:
     lock_file.write_text(tampered, encoding="utf-8")
     with pytest.raises(DependencyError):
         _build(project, options=BuildOptions(frozen=True))
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS 原生构建仅在 macOS runner 执行")
+def test_e2e_macos_native_build_and_verify(tmp_path: Path) -> None:
+    """macOS 原生构建单格：产物为 Mach-O、架构与宿主一致、可运行.
+
+    这是 macOS 目标第一次进入真实 CI 构建；失败时保留完整日志，不做 mock
+    或跳过处理。
+    """
+    _require_native_toolchain()
+    project = init_project("e2e-macos", template_id="helloworld", directory=tmp_path)
+    _build(project, target=Platform.MACOS)
+    exe = _exe_path(project, "e2e-macos", windows=False)
+    assert exe.is_file(), f"产物缺失: {exe}"
+    assert verify_artifact(exe, Platform.MACOS, host_arch()) == []
+    result = _run(exe, cwd=project)
+    assert result.returncode == 0, result.stderr
+    assert "hello, world" in result.stdout

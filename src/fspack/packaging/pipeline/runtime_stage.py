@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fspack.config import standalone_cache_dir, win7_dll_cache_dir
-from fspack.exceptions import EmbedError
+from fspack.exceptions import EmbedError, ProjectError
 from fspack.packaging.pyc import (
     _trim_standalone_runtime,
     _trim_stdlib,
@@ -211,11 +211,25 @@ def _slim_runtime(ctx: BuildContext, has_tkinter: bool) -> None:
 
 
 def _detect_macos_arch() -> str:
-    """检测 macOS 目标架构：host 为 macOS 时用本机架构，否则默认 x86_64（CI 常见）."""
-    import platform as _platform
+    """检测 macOS 目标架构，非 macOS 宿主或未知架构时显式报错.
 
-    machine = _platform.machine()
-    return "arm64" if machine == "arm64" else "x86_64"
+    只接受 macOS 宿主：``platform.machine()`` 返回的是构建机架构，不是目标
+    架构；非 macOS 宿主无法推断 macOS 目标架构，且 macOS 目标的交叉构建已被
+    :func:`fspack.packaging.pipeline.executor._guard_cross_target` 拦截。历史上
+    这里静默回退 ``x86_64``，会让 Apple Silicon 上产出的产物名与实际架构不符，
+    故改为显式报错。
+    """
+    import platform as _platform
+    import sys
+
+    if sys.platform != "darwin":
+        raise ProjectError(f"macOS 目标只能在 macOS 构建机构建，无法从 {sys.platform} 推断目标架构")
+    machine = _platform.machine().lower()
+    if machine in ("arm64", "aarch64"):
+        return "arm64"
+    if machine == "x86_64":
+        return "x86_64"
+    raise ProjectError(f"不支持的 macOS 架构: {machine}（仅支持 x86_64/arm64）")
 
 
 def _prepare_standalone_runtime(ctx: BuildContext, *, macos_arch: str | None = None) -> Path:

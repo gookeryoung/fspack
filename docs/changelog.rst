@@ -13,6 +13,8 @@ v0.6.14
 -------
 
 - feat(cli): 新增 ``fsp verify <path> [--target ...] [--arch ...]``——只读文件头校验 PE/ELF/Mach-O 机器类型与目标一致，不匹配退出码 1；纯 ``struct`` 实现，无新增依赖
+- ci(e2e): 新增 macOS 原生真实构建单格 job（``e2e-macos``，macos-latest/arm64）——真实构建、校验 Mach-O 机器类型并运行产物；x86_64 macOS 暂未覆盖
+- fix(macos): 架构探测不再在非 macOS 宿主静默回退 ``x86_64``，非 macOS 宿主或未知架构显式报错，避免产物名与 Mach-O 实际架构不符
 - refactor(naming): **产物命名加架构段（破坏性）**——发行包基名改为 ``<name>-<ver>-py<ver>-<platform>-<arch>-slim``；manifest/SBOM 改为 ``<name>-<ver>-py<ver>-<platform>-{manifest,sbom}.json``；``.deb`` 的 ``Architecture`` 由 Linux 目标架构推导（x86_64→amd64、arm64→arm64），不再写死 amd64
 - refactor(naming): 不保留旧名兼容开关；下游脚本改用通配匹配，迁移对照与 release 说明见 ``docs/distribution.md`` 的「产物命名与迁移」
 - test(templates): 新增模板一致性护栏——以人工维护的契约期望表为独立 oracle，校验 init/doctor 模板 id 集合、分类、``app_type``、依赖与 ``requires-python``，模板增删必须显式更新期望

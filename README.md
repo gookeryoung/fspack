@@ -193,6 +193,10 @@ from the build machine (macOS picks x86_64 or arm64 automatically; Windows/Linux
 are x86_64 only), and Python version from `--py-version`. There is no `--arch` flag
 yet, and every run writes to the same `dist/` directory.
 
+**Build & CI status**: Windows and Linux are built on native runners in the
+release workflow. macOS packaging runs as a single native build cell on
+`macos-latest` (`e2e-macos` job); x86_64 macOS is not covered yet.
+
 **Windows target**: Cross-compile from any build machine (Linux/macOS with mingw-w64 →
 `fsp b --target windows`). macOS/Linux targets require same-platform build machines
 (cross-machine requests will fail explicitly; `--dry-run` preview works from anywhere).

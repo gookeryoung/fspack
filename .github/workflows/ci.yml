@@ -132,6 +132,45 @@ jobs:
           PYTHONUTF8: "1"
         run: uv run pytest -m e2e -v
 
+  # ===== macOS 原生真实构建：单格（arm64），验证 Mach-O 产物 =====
+  # 此前 macOS 目标只有单测（工具全 mock），从未有真实构建进过 CI。
+  # 本 job 在 macos-latest（Apple Silicon）上跑原生构建并执行产物；
+  # x86_64 macOS 需 macos-13，暂不纳入（见 docs 的分期计划）。
+  # 失败即为真实缺陷，不得改为 mock/skip 绕过。
+  e2e-macos:
+    name: E2E (macos-latest, native)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+          save-cache: false
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Restore fspack runtime cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.fspack/cache
+          key: fspack-runtime-${{ runner.os }}-${{ hashFiles('src/fspack/packaging/runtime/hashes.py') }}-${{ hashFiles('src/fspack/config/versions.py') }}
+          restore-keys: |
+            fspack-runtime-${{ runner.os }}-
+
+      - name: Sync dependencies
+        run: uv sync --frozen --extra test --python 3.11
+
+      - name: Run macOS native e2e
+        env:
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: "1"
+        run: uv run pytest -m e2e -v
+
   # ===== 性能基准监控：仅 push to main 触发，PR 不触发 =====
   # 运行 pytest-benchmark 基线测试，保存结果并与历史最佳基准对比。
   # 对比逻辑见 fspack.doctor.benchmark_compare：扫描所有历史 JSON，按测试名

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import sys
 import tarfile
 import zipfile
 from pathlib import Path
@@ -11,7 +12,8 @@ from urllib.request import Request
 import pytest
 
 from fspack.config import MirrorConfig
-from fspack.exceptions import EmbedError
+from fspack.exceptions import EmbedError, ProjectError
+from fspack.packaging.pipeline.runtime_stage import _detect_macos_arch
 from fspack.packaging.runtime import (
     STANDALONE_BASE_URL,
     STANDALONE_RELEASE_TAG,
@@ -815,3 +817,30 @@ def test_ensure_standalone_skips_with_stage_records_cache_hit(tmp_path: Path, mo
     ensure_standalone("3.11.9", STANDALONE_RELEASE_TAG, tmp_path / "cache", runtime, stage=rec)
     record = rec._finalize()
     assert record.cache_hit == 1
+
+
+@pytest.mark.parametrize(
+    ("machine", "expected"),
+    [("arm64", "arm64"), ("aarch64", "arm64"), ("x86_64", "x86_64"), ("X86_64", "x86_64")],
+)
+def test_detect_macos_arch_native(monkeypatch: pytest.MonkeyPatch, machine: str, expected: str) -> None:
+    """macOS 宿主按本机架构归一化（aarch64 → arm64）."""
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr("platform.machine", lambda: machine)
+    assert _detect_macos_arch() == expected
+
+
+@pytest.mark.parametrize("host", ["linux", "win32"])
+def test_detect_macos_arch_rejects_non_macos(monkeypatch: pytest.MonkeyPatch, host: str) -> None:
+    """非 macOS 宿主不再静默回退 x86_64，而是显式报错."""
+    monkeypatch.setattr(sys, "platform", host)
+    with pytest.raises(ProjectError, match="只能在 macOS 构建机构建"):
+        _detect_macos_arch()
+
+
+def test_detect_macos_arch_rejects_unknown_arch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """macOS 宿主上的未知架构显式报错，避免产物名与内容不符."""
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr("platform.machine", lambda: "ppc64")
+    with pytest.raises(ProjectError, match="不支持的 macOS 架构: ppc64"):
+        _detect_macos_arch()
