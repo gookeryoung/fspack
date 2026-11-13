@@ -153,10 +153,12 @@ def _dispatch(command: str, ns: argparse.Namespace) -> None:
         _run_cache(ns)
         return
 
-    # manifest 子命令：diff 动作没有 project 参数（直接读传入的 manifest JSON 路径），
-    # 必须在访问 ns.project 之前分发；generate 动作则需要 project
-    if command in ("manifest", "m"):
-        _run_manifest(ns)
+    # manifest/verify 没有统一的 project 参数（manifest diff 读 JSON 路径、verify
+    # 读产物路径），必须在访问 ns.project 之前分发
+    early_handlers = {"manifest": _run_manifest, "m": _run_manifest, "verify": _run_verify}
+    early_handler = early_handlers.get(command)
+    if early_handler is not None:
+        early_handler(ns)
         return
 
     project = Path(ns.project).resolve()
@@ -497,6 +499,27 @@ def _run_cache(ns: argparse.Namespace) -> None:
             target=target,
         )
     # argparse 已用 required=True 保证 cache_action 必填，到这里 action 必非 None
+
+
+def _run_verify(ns: argparse.Namespace) -> None:
+    """执行 verify 子命令：校验产物格式与架构，不匹配时以退出码 1 退出."""
+    from fspack.console import console
+    from fspack.packaging.verify import detect_binary, host_arch, verify_artifact
+    from fspack.platform import Platform, detect_platform
+
+    path = Path(ns.path)
+    target = Platform(ns.target) if ns.target else detect_platform()
+    arch = ns.arch or host_arch()
+    problems = verify_artifact(path, target, arch)
+    if problems:
+        for problem in problems:
+            console.error(problem)
+        raise SystemExit(1)
+
+    info = detect_binary(path)
+    # problems 为空时 detect_binary 必然非 None（不可识别会先返回问题）
+    assert info is not None
+    console.success(f"{path}: {info.format.upper()} / {', '.join(info.archs)}（目标 {target.value} / {arch}）")
 
 
 def _run_manifest(ns: argparse.Namespace) -> None:

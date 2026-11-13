@@ -33,6 +33,7 @@ positional arguments:
     manifest (m)  产物清单生成与差异对比
     doctor (d)    环境诊断：检查打包工具可用性与配置
     cache         缓存健康检查与清理
+    verify        校验产物二进制格式与目标架构（PE/ELF/Mach-O）
 
 options:
   -h, --help      show this help message and exit

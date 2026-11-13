@@ -742,6 +742,29 @@ def _add_cache_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser
     )
 
 
+def _add_verify_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """添加 verify 子命令：校验产物二进制格式与目标架构是否一致."""
+    p = sub.add_parser("verify", help="校验产物二进制格式与目标架构（PE/ELF/Mach-O）")
+    _add_options(
+        p,
+        (
+            _Opt(("path",), "产物文件路径（如 dist/app.exe）", metavar="PATH"),
+            _Opt(
+                ("--target",),
+                "期望平台，默认当前平台",
+                choices=("windows", "linux", "macos"),
+                default=None,
+            ),
+            _Opt(
+                ("--arch",),
+                "期望架构，默认当前主机架构",
+                choices=("x86_64", "arm64"),
+                default=None,
+            ),
+        ),
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     """构建参数解析器."""
     parser = argparse.ArgumentParser(
@@ -760,4 +783,5 @@ def build_parser() -> argparse.ArgumentParser:
     _add_manifest_subparser(sub)
     _add_doctor_subparser(sub)
     _add_cache_subparser(sub)
+    _add_verify_subparser(sub)
     return parser

@@ -143,6 +143,7 @@ Global options: `-V/--version` shows version, `-v/--verbose` enables DEBUG loggi
 | `fsp init` | `fsp i` | Scaffold new project from templates (18 available) |
 | `fsp doctor` | `fsp d` | Environment diagnostics — check toolchain availability |
 | `fsp manifest` | `fsp m` | Artifact manifest generation and diff (generate/diff) |
+| `fsp verify` | — | Verify artifact binary format and target arch (PE/ELF/Mach-O) |
 | `fsp cache` | — | Cache health check and cleanup (corrupted/stale/orphaned) |
 
 ```text
@@ -151,6 +152,7 @@ fsp r [project] [--entry <name>] [--debug] [--profile] [-- <args>...]
 fsp p [project] [--no-build] [--format <auto|zip|nsis|tar.gz|deb|pkg|dmg|all>] [-R]
 fsp init [name] [--template <id>] [--list]
 fsp manifest generate|diff    # Artifact manifest generation and diff (--exit-code for CI)
+fsp verify                # Verify artifact binary format and target arch
 fsp doctor                # Environment diagnostics (--test validates built-in templates)
 fsp cache status|clean    # Cache health check and cleanup
 ```

@@ -14,6 +14,7 @@
 | `fsp doctor` | `fsp d` | 环境诊断：检查打包工具可用性与配置 |
 | `fsp manifest` | `fsp m` | 产物清单生成与差异对比（generate/diff） |
 | `fsp cache` | — | 缓存健康检查与清理（损坏/过期/孤儿文件） |
+| `fsp verify` | — | 校验产物二进制格式与目标架构（PE/ELF/Mach-O） |
 
 ## fsp build
 

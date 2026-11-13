@@ -41,6 +41,7 @@
 - :mod:`fspack.packaging.dep_analyzer` —— 二进制依赖分析与未用二进制剥离
 - :mod:`fspack.packaging.size_report` —— 构建产物体积统计
 - :mod:`fspack.packaging.sbom` —— SBOM（软件物料清单）生成
+- :mod:`fspack.packaging.verify` —— 产物二进制格式/架构校验（PE / ELF / Mach-O）
 - :mod:`fspack.packaging.profile` —— 性能剖析
 - :mod:`fspack.packaging.sync` —— 源码同步（``copy_source``）
 - :mod:`fspack.packaging.log_file` —— 构建日志文件管理
