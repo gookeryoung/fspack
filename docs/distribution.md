@@ -12,7 +12,7 @@
 |------|------|-------------|--------|-------------|
 | Windows | x86_64 | 3.8–3.14（含 3.13t/3.14t） | embed（自由线程走 standalone） | 有（release.yml） |
 | Linux | x86_64 | 3.10–3.14（含 3.13t/3.14t） | standalone | 有（release.yml） |
-| macOS | x86_64 / arm64 | 3.10–3.14（含 3.13t/3.14t） | standalone | 单格：macos-latest（arm64） |
+| macOS | x86_64 / arm64 | 3.10–3.14（含 3.13t/3.14t） | standalone | 双格：macos-latest（arm64）+ macos-15-intel（x86_64） |
 
 版本下限不是配置项而是上游资产约束：python-build-standalone 自 3.8/3.9 EOL 后
 不再发布对应 tarball，因此这两个版本只能在 Windows embed 路径使用。显式传

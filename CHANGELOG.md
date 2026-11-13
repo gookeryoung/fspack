@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - 新增 `fsp verify <path> [--target windows|linux|macos] [--arch x86_64|arm64]`：只读文件头校验产物是 PE/ELF/Mach-O 且机器类型与目标一致，不匹配时退出码 1；纯 `struct` 实现，无新增依赖，可在任意构建机校验任意平台产物
-- 新增 macOS 原生真实构建单格 CI job（`e2e-macos`，macos-latest/arm64）：真实构建、`fsp verify` 校验 Mach-O 机器类型并运行产物；x86_64 macOS 暂未覆盖
+- 新增 macOS 原生真实构建 CI job（`e2e-macos`）双格矩阵：arm64（`macos-latest`）与 x86_64（`macos-15-intel`）各跑一次真实构建、`fsp verify` 校验 Mach-O 机器类型并运行产物；架构期望由宿主推导，不写死 arm64
 - 新增 `tests/test_template_consistency.py` 护栏：以人工维护的契约期望表为独立 oracle，校验 init/doctor 模板 id 集合、分类、`app_type`、依赖与 `requires-python`，模板增删必须显式更新期望
 - 新增 `tests/_projects.py` fixture 工厂（`write_project` / `doctor_template_dir` / `copy_doctor_project`），迁移 5 个测试文件的重复工程构造
 

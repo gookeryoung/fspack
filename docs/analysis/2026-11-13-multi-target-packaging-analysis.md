@@ -74,8 +74,8 @@
 | Linux | x86_64 | 3.13t / 3.14t | standalone | **未验证** | `versions.py:74-75`；命名 `urls.py:95-97` |
 | Linux | x86_64 | 3.8 / 3.9 | — | **空白（无上游资产）** | `KNOWN_STANDALONE_VERSIONS` 无 3.8/3.9 键（[versions.py:66-76](../../src/fspack/config/versions.py#L66-L76)） |
 | Linux | arm64 | — | — | **空白** | URL 硬编码 `x86_64-unknown-linux-gnu` [urls.py:92](../../src/fspack/packaging/runtime/urls.py#L92)；wheel tag 仅 x86_64 [platform.py:56](../../src/fspack/platform.py#L56) |
-| macOS | arm64 | 3.10–3.14（+t） | standalone | **未验证** | 架构探测 [runtime_stage.py:213-218](../../src/fspack/packaging/pipeline/runtime_stage.py#L213-L218)；哈希 `hashes.py:51-72`；命名归一化 [urls.py:60](../../src/fspack/packaging/runtime/urls.py#L60)；CI 无 macOS 打包 job |
-| macOS | x86_64 | 3.10–3.14（+t） | standalone | **未验证** | 同上；`macos-latest` 已为 arm64，x86_64 需 `macos-13`，未配置 |
+| macOS | arm64 | 3.10–3.14（+t） | standalone | **已验证（3.11，e2e-macos on macos-latest）** | 架构探测 [runtime_stage.py:213-218](../../src/fspack/packaging/pipeline/runtime_stage.py#L213-L218)；哈希 `hashes.py:51-72`；命名归一化 [urls.py:60](../../src/fspack/packaging/runtime/urls.py#L60)；CI: `e2e-macos` 矩阵 arm64 格 |
+| macOS | x86_64 | 3.10–3.14（+t） | standalone | **待验证（已配置 CI 格）** | 同上；Intel runner 用 `macos-15-intel`（`macos-13` 已退役），由 `e2e-macos` 矩阵覆盖 |
 | 全部 | 任意 | 任意 | Nuitka `.pyd` | **仅同平台** | 跨平台静默跳过 [compile_stage.py:110](../../src/fspack/packaging/pipeline/compile_stage.py#L110) |
 | 全部 | 任意 | 任意 | pyc 预编译 | **仅同平台** | 跨平台静默跳过 [compile_stage.py:156](../../src/fspack/packaging/pipeline/compile_stage.py#L156) |
 
@@ -383,8 +383,8 @@ runner 映射表（建议内置，可被声明覆盖）：
 | windows | x86_64 | `windows-latest` |
 | linux | x86_64 | `ubuntu-latest` |
 | linux | arm64 | arm64 runner（如 `ubuntu-24.04-arm`，以组织可用性为准） |
-| macos | arm64 | `macos-14` 及以上 |
-| macos | x86_64 | `macos-13` |
+| macos | arm64 | `macos-latest`（arm64） |
+| macos | x86_64 | `macos-15-intel`（`macos-13` 已退役） |
 | windows | arm64 | 无（未支持） |
 
 这样，「矩阵规模」这个决策从 workflow 里搬到了 `pyproject.toml` + 代码资产表，
@@ -536,7 +536,7 @@ Phase 0–2 只要求「打印正确的复现指令」，不接管容器生命�
 
 | 阶段 | 解决什么 | 主要动作 | 风险 | 验收方式 | 标注 |
 |---|---|---|---|---|---|
-| **Phase 0** 事实校正与护栏 | 让「文档说的」等于「实际能做的」；堵住静默错误 | ① 文档矩阵按第 2 节重写（明确 Linux/macOS 无 3.8/3.9、macOS 未在 CI 构建）；② 新增产物机器类型校验（PE/ELF/Mach-O）；③ 产物名加 arch，manifest/SBOM 加 py+platform；④ macOS 目标在非原生架构上的行为显式化；⑤ 补一个 macOS 原生真实构建 job（单格） | 命名变更影响用户脚本；新增 macOS job 可能暴露真实缺陷（这是好事） | 新增 1 个 macOS 真实构建；`fsp verify` 对 PE/ELF/Mach-O 三种格式各有正反用例；旧名→新名迁移说明进 changelog | **立刻可做** |
+| **Phase 0** 事实校正与护栏 | 让「文档说的」等于「实际能做的」；堵住静默错误 | ① 文档矩阵按第 2 节重写（明确 Linux/macOS 无 3.8/3.9、macOS 未在 CI 构建）；② 新增产物机器类型校验（PE/ELF/Mach-O）；③ 产物名加 arch，manifest/SBOM 加 py+platform；④ macOS 目标在非原生架构上的行为显式化；⑤ 补 macOS 原生真实构建 job（arm64 + x86_64 双格） | 命名变更影响用户脚本；新增 macOS job 可能暴露真实缺陷（这是好事） | macOS 两架构各至少 1 个真实构建；`fsp verify` 对 PE/ELF/Mach-O 三种格式各有正反用例；旧名→新名迁移说明进 changelog | **立刻可做** |
 | **Phase 1** 矩阵契约 | 建立 cell 模型与声明，CI 由声明展开 | ① `[tool.fspack.matrix]` 解析与 `fsp matrix list --json`；② `--cell` + `dist/<cell>/`；③ `matrix-report.json` 与退出码；④ `plan` job 接入 CI（先用 3 格：win/linux/macos 原生各一） | 契约一旦发布就是用户可见 API，后续改名成本高 | 同一 cell 在本地与 CI 产出同名同校验结果；`skip`/`allow_failure`/`host-mismatch` 三态各有测试 | **需先定契约** |
 | **Phase 2** 多架构原生 | 把 arm64 从空白变可用 | ① `--arch` 与 URL/资产名 arm64 分支（Linux/Windows/macOS）；② wheel tag 按架构收窄；③ `.deb` arch 由 cell 推导；④ Linux arm64 与 macOS 双架构原生 runner；⑤ arm64 冒烟（原生或 Rosetta） | 上游资产命名/可用性变化；arm runner 成本；macOS x86_64 runner 逐步退场 | 每个新增架构至少有「构建 + 格式校验 + 冒烟」三项；`test_runtime_hash` 扩展到新架构 | **需先定契约**（依赖 Phase 1） |
 | **Phase 3** 可选增强 | 本地/容器的便捷性 | ① `--via docker` 由 fspack 拉起容器；② 构建与测试分离（干净环境安装冒烟）；③ 工具链版本记录与比对 | 容器路径/挂载/缓存复杂度高；投入产出比低于前两期 | 本地一条命令可完整复现远端格；工具链漂移可被检出 | **不建议做**（至少不在 Phase 2 之前做） |
