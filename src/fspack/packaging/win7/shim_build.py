@@ -69,14 +69,17 @@ class ShimSpec:
 
     @property
     def src_path(self) -> Path:
+        """shim 源文件绝对路径（``SHIM_SRC_DIR`` / ``src_name``）."""
         return SHIM_SRC_DIR / self.src_name
 
     @property
     def dll_path(self) -> Path:
+        """编译产物 DLL 的绝对路径（``SHIM_SRC_DIR`` / ``dll_name``）."""
         return SHIM_SRC_DIR / self.dll_name
 
     @property
     def def_path(self) -> Path | None:
+        """导出定义文件路径；未声明 ``def_name`` 时为 ``None``."""
         return SHIM_SRC_DIR / self.def_name if self.def_name else None
 
 

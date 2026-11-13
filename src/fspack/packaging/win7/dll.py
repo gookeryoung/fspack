@@ -187,21 +187,25 @@ class Win7EmbedRuntime(RuntimeDownloader):
     @classmethod
     @override
     def archive_name(cls, version: str, **kwargs: object) -> str:  # noqa: ARG003
+        """win7 重编译版 embed zip 的缓存文件名（``-win7.zip`` 后缀）."""
         return win7_zip_cache_name(version)
 
     @classmethod
     @override
     def download_url(cls, version: str, **kwargs: object) -> str:  # noqa: ARG003
+        """重编译版 embed zip 的下载 URL（与哈希清单同源）."""
         return win7_zip_url(version)
 
     @classmethod
     @override
     def marker_path(cls, runtime_dir: Path, version: str) -> Path:
+        """就绪标志：runtime 目录下重编译版 ``python3XX.dll``."""
         return runtime_dir / win7_dll_name(version)
 
     @classmethod
     @override
     def extract_archive(cls, archive_path: Path, runtime_dir: Path) -> None:
+        """从缓存 zip 中提取重编译版 python3XX.dll 覆盖 runtime，保证组件同源."""
         extract_win7_dll(archive_path, runtime_dir, _dll_member_version(archive_path))
 
 

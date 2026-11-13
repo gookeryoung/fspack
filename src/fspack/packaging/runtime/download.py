@@ -196,11 +196,13 @@ class EmbedRuntime(RuntimeDownloader):
     @classmethod
     @override
     def archive_name(cls, version: str, **kwargs: object) -> str:
+        """embed python zip 的缓存文件名（如 ``python-3.12.10-embed-amd64.zip``）."""
         return embed_zip_name(version)
 
     @classmethod
     @override
     def download_url(cls, version: str, **kwargs: object) -> str:
+        """从镜像配置拼出 embed python zip 的下载 URL."""
         mirror = kwargs["mirror"]
         assert isinstance(mirror, MirrorConfig)
         return mirror.embed_url(version)
@@ -208,11 +210,13 @@ class EmbedRuntime(RuntimeDownloader):
     @classmethod
     @override
     def marker_path(cls, runtime_dir: Path, version: str) -> Path:
+        """就绪标志：runtime 目录下对应版本的 ``python3XX.dll``，存在即视为已下载."""
         return runtime_dir / f"{embed_dirname(version)}.dll"
 
     @classmethod
     @override
     def extract_archive(cls, archive_path: Path, runtime_dir: Path) -> None:
+        """安全解压 embed zip 到 runtime 目录（拒绝越界路径条目）."""
         extract_zip_safe(archive_path, runtime_dir, label="embed zip")
 
     @classmethod
@@ -238,6 +242,7 @@ class StandaloneRuntime(RuntimeDownloader):
     @classmethod
     @override
     def archive_name(cls, version: str, **kwargs: object) -> str:
+        """按 release tag、macOS 架构与 Windows 自由线程变体拼出 tarball 缓存文件名."""
         release_tag = kwargs["release_tag"]
         assert isinstance(release_tag, str)
         macos_arch = kwargs.get("macos_arch")
@@ -249,6 +254,7 @@ class StandaloneRuntime(RuntimeDownloader):
     @classmethod
     @override
     def download_url(cls, version: str, **kwargs: object) -> str:
+        """拼出 python-build-standalone tarball 的下载 URL，参数与 :meth:`archive_name` 一致."""
         release_tag = kwargs["release_tag"]
         assert isinstance(release_tag, str)
         macos_arch = kwargs.get("macos_arch")
@@ -260,6 +266,7 @@ class StandaloneRuntime(RuntimeDownloader):
     @classmethod
     @override
     def marker_path(cls, runtime_dir: Path, version: str) -> Path:
+        """就绪标志：``python/bin/pythonX.Y[t]``，free-threaded 版本二进制名带 ``t`` 后缀."""
         # free-threaded build 二进制名带 t 后缀（python3.13t）
         is_t = version.endswith("t")
         base = version[:-1] if is_t else version
@@ -270,6 +277,7 @@ class StandaloneRuntime(RuntimeDownloader):
     @classmethod
     @override
     def extract_archive(cls, archive_path: Path, runtime_dir: Path) -> None:
+        """安全解压 standalone tarball 到 runtime 目录（PEP 706 等价过滤）."""
         extract_tar_safe(archive_path, runtime_dir, label="python-build-standalone tarball")
 
 
