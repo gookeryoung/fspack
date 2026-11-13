@@ -86,9 +86,9 @@ def test_capability_tag_all_doctor_templates_registered() -> None:
     直接访问私有 ``_CAPABILITY_TAGS`` 做注册表对齐校验（公共接口无此暴露）。
     """
     from fspack.doctor.template_report import _CAPABILITY_TAGS
-    from fspack.templates.project_template import ProjectTemplate
+    from fspack.templates import list_templates
 
-    doctor_ids = {tpl.id for tpl in ProjectTemplate.list_all()}
+    doctor_ids = {tpl.id for tpl in list_templates(role="doctor")}
     tagged_ids = set(_CAPABILITY_TAGS)
     assert doctor_ids == tagged_ids, (
         f"能力标签与 doctor 模板集不一致：缺标签 {doctor_ids - tagged_ids}，多余标签 {tagged_ids - doctor_ids}"

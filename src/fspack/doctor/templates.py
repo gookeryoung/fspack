@@ -437,9 +437,9 @@ def run_doctor_test(profile: ProfileOptions = _DEFAULT_PROFILE) -> None:  # prag
 
     :param profile: 基准剖析日志选项（``-P``/``-PO``/``-PC``）
     """
-    from fspack.templates.project_template import ProjectTemplate
+    from fspack.templates import list_templates
 
-    templates = ProjectTemplate.list_all()
+    templates = list(list_templates(role="doctor"))
     if not templates:
         console.warn("未找到项目模板")
         return

@@ -293,8 +293,3 @@ templates 子包
    :members:
    :undoc-members:
    :show-inheritance:
-
-.. automodule:: fspack.templates.project_template
-   :members:
-   :undoc-members:
-   :show-inheritance:

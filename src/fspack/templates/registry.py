@@ -43,8 +43,8 @@ _logger = logging.getLogger(__name__)
 # 支持的分类目录名
 _CATEGORIES: frozenset[str] = frozenset({"cli", "gui", "game", "sci", "web", "config"})
 
-# 默认角色集合：init 模板仅用于 ``fsp init``。doctor 流程走
-# ``ProjectTemplate.list_all()`` 直扫 ``assets/templates/``，不经此角色过滤。
+# 默认角色集合：init 模板仅用于 ``fsp init``。doctor 流程用
+# ``list_templates(role="doctor")`` 扫描 ``assets/templates/``。
 _DEFAULT_ROLES: frozenset[str] = frozenset({"init"})
 
 # 模板默认 Python 版本约束：与根 pyproject.toml、CI 矩阵（3.8–3.14）及运行时
