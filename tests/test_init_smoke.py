@@ -22,7 +22,7 @@ from fspack.packaging.pipeline import build
 from fspack.platform import Platform
 from fspack.templates import list_templates
 
-# 全部 init 角色模板 id（当前 24 个），新增模板自动纳入冒烟矩阵
+# 全部 init 角色模板 id（当前 18 个），新增模板自动纳入冒烟矩阵
 _INIT_TEMPLATE_IDS: tuple[str, ...] = tuple(t.id for t in list_templates(role="init"))
 
 
@@ -44,8 +44,8 @@ def test_init_template_build_dry_run_smoke(tmp_path: Path, template_id: str) -> 
 
 
 def test_smoke_matrix_covers_all_categories() -> None:
-    """冒烟矩阵模板数不少于已注册 init 模板数，防止参数化列表意外缩水."""
-    assert len(_INIT_TEMPLATE_IDS) >= 18
+    """冒烟矩阵精确覆盖 18 个 init 模板，模板增删必须显式同步本断言."""
+    assert len(_INIT_TEMPLATE_IDS) == 18
     # 各分类至少一个代表：cli/gui/game/sci/web/config
     assert "helloworld" in _INIT_TEMPLATE_IDS
     assert "pyside2" in _INIT_TEMPLATE_IDS
