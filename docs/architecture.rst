@@ -307,8 +307,8 @@ facade 例外见 :doc:`adr/0001-layering`，由 ``tests/test_layout.py`` 机械�
 
    * - 模块
      - 职责
-   * - ``cli.py``
-     - CLI 入口（cargo 风格短命令 ``fsp b/c/r/p``），延迟导入重模块使 ``--help`` 提速
+   * - ``cli.py`` / ``cli_parser.py`` / ``cli_init.py`` / ``cli_help.py``
+     - CLI 入口与命令分发（cargo 风格短命令 ``fsp b/c/r/p``）+ argparse 参数声明 + ``init`` 子命令 + 帮助/版本快速路径；延迟导入重模块使 ``--help`` 提速
    * - ``builder.py``
      - 高层构建 facade，re-export ``pipeline.build``/``runtime``/``loader``/``sync`` 等
    * - ``analyzer/``（子包：``analysis`` / ``ast_scan`` / ``fingerprint``）
@@ -316,7 +316,7 @@ facade 例外见 :doc:`adr/0001-layering`，由 ``tests/test_layout.py`` 机械�
        串行/并行调度（按采样预估的串行成本决定是否启用进程池），``ast_scan`` 负责
        单文件 AST 与 QML 解析，``fingerprint`` 负责源码指纹
    * - ``runner.py``
-     - 运行已打包项目（Linux 原生，Windows 自动用 wine）
+     - 运行已打包项目（原生可执行文件直跑；Linux 下 ``.exe`` 用 wine）
    * - ``console.py``
      - rich 驱动的彩色输出与日志配置
    * - ``platform.py``
@@ -359,22 +359,22 @@ packaging/ 子包
 
    * - 子模块
      - 职责
-   * - ``pipeline/``（``__init__.py`` / ``executor.py`` / ``*_stage.py`` / ``context.py``）
-     - 构建流水线编排（``build()`` 入口，10+ 阶段调度）
-   * - ``runtime/``（``__init__.py`` / ``download.py`` / ``extract.py`` / ``urls.py`` / ``trim.py`` / ``pth.py``）
-     - ``RuntimeDownloader``：embed python / python-build-standalone 下载解压 + 安全解压 + stdlib 精简 + ``._pth`` 生成
+   * - ``pipeline/``（``__init__.py`` / ``executor.py`` / ``*_stage.py`` / ``stages.py`` / ``context.py``）
+     - 构建流水线编排（``build()`` 入口，阶段调度）
+   * - ``runtime/``（``__init__.py`` / ``download.py`` / ``extract.py`` / ``urls.py`` / ``hashes.py`` / ``trim.py`` / ``stdlib_zip.py`` / ``pth.py``）
+     - ``RuntimeDownloader``：embed python / python-build-standalone 下载解压 + sha256 清单校验 + 安全解压 + stdlib 精简/zip 化 + ``._pth`` 生成
    * - ``loader/``（``__init__.py`` / ``source.py`` / ``compile.py`` / ``toolchain.py`` / ``cache_keys.py`` / ``resource.py``）
      - C loader facade：源码资源读取（``assets/loader/*.c``）+ 编译器基类/平台子类 + 工具链发现 + 缓存键 + icon/版本信息资源
-   * - ``installer/``（``__init__.py`` / ``base.py`` / ``facade.py`` / ``dist_prep.py`` / ``request.py`` / ``linux.py`` / ``macos.py`` / ``nsis.py`` / ``zip.py``）
-     - 安装包 facade：NSIS / .deb + tar.gz / .pkg + .dmg / 跨平台 zip（``ReleaseRequest``/``SignOptions`` 参数收敛）
-   * - ``wheels/``（``__init__.py`` / ``downloader.py`` / ``pip_args.py`` / ``process.py`` / ``output.py`` / ``resolver.py`` / ``uv_bridge.py`` / ``parallel.py`` / ``sdist.py`` / ``cache.py`` / ``markers.py``）
-     - wheel 下载 facade：入口编排（``downloader``）+ 参数构造（``pip_args``）+ 进程执行（``process``）+ 输出解析（``output``）+ pip/uv 调用 + sdist 回退 + 并行下载 + 依赖解析缓存 + python_version 标记预过滤
-   * - ``nuitka/``（``__init__.py`` / ``compiler.py`` / ``env.py`` / ``standalone.py`` / ``winlibs.py`` / ``ccache.py`` / ``compile.py`` / ``strip.py`` / ``verify.py`` / ``protocol.py`` / ``progress.py``）
-     - Nuitka 编译 facade：环境就绪 + standalone python + winlibs gcc 工具链 + ccache + 并行编译调度 + 编译流程 + 产物剥离 + 验证
+   * - ``installer/``（``__init__.py`` / ``base.py`` / ``facade.py`` / ``dist_prep.py`` / ``request.py`` / ``linux.py`` / ``macos.py`` / ``nsis.py`` / ``zip.py`` / ``sevenzip.py``）
+     - 安装包 facade：NSIS / .deb + tar.gz / .pkg + .dmg / 跨平台 zip 与 7z（``ReleaseRequest``/``SignOptions`` 参数收敛）
+   * - ``wheels/``（``__init__.py`` / ``downloader.py`` / ``pip_args.py`` / ``process.py`` / ``output.py`` / ``resolver.py`` / ``local_cache.py`` / ``uv_bridge.py`` / ``parallel.py`` / ``sdist.py`` / ``cache.py`` / ``markers.py``）
+     - wheel 下载 facade：入口编排（``downloader``）+ 参数构造（``pip_args``）+ 进程执行（``process``）+ 输出解析（``output``）+ pip/uv 调用 + 本地缓存 uv 离线解析（``local_cache``）+ sdist 回退 + 并行下载 + 依赖解析缓存 + python_version 标记预过滤
+   * - ``nuitka/``（``__init__.py`` / ``compiler.py`` / ``env.py`` / ``standalone.py`` / ``winlibs.py`` / ``indexes.py`` / ``ccache.py`` / ``compile.py`` / ``strip.py`` / ``verify.py`` / ``protocol.py`` / ``progress.py``）
+     - Nuitka 编译 facade：环境就绪 + standalone python + winlibs gcc 工具链 + 国内索引回退 + ccache + 并行编译调度 + 编译流程 + 产物剥离 + 验证
    * - ``pyc/``（``__init__.py`` / ``compile.py`` / ``stamp.py`` / ``source_strip.py``）
      - 字节码预编译（``compileall`` + stamp 缓存 + .py 源码剥离）
-   * - ``win7/``（``__init__.py`` / ``check.py`` / ``dll.py`` / ``scan.py``）
-     - Win7 兼容门禁：PE 导入表静态检查 + 重编译版 python3XX.dll 下载校验 + dist 全量扫描报告
+   * - ``win7/``（``__init__.py`` / ``check.py`` / ``dll.py`` / ``patch.py`` / ``scan.py`` / ``shim_build.py``）
+     - Win7 兼容门禁：PE 导入表静态检查 + 重编译版 python3XX.dll 下载校验 + dist 全量扫描报告 + 导入表原地改名（``patch``）+ shim 就地编译（``shim_build``）
    * - ``sync.py``
      - 源码同步（``copy_source`` + 增量同步 + site-packages 指纹）
    * - ``builtin.py``
@@ -419,27 +419,26 @@ wheel 精简 facade：
 性能优化
 --------
 
-fspack 内置多层性能优化：
+fspack 内置多层性能优化，量化数据、基线快照与更新流程统一见 :doc:`performance`：
 
 - **增量缓存**：源码指纹缓存（依赖分析结果）、``.pyc`` stamp、Nuitka stamp、
   C loader 源码哈希、图标转换摘要、embed stdlib 精简指纹、Win7 扫描/loader
   校验签名、manifest 哈希备忘录（按 (size, mtime_ns) 复用 SHA256）。缓存命中
   只跳过对应的"昂贵动作"，热构建仍需枚举源码、解包/校验 dist 与扫描全量 PE——
-  不是"只重做变更文件"：``Win7 兼容扫描`` 在热构建里通常是最大单项（34 个 PE
-  约 90ms），因为它必须复核整棵 dist 的导入表
+  不是"只重做变更文件"：Win7 兼容扫描在热构建里通常是最大单项，因为它必须
+  复核整棵 dist 的导入表
 - **通用 action 缓存**：上述标记统一由 :mod:`fspack.packaging.action_cache`
   管理（键 = 输入指纹，值 = ``<dist>/build/action-<name>.json``，版本号/损坏
   即视为未命中），避免四套各自实现漂移
 - **CLI 懒加载**：``fsp`` 入口延迟导入重模块（``config``/``console``/``platform``），
   ``fsp --help`` 冷启动远低于全量导入
 - **wheel 本地解析**：依赖缓存未命中时先用 ``uv pip compile --no-index`` 在本地
-  缓存上解析（热缓存约 40ms），替代 ``pip download --no-index`` 预检的
-  1.5–2.7s，无法确定时回退原预检
+  缓存上解析精确版本，替代 ``pip download --no-index`` 全量预检；无法确定时
+  回退原预检
 - **wheel 并行下载**：``uv`` 解析精确版本后用 ``ThreadPoolExecutor`` 并行
   ``pip download --no-deps``，失败包自动 sdist 回退构建
 - **AST 并行门槛**：按等距采样的 AST 节点密度预估串行解析成本，只有预估能省
-  下明显时间（≥0.75s）才启用 4 进程池——注释密集型源码（字节多、节点少）
-  保持串行，实测 1268 文件 / 13 MiB 串行 0.49s 优于 4 worker 0.71s
+  下明显时间才启用 4 进程池——注释密集型源码（字节多、节点少）保持串行
 - **Win7 兼容**：Python 3.9+ 注入 api-ms-win-core-path 替代 DLL，支持在 Win7/Win2008R2 运行
 - **国内镜像**：默认阿里云源 PyPI 与 embed python 镜像，``--mirror`` 切换（aliyun/huawei/tsinghua）
 - **彩色进度显示**：rich 驱动的步骤进度（> 准备运行时 / √ 构建完成），

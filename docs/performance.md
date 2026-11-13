@@ -108,13 +108,13 @@ req-49 驱动的 20 轮迭代分 4 个阶段交付：阶段 1 健壮性基础（
 | lazy-import 启动收益 | — | 51ms | numpy `__init__.py` 延迟 |
 | ccache 加速比 | — | 8.08x | 命中 vs 未命中 |
 | 性能基线测试数 | 10 | 26 | +16 |
-| CI 退化检测精度 | 单一 25% | 5 类别 10-25% | 误报↓ 灵敏度↑ |
+| CI 退化检测精度 | 单一 25% | 6 类别 10-25% | 误报↓ 灵敏度↑ |
 
 ## 基线测试清单
 
-共 26 个基线测试，按 5 个类别分组，各类别有不同的 StdDev 特性与退化阈值：
+共 26 个基线测试，按 6 个类别分组，各类别有不同的 StdDev 特性与退化阈值：
 
-### core（10 个，阈值 10%）
+### core（9 个，阈值 10%）
 
 `tests/test_perf_baseline.py`，核心场景基线，确定性高 StdDev <1%。
 
@@ -124,12 +124,17 @@ req-49 驱动的 20 轮迭代分 4 个阶段交付：阶段 1 健壮性基础（
 | `test_analyze_dependencies_baseline` | AST 依赖分析 |
 | `test_classify_entry_baseline` | 入口类型分类 |
 | `test_slim_unpack_baseline` | wheel 精简解包 |
-| `test_source_fingerprint_baseline` | 源码指纹计算 |
 | `test_project_info_from_dir_baseline` | ProjectInfo 冷解析 |
 | `test_project_info_from_dir_cached_baseline` | ProjectInfo 缓存命中 |
 | `test_generate_wrapper_source_baseline` | EntryWrapper 生成 |
 | `test_ensure_env_cache_hit_baseline` | Nuitka 环境缓存命中 |
 | `test_wheel_download_cache_hit_baseline` | wheel 依赖缓存命中 |
+
+### fingerprint（1 个，阈值 10%）
+
+`tests/test_perf_baseline.py` 的 `test_source_fingerprint_baseline`，stat 密集
+µs 级微基准。同一份代码跨 runner 绝对抖动可达 ~100µs，因此单独成类并设
+120µs 绝对噪声下限（`noise_floor`）；真实退化（数倍变慢）绝对差远超下限仍会捕获。
 
 ### build_perf（4 个，阈值 25%）
 
@@ -245,7 +250,7 @@ uv run fsp doctor --bench-compare --bench-no-categories --bench-threshold 25
 
 ```
 当前运行: 0126_iter145-final_Windows-CPython-3.11-64bit_20260804T120000.json
-类别阈值: build_perf=25%, nuitka_compile=10%, wheel_download=10%, entry_startup=15%, core=10% | 全局阈值: 25%
+类别阈值: build_perf=25%, nuitka_compile=10%, wheel_download=10%, entry_startup=15%, fingerprint=10%, core=10% | 全局阈值: 25%
 
 测试名                       当前 median    最佳 median          Δ   阈值        类别      最佳来源     状态
 ...
@@ -268,14 +273,15 @@ uv run fsp doctor --bench-compare --bench-no-categories --bench-threshold 25
 | nuitka_compile | 10% | <1% of median | mock `time.sleep` 确定性高，10% 足以检测真实退化 |
 | wheel_download | 10% | <1% of median | mock `time.sleep` 确定性高，10% 足以检测真实退化 |
 | entry_startup | 15% | 5-8% of median | 真实 subprocess 启动抖动，15% 平衡灵敏度与误报 |
+| fingerprint | 10% | ~100µs 绝对抖动 | stat 密集 µs 级微基准，另设 120µs `noise_floor` 吸收跨 runner 绝对差 |
 
 ### 系统性退化检测
 
 当多个不相关测试同步中等幅度退化时，判定为机器负载波动而非代码问题：
 
 - 可比测试数 ≥ 5
-- 退化率 ≥ 50%（至少一半测试退化）
-- 退化测试的中位退化幅度 ≥ 30%
+- 退化率 ≥ 40%（至少四成测试退化）
+- 退化测试的平均退化幅度 ≥ 20%
 
 满足以上条件时输出警告但不阻断 CI（exit 0），建议人工审查 artifact 中的 JSON
 数据确认无真实退化。

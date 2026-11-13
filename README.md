@@ -137,7 +137,7 @@ Global options: `-V/--version` shows version, `-v/--verbose` enables DEBUG loggi
 | Command | Alias | Description |
 |---------|-------|-------------|
 | `fsp build` | `fsp b` | Build project — produce executables and runtime |
-| `fsp run` | `fsp r` | Run packaged app (native on Linux, wine on Windows) |
+| `fsp run` | `fsp r` | Run packaged app (native binary directly; `.exe` via wine on Linux) |
 | `fsp clean` | `fsp c` | Clean dist/ directory |
 | `fsp package` | `fsp p` | Create installers (Windows NSIS / Linux .deb + tar.gz / macOS pkg + dmg) |
 | `fsp init` | `fsp i` | Scaffold new project from templates (18 available) |

@@ -197,7 +197,7 @@ done
 4. **wineboot --init**：首次运行需初始化 prefix，否则 wine 报错
 5. **GUI 应用 wine 缺系统 DLL**：PySide6/PyQt5 的 Qt DLL 可能依赖 `icuuc.dll` 等 Windows 10+ 系统 DLL，wine 默认不提供。CI 中检测到 `DLL load failed` 时应 skip 运行断言（仅验证构建成功），参考 fspack 自身 slow 测试的 skip 逻辑
 6. **缓存 key 含 target**：Windows embed python 与 Linux python-build-standalone 不通用，缓存键必须含 target 隔离
-7. **fspack 版本固定**：建议其他项目 `uv pip install fspack==0.6.8` 固定版本，避免 fspack 升级破坏 CI
+7. **fspack 版本固定**：建议其他项目 `uv pip install fspack==0.6.13` 固定版本，避免 fspack 升级破坏 CI
 
 ## 完整示例
 

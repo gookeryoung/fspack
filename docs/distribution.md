@@ -24,7 +24,22 @@ authors = [{ name = "张三" }]
 
 ### 代码签名（推荐）
 
-生产分发建议用 Authenticode 证书签名 exe 与安装包，进一步降低误报。fspack 打包后用 Windows SDK `signtool` 签名：
+生产分发建议用证书签名 exe 与安装包，进一步降低误报。`fsp p` 内置三平台签名开关，
+无需手工后处理：
+
+| 平台 | CLI 选项 | 行为 |
+|------|---------|------|
+| Windows | `--sign-exe` + `--sign-exe-certificate <pfx>` + `--sign-exe-password <pwd>` | 调用 `signtool sign /f <pfx> /p <pwd> /t <时间戳>`，签名 dist 内 exe 与 release 下的 NSIS 安装包；需 Windows SDK 的 `signtool` 在 PATH 中。证书路径/密码也可用 `[tool.fspack]` 的 `sign-exe-certificate`/`sign-exe-password` 配置默认值（CLI 优先） |
+| Linux | `--sign-deb` + `--sign-deb-key <keyid>` | `gpg --detach-sign --armor` 对 `.deb` 做分离签名，产出 `<deb>.asc`；未指定 key 时用 GPG 默认密钥，也可用 `[tool.fspack] sign-deb-key` 配置默认值 |
+| macOS | `--codesign` | 对 pkg/dmg 做 ad-hoc 签名（`codesign --force --sign -`），仅适用于本地执行；真实分发仍需 Apple Developer ID 签名 |
+
+```bash
+fsp p --sign-exe --sign-exe-certificate cert.pfx --sign-exe-password <密码>
+fsp p --sign-deb --sign-deb-key 0x12345678
+fsp p --format pkg --codesign
+```
+
+也可在打包后用外部工具手工签名：
 
 ```bash
 fsp b                                              # 产出 dist/my-app.exe

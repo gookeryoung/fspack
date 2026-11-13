@@ -151,7 +151,7 @@ fsp r --entry gui         # 运行 gui 入口
 | `fsp build` | `fsp b` | 打包项目，生成可执行文件与运行时 |
 | `fsp run` | `fsp r` | 运行已打包项目（Linux 原生，`.exe` 自动用 wine） |
 | `fsp clean` | `fsp c` | 清理 dist/ 目录 |
-| `fsp package` | `fsp p` | 生成安装包（Windows NSIS / Linux .deb + tar.gz） |
+| `fsp package` | `fsp p` | 生成安装包（Windows NSIS / Linux .deb + tar.gz / macOS pkg + dmg） |
 | `fsp init` | `fsp i` | 从模板创建新项目（18 个模板可选） |
 | `fsp doctor` | `fsp d` | 环境诊断：检查打包工具可用性与配置 |
 | `fsp manifest` | `fsp m` | 产物清单生成与差异对比（generate/diff） |

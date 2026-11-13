@@ -21,8 +21,9 @@ try:
     release = __version__
     version = __version__
 except ImportError:
-    release = "0.1.0"
-    version = "0.1.0"
+    # 源码不可导入时的占位，避免把过期版本号写进文档元数据
+    release = "unknown"
+    version = "unknown"
 
 # -- Sphinx 配置 -----------------------------------------------------------
 extensions = [
