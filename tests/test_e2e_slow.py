@@ -10,7 +10,9 @@
 - 平台 marker 过滤：Linux 上 ``--target windows``，win-only 依赖在、linux-only
   与 python_version 不满足的依赖不在（P0「marker 剥离」端到端回归）
 - ``--lock``/``--frozen``：真实构建写锁 → 篡改 hash 后 frozen 构建必须失败
-- macOS 原生构建：macOS runner 上产出 Mach-O 产物，校验机器类型并运行
+- macOS 原生构建：macOS runner 上产出 Mach-O 产物，校验机器类型并运行；
+  `e2e-macos` 矩阵覆盖 arm64（macos-latest）与 x86_64（macos-15-intel），
+  架构期望一律由宿主 `platform.machine()` 推导
 
 运行方式（联网 + 需要 gcc/mingw，单次数十秒）::
 
@@ -20,7 +22,7 @@ CI 中由独立 job 执行，避免拖慢 ``-m "not slow"`` 主门禁。
 
 已知限制（无法在当前矩阵验证，见 docs 或提交说明）：
 - Linux 上产出的 Windows exe 需要 wine 才能执行，本文件只做 PE/entry 结构断言
-- macOS x86_64 需 macos-13 runner，当前只在 macos-latest（arm64）跑单格
+- macOS 只覆盖 CI 实际提供的 runner 架构（arm64 + x86_64）；其他架构无原生 runner
 """
 
 from __future__ import annotations
@@ -273,9 +275,10 @@ def test_e2e_lock_then_frozen_rejects_tampered_hash(tmp_path: Path) -> None:
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS 原生构建仅在 macOS runner 执行")
 def test_e2e_macos_native_build_and_verify(tmp_path: Path) -> None:
-    """macOS 原生构建单格：产物为 Mach-O、架构与宿主一致、可运行.
+    """macOS 原生构建（arm64 / x86_64 共用）：产物为 Mach-O、架构与宿主一致、可运行.
 
-    这是 macOS 目标第一次进入真实 CI 构建；失败时保留完整日志，不做 mock
+    由 CI 的 `e2e-macos` 矩阵在两种原生 runner 上各跑一次；期望架构来自
+    `host_arch()`，不在用例里写死 arm64。失败时保留完整日志，不做 mock
     或跳过处理。
     """
     _require_native_toolchain()
