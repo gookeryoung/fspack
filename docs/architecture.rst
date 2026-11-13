@@ -19,7 +19,12 @@
 3. **下载运行时**：Windows 下载 embed python zip；Linux/macOS 下载
    python-build-standalone tar.gz。macOS 目标仅支持 macOS 构建机、Linux 目标
    仅支持 Linux 构建机（clang 无法可靠交叉产出 Mach-O，macOS 的 gcc 是 clang
-   垫片、Windows 的 gcc 是 mingw，均无法产出 ELF；Windows 目标支持任意构建机）
+   垫片、Windows 的 gcc 是 mingw，均无法产出 ELF；Windows 目标支持任意构建机）。
+   版本受平台资产表约束：Windows embed 覆盖 3.8–3.14（自由线程 3.13t/3.14t
+   改走 standalone），Linux/macOS standalone 覆盖 3.10–3.14（上游已不发布
+   3.8/3.9）；架构由构建机决定，Windows/Linux 仅 x86_64，macOS 按
+   ``platform.machine()`` 取 x86_64 或 arm64。每次构建只产出一个目标，
+   产物统一写入 ``dist/``
 4. **解压运行时**：安全解压（拒绝越界路径条目）到 ``dist/runtime/``
 5. **精简标准库**：Windows 按版本 + 黑名单指纹精简 embed zip（action 缓存
    命中跳过）；Linux/macOS 剥离 standalone 的 test/ensurepip/idlelib 等，

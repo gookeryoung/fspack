@@ -30,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Docs
 - 新增 `docs/analysis/2026-11-13-template-test-fixture-consolidation-analysis.md` 模板与测试示例工程整合分析
 - `docs/cli.md` 补充 init 模板 `requires-python` 默认值与 PySide2 例外，并说明已有项目不受影响
+- 平台支持矩阵按实际能力校正：Linux/macOS 运行时仅 3.10–3.14、3.8/3.9 仅 Windows embed、macOS 尚无 CI 真实构建；补充「一次构建只产出一个目标、无 `--arch`、所有目标共用 `dist/`」说明
+- 新增 `docs/analysis/2026-11-13-multi-target-packaging-analysis.md` 多目标打包方案与现状盘点
 
 ## [0.6.13] - 2026-11-13
 

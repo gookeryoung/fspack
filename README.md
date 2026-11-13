@@ -176,11 +176,20 @@ Full configuration reference: [Configuration Guide](docs/configuration.md).
 
 ## 🖥️ Platform Support
 
-| Platform | Runtime | Installer |
-|----------|---------|-----------|
-| Windows | Portable Python (official embed) | NSIS `.exe` |
-| Linux | python-build-standalone | `.deb` + `.tar.gz` |
-| macOS | python-build-standalone | `.pkg` + `.dmg` |
+| Platform | Arch | Runtime | Python versions | Installer |
+|----------|------|---------|-----------------|-----------|
+| Windows | x86_64 | Portable Python (official embed) | 3.8–3.14 | NSIS `.exe` |
+| Linux | x86_64 | python-build-standalone | 3.10–3.14 | `.deb` + `.tar.gz` |
+| macOS | x86_64 / arm64 | python-build-standalone | 3.10–3.14 | `.pkg` + `.dmg` |
+
+Version ranges are limited by upstream runtime assets: python-build-standalone no
+longer publishes 3.8/3.9, so those versions are Windows-only. Free-threaded builds
+(3.13t/3.14t) are available on all three platforms via standalone tarballs.
+
+One invocation produces one target: platform comes from `--target`, architecture
+from the build machine (macOS picks x86_64 or arm64 automatically; Windows/Linux
+are x86_64 only), and Python version from `--py-version`. There is no `--arch` flag
+yet, and every run writes to the same `dist/` directory.
 
 **Windows target**: Cross-compile from any build machine (Linux/macOS with mingw-w64 →
 `fsp b --target windows`). macOS/Linux targets require same-platform build machines

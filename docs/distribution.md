@@ -2,6 +2,27 @@
 
 涵盖安全分发（资源段嵌入、代码签名、误报申诉）与 Windows 7 兼容支持。
 
+## 平台、架构与 Python 版本
+
+一次 `fsp b` 只产出一个目标：平台由 `--target` 指定，架构由构建机决定，Python
+版本由 `--py-version` 指定。产物统一写入 `dist/`，不同目标会互相覆盖，跨目标
+批量构建需自行换目录或分次执行。
+
+| 平台 | 架构 | 可用 Python | 运行时 | CI 真实构建 |
+|------|------|-------------|--------|-------------|
+| Windows | x86_64 | 3.8–3.14（含 3.13t/3.14t） | embed（自由线程走 standalone） | 有（release.yml） |
+| Linux | x86_64 | 3.10–3.14（含 3.13t/3.14t） | standalone | 有（release.yml） |
+| macOS | x86_64 / arm64 | 3.10–3.14（含 3.13t/3.14t） | standalone | 单格：macos-latest（arm64） |
+
+版本下限不是配置项而是上游资产约束：python-build-standalone 自 3.8/3.9 EOL 后
+不再发布对应 tarball，因此这两个版本只能在 Windows embed 路径使用。显式传
+`--py-version 3.8` 到 Linux/macOS 会因资产不存在而下载失败；`.python-version`
+写 3.8 时会被忽略并回退到 `requires-python` 解析出的版本，注意区分。
+
+Windows/Linux 目前只有 x86_64；macOS 两架构按构建机 `platform.machine()` 选择，
+无 `--arch` 开关。Windows 目标可从任意构建机交叉产出；Linux/macOS 目标要求
+同平台构建机。
+
 ## 安全与分发
 
 ### 资源段嵌入（自动）

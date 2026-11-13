@@ -31,7 +31,7 @@ fsp b [project] [--mirror <name>] [--py-version <ver>] [--target <platform>]
 |------|------|
 | `project` | 项目目录，默认当前目录 |
 | `--mirror` | 镜像源（aliyun/huawei/tsinghua），默认 aliyun |
-| `--py-version` | Python 版本，默认 3.11.9（Windows）/ 3.11.15（Linux/macOS） |
+| `--py-version` | Python 版本，默认 3.11.9（Windows）/ 3.11.15（Linux/macOS）；Windows 支持 3.8–3.14，Linux/macOS 仅 3.10–3.14（3.8/3.9 无上游运行时资产） |
 | `--target` | 目标平台（windows/linux/macos），默认当前平台；macOS 目标仅支持 macOS 构建机 |
 | `--keep-module` | 显式保留子模块（如 `PySide2.QtGui`），可重复 |
 | `--icon` | exe 图标（.ico/.png/.jpg），覆盖配置与自动搜索 |

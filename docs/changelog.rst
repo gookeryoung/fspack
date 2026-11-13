@@ -19,8 +19,8 @@ v0.6.14
 - refactor(templates): 退役 ``ProjectTemplate`` 兼容 shim（删除 95 行），doctor 模板统一经 ``list_templates(role="doctor")`` / ``get_template(id, role)`` 加载；``test_template_loader`` 改写为注册表 doctor 加载路径测试并补充缓存隔离
 - fix(templates): 修复 init ``game/snake`` 的 ``<3.12`` 上界与 doctor ``game/pygame_snake``（``>=3.13``）对同一示例给出互斥约束
 - fix(test): 修复 ``test_init_smoke`` 注释仍写「24 个模板」、断言仅要求 ``>= 18`` 导致模板误删无法发现
-- docs: 说明已有生成项目不受影响——``fsp init`` 不改写既有 ``pyproject.toml``，新口径仅作用于之后生成的项目；``docs/cli.md`` 补充默认值与 PySide2 例外
-- docs: 新增 ``docs/analysis/2026-11-13-template-test-fixture-consolidation-analysis.md`` 模板与测试示例工程整合分析
+- docs: 说明已有生成项目不受影响——``fsp init`` 不改写既有 ``pyproject.toml``，新口径仅作用于之后生成的项目；``docs/cli.md`` 补充默认值与 PySide2 例外；新增模板与测试示例工程整合分析文档
+- docs: 平台支持矩阵校正——Linux/macOS 运行时仅 3.10–3.14、3.8/3.9 仅 Windows embed、macOS 尚无 CI 真实构建；补充「一次构建只产出一个目标、无 ``--arch``、共用 ``dist/``」说明；新增多目标打包分析文档
 
 v0.6.13
 -------
