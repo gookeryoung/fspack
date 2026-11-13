@@ -36,6 +36,51 @@ def test_build_parser_prog() -> None:
     assert cli.build_parser().prog == "fspack"
 
 
+@pytest.mark.parametrize("argv", [["-v", "b"], ["b", "-v"]], ids=["before", "after"])
+def test_verbose_position_independent(argv: list[str]) -> None:
+    """``-v`` 写在子命令前后等价（均为 True）."""
+    assert cli.build_parser().parse_args(argv).verbose is True
+
+
+def test_verbose_after_subcommand_positional() -> None:
+    """``-v`` 也可以跟在子命令的位置参数之后."""
+    assert cli.build_parser().parse_args(["b", ".", "-v"]).verbose is True
+
+
+def test_verbose_both_positions_not_reset() -> None:
+    """同时写在两层时不得被子命令的默认值覆盖回 False."""
+    assert cli.build_parser().parse_args(["-v", "b", "-v"]).verbose is True
+
+
+def test_verbose_default_false() -> None:
+    """不传 ``-v`` 时保持默认 False（子命令层不得泄漏 SUPPRESS 或 None）."""
+    ns = cli.build_parser().parse_args(["b"])
+    assert ns.verbose is False
+    assert ns.quiet is False
+
+
+def test_verbose_with_quiet_keeps_both() -> None:
+    """``-q`` 仍只在全局位置生效，且与子命令后的 ``-v`` 互不覆盖."""
+    ns = cli.build_parser().parse_args(["-q", "b", "-v"])
+    assert ns.quiet is True
+    assert ns.verbose is True
+
+
+@pytest.mark.parametrize("argv", [["-v", "b"], ["b", "-v"]], ids=["before", "after"])
+def test_main_wires_verbose_from_any_position(argv: list[str], monkeypatch: pytest.MonkeyPatch) -> None:
+    """两种位置最终落到同一处 verbose 状态（console 日志级别 + logutil 路径宽度）."""
+    from fspack import logutil
+    from fspack.console import console
+
+    seen: dict[str, Any] = {}
+    monkeypatch.setattr(console, "setup_logging", lambda *, verbose: seen.__setitem__("logging", verbose))
+    monkeypatch.setattr(logutil, "configure", lambda **kwargs: seen.__setitem__("logutil", kwargs["verbose"]))
+    monkeypatch.setattr(cli, "_dispatch", lambda command, ns: None)
+
+    cli.main(argv)
+    assert seen == {"logging": True, "logutil": True}
+
+
 def test_version(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit):
         cli.main(["-V"])

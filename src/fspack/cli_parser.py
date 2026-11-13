@@ -75,6 +75,24 @@ def _add_options(parser: argparse.ArgumentParser, opts: tuple[_Opt, ...]) -> Non
         parser.add_argument(*opt.flags, **kwargs)
 
 
+def _add_verbose_option(parser: argparse.ArgumentParser) -> None:
+    """在子命令 parser 上注册位置无关的全局 ``-v/--verbose``.
+
+    顶层 parser 已把 ``verbose``（默认 False）写入 namespace；子命令层用
+    ``default=argparse.SUPPRESS`` 注册同名参数：未出现在子命令位置时不写回
+    namespace，从而保留顶层解析结果，避免 ``fsp -v b`` 被子命令的默认值覆盖
+    回 False；出现在任意一层都置 True。这样 ``fsp -v b`` 与 ``fsp b -v`` 语义
+    完全一致，写在多层（如 ``fsp -v b -v``）也不会互相覆盖。
+    """
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="显示 DEBUG 级别日志（含外部工具原始输出）",
+    )
+
+
 # 位置参数：可选的项目目录，默认当前目录。多个子命令复用。
 _PROJECT_ARG = _Opt(("project",), "项目目录（默认当前目录）", default=".", nargs="?")
 
@@ -611,30 +629,35 @@ _DOCTOR_OPTS: tuple[_Opt, ...] = (
 def _add_build_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     """添加 build/b 子命令：打包项目."""
     p = sub.add_parser("build", aliases=["b"], help="打包项目")
+    _add_verbose_option(p)
     _add_options(p, _BUILD_OPTS)
 
 
 def _add_run_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     """添加 run/r 子命令：运行已打包项目."""
     p = sub.add_parser("run", aliases=["r"], help="运行已打包项目")
+    _add_verbose_option(p)
     _add_options(p, _RUN_OPTS)
 
 
 def _add_clean_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     """添加 clean/c 子命令：清理 dist/."""
     p = sub.add_parser("clean", aliases=["c"], help="清理 dist/")
+    _add_verbose_option(p)
     _add_options(p, _CLEAN_OPTS)
 
 
 def _add_package_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     """添加 package/p 子命令：生成发行包."""
     p = sub.add_parser("package", aliases=["p"], help="生成发行包")
+    _add_verbose_option(p)
     _add_options(p, _PACKAGE_OPTS)
 
 
 def _add_init_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     """添加 init/i 子命令：从模板创建新项目."""
     p = sub.add_parser("init", aliases=["i"], help="从模板创建新项目")
+    _add_verbose_option(p)
     _add_options(p, _INIT_OPTS)
 
 
@@ -648,9 +671,11 @@ def _add_manifest_subparser(sub: argparse._SubParsersAction[argparse.ArgumentPar
     - ``diff``：对比两份 manifest JSON 的差异（新增/删除/修改 + 分类汇总）
     """
     g = sub.add_parser("manifest", aliases=["m"], help="产物清单生成与差异对比")
+    _add_verbose_option(g)
     sub2 = g.add_subparsers(dest="manifest_action", metavar="<action>")
 
     p_gen = sub2.add_parser("generate", aliases=["g"], help="扫描 dist 目录生成 manifest JSON（显式重新生成）")
+    _add_verbose_option(p_gen)
     _add_options(
         p_gen,
         (
@@ -672,6 +697,7 @@ def _add_manifest_subparser(sub: argparse._SubParsersAction[argparse.ArgumentPar
     )
 
     p_diff = sub2.add_parser("diff", aliases=["d"], help="对比两份 manifest JSON 的差异（新增/删除/修改 + 分类汇总）")
+    _add_verbose_option(p_diff)
     _add_options(
         p_diff,
         (
@@ -698,6 +724,7 @@ def _add_doctor_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParse
     文件，删除损坏文件。
     """
     p = sub.add_parser("doctor", aliases=["d"], help="环境诊断：检查打包工具可用性与配置")
+    _add_verbose_option(p)
     _add_options(p, _DOCTOR_OPTS)
 
 
@@ -715,6 +742,7 @@ def _add_cache_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser
     ``--stale`` 额外清理非 wheels 类型的过期文件，``--target <name>`` 限定单类型。
     """
     p = sub.add_parser("cache", help="缓存健康检查与清理")
+    _add_verbose_option(p)
     cache_sub = p.add_subparsers(dest="cache_action", metavar="<action>", required=True)
 
     # 公共选项：--target 限定单 cache 类型，status/clean 都支持
@@ -726,6 +754,7 @@ def _add_cache_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser
     )
 
     status_p = cache_sub.add_parser("status", help="扫描缓存目录健康状态（损坏/过期/孤儿）")
+    _add_verbose_option(status_p)
     _add_options(
         status_p,
         (
@@ -739,6 +768,7 @@ def _add_cache_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser
     )
 
     clean_p = cache_sub.add_parser("clean", help="清理损坏文件与孤儿产物")
+    _add_verbose_option(clean_p)
     _add_options(
         clean_p,
         (
@@ -757,6 +787,7 @@ def _add_cache_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser
 def _add_verify_subparser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     """添加 verify 子命令：校验产物二进制格式与目标架构是否一致."""
     p = sub.add_parser("verify", help="校验产物二进制格式与目标架构（PE/ELF/Mach-O）")
+    _add_verbose_option(p)
     _add_options(
         p,
         (
