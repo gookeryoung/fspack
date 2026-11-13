@@ -15,30 +15,31 @@ import pytest
 
 from fspack._compat import tomllib
 from fspack.templates import get_template, list_templates
+from fspack.templates.registry import DEFAULT_REQUIRES_PYTHON
 
 # 人工评审的 init 模板契约期望表（独立 oracle）：
 # id: (category, app_type, dependencies, requires-python)
 # requires-python 取自模板渲染产物 pyproject.toml，是用户实际拿到的约束。
 EXPECTED_INIT_CONTRACT: dict[str, tuple[str, str, tuple[str, ...], str]] = {
-    "helloworld": ("cli", "cli", (), ">=3.8,<3.12"),
-    "requests": ("cli", "cli", ("requests",), ">=3.8,<3.12"),
-    "rich": ("cli", "cli", ("rich",), ">=3.8,<3.12"),
-    "typer": ("cli", "cli", ("typer",), ">=3.8,<3.12"),
-    "full-config": ("config", "cli", (), ">=3.8,<3.12"),
-    "multi-entry": ("config", "cli", (), ">=3.8,<3.12"),
-    "pyinstaller": ("config", "cli", (), ">=3.8,<3.12"),
-    "snake": ("game", "gui", ("pygame",), ">=3.8,<3.12"),
+    "helloworld": ("cli", "cli", (), ">=3.8"),
+    "requests": ("cli", "cli", ("requests",), ">=3.8"),
+    "rich": ("cli", "cli", ("rich",), ">=3.8"),
+    "typer": ("cli", "cli", ("typer",), ">=3.8"),
+    "full-config": ("config", "cli", (), ">=3.8"),
+    "multi-entry": ("config", "cli", (), ">=3.8"),
+    "pyinstaller": ("config", "cli", (), ">=3.8"),
+    "snake": ("game", "gui", ("pygame",), ">=3.8"),
     # PySide2 不支持 Python 3.10+，上界与其余模板不同
     "pyside2": ("gui", "gui", ("PySide2",), ">=3.8,<3.10"),
-    "pyside6": ("gui", "gui", ("PySide6",), ">=3.8,<3.12"),
-    "pyside6-qml": ("gui", "gui", ("PySide6",), ">=3.8,<3.12"),
-    "tkinter": ("gui", "gui", (), ">=3.8,<3.12"),
-    "matplotlib": ("sci", "gui", ("matplotlib",), ">=3.8,<3.12"),
-    "numpy": ("sci", "cli", ("numpy",), ">=3.8,<3.12"),
-    "scipy": ("sci", "cli", ("numpy", "scipy"), ">=3.8,<3.12"),
-    "fastapi": ("web", "cli", ("fastapi", "uvicorn"), ">=3.8,<3.12"),
-    "flask": ("web", "cli", ("flask",), ">=3.8,<3.12"),
-    "web-fastapi-react": ("web", "web", ("fastapi", "uvicorn"), ">=3.8,<3.12"),
+    "pyside6": ("gui", "gui", ("PySide6",), ">=3.8"),
+    "pyside6-qml": ("gui", "gui", ("PySide6",), ">=3.8"),
+    "tkinter": ("gui", "gui", (), ">=3.8"),
+    "matplotlib": ("sci", "gui", ("matplotlib",), ">=3.8"),
+    "numpy": ("sci", "cli", ("numpy",), ">=3.8"),
+    "scipy": ("sci", "cli", ("numpy", "scipy"), ">=3.8"),
+    "fastapi": ("web", "cli", ("fastapi", "uvicorn"), ">=3.8"),
+    "flask": ("web", "cli", ("flask",), ">=3.8"),
+    "web-fastapi-react": ("web", "web", ("fastapi", "uvicorn"), ">=3.8"),
 }
 
 # doctor 富示例模板 id 集合：测试与 ``fsp doctor`` 共用这些目录，误删会
@@ -56,9 +57,24 @@ EXPECTED_DOCTOR_IDS: frozenset[str] = frozenset(
     }
 )
 
+# doctor 富示例模板的 requires-python：刻意覆盖不同运行时段（见 docs/cli.md
+# 的 doctor 模板表），**不做归一**，差异是产品能力展示而非漂移。
+# ``None`` 表示模板 pyproject.toml 未声明，运行期回退注册表默认值。
+EXPECTED_DOCTOR_REQUIRES: dict[str, str | None] = {
+    "cli_complex": "==3.14.*",
+    "multi_entry": ">=3.8,<3.11",
+    "pygame_snake": ">=3.13",
+    "pygame_tetris": ">=3.8,<3.13",
+    "pyside2_qml_dashboard": ">=3.8,<3.11",
+    "sci_stack": ">=3.8",
+    "tk_app": None,
+    "webview_app": ">=3.10,<3.14",
+}
+
 _INIT_IDS = tuple(EXPECTED_INIT_CONTRACT)
-# 除 pyside2 外的 init 模板共用同一 requires-python 口径
-_INIT_BASELINE_REQUIRES = ">=3.8,<3.12"
+# 除 pyside2 外的 init 模板共用同一 requires-python 口径（与根 pyproject.toml、
+# CI 矩阵 3.8–3.14 及运行时支持范围一致）
+_INIT_BASELINE_REQUIRES = ">=3.8"
 
 
 def _pyproject(tpl_id: str) -> dict[str, object]:
@@ -141,6 +157,21 @@ def test_doctor_template_ids_match_contract() -> None:
     assert actual == EXPECTED_DOCTOR_IDS, (
         f"doctor 模板集合漂移：多出 {sorted(actual - EXPECTED_DOCTOR_IDS)}，缺少 {sorted(EXPECTED_DOCTOR_IDS - actual)}"
     )
+
+
+@pytest.mark.parametrize("tpl_id", tuple(EXPECTED_DOCTOR_REQUIRES))
+def test_doctor_template_requires_python_is_intentional(tpl_id: str) -> None:
+    """doctor 模板的版本差异是运行时段覆盖，改动必须显式同步本表."""
+    expected = EXPECTED_DOCTOR_REQUIRES[tpl_id]
+    assert _project(tpl_id).get("requires-python") == expected
+
+
+def test_doctor_template_default_requires_python_fallback() -> None:
+    """未声明的 doctor 模板回退到与 init 模板一致的默认值（非旧 ``>=3.13``）."""
+    tpl = get_template("tk_app")
+    assert tpl is not None
+    assert DEFAULT_REQUIRES_PYTHON == ">=3.8"
+    assert tpl.requires_python == DEFAULT_REQUIRES_PYTHON
 
 
 def test_template_ids_unique_across_roles() -> None:

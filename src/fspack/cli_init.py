@@ -36,6 +36,7 @@ from fspack.templates import (
     list_templates,
     render_template,
 )
+from fspack.templates.registry import DEFAULT_REQUIRES_PYTHON
 from fspack.wizard import select_item
 
 __all__ = ["init_project", "print_template_list", "prompt_template_selection"]
@@ -53,8 +54,9 @@ _REQUIRES_PYTHON_RE = re.compile(r'^requires-python = "[^"]*"$', re.MULTILINE)
 # 模板 pyproject.toml 内容中的 requires-python 行（详情区提取约束显示用）
 _TEMPLATE_REQUIRES_RE = re.compile(r'^requires-python = "([^"]+)"$', re.MULTILINE)
 
-# 视为基线的模板 requires-python 约束（当前全部模板的默认值，偏离时才在详情区显示）
-_DEFAULT_TEMPLATE_REQUIRES: Final = ">=3.8,<3.12"
+# 视为基线的模板 requires-python 约束：直接引用注册表默认值，模板默认口径
+# 调整时详情区「偏离基线」的判断自动跟随，避免两处硬编码漂移。
+_DEFAULT_TEMPLATE_REQUIRES: Final = DEFAULT_REQUIRES_PYTHON
 
 # 详情区结构行最多显示的文件数（超出折叠为 "等 N 个文件"）
 _DETAIL_MAX_FILES: Final = 6
@@ -114,7 +116,7 @@ def _template_detail(tpl: Template) -> str:
 
     结构行从模板文件列表自动推导（与实际生成文件树一致，无需在
     template.toml 手工维护）；Python 行仅在约束偏离模板基线
-    （``>=3.8,<3.12``）时显示，聚焦例外模板（如 pyside2 需 ``<3.10``）。
+    （``>=3.8``）时显示，聚焦例外模板（如 pyside2 需 ``<3.10``）。
 
     :param tpl: 模板对象
     :return: 详情文本（描述行 + 依赖行 + 结构行 + 可选 Python 行，全空返回空串）

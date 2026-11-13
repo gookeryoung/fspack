@@ -140,6 +140,8 @@ fsp init [project_name] [--template <id>] [--list] [--description <desc>] [--dir
 
 18 个模板按分类：CLI(4) / GUI(4) / 游戏(1) / 科学(3) / Web(3) / 配置(3)。详见 `fsp init --list`。
 
+生成项目的 `requires-python` 默认 `>=3.8`（与 fspack 运行时及 CI 支持矩阵 3.8–3.14 一致）；`pyside2` 因 PySide2 无 3.10+ wheel 例外保留 `>=3.8,<3.10`。`fsp init` 不改写已有项目的 `pyproject.toml`。
+
 ## fsp manifest
 
 ```text

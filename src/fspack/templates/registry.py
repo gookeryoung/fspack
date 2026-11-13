@@ -25,10 +25,18 @@ import functools
 import logging
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Final
 
 from fspack._compat import tomllib
 
-__all__ = ["Template", "TemplateFile", "clear_template_cache", "get_template", "list_templates"]
+__all__ = [
+    "DEFAULT_REQUIRES_PYTHON",
+    "Template",
+    "TemplateFile",
+    "clear_template_cache",
+    "get_template",
+    "list_templates",
+]
 
 _logger = logging.getLogger(__name__)
 
@@ -38,6 +46,12 @@ _CATEGORIES: frozenset[str] = frozenset({"cli", "gui", "game", "sci", "web", "co
 # 默认角色集合：init 模板仅用于 ``fsp init``。doctor 流程走
 # ``ProjectTemplate.list_all()`` 直扫 ``assets/templates/``，不经此角色过滤。
 _DEFAULT_ROLES: frozenset[str] = frozenset({"init"})
+
+# 模板默认 Python 版本约束：与根 pyproject.toml、CI 矩阵（3.8–3.14）及运行时
+# 支持范围（embed 3.8–3.14 / standalone 3.10–3.14）一致。模板未声明
+# ``requires-python`` 时回退此值，避免此前 ``>=3.13`` 与 init 模板口径相反。
+# 例外：PySide2 无 3.10+ wheel，相关模板在自身 pyproject.toml 显式保留上界。
+DEFAULT_REQUIRES_PYTHON: Final[str] = ">=3.8"
 
 # 扫描模板源文件时跳过的目录名与文件后缀：这些是 Python/工具链产生的编译或缓存
 # 产物（非模板源文件），不应作为 $variable 占位符文本读取。安装后的模板目录若被
@@ -84,7 +98,7 @@ class Template:
     :param extra_config: 额外 ``[tool.fspack]`` 配置行（如 ``icon = "assets/app.ico"``）
     :param dir: 模板目录绝对路径（doctor 流程 ``copytree`` 用，init 模板也填充）
     :param version: 项目版本（从 ``pyproject.toml`` 解析，默认 ``0.1.0``）
-    :param requires_python: Python 版本约束（从 ``pyproject.toml`` 解析，默认 ``>=3.13``）
+    :param requires_python: Python 版本约束（从 ``pyproject.toml`` 解析，默认 ``>=3.8``）
     :param roles: 角色集合（``"init"``/``"doctor"``），决定模板出现在哪些命令中
     """
 
@@ -99,7 +113,7 @@ class Template:
     extra_config: str = ""
     dir: Path = Path()
     version: str = "0.1.0"
-    requires_python: str = ">=3.13"
+    requires_python: str = DEFAULT_REQUIRES_PYTHON
     roles: frozenset[str] = _DEFAULT_ROLES
 
 
@@ -214,7 +228,7 @@ def _load_template(tpl_dir: Path) -> Template | None:
         extra_config=data.get("extra_config", ""),
         dir=tpl_dir,
         version=data.get("version", "0.1.0"),
-        requires_python=data.get("requires_python", ">=3.13"),
+        requires_python=data.get("requires_python", DEFAULT_REQUIRES_PYTHON),
         roles=_roles_from_data(data),
     )
 
@@ -261,7 +275,7 @@ def _load_doctor_template(tpl_dir: Path) -> Template | None:
         app_type=fsp.get("app-type", "cli"),
         dir=tpl_dir,
         version=proj.get("version", "0.0.0"),
-        requires_python=proj.get("requires-python", ">=3.13"),
+        requires_python=proj.get("requires-python", DEFAULT_REQUIRES_PYTHON),
         roles=frozenset({"doctor"}),
     )
 

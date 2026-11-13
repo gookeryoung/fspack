@@ -218,20 +218,20 @@ def test_cli_init_python_version_overrides_requires_python(tmp_path: Path, monke
     cli_main(["init", "ver-app", "--template", "helloworld", "--python-version", "3.10"])
     pyproject = (tmp_path / "ver-app" / "pyproject.toml").read_text(encoding="utf-8")
     assert 'requires-python = ">=3.10"' in pyproject
-    # 模板默认约束被覆盖（helloworld 默认 >=3.8,<3.12）
+    # 模板默认约束被覆盖（helloworld 默认 >=3.8）
     assert "<3.12" not in pyproject
 
 
 def test_cli_init_python_version_3_8_for_pyside2(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """fsp init --python-version 3.8 --template pyside2 → requires-python = ">=3.8".
 
-    覆盖 PySide2 模板默认的 ``>=3.8,<3.11`` 约束为 ``>=3.8``（去掉上界）。
+    覆盖 PySide2 模板默认的 ``>=3.8,<3.10`` 约束为 ``>=3.8``（去掉上界）。
     """
     monkeypatch.chdir(tmp_path)
     cli_main(["init", "p2-app", "--template", "pyside2", "--python-version", "3.8"])
     pyproject = (tmp_path / "p2-app" / "pyproject.toml").read_text(encoding="utf-8")
     assert 'requires-python = ">=3.8"' in pyproject
-    assert "<3.11" not in pyproject
+    assert "<3.10" not in pyproject
 
 
 def test_cli_init_python_version_invalid_format_errors(
@@ -262,8 +262,8 @@ def test_init_project_python_version_none_keeps_default(tmp_path: Path) -> None:
 
     target = init_project("def-app", template_id="helloworld", directory=tmp_path)
     pyproject = (target / "pyproject.toml").read_text(encoding="utf-8")
-    # helloworld 默认约束 >=3.8,<3.12
-    assert 'requires-python = ">=3.8,<3.12"' in pyproject
+    # helloworld 默认约束 >=3.8
+    assert 'requires-python = ">=3.8"' in pyproject
 
 
 # ---- _format_requires_python 单元测试 ----
@@ -343,7 +343,7 @@ def test_template_detail_contains_dependency_line() -> None:
 
 
 def test_template_detail_python_line_only_for_deviating_constraint() -> None:
-    """Python 行仅在约束偏离基线（>=3.8,<3.12）时显示：pyside2 显示 <3.10，helloworld 不显示."""
+    """Python 行仅在约束偏离基线（>=3.8）时显示：pyside2 显示 <3.10，helloworld 不显示."""
     from fspack.cli_init import _template_detail
     from fspack.templates import get_template
 
