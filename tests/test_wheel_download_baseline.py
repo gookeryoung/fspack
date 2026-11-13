@@ -53,6 +53,7 @@ from typing import Any
 
 import pytest
 
+from fspack.exceptions import DependencyError
 from fspack.packaging.wheels.cache import _deps_cache_key, _save_deps_cache
 from fspack.packaging.wheels.downloader import download_wheels
 from fspack.packaging.wheels.resolver import DownloadContext, _download_resolved_parallel
@@ -283,9 +284,10 @@ class TestWheelDownloadBaseline:
         2. ``_save_deps_cache`` noop（避免写文件 I/O 影响基线）
         3. ``_find_pip_python`` 返回 "python"（避免 PATH 查找 subprocess）
         4. ``_run_pip`` 返回 None（让 ``--no-index`` 离线解析"失败"，走 ``_download_online``）
-        5. ``_find_uv`` 返回 "uv"，``_uv_supports_download`` 返回 True
-        6. ``_resolve_with_uv`` 返回 50 包解析结果
-        7. ``_download_one_with_uv`` sleep 10ms 模拟 uv 下载
+        5. ``_resolve_with_uv_offline`` 抛错（M1 本地快路径不可用，回退 pip 预检）
+        6. ``_find_uv`` 返回 "uv"，``_uv_supports_download`` 返回 True
+        7. ``_resolve_with_uv`` 返回 50 包解析结果
+        8. ``_download_one_with_uv`` sleep 10ms 模拟 uv 下载
 
         本基线测量完整冷下载编排开销：``_deps_cache_key`` + ``_load_deps_cache``
         + ``_find_pip_python`` + ``_run_pip_download``（含 ``_download_online``
@@ -309,6 +311,18 @@ class TestWheelDownloadBaseline:
         monkeypatch.setattr("fspack.packaging.wheels.downloader._save_deps_cache", lambda *a, **kw: None)
         monkeypatch.setattr("fspack.packaging.wheels.downloader._find_pip_python", lambda: "python")
         monkeypatch.setattr("fspack.packaging.wheels.process._run_pip", lambda *a, **kw: None)
+
+        # M1（ac3a63e）在 pip 预检前新增了 uv 离线解析快路径，会启动真实 uv
+        # 子进程（~20ms/轮）；本基线约定所有子进程 I/O 均 mock，这里模拟该路径
+        # 不可用，让流程稳定回退到 pip 预检（已 mock）后的在线下载，保持
+        # "下载编排"测量语义，避免 uv 启动耗时污染基线。
+        def _offline_unavailable(*args: Any, **kwargs: Any) -> str:
+            raise DependencyError("mock: uv 离线解析不可用")
+
+        monkeypatch.setattr(
+            "fspack.packaging.wheels.local_cache._resolve_with_uv_offline",
+            _offline_unavailable,
+        )
         monkeypatch.setattr("fspack.packaging.wheels.resolver._find_uv", lambda: "uv")
         monkeypatch.setattr("fspack.packaging.wheels.resolver._uv_supports_download", lambda uv_path: True)
         monkeypatch.setattr(
