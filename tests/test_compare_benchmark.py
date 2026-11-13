@@ -430,13 +430,12 @@ class TestMatchCategory:
     """_match_category 类别匹配."""
 
     def test_core_category_matched(self) -> None:
-        """test_perf_baseline.py 的 10 个核心测试匹配 core 类别."""
+        """test_perf_baseline.py 的 9 个核心测试匹配 core 类别（指纹单独成类）."""
         for name in (
             "test_collect_imports_and_submodules_baseline",
             "test_analyze_dependencies_baseline",
             "test_classify_entry_baseline",
             "test_slim_unpack_baseline",
-            "test_source_fingerprint_baseline",
             "test_project_info_from_dir_baseline",
             "test_project_info_from_dir_cached_baseline",
             "test_generate_wrapper_source_baseline",
@@ -447,6 +446,14 @@ class TestMatchCategory:
             assert cat is not None
             assert cat.name == "core"
             assert cat.threshold == 10.0
+
+    def test_fingerprint_category_matched(self) -> None:
+        """源码指纹微基准单独匹配 fingerprint 类别（专属 120µs 噪声下限）."""
+        cat = cb._match_category("test_source_fingerprint_baseline")
+        assert cat is not None
+        assert cat.name == "fingerprint"
+        assert cat.threshold == 10.0
+        assert cat.noise_floor == pytest.approx(1.2e-4)
 
     def test_build_perf_category_matched(self) -> None:
         """test_build_perf_baseline.py 的 4 个测试匹配 build_perf 类别."""
@@ -681,6 +688,47 @@ class TestCompareWithCategories:
         assert report.regressions == 0
         row = report.rows[0]
         assert row.is_regression is False
+
+    def test_fingerprint_runner_jitter_not_triggered(self, tmp_path: Path) -> None:
+        """复现 2026-11-12 CI 误报：指纹 98.5µs → 152.4µs 不判退化.
+
+        同一份代码在不同 runner 实测 152.4/199.5/202.9µs（最快 run 98.5µs），
+        绝对差 54-104µs 属 stat/调度抖动；fingerprint 类别下限 120µs 抑制误报。
+        """
+        self._write_bench_file(
+            tmp_path / "001_hist.json",
+            [("test_source_fingerprint_baseline", 0.0000985)],
+            mtime_offset=-100,
+        )
+        self._write_bench_file(
+            tmp_path / "002_cur.json",
+            [("test_source_fingerprint_baseline", 0.0001524)],
+            mtime_offset=0,
+        )
+        report = cb.compare(tmp_path, threshold=25.0)
+        assert report.regressions == 0
+        row = report.rows[0]
+        assert row.category == "fingerprint"
+        assert row.delta_pct == pytest.approx(54.7, abs=0.1)
+        assert row.is_regression is False
+
+    def test_fingerprint_real_regression_triggered(self, tmp_path: Path) -> None:
+        """指纹真实退化（98.5µs → 400µs，绝对差 301µs ≥ 120µs）仍判退化."""
+        self._write_bench_file(
+            tmp_path / "001_hist.json",
+            [("test_source_fingerprint_baseline", 0.0000985)],
+            mtime_offset=-100,
+        )
+        self._write_bench_file(
+            tmp_path / "002_cur.json",
+            [("test_source_fingerprint_baseline", 0.0004000)],
+            mtime_offset=0,
+        )
+        report = cb.compare(tmp_path, threshold=25.0)
+        assert report.regressions == 1
+        row = report.rows[0]
+        assert row.category == "fingerprint"
+        assert row.is_regression is True
 
     def test_other_categories_use_global_noise_floor(self, tmp_path: Path) -> None:
         """其他类别无专属下限，沿用全局 NOISE_FLOOR_SECONDS（50µs）."""

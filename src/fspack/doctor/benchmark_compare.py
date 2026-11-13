@@ -122,12 +122,24 @@ DEFAULT_CATEGORIES: tuple[BenchmarkCategory, ...] = (
         threshold=15.0,
         description="test_entry_startup_baseline.py 启动基线，真实 subprocess 抖动 StdDev 5-8%",
     ),
-    # test_perf_baseline.py 的 10 个核心测试：确定性高 StdDev <1%
+    # test_perf_baseline.py 源码指纹微基准：stat 密集，跨 runner 绝对抖动大
+    # noise_floor=1.2e-4（120µs）：同一份代码在 2026-11-11~12 的 CI run 实测
+    # 152.4/199.5/202.9µs，最快 run（0006_main.json，11-11）为 98.5µs——相对差
+    # 55-106%，绝对差 54-104µs。µs 级 stat 密集测试的绝对差落在共享 runner
+    # 世代/负载抖动包络内，真实退化（数倍变慢）绝对差远超 120µs 仍会被捕获
+    BenchmarkCategory(
+        name="fingerprint",
+        pattern=r"^test_source_fingerprint_baseline$",
+        threshold=10.0,
+        description="test_perf_baseline.py 源码指纹基线，stat 密集 µs 级，跨 runner 绝对抖动可达 ~100µs",
+        noise_floor=1.2e-4,
+    ),
+    # test_perf_baseline.py 其余 9 个核心测试：确定性高 StdDev <1%
     BenchmarkCategory(
         name="core",
         pattern=(
             r"^test_(collect_imports_and_submodules|analyze_dependencies|classify_entry|"
-            r"slim_unpack|source_fingerprint|project_info_from_dir|project_info_from_dir_cached|"
+            r"slim_unpack|project_info_from_dir|project_info_from_dir_cached|"
             r"generate_wrapper_source|ensure_env_cache_hit|wheel_download_cache_hit)_baseline$"
         ),
         threshold=10.0,
