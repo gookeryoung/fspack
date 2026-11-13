@@ -21,35 +21,35 @@ from fspack.progress import StageRecorder
 # ---- _stream_compile 流式输出测试 ----
 
 
-def test_stream_compile_captures_stdout_and_stderr(capfd: pytest.CaptureFixture[str]) -> None:
-    """_stream_compile 捕获子进程 stdout/stderr 并实时写入终端 fd."""
+def test_stream_compile_captures_stdout_and_stderr(caplog: pytest.LogCaptureFixture) -> None:
+    """_stream_compile 捕获子进程 stdout/stderr，并按行转发到 DEBUG（-v/日志文件可见）."""
     cmd = [sys.executable, "-c", "import sys; print('out-msg'); sys.stderr.write('err-msg\\n')"]
-    returncode, stdout, stderr = NuitkaCompiler._stream_compile(cmd)
+    with caplog.at_level(logging.DEBUG, logger="fspack.console"):
+        returncode, stdout, stderr = NuitkaCompiler._stream_compile(cmd)
     assert returncode == 0
     assert "out-msg" in stdout
     assert "err-msg" in stderr
-    # 验证输出被实时写入终端 fd（capfd 捕获 fd 级输出）
-    captured = capfd.readouterr()
-    assert "out-msg" in captured.out
-    assert "err-msg" in captured.err
+    # 默认终端不再直写工具原始输出，改为带 [nuitka] 前缀的 DEBUG 记录
+    assert "[nuitka] out-msg" in caplog.text
+    assert "[nuitka] err-msg" in caplog.text
 
 
-def test_stream_compile_captures_delayed_output(capfd: pytest.CaptureFixture[str]) -> None:
+def test_stream_compile_captures_delayed_output(caplog: pytest.LogCaptureFixture) -> None:
     """_stream_compile 能捕获子进程延迟输出（模拟 nuitka 编译耗时的多段输出）."""
     cmd = [
         sys.executable,
         "-c",
         "import sys, time; print('step1'); time.sleep(0.3); print('step2'); sys.stderr.write('warn\\n')",
     ]
-    returncode, stdout, stderr = NuitkaCompiler._stream_compile(cmd)
+    with caplog.at_level(logging.DEBUG, logger="fspack.console"):
+        returncode, stdout, stderr = NuitkaCompiler._stream_compile(cmd)
     assert returncode == 0
     assert "step1" in stdout
     assert "step2" in stdout
     assert "warn" in stderr
-    captured = capfd.readouterr()
-    assert "step1" in captured.out
-    assert "step2" in captured.out
-    assert "warn" in captured.err
+    assert "[nuitka] step1" in caplog.text
+    assert "[nuitka] step2" in caplog.text
+    assert "[nuitka] warn" in caplog.text
 
 
 def test_stream_compile_returns_nonzero_on_failure(capfd: pytest.CaptureFixture[str]) -> None:
@@ -59,7 +59,7 @@ def test_stream_compile_returns_nonzero_on_failure(capfd: pytest.CaptureFixture[
     assert returncode == 3
 
 
-def test_stream_compile_captures_multiline_output(capfd: pytest.CaptureFixture[str]) -> None:
+def test_stream_compile_captures_multiline_output(caplog: pytest.LogCaptureFixture) -> None:
     """_stream_compile 能捕获多行输出（模拟 nuitka --show-progress 的多步骤输出）."""
     script = (
         "print('Nuitka:INFO:Started Python compilation'); "
@@ -68,14 +68,14 @@ def test_stream_compile_captures_multiline_output(capfd: pytest.CaptureFixture[s
         "print('Nuitka:INFO:Running C compilation')"
     )
     cmd = [sys.executable, "-c", script]
-    returncode, stdout, _stderr = NuitkaCompiler._stream_compile(cmd)
+    with caplog.at_level(logging.DEBUG, logger="fspack.console"):
+        returncode, stdout, _stderr = NuitkaCompiler._stream_compile(cmd)
     assert returncode == 0
     assert "Started Python compilation" in stdout
     assert "Completed Python level compilation" in stdout
     assert "Generating C source code" in stdout
     assert "Running C compilation" in stdout
-    captured = capfd.readouterr()
-    assert "Running C compilation" in captured.out
+    assert "[nuitka] Nuitka:INFO:Running C compilation" in caplog.text
 
 
 # ---- 心跳线程测试 ----

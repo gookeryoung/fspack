@@ -29,6 +29,8 @@ from rich.theme import Theme
 
 __all__ = ["CICompat", "ConsoleUI", "console"]
 
+_logger = logging.getLogger(__name__)
+
 
 class _AsciiEncodingStream:
     """stdout 代理流：向 rich 报告 ASCII 编码以启用 ``ascii_only`` 渲染.
@@ -177,7 +179,10 @@ class ConsoleUI:
                 show_level=True,
                 show_path=False,
                 rich_tracebacks=True,
-                markup=True,
+                # 日志消息是纯文本（含路径、命令、pyproject 键名等），
+                # markup=True 会把 ``[project.scripts]`` 当作标签吞掉。
+                markup=False,
+                level=level,
             )
         )
 
@@ -221,6 +226,20 @@ class ConsoleUI:
             self._console.print(f"    [error]{mark}[/] {elapsed_text}{markup_escape(f' · {detail}' if detail else '')}")
         else:
             self._console.print(f"    [success]ok[/] {elapsed_text}{markup_escape(f' · {detail}' if detail else '')}")
+
+    def tool_output(self, tool: str, chunk: bytes) -> None:
+        """转发外部工具（Nuitka/gcc/pip/前端构建）的原始输出到 DEBUG.
+
+        默认终端只保留阶段级输出，不再让数千行无归属的工具输出淹没阶段
+        骨架；``-v`` 或启用日志文件时以 ``[tool] 行`` 形式完整还原，信息
+        量不低于收敛前。按整行转发，避免多线程分块写入相互截断。
+        """
+        if not chunk:
+            return
+        text = chunk.decode("utf-8", errors="replace")
+        for line in text.splitlines():
+            if line.strip():
+                _logger.debug("[%s] %s", tool, line)
 
     def success(self, msg: str) -> None:
         """打印成功消息（legacy 控制台用 ASCII ``v`` 避免 Ambiguous 宽度偏移）.

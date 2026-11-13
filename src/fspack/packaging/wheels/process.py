@@ -190,31 +190,26 @@ class _DownloadMonitor:
 
 
 def _stream_subprocess(cmd: list[str]) -> subprocess.CompletedProcess[str]:
-    """运行命令，实时流式输出 stderr 到终端，捕获 stdout 和 stderr。
+    """运行命令，流式转发 stderr 到 DEBUG（``-v``/日志文件可见），捕获 stdout 和 stderr。
 
-    用 ``Popen`` + 守护线程通过 ``os.read`` 读取 stderr 文件描述符字节块并实时
-    写入 ``sys.stderr``，支持 pip 进度条的 ``\\r`` 回车更新。stdout 始终捕获
-    用于解析 wheel 列表。stderr 同时累积，供失败时构造 ``CalledProcessError``。
+    用 ``Popen`` + 守护线程通过 ``os.read`` 读取 stderr 文件描述符字节块，
+    按整行交给 :meth:`fspack.console.ConsoleUI.tool_output`——默认终端不再
+    直接写入 ``sys.stderr``，避免 pip 输出与阶段骨架/进度条互相打断。
+    stdout 始终捕获用于解析 wheel 列表。stderr 同时累积，供失败时构造
+    ``CalledProcessError``。
 
     使用 ``os.read`` 而非 ``BufferedReader.read1``：前者直接读 fd，不依赖
     ``Popen`` 的缓冲层（``bufsize=0`` 时 stderr 是 ``FileIO`` 无 ``read1`` 方法）。
 
     **内存保护**：stderr 累积上限 :data:`_STDERR_ACCUM_LIMIT`（4MB），超过后
-    停止累积（继续写 ``sys.stderr`` 实时显示），避免失控的 sdist 构建日志
-    （可达数十 MB）导致内存膨胀。错误诊断只需末尾数 KB 即可定位根因。
-
-    调用方应在调用前停止 spinner（避免 ``\\r`` 与 pip 进度条冲突），并在调用后
-    恢复 spinner 或继续后续日志输出。
-
-    .. note::
-        pip 在 ``stderr=PIPE`` 下检测到非 tty 不输出进度条，本函数的流式输出
-        实际只传递 pip 的非进度条输出（如 ``Downloading X.whl`` 行）。实时下载
-        速度由调用方通过 :class:`_DownloadMonitor` 监控 cache_dir 文件大小变化
-        显示（见 :func:`fspack.packaging.wheels.parallel._download_one_resolved`）。
+    停止累积（继续转发），避免失控的 sdist 构建日志（可达数十 MB）导致内存
+    膨胀。错误诊断只需末尾数 KB 即可定位根因。
     """
     # 延迟导入 threading：保持模块顶部零 stdlib 副作用约定（与 net.py/runtime.py
     # 等热路径模块一致）。site.py 启动期已加载 threading，此处为 dict 查询，无实际开销。
     import threading
+
+    from fspack.console import console
 
     process = subprocess.Popen(
         cmd,
@@ -232,13 +227,12 @@ def _stream_subprocess(cmd: list[str]) -> subprocess.CompletedProcess[str]:
             chunk = os.read(fd, 4096)
             if not chunk:
                 break
-            # 累积上限保护：超过 _STDERR_ACCUM_LIMIT 后仅写终端不再累积，
+            # 累积上限保护：超过 _STDERR_ACCUM_LIMIT 后仅转发不再累积，
             # 避免长输出场景内存膨胀。错误诊断只需末尾片段即可定位根因。
             if stderr_total < _STDERR_ACCUM_LIMIT:
                 stderr_chunks.append(chunk)
                 stderr_total += len(chunk)
-            sys.stderr.buffer.write(chunk)
-            sys.stderr.buffer.flush()
+            console.tool_output("pip", chunk)
 
     thread = threading.Thread(target=_drain_stderr, daemon=True)
     thread.start()

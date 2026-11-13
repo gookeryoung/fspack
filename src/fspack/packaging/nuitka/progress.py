@@ -34,8 +34,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor as _DefaultThreadPoolExecutor
 from concurrent.futures import as_completed
 from pathlib import Path
-from typing import IO, TYPE_CHECKING, Any, TextIO
+from typing import IO, TYPE_CHECKING, Any
 
+from fspack.console import console
 from fspack.metrics import StageRecorder
 from fspack.packaging.nuitka.winlibs import needs_force_mingw64
 from fspack.platform import Platform
@@ -161,13 +162,14 @@ class NuitkaProgress:
         def _drain(
             stream: IO[bytes] | None,
             chunks: list[bytes],
-            out: TextIO,
             total_ref: list[int],
             *,
+            tool: str,
             _limit: int = stream_accum_limit,
         ) -> None:
             assert stream is not None
             fd = stream.fileno()
+            pending = b""
             while True:
                 try:
                     chunk = os.read(fd, 4096)
@@ -178,14 +180,21 @@ class NuitkaProgress:
                 if total_ref[0] < _limit:
                     chunks.append(chunk)
                     total_ref[0] += len(chunk)
-                out.buffer.write(chunk)
-                out.buffer.flush()
+                pending += chunk
+                while b"\n" in pending:
+                    line, pending = pending.split(b"\n", 1)
+                    console.tool_output(tool, line + b"\n")
+                if len(pending) > 8192:  # 无换行的超长输出避免无限累积
+                    console.tool_output(tool, pending)
+                    pending = b""
+            if pending:
+                console.tool_output(tool, pending)
 
         t_out = threading.Thread(
-            target=_drain, args=(process.stdout, stdout_chunks, sys.stdout, stdout_total), daemon=True
+            target=_drain, args=(process.stdout, stdout_chunks, stdout_total), kwargs={"tool": "nuitka"}, daemon=True
         )
         t_err = threading.Thread(
-            target=_drain, args=(process.stderr, stderr_chunks, sys.stderr, stderr_total), daemon=True
+            target=_drain, args=(process.stderr, stderr_chunks, stderr_total), kwargs={"tool": "nuitka"}, daemon=True
         )
         t_out.start()
         t_err.start()
@@ -373,7 +382,9 @@ class NuitkaProgress:
                         if returncode == 0:
                             compiled_files.add(py_file)
                             stage.processed()
-                            _logger.info("编译 [%d/%d] %s 成功", idx, total, py_file.name)
+                            # 每文件一条只在 -v/日志文件可见：大项目数百条 INFO
+                            # 会淹没阶段骨架，默认终端只保留阶段级与心跳。
+                            _logger.debug("编译 [%d/%d] %s 成功", idx, total, py_file.name)
                         else:
                             failed_files.append(py_file)
                             _logger.warning("Nuitka 编译失败 %s（退出码 %s），详见上方输出", py_file, returncode)

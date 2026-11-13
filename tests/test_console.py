@@ -20,6 +20,38 @@ def test_step_prints_title() -> None:
     assert ">" in out
 
 
+def test_logger_message_brackets_not_swallowed() -> None:
+    """RichHandler(markup=False)：``[project.scripts]`` 等方括号按字面输出."""
+    root = logging.getLogger()
+    previous_handlers = list(root.handlers)
+    previous_level = root.level
+    console.setup_logging()
+    try:
+        with console.rich.capture() as capture:
+            logging.getLogger("fspack.test.markup").info("[project.scripts] 已解析")
+        out = capture.get()
+    finally:
+        root.handlers.clear()
+        root.handlers.extend(previous_handlers)
+        root.setLevel(previous_level)
+    assert "[project.scripts] 已解析" in out
+
+
+def test_tool_output_logged_at_debug(caplog: pytest.LogCaptureFixture) -> None:
+    """外部工具原始输出按整行、带 [tool] 前缀进入 DEBUG."""
+    with caplog.at_level(logging.DEBUG, logger="fspack.console"):
+        console.tool_output("nuitka", "gcc -c a.c\nINFO: 编译中\n".encode())
+    assert "[nuitka] gcc -c a.c" in caplog.text
+    assert "[nuitka] INFO: 编译中" in caplog.text
+
+
+def test_tool_output_dropped_at_info(caplog: pytest.LogCaptureFixture) -> None:
+    """默认 INFO 级别下工具输出不进入终端日志（只在 -v/日志文件可见）."""
+    with caplog.at_level(logging.INFO, logger="fspack.console"):
+        console.tool_output("pip", b"Downloading numpy.whl\n")
+    assert "Downloading numpy.whl" not in caplog.text
+
+
 def test_stage_header_and_finish_interactive(monkeypatch: pytest.MonkeyPatch) -> None:
     """交互式终端：阶段标题 + 缩进完成行（耗时与备注）."""
     from fspack.console import ConsoleUI

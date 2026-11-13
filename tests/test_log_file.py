@@ -391,10 +391,11 @@ def test_log_file_handler_dataclass() -> None:
 
 
 def test_setup_log_file_lowers_warning_root_level(tmp_path: Path) -> None:
-    """root 级别高于 INFO（默认 WARNING）时降为 INFO，保证构建日志落盘.
+    """root 级别高于 DEBUG（默认 WARNING）时降为 DEBUG，保证 -v 细节也能落盘.
 
     API 调用 build(log_file=...)（未经 CLI setup_logging）时 root 为默认
-    WARNING，INFO 级日志在 logger 层就被丢弃、文件恒空。
+    WARNING，INFO/DEBUG 级日志在 logger 层就被丢弃、文件恒空。控制台
+    RichHandler 自带级别过滤，降低 root 不影响终端观感。
     """
     root = logging.getLogger()
     original_level = root.level
@@ -402,7 +403,7 @@ def test_setup_log_file_lowers_warning_root_level(tmp_path: Path) -> None:
     try:
         wrapper = setup_log_file(tmp_path / "build.log")
         try:
-            assert root.level == logging.INFO
+            assert root.level == logging.DEBUG
             logging.getLogger("test.level.lower").info("降级测试")
             wrapper.handler.flush()
         finally:

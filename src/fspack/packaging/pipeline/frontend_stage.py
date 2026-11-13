@@ -225,11 +225,14 @@ def _run_cmd(exe: str, args: Sequence[str], cwd: Path) -> None:
     stdout_chunks: list[bytes] = []
     stderr_chunks: list[bytes] = []
 
-    def _drain(stream: IO[bytes] | None, chunks: list[bytes], out: Any) -> None:
-        """消费管道防写端阻塞：os.read 字节块实时写终端并累积（超限停积）."""
+    def _drain(stream: IO[bytes] | None, chunks: list[bytes], tool: str) -> None:
+        """消费管道防写端阻塞：字节块按行转发到 DEBUG 并累积（超限停积）."""
+        from fspack.console import console
+
         assert stream is not None
         fd = stream.fileno()
         total = 0
+        pending = b""
         while True:
             try:
                 chunk = os.read(fd, 4096)
@@ -240,11 +243,15 @@ def _run_cmd(exe: str, args: Sequence[str], cwd: Path) -> None:
             if total < _FE_ACCUM_LIMIT:
                 chunks.append(chunk)
                 total += len(chunk)
-            out.buffer.write(chunk)
-            out.buffer.flush()
+            pending += chunk
+            while b"\n" in pending:
+                line, pending = pending.split(b"\n", 1)
+                console.tool_output(tool, line + b"\n")
+        if pending:
+            console.tool_output(tool, pending)
 
-    t_out = threading.Thread(target=_drain, args=(proc.stdout, stdout_chunks, sys.stdout), daemon=True)
-    t_err = threading.Thread(target=_drain, args=(proc.stderr, stderr_chunks, sys.stderr), daemon=True)
+    t_out = threading.Thread(target=_drain, args=(proc.stdout, stdout_chunks, "frontend"), daemon=True)
+    t_err = threading.Thread(target=_drain, args=(proc.stderr, stderr_chunks, "frontend"), daemon=True)
     t_out.start()
     t_err.start()
 

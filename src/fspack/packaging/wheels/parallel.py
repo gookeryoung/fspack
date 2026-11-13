@@ -208,8 +208,9 @@ def _download_one_resolved(
             并行下载路径与 sdist 回退重试均传 ``True``：前者需用配置镜像
             而非 pip 默认 pypi.org（国内访问慢/超时），后者需从网络下载
             其他包。``--find-links <cache_dir>`` 仍优先检查本地缓存。
-        stream: True 时流式输出 pip 输出到终端（单包场景），False 时静默
-            捕获（并行场景避免多进程 stderr 交错）。
+        stream: True 时在单包场景启用 cache_dir 下载速度监控（pip 输出静默
+            捕获以避免双进度），False 时完全静默（并行场景避免多进程 stderr
+            交错）。
     """
     if with_index:
         cmd = [*ctx.base_args, "--no-deps", "-i", ctx.pypi_index, *ctx.extra_args, req]
@@ -219,14 +220,16 @@ def _download_one_resolved(
     start = time.perf_counter()
     try:
         if stream:
-            # 单包场景：流式输出 pip 输出 + 监控 cache_dir 文件大小变化显示实时下载速度。
-            # 通过模块属性访问 _stream_subprocess/_DownloadMonitor，便于测试 monkeypatch。
+            # 单包场景：只保留 cache_dir 字节量监控这一套进度；pip 自身的
+            # ``Downloading …`` 行与之并排出现会造成双进度，改为静默捕获，
+            # 失败上下文仍由 result.stderr 提供。
+            # 通过模块属性访问 _DownloadMonitor，便于测试 monkeypatch。
             from fspack.packaging.wheels import process as _dl
 
             monitor = _dl._DownloadMonitor(ctx.cache_dir, req)
             try:
                 monitor.start()
-                result = _dl._stream_subprocess(cmd)
+                result = subprocess.run(cmd, check=True, capture_output=True, encoding="utf-8", errors="replace")
             finally:
                 monitor.stop()
         else:

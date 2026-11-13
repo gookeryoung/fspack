@@ -167,13 +167,13 @@ def setup_log_file(path: Path, fmt: LogFormat = LogFormat.TEXT) -> LogFileHandle
     handler.setLevel(logging.DEBUG)  # 文件记录全部级别，由 root logger 级别过滤
     handler.setFormatter(JsonFormatter() if fmt is LogFormat.JSON else TextFormatter())
     root = logging.getLogger()
-    # root 级别高于 INFO（默认 WARNING）时 INFO 级构建日志在 logger 层就被丢弃，
-    # 文件恒空——作为 API 调用 build(log_file=...)（未经 CLI setup_logging）时
-    # 即如此。降为 INFO 保证日志文件可用，teardown 恢复原级别（CLI 路径已是
-    # INFO，此操作无变化）。
+    # root 级别高于 DEBUG 时，-v 才会产生的 DEBUG 细节（外部工具原始输出、
+    # 每文件编译日志）在 logger 层就被丢弃，日志文件里看不到失败上下文。
+    # 统一降到 DEBUG：控制台 RichHandler 自带 INFO 级别过滤，终端观感不变；
+    # teardown 恢复原级别。
     previous_level = root.level
-    if previous_level > logging.INFO:
-        root.setLevel(logging.INFO)
+    if previous_level > logging.DEBUG:
+        root.setLevel(logging.DEBUG)
     root.addHandler(handler)
     _logger.info("日志文件已启用: %s（格式: %s）", path, fmt.value)
     return LogFileHandler(handler=handler, path=path, previous_root_level=previous_level)

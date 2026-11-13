@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import sys
@@ -2208,10 +2209,10 @@ def test_download_resolved_parallel_single_retry_error_converted(
     cache = tmp_path / "cache"
     cache.mkdir()
 
-    def fake_stream(cmd: list[str]) -> CompletedStub:
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         raise subprocess.CalledProcessError(1, cmd, stderr="ERROR: No matching distribution found")
 
-    monkeypatch.setattr("fspack.packaging.wheels.process._stream_subprocess", fake_stream)
+    monkeypatch.setattr("fspack.packaging.wheels.parallel.subprocess.run", fake_run)
     monkeypatch.setattr(
         "fspack.packaging.wheels.parallel._handle_sdist_fallback",
         lambda *a, **kw: None,
@@ -2632,9 +2633,9 @@ def _patch_stderr_buffer(monkeypatch: pytest.MonkeyPatch) -> list[bytes]:
     return written
 
 
-def test_stream_subprocess_success(monkeypatch: pytest.MonkeyPatch) -> None:
-    """成功时返回 CompletedProcess，stdout/stderr 正确捕获，stderr 实时写入终端."""
-    written = _patch_stderr_buffer(monkeypatch)
+def test_stream_subprocess_success(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    """成功时返回 CompletedProcess，stdout/stderr 正确捕获，stderr 转发到 DEBUG."""
+    _patch_stderr_buffer(monkeypatch)
 
     def fake_popen(cmd: list[str], **kw: Any) -> _FakePopen:
         popen = _FakePopen(cmd, stdout_bytes=b"saved wheel\n", stderr_bytes=b"Downloading pkg", returncode=0)
@@ -2642,12 +2643,13 @@ def test_stream_subprocess_success(monkeypatch: pytest.MonkeyPatch) -> None:
         return popen
 
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.Popen", fake_popen)
-    result = _stream_subprocess(["pip", "download"])
+    with caplog.at_level(logging.DEBUG, logger="fspack.console"):
+        result = _stream_subprocess(["pip", "download"])
     assert result.returncode == 0
     assert result.stdout == "saved wheel\n"
     assert result.stderr == "Downloading pkg"
-    # stderr 被实时写入 sys.stderr.buffer
-    assert b"".join(written) == b"Downloading pkg"
+    # stderr 不再直写 sys.stderr，而是以 [pip] 前缀进入 DEBUG（-v/日志文件可见）
+    assert "[pip] Downloading pkg" in caplog.text
 
 
 def test_stream_subprocess_failure(monkeypatch: pytest.MonkeyPatch) -> None:
