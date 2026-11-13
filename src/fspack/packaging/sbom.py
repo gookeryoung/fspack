@@ -2,7 +2,7 @@
 
 在 :func:`fspack.packaging.pipeline.build` 完成后扫描 ``dist`` 下 site-packages
 的 ``*.dist-info`` 目录，提取每个依赖的名称/版本/许可证/SHA256，生成 SPDX 2.3
-兼容 JSON 文件到 ``dist/release/<name>-<version>-sbom.json``，便于审计与合规检查。
+兼容 JSON 文件到 ``dist/release/<name>-<version>-py<ver>-<platform>-sbom.json``，便于审计与合规检查。
 
 公共 API：
 
@@ -48,6 +48,7 @@ from fspack._compat import UTC
 from fspack.config import ProjectInfo
 from fspack.fsutil import atomic_write_text
 from fspack.packaging.site_packages import find_site_packages
+from fspack.platform import Platform, detect_platform
 
 __all__ = [
     "SbomPackage",
@@ -142,21 +143,23 @@ def collect_sbom(dist_dir: Path, info: ProjectInfo) -> dict[str, Any]:
     }
 
 
-def generate_sbom(dist_dir: Path, info: ProjectInfo) -> Path:
-    """生成 SBOM JSON 文件到 ``dist/release/<name>-<version>-sbom.json``.
+def generate_sbom(dist_dir: Path, info: ProjectInfo, target: Platform | None = None) -> Path:
+    """生成 SBOM JSON 文件到 ``dist/release/<name>-<version>-py<ver>-<platform>-sbom.json``.
 
     Args:
         dist_dir: dist 根目录
         info: 项目元信息
+        target: 目标平台，``None`` 时用当前平台；用于文件名区分同一项目的多目标产物
 
     Returns:
         生成的 SBOM 文件路径
     """
     import json
 
+    target = target or detect_platform()
     release_dir = dist_dir / "release"
     release_dir.mkdir(parents=True, exist_ok=True)
-    sbom_path = release_dir / f"{info.name}-{info.version}-sbom.json"
+    sbom_path = release_dir / f"{info.name}-{info.version}-py{info.py_version}-{target.value}-sbom.json"
     sbom_data = collect_sbom(dist_dir, info)
     atomic_write_text(sbom_path, json.dumps(sbom_data, ensure_ascii=False, indent=2))
     _logger.info("SBOM 已生成: %s（%d 个包）", sbom_path, len(sbom_data["packages"]))

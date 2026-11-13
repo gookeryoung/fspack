@@ -116,9 +116,9 @@ dist 布局
    │   └── Lib/site-packages/   # 第三方依赖（.pyc 预编译）
    ├── src/                # 用户源码（--nuitka 时编译为 .pyd）
    └── release/            # 安装包（fsp p 产出）
-       ├── <name>-setup.exe           # Windows NSIS
-       ├── <name>_<ver>_amd64.deb     # Linux .deb
-       └── <name>-<ver>-linux.tar.gz  # Linux 便携包
+       ├── <name>-<ver>-py<ver>-windows-x86_64-slim-setup.exe   # Windows NSIS
+       ├── <name>_<ver>-py<ver>-slim_amd64.deb                  # Linux .deb
+       └── <name>-<ver>-py<ver>-linux-x86_64-slim.tar.gz  # Linux 便携包
 
 多入口机制
 ----------

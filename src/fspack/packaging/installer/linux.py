@@ -29,6 +29,7 @@ from fspack.packaging.installer.dist_prep import (
     _prepare_dist,
     _py_tag,
     _release_base,
+    _target_arch,
 )
 from fspack.packaging.installer.request import _NO_SIGN, ReleaseRequest, SignOptions
 from fspack.platform import Platform
@@ -47,16 +48,16 @@ _logger = logging.getLogger("fspack.packaging.installer")
 
 
 def _deb_arch() -> str:
-    """返回 .deb 包 Architecture 字段值：固定 ``amd64``（与 Linux 目标 runtime 一致）.
+    """返回 .deb 包 Architecture 字段值：由 Linux 目标架构推导.
 
     Linux 目标 runtime 固定下载 python-build-standalone 的
     ``x86_64-unknown-linux-gnu`` tarball（见 :func:`standalone_tarball_name`），
     .deb 架构须与 runtime 实际架构一致，**与构建机架构无关**——此前按
     ``platform.machine()`` 取构建机架构，macOS arm64 runner 交叉构建 Linux
-    目标时 .deb 被误标 arm64 而装不进 amd64 系统。未来支持 Linux arm64
-    目标时在此参数化。
+    目标时 .deb 被误标 arm64 而装不进 amd64 系统。现统一从
+    :func:`_target_arch` 推导，Linux arm64 支持落地时无需再改这里。
     """
-    return "amd64"
+    return {"x86_64": "amd64", "arm64": "arm64"}.get(_target_arch("linux"), "amd64")
 
 
 class LinuxInstaller(Installer):
@@ -92,7 +93,7 @@ class LinuxInstaller(Installer):
             lambda: build_tarball(dist_dir, info, release_dir),
             detail=tar_name,
         )
-        deb_name = f"{info.name}_{info.version}-{_py_tag(info)}-slim_amd64.deb"
+        deb_name = f"{info.name}_{info.version}-{_py_tag(info)}-slim_{_deb_arch()}.deb"
         result = _run_stage(
             tracker,
             "构造 .deb 安装包",
@@ -202,7 +203,7 @@ def build_deb_release(req: ReleaseRequest, *, sign: SignOptions = _NO_SIGN) -> P
     dist, info = _prepare_dist(req, Platform.LINUX)
     _check_exe(dist, info, Platform.LINUX)
     release = dist / "release"
-    deb_name = f"{info.name}_{info.version}-{_py_tag(info)}-slim_amd64.deb"
+    deb_name = f"{info.name}_{info.version}-{_py_tag(info)}-slim_{_deb_arch()}.deb"
     result = _run_stage(
         tk,
         "构造 .deb 安装包",

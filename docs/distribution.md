@@ -23,6 +23,36 @@ Windows/Linux 目前只有 x86_64；macOS 两架构按构建机 `platform.machin
 无 `--arch` 开关。Windows 目标可从任意构建机交叉产出；Linux/macOS 目标要求
 同平台构建机。
 
+## 产物命名与迁移
+
+0.6.14 起发行包基名插入架构段，manifest/SBOM 名补 py 与平台，目的是让
+「同名产物内容不同」可被文件名区分。**旧名不保留兼容**，`dist/release/`
+只产出新名。
+
+| 产物 | 0.6.13 及之前 | 0.6.14 起 |
+|------|---------------|-----------|
+| Windows setup | `app-1.0-py3.14.6-windows-slim-setup.exe` | `app-1.0-py3.14.6-windows-x86_64-slim-setup.exe` |
+| Windows zip | `app-1.0-py3.14.6-windows-slim.zip` | `app-1.0-py3.14.6-windows-x86_64-slim.zip` |
+| Linux tar.gz | `app-1.0-py3.14.6-linux-slim.tar.gz` | `app-1.0-py3.14.6-linux-x86_64-slim.tar.gz` |
+| Linux deb | `app_1.0-py3.14.6-slim_amd64.deb` | 文件名不变；`Architecture` 改为按目标架构推导 |
+| macOS pkg / dmg | `app-1.0-py3.14.6-macos-slim.pkg` | `app-1.0-py3.14.6-macos-arm64-slim.pkg`（Intel 为 `x86_64`） |
+| manifest | `app-1.0-manifest.json` | `app-1.0-py3.14.6-windows-manifest.json` |
+| SBOM | `app-1.0-sbom.json` | `app-1.0-py3.14.6-windows-sbom.json` |
+
+迁移建议：
+
+- 下游脚本不要硬编码完整文件名，改用通配：`*-windows-*-slim-setup.exe`、
+  `*-linux-*-slim.tar.gz`、`*-macos-*-slim.dmg`、`*-manifest.json`。
+- Release 附件名会随之变化，若有按附件名下载的流程需同步更新。
+- 若确实需要旧名，只能在调用方打包后自行重命名；fspack 不提供兼容开关。
+
+Release 说明可参考：
+
+> 本版本重命名了发行产物，以携带架构信息：`<name>-<ver>-py<ver>-<platform>-slim`
+> 变为 `<name>-<ver>-py<ver>-<platform>-<arch>-slim`，manifest/SBOM 文件名新增
+> py 与平台字段。未提供旧名兼容开关；若你的 CI 或脚本按固定文件名取产物，
+> 请改为通配匹配（如 `*-windows-*-slim-setup.exe`）。功能与产物内容未变。
+
 ## 安全与分发
 
 ### 资源段嵌入（自动）

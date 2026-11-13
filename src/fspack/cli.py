@@ -548,6 +548,7 @@ def _run_generate(ns: argparse.Namespace) -> None:
     from fspack.exceptions import ProjectError
     from fspack.fsutil import atomic_write_text
     from fspack.packaging.manifest import _format_size, _logger, collect_manifest
+    from fspack.platform import Platform, detect_platform
 
     project = Path(ns.project).resolve()
     # 生成 ProjectInfo（复用 from_dir 缓存），用于填充 manifest.project 与默认文件名
@@ -566,9 +567,10 @@ def _run_generate(ns: argparse.Namespace) -> None:
     if getattr(ns, "output", None):
         output = Path(ns.output).resolve()
     else:
+        target = Platform(ns.target) if ns.target else detect_platform()
         release_dir = dist / "release"
         release_dir.mkdir(parents=True, exist_ok=True)
-        output = release_dir / f"{info.name}-{info.version}-manifest.json"
+        output = release_dir / f"{info.name}-{info.version}-py{info.py_version}-{target.value}-manifest.json"
     atomic_write_text(output, json.dumps(data, ensure_ascii=False, indent=2))
     _logger.info(
         "产物清单已生成: %s（%d 个文件，共 %s）",

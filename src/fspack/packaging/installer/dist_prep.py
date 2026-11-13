@@ -33,6 +33,7 @@ __all__ = [
     "_prepare_staging",
     "_py_tag",
     "_release_base",
+    "_target_arch",
 ]
 
 _logger = logging.getLogger(__name__)
@@ -122,13 +123,29 @@ def _py_tag(info: ProjectInfo) -> str:
     return f"py{info.py_version}"
 
 
+def _target_arch(platform_suffix: str) -> str:
+    """返回产物架构：Windows/Linux 固定 ``x86_64``，macOS 跟随构建机.
+
+    Windows/Linux 的 runtime 只有 x86_64 资产（见
+    :func:`fspack.packaging.runtime.standalone_tarball_name`）；macOS 的
+    x86_64/arm64 由构建机决定，且跨平台构建被 executor 拦截，因此
+    ``platform.machine()`` 与目标架构一致。
+    """
+    if platform_suffix != "macos":
+        return "x86_64"
+    import platform
+
+    return "arm64" if platform.machine().lower() in ("arm64", "aarch64") else "x86_64"
+
+
 def _release_base(info: ProjectInfo, platform_suffix: str) -> str:
-    """生成发行包基础名：``<name>-<version>-<py_tag>-<platform>-slim``。
+    """生成发行包基础名：``<name>-<version>-<py_tag>-<platform>-<arch>-slim``。
 
     slim 标识体现 wheel 精简解压（slimunpack 按需解压 + Qt 闭包），
     是 fspack 默认且唯一的打包策略，故始终体现在文件名中。
     """
-    return f"{info.name}-{info.version}-{_py_tag(info)}-{platform_suffix}-slim"
+    arch = _target_arch(platform_suffix)
+    return f"{info.name}-{info.version}-{_py_tag(info)}-{platform_suffix}-{arch}-slim"
 
 
 # 构建中间文件/缓存文件，打包时排除（仅用于增量构建，对最终用户无用）.
@@ -211,7 +228,7 @@ def _make_staged_archive(  # noqa: PLR0913
     Args:
         dist_dir: 待打包的 dist 目录
         release_dir: 归档输出目录（同时用作 staging 父目录）
-        base: 归档基础名与内顶层目录名（如 ``<name>-<version>-<py_tag>-<platform>-slim``）
+        base: 归档基础名与内顶层目录名（如 ``<name>-<version>-<py_tag>-<platform>-<arch>-slim``）
         fmt: ``shutil.make_archive`` 格式，``"gztar"``（tar.gz）或 ``"zip"``
         keep_staging: 打包后保留 staging 目录（供后续格式复用，消除重复全量
             copytree；调用方须在最后一个复用格式完成后清理）

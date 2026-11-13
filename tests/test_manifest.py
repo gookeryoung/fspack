@@ -124,10 +124,10 @@ def test_generate_manifest_writes_json_and_skips_self(tmp_path: Path) -> None:
     info = _make_info(tmp_path)
     _make_dist_tree(dist)
 
-    out = generate_manifest(dist, info)
+    out = generate_manifest(dist, info, Platform.WINDOWS)
 
     assert out.is_file()
-    assert out.name == "app-1.0-manifest.json"
+    assert out.name == "app-1.0-py3.11.9-windows-manifest.json"
     assert out.parent.name == "release"
 
     raw = json.loads(out.read_text(encoding="utf-8"))
@@ -348,9 +348,9 @@ def test_run_generate_creates_manifest_in_release(tmp_path: Path) -> None:
     from fspack import cli
 
     proj = _make_cli_project(tmp_path)
-    cli._run_generate(Namespace(project=str(proj), py_version=None, output=None))
+    cli._run_generate(Namespace(project=str(proj), py_version="3.11.9", output=None, target="windows"))
 
-    out = proj / "dist" / "release" / "app-0.1-manifest.json"
+    out = proj / "dist" / "release" / "app-0.1-py3.11.9-windows-manifest.json"
     assert out.is_file()
     data = json.loads(out.read_text(encoding="utf-8"))
     assert data["summary"]["total_files"] >= 1
@@ -365,7 +365,7 @@ def test_run_generate_explicit_output(tmp_path: Path) -> None:
 
     proj = _make_cli_project(tmp_path)
     out = tmp_path / "custom-manifest.json"
-    cli._run_generate(Namespace(project=str(proj), py_version=None, output=str(out)))
+    cli._run_generate(Namespace(project=str(proj), py_version="3.11.9", output=str(out), target="windows"))
     assert out.is_file()
 
 
@@ -378,7 +378,7 @@ def test_run_generate_missing_dist_exits(tmp_path: Path) -> None:
     proj = tmp_path / "app"
     proj.mkdir()
     (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n', encoding="utf-8")
-    ns = Namespace(project=str(proj), py_version=None, output=None)
+    ns = Namespace(project=str(proj), py_version=None, output=None, target=None)
     with pytest.raises(SystemExit) as ei:
         cli._run_generate(ns)
     assert ei.value.code == 2
@@ -393,7 +393,7 @@ def test_run_generate_invalid_project_exits(tmp_path: Path) -> None:
     proj = tmp_path / "empty"
     proj.mkdir()
     (proj / "dist").mkdir()
-    ns = Namespace(project=str(proj), py_version=None, output=None)
+    ns = Namespace(project=str(proj), py_version=None, output=None, target=None)
     with pytest.raises(SystemExit) as ei:
         cli._run_generate(ns)
     assert ei.value.code == 2
@@ -548,14 +548,14 @@ def test_pipeline_manifest_records_final_win7_files(
     barrier = Barrier(2)
     real_sbom = sbom.generate_sbom
 
-    def concurrent_manifest(dist_dir: Path, info: ProjectInfo) -> Path:
+    def concurrent_manifest(dist_dir: Path, info: ProjectInfo, target: Platform | None = None) -> Path:
         if not no_sbom:
             barrier.wait(timeout=10)
-        return generate_manifest(dist_dir, info)
+        return generate_manifest(dist_dir, info, target)
 
-    def concurrent_sbom(dist_dir: Path, info: ProjectInfo) -> Path:
+    def concurrent_sbom(dist_dir: Path, info: ProjectInfo, target: Platform | None = None) -> Path:
         barrier.wait(timeout=10)
-        return real_sbom(dist_dir, info)
+        return real_sbom(dist_dir, info, target)
 
     monkeypatch.setattr("fspack.packaging.manifest.generate_manifest", concurrent_manifest)
     monkeypatch.setattr(sbom, "generate_sbom", concurrent_sbom)
@@ -568,7 +568,7 @@ def test_pipeline_manifest_records_final_win7_files(
         options=BuildOptions(no_sbom=no_sbom, no_size_report=True),
     )
 
-    data = load_manifest(dist / "release/app-1.0-manifest.json")
+    data = load_manifest(dist / "release/app-1.0-py3.11.9-windows-manifest.json")
     entries = {e["path"]: e for e in data["entries"]}
     binary_hash = hashlib.sha256(b"new-imports").hexdigest()
     assert entries["site-packages/pkg/native.pyd"]["sha256"] == binary_hash
@@ -579,8 +579,8 @@ def test_pipeline_manifest_records_final_win7_files(
     excluded = {
         ".build_ok",
         ".build_failed",
-        "release/app-1.0-manifest.json",
-        "release/app-1.0-sbom.json",
+        "release/app-1.0-py3.11.9-windows-manifest.json",
+        "release/app-1.0-py3.11.9-windows-sbom.json",
         # 哈希备忘录是构建缓存，按设计不进 manifest
         "build/action-manifest-hashes.json",
     }
@@ -595,7 +595,7 @@ def test_pipeline_manifest_records_final_win7_files(
     recollected = collect_manifest(dist, info)
     assert recollected["entries"] == data["entries"]
     assert recollected["summary"] == data["summary"]
-    sbom_path = dist / "release/app-1.0-sbom.json"
+    sbom_path = dist / "release/app-1.0-py3.11.9-windows-sbom.json"
     if no_sbom:
         assert not sbom_path.exists()
     else:
@@ -615,7 +615,7 @@ def test_pipeline_report_failure_remains_nonfatal(
     dist = report_pipeline
     failed_report, parallel = failure_mode
 
-    def fail_report(dist_dir: Path, info: ProjectInfo) -> Path:
+    def fail_report(dist_dir: Path, info: ProjectInfo, target: object = None) -> Path:
         assert (dist_dir / "release/win7-compat-report.txt").is_file()
         raise ValueError("report failure stub")
 
@@ -635,10 +635,10 @@ def test_pipeline_report_failure_remains_nonfatal(
     assert info.name == "app"
     assert "report failure stub" in caplog.text
     assert (dist / ".build_ok").is_file()
-    assert not (dist / f"release/app-1.0-{failed_report}.json").exists()
+    assert not (dist / f"release/app-1.0-py3.11.9-windows-{failed_report}.json").exists()
     if parallel:
         successful_report = "manifest" if failed_report == "sbom" else "sbom"
-        assert (dist / f"release/app-1.0-{successful_report}.json").is_file()
+        assert (dist / f"release/app-1.0-py3.11.9-windows-{successful_report}.json").is_file()
 
 
 @pytest.mark.parametrize("no_sbom", [False, True])
@@ -669,8 +669,8 @@ def test_pipeline_report_flags_without_win7_scan(
         target=Platform.WINDOWS,
         options=BuildOptions(no_sbom=no_sbom, no_manifest=no_manifest, no_win7_scan=True, no_size_report=True),
     )
-    assert (dist / "release/app-1.0-sbom.json").is_file() is (not no_sbom)
-    manifest_path = dist / "release/app-1.0-manifest.json"
+    assert (dist / "release/app-1.0-py3.11.9-windows-sbom.json").is_file() is (not no_sbom)
+    manifest_path = dist / "release/app-1.0-py3.11.9-windows-manifest.json"
     assert manifest_path.is_file() is (not no_manifest)
     assert not (dist / "release/win7-compat-report.txt").exists()
     assert not (dist / "runtime/bcryptprimitives.dll").exists()

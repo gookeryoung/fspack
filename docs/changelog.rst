@@ -13,6 +13,8 @@ v0.6.14
 -------
 
 - feat(cli): 新增 ``fsp verify <path> [--target ...] [--arch ...]``——只读文件头校验 PE/ELF/Mach-O 机器类型与目标一致，不匹配退出码 1；纯 ``struct`` 实现，无新增依赖
+- refactor(naming): **产物命名加架构段（破坏性）**——发行包基名改为 ``<name>-<ver>-py<ver>-<platform>-<arch>-slim``；manifest/SBOM 改为 ``<name>-<ver>-py<ver>-<platform>-{manifest,sbom}.json``；``.deb`` 的 ``Architecture`` 由 Linux 目标架构推导（x86_64→amd64、arm64→arm64），不再写死 amd64
+- refactor(naming): 不保留旧名兼容开关；下游脚本改用通配匹配，迁移对照与 release 说明见 ``docs/distribution.md`` 的「产物命名与迁移」
 - test(templates): 新增模板一致性护栏——以人工维护的契约期望表为独立 oracle，校验 init/doctor 模板 id 集合、分类、``app_type``、依赖与 ``requires-python``，模板增删必须显式更新期望
 - test(templates): 新增 ``tests/_projects.py`` fixture 工厂（``write_project`` / ``doctor_template_dir`` / ``copy_doctor_project``），迁移 5 个测试文件的重复工程构造
 - refactor(templates): 统一 18 个 init 模板的 ``requires-python`` 为 ``>=3.8``（依据根 ``pyproject.toml``、CI 矩阵 3.8–3.14、运行时 embed/standalone 支持范围；PySide2 保留 ``>=3.8,<3.10`` 例外），``Template`` 默认约束改为 ``>=3.8``，``cli_init`` 基线改为引用 ``DEFAULT_REQUIRES_PYTHON``

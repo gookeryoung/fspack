@@ -3,7 +3,7 @@
 覆盖 :mod:`fspack.packaging.sbom` 公共 API 与内部辅助函数：
 
 - :func:`collect_sbom`：扫描 dist 目录返回 SPDX 2.3 字典
-- :func:`generate_sbom`：生成 JSON 文件到 dist/release/<name>-<version>-sbom.json
+- :func:`generate_sbom`：生成 JSON 文件到 dist/release/<name>-<version>-py<ver>-<platform>-sbom.json
 - :func:`_extract_license`：METADATA 许可证字段优先级解析
 - :func:`_compute_package_checksum`：基于 RECORD 的包整体 SHA256 计算
 - :func:`_sanitize_spdx_id`：包名转合法 SPDX ID
@@ -27,6 +27,7 @@ from fspack.packaging.sbom import (
     collect_sbom,
     generate_sbom,
 )
+from fspack.platform import Platform
 
 
 def _make_info(tmp_path: Path, name: str = "app", version: str = "1.0") -> ProjectInfo:
@@ -199,7 +200,7 @@ def test_collect_sbom_skips_non_dist_info_dirs(tmp_path: Path) -> None:
 
 
 def test_generate_sbom_creates_json_file(tmp_path: Path) -> None:
-    """generate_sbom 在 dist/release/<name>-<version>-sbom.json 生成 JSON 文件."""
+    """generate_sbom 在 dist/release/<name>-<version>-py<ver>-<platform>-sbom.json 生成 JSON 文件."""
     dist, site_packages = _make_dist_with_site_packages(tmp_path)
     _make_dist_info(
         site_packages,
@@ -210,9 +211,9 @@ def test_generate_sbom_creates_json_file(tmp_path: Path) -> None:
     )
     info = _make_info(tmp_path, name="myapp", version="3.5")
 
-    sbom_path = generate_sbom(dist, info)
+    sbom_path = generate_sbom(dist, info, Platform.WINDOWS)
 
-    expected = dist / "release" / "myapp-3.5-sbom.json"
+    expected = dist / "release" / "myapp-3.5-py3.11.9-windows-sbom.json"
     assert sbom_path == expected
     assert sbom_path.is_file()
     # 文件内容为合法 JSON，结构与 collect_sbom 一致
@@ -229,7 +230,7 @@ def test_generate_sbom_creates_release_dir_if_missing(tmp_path: Path) -> None:
     _make_dist_info(site_packages, "pkg", "1.0", metadata="License: MIT\n")
     info = _make_info(tmp_path)
 
-    sbom_path = generate_sbom(dist, info)
+    sbom_path = generate_sbom(dist, info, Platform.WINDOWS)
 
     assert sbom_path.is_file()
     assert sbom_path.parent.is_dir()
@@ -241,10 +242,10 @@ def test_generate_sbom_overwrites_existing(tmp_path: Path) -> None:
     _make_dist_info(site_packages, "pkg", "1.0", metadata="License: MIT\n")
     info = _make_info(tmp_path)
 
-    first = generate_sbom(dist, info)
+    first = generate_sbom(dist, info, Platform.WINDOWS)
     first.write_text("stale", encoding="utf-8")
 
-    second = generate_sbom(dist, info)
+    second = generate_sbom(dist, info, Platform.WINDOWS)
     assert second.read_text(encoding="utf-8") != "stale"
     # 内容仍为合法 JSON
     json.loads(second.read_text(encoding="utf-8"))

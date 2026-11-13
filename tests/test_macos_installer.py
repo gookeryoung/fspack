@@ -24,6 +24,16 @@ from fspack.platform import Platform
 from tests._stubs import CompletedStub
 
 
+@pytest.fixture(autouse=True)
+def _fixed_macos_arch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """固定 macOS 架构为 x86_64，避免产物名断言随构建机架构变化.
+
+    架构探测本身（``platform.machine()`` → arm64/x86_64）由
+    ``tests/test_verify.py::test_host_arch_mapping`` 覆盖。
+    """
+    monkeypatch.setattr("fspack.packaging.installer.dist_prep._target_arch", lambda _suffix: "x86_64")
+
+
 def _make_info(tmp_path: Path, name: str = "app") -> ProjectInfo:
     return ProjectInfo(
         name=name,
@@ -69,7 +79,7 @@ def test_build_pkg_creates_pkg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     dist = _make_dist(tmp_path)
     info = _make_info(tmp_path)
     release = tmp_path / "release"
-    stale_staging = release / "app-1.0-py3.11.10-macos-slim.pkg-staging"
+    stale_staging = release / "app-1.0-py3.11.10-macos-x86_64-slim.pkg-staging"
     stale_staging.mkdir(parents=True)
     (stale_staging / "stale.txt").write_text("stale")
 
@@ -97,10 +107,10 @@ def test_build_pkg_creates_pkg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr("fspack.packaging.installer.macos.subprocess.run", fake_run)
 
     out = build_pkg(dist, info, release)
-    assert out == release / "app-1.0-py3.11.10-macos-slim.pkg"
+    assert out == release / "app-1.0-py3.11.10-macos-x86_64-slim.pkg"
     assert out.is_file()
     assert captured["cmd"][0] == "pkgbuild"
-    assert not (release / "app-1.0-py3.11.10-macos-slim.pkg-staging").exists(), "staging 未清理"
+    assert not (release / "app-1.0-py3.11.10-macos-x86_64-slim.pkg-staging").exists(), "staging 未清理"
 
 
 def test_build_pkg_pkgbuild_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -168,7 +178,7 @@ def test_build_dmg_creates_dmg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     dist = _make_dist(tmp_path)
     info = _make_info(tmp_path)
     release = tmp_path / "release"
-    stale_staging = release / "app-1.0-py3.11.10-macos-slim.dmg-staging"
+    stale_staging = release / "app-1.0-py3.11.10-macos-x86_64-slim.dmg-staging"
     stale_staging.mkdir(parents=True)
     (stale_staging / "stale.txt").write_text("stale")
 
@@ -195,11 +205,11 @@ def test_build_dmg_creates_dmg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr("fspack.packaging.installer.macos.subprocess.run", fake_run)
 
     out = build_dmg(dist, info, release)
-    assert out == release / "app-1.0-py3.11.10-macos-slim.dmg"
+    assert out == release / "app-1.0-py3.11.10-macos-x86_64-slim.dmg"
     assert out.is_file()
     assert captured["cmd"][0] == "hdiutil"
     assert captured["cmd"][1] == "create"
-    assert not (release / "app-1.0-py3.11.10-macos-slim.dmg-staging").exists(), "staging 未清理"
+    assert not (release / "app-1.0-py3.11.10-macos-x86_64-slim.dmg-staging").exists(), "staging 未清理"
 
 
 def test_build_dmg_hdiutil_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -281,17 +291,17 @@ def test_build_mac_installer_no_build_success(tmp_path: Path, monkeypatch: pytes
 
     def fake_build_pkg(dist_dir: Path, info: object, release_dir: Path, *, codesign: bool = False) -> Path:
         captured["pkg"] = info
-        return release_dir / "app-1.0-py3.11.10-macos-slim.pkg"
+        return release_dir / "app-1.0-py3.11.10-macos-x86_64-slim.pkg"
 
     def fake_build_dmg(dist_dir: Path, info: object, release_dir: Path, *, codesign: bool = False) -> Path:
         captured["dmg"] = info
-        return release_dir / "app-1.0-py3.11.10-macos-slim.dmg"
+        return release_dir / "app-1.0-py3.11.10-macos-x86_64-slim.dmg"
 
     monkeypatch.setattr("fspack.packaging.installer.macos.build_pkg", fake_build_pkg)
     monkeypatch.setattr("fspack.packaging.installer.macos.build_dmg", fake_build_dmg)
 
     result = build_mac_installer(ReleaseRequest(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=True))
-    assert result == dist / "release" / "app-1.0-py3.11.10-macos-slim.dmg"
+    assert result == dist / "release" / "app-1.0-py3.11.10-macos-x86_64-slim.dmg"
     assert captured["pkg"] is not None
     assert captured["dmg"] is not None
 
@@ -308,11 +318,11 @@ def test_build_mac_installer_with_codesign_passthrough(tmp_path: Path, monkeypat
 
     def fake_build_pkg(dist_dir: Path, info: object, release_dir: Path, *, codesign: bool = False) -> Path:
         codesign_calls.append(codesign)
-        return release_dir / "app-1.0-py3.11.10-macos-slim.pkg"
+        return release_dir / "app-1.0-py3.11.10-macos-x86_64-slim.pkg"
 
     def fake_build_dmg(dist_dir: Path, info: object, release_dir: Path, *, codesign: bool = False) -> Path:
         codesign_calls.append(codesign)
-        return release_dir / "app-1.0-py3.11.10-macos-slim.dmg"
+        return release_dir / "app-1.0-py3.11.10-macos-x86_64-slim.dmg"
 
     monkeypatch.setattr("fspack.packaging.installer.macos.build_pkg", fake_build_pkg)
     monkeypatch.setattr("fspack.packaging.installer.macos.build_dmg", fake_build_dmg)
@@ -349,12 +359,12 @@ def test_build_pkg_release_success(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     release = dist / "release"
 
     def fake_build_pkg(dist_dir: Path, info: object, rel: Path, *, codesign: bool = False) -> Path:
-        return rel / "app-1.0-py3.11.10-macos-slim.pkg"
+        return rel / "app-1.0-py3.11.10-macos-x86_64-slim.pkg"
 
     monkeypatch.setattr("fspack.packaging.installer.macos.build_pkg", fake_build_pkg)
 
     result = build_pkg_release(ReleaseRequest(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=True))
-    assert result == release / "app-1.0-py3.11.10-macos-slim.pkg"
+    assert result == release / "app-1.0-py3.11.10-macos-x86_64-slim.pkg"
 
 
 def test_build_dmg_release_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -367,12 +377,12 @@ def test_build_dmg_release_success(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     release = dist / "release"
 
     def fake_build_dmg(dist_dir: Path, info: object, rel: Path, *, codesign: bool = False) -> Path:
-        return rel / "app-1.0-py3.11.10-macos-slim.dmg"
+        return rel / "app-1.0-py3.11.10-macos-x86_64-slim.dmg"
 
     monkeypatch.setattr("fspack.packaging.installer.macos.build_dmg", fake_build_dmg)
 
     result = build_dmg_release(ReleaseRequest(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=True))
-    assert result == release / "app-1.0-py3.11.10-macos-slim.dmg"
+    assert result == release / "app-1.0-py3.11.10-macos-x86_64-slim.dmg"
 
 
 def test_build_mac_installer_with_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -409,9 +419,9 @@ def test_build_mac_installer_with_build(tmp_path: Path, monkeypatch: pytest.Monk
     monkeypatch.setattr("fspack.packaging.installer.macos.build_pkg", lambda *a, **kw: tmp_path / "x.pkg")
     monkeypatch.setattr(
         "fspack.packaging.installer.macos.build_dmg",
-        lambda *a, **kw: dist / "release" / "app-1.0-py3.11.10-macos-slim.dmg",
+        lambda *a, **kw: dist / "release" / "app-1.0-py3.11.10-macos-x86_64-slim.dmg",
     )
 
     result = build_mac_installer(ReleaseRequest(tmp_path, get_mirror("aliyun"), "3.11.10", no_build=False))
-    assert result == dist / "release" / "app-1.0-py3.11.10-macos-slim.dmg"
+    assert result == dist / "release" / "app-1.0-py3.11.10-macos-x86_64-slim.dmg"
     assert (dist / "app").is_file()

@@ -152,7 +152,7 @@ fsp manifest diff <old.json> <new.json> [--exit-code]
 
 | 子命令 | 说明 |
 |--------|------|
-| `generate`（别名 `g`） | 扫描项目 dist 目录生成 manifest JSON，默认写入 `dist/release/<name>-<version>-manifest.json`；`-o/--output` 指定输出路径 |
+| `generate`（别名 `g`） | 扫描项目 dist 目录生成 manifest JSON，默认写入 `dist/release/<name>-<version>-py<ver>-<platform>-manifest.json`；`--target` 指定目标平台，`-o/--output` 指定输出路径 |
 | `diff`（别名 `d`） | 对比两份 manifest JSON 的差异（新增/删除/修改 + 分类汇总）；`--exit-code` 有差异时以退出码 1 退出，便于 CI 门禁判断产物变更 |
 
 ## fsp doctor

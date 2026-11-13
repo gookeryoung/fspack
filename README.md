@@ -218,9 +218,9 @@ dist/
 │   └── Lib/site-packages/   # Third-party deps (slimmed + pre-compiled)
 ├── src/                # Your source code
 └── release/            # Installers produced by `fsp p`
-    ├── <name>-setup.exe           # Windows installer
-    ├── <name>_<ver>_amd64.deb     # Linux .deb
-    └── <name>-<ver>-linux.tar.gz  # Linux portable package
+    ├── <name>-<ver>-py<ver>-windows-x86_64-slim-setup.exe   # Windows installer
+    ├── <name>_<ver>-py<ver>-slim_amd64.deb                  # Linux .deb
+    └── <name>-<ver>-py<ver>-linux-x86_64-slim.tar.gz        # Linux portable package
 ```
 
 ## 🔐 Security & Distribution

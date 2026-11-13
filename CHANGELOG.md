@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 新增 `tests/_projects.py` fixture 工厂（`write_project` / `doctor_template_dir` / `copy_doctor_project`），迁移 5 个测试文件的重复工程构造
 
 ### Changed
+- **产物命名加架构段（破坏性变更）**：发行包基名由 `<name>-<ver>-py<ver>-<platform>-slim` 改为 `<name>-<ver>-py<ver>-<platform>-<arch>-slim`；manifest/SBOM 由 `<name>-<ver>-manifest.json` / `<name>-<ver>-sbom.json` 改为 `<name>-<ver>-py<ver>-<platform>-manifest.json` / `-sbom.json`；`.deb` 的 `Architecture` 由 Linux 目标架构推导（x86_64→amd64、arm64→arm64），不再写死 amd64
+- **不保留旧名兼容开关**：`dist/release/` 只产出新名，不提供 `--legacy-names` 之类的回退。下游脚本请改用通配匹配（如 `*-windows-*-slim-setup.exe`、`*-linux-*-slim.tar.gz`、`*-manifest.json`），迁移对照与 release 说明写法见 [docs/distribution.md](docs/distribution.md#产物命名与迁移)
 - 统一 18 个 init 模板的 `requires-python` 为 `>=3.8`（依据根 `pyproject.toml`、CI 矩阵 3.8–3.14、运行时 embed 3.8–3.14 / standalone 3.10–3.14）；PySide2 因无 3.10+ wheel 保留 `>=3.8,<3.10` 例外。`Template` 默认约束从 `>=3.13` 修正为 `>=3.8`，`cli_init` 详情区基线改为引用 `DEFAULT_REQUIRES_PYTHON`
 - doctor 模板保留各自运行时段（`==3.14.*` / `>=3.13` / `>=3.8,<3.13` 等），不做归一；未声明 `requires-python` 的 `tk_app` 回退新默认 `>=3.8`
 - 退役 `ProjectTemplate` 兼容 shim（删除 95 行），doctor 模板统一经 `list_templates(role="doctor")` / `get_template(id, role)` 加载；`test_template_loader` 改写为注册表 doctor 加载路径测试并补充缓存隔离

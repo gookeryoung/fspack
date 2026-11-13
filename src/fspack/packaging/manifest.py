@@ -2,7 +2,7 @@
 
 在构建完成后扫描 ``dist`` 目录，按相对路径记录每个文件的大小、SHA256
 校验和、归属分类（runtime/site-packages/src/release 等），生成 JSON
-到 ``dist/release/<name>-<version>-manifest.json``，便于版本间对比产物变化。
+到 ``dist/release/<name>-<version>-py<ver>-<platform>-manifest.json``，便于版本间对比产物变化。
 
 差异对比（``fsp manifest diff a.json b.json``）输出：
 - 新增文件（added）
@@ -46,6 +46,7 @@ from fspack._compat import UTC
 from fspack.config import ProjectInfo
 from fspack.fsutil import atomic_write_text, scandir_tree
 from fspack.packaging import action_cache
+from fspack.platform import Platform, detect_platform
 
 __all__ = [
     "ManifestDiff",
@@ -101,7 +102,7 @@ def collect_manifest(dist_dir: Path, info: ProjectInfo, *, reuse_hashes: bool = 
 
     遍历 ``dist_dir`` 下所有文件（通过 :func:`scandir_tree` 复用 stat
     缓存），计算每个文件的 SHA256，按相对路径排序（保证可重现性）。
-    跳过 manifest JSON 自身、release 隐藏文件、SBOM、根目录构建状态
+    跳过 release 目录下的 manifest/SBOM JSON、隐藏文件、根目录构建状态
     标记 ``.build_ok``/``.build_failed`` 以及哈希备忘录自身，避免并发报告
     与构建收尾造成清单漂移。
 
@@ -121,8 +122,6 @@ def collect_manifest(dist_dir: Path, info: ProjectInfo, *, reuse_hashes: bool = 
     """
     dist_dir = Path(dist_dir)
     dist_str = str(dist_dir)
-    # manifest 自身文件名（用于扫描时跳过），与 generate_manifest 保持一致
-    self_name = f"{info.name}-{info.version}-manifest.json"
 
     # 第一遍：物化目录条目并过滤（scandir_tree 为生成器，二次遍历会重复扫描）
     collected: list[tuple[str, os.DirEntry[str]]] = []
@@ -132,12 +131,13 @@ def collect_manifest(dist_dir: Path, info: ProjectInfo, *, reuse_hashes: bool = 
         except ValueError:
             # 跨盘符等场景无法求相对路径时跳过（非典型场景）
             continue
-        # 跳过 manifest 自身：避免每次生成后 sha256 变化
-        if rel == f"release/{self_name}":
+        # 跳过 release/ 下的 manifest/SBOM：manifest 自身每次生成后 sha256 会变，
+        # 且 SBOM 与 manifest 并行生成时半成品可能被扫到导致内容抖动。
+        # 按后缀匹配而非精确文件名，适配带 py/platform 的产物名。
+        if rel.startswith("release/") and rel.endswith(("-manifest.json", "-sbom.json")):
             continue
-        # 跳过 release/ 下隐藏文件与 SBOM 文件：manifest 与 SBOM 并行生成时，
-        # mkstemp 临时文件（".tmp_" 前缀）与半成品 SBOM 可能被扫到导致内容抖动
-        if rel.startswith("release/.") or rel.endswith("-sbom.json"):
+        # 跳过 release/ 下隐藏文件（mkstemp 临时文件 ".tmp_" 前缀）
+        if rel.startswith("release/."):
             continue
         if rel in (".build_ok", ".build_failed"):
             continue
@@ -208,21 +208,23 @@ def collect_manifest(dist_dir: Path, info: ProjectInfo, *, reuse_hashes: bool = 
     }
 
 
-def generate_manifest(dist_dir: Path, info: ProjectInfo) -> Path:
-    """生成 manifest JSON 文件到 ``dist/release/<name>-<version>-manifest.json``.
+def generate_manifest(dist_dir: Path, info: ProjectInfo, target: Platform | None = None) -> Path:
+    """生成 manifest JSON 文件到 ``dist/release/<name>-<version>-py<ver>-<platform>-manifest.json``.
 
     Args:
         dist_dir: dist 根目录
         info: 项目元信息
+        target: 目标平台，``None`` 时用当前平台；用于文件名区分同一项目的多目标产物
 
     Returns:
         生成的 manifest 文件路径
     """
     import json
 
+    target = target or detect_platform()
     release_dir = dist_dir / "release"
     release_dir.mkdir(parents=True, exist_ok=True)
-    manifest_path = release_dir / f"{info.name}-{info.version}-manifest.json"
+    manifest_path = release_dir / f"{info.name}-{info.version}-py{info.py_version}-{target.value}-manifest.json"
     data = collect_manifest(dist_dir, info)
     atomic_write_text(manifest_path, json.dumps(data, ensure_ascii=False, indent=2))
     _logger.info(

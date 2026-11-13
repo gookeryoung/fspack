@@ -580,8 +580,8 @@ def _execute_build(  # noqa: PLR0912, PLR0913
         from fspack.packaging.sbom import generate_sbom
 
         _post_build_pool = ThreadPoolExecutor(max_workers=2)
-        sbom_future = _post_build_pool.submit(generate_sbom, cfg.dist_dir, info)
-        manifest_future = _post_build_pool.submit(generate_manifest, cfg.dist_dir, info)
+        sbom_future = _post_build_pool.submit(generate_sbom, cfg.dist_dir, info, target)
+        manifest_future = _post_build_pool.submit(generate_manifest, cfg.dist_dir, info, target)
 
     try:
         # SBOM 生成（默认启用，--no-sbom 关闭）：扫描 dist 下 site-packages 的
@@ -593,7 +593,9 @@ def _execute_build(  # noqa: PLR0912, PLR0913
 
             with tracker.stage("生成 SBOM") as st:
                 try:
-                    sbom_path = sbom_future.result() if sbom_future is not None else generate_sbom(cfg.dist_dir, info)
+                    sbom_path = (
+                        sbom_future.result() if sbom_future is not None else generate_sbom(cfg.dist_dir, info, target)
+                    )
                     st.processed(1)
                     st.set_detail(sbom_path.name)
                 except Exception as e:
@@ -613,7 +615,7 @@ def _execute_build(  # noqa: PLR0912, PLR0913
                     manifest_path = (
                         manifest_future.result()
                         if manifest_future is not None
-                        else generate_manifest(cfg.dist_dir, info)
+                        else generate_manifest(cfg.dist_dir, info, target)
                     )
                     st.processed(1)
                     st.set_detail(manifest_path.name)

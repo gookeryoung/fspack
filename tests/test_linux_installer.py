@@ -53,17 +53,17 @@ def test_build_tarball_creates_archive(tmp_path: Path) -> None:
 
     out = build_tarball(dist, info, release)
     assert out.is_file()
-    assert out.name == "app-1.0-py3.11.10-linux-slim.tar.gz"
+    assert out.name == "app-1.0-py3.11.10-linux-x86_64-slim.tar.gz"
     assert out.stat().st_size > 0
 
     with tarfile.open(out) as tf:
         names = tf.getnames()
-    assert "app-1.0-py3.11.10-linux-slim" in names
-    assert "app-1.0-py3.11.10-linux-slim/app" in names
-    assert "app-1.0-py3.11.10-linux-slim/src/app.py" in names
+    assert "app-1.0-py3.11.10-linux-x86_64-slim" in names
+    assert "app-1.0-py3.11.10-linux-x86_64-slim/app" in names
+    assert "app-1.0-py3.11.10-linux-x86_64-slim/src/app.py" in names
     assert not any("release" in n for n in names), "release/ 未被排除"
 
-    assert not (release / "app-1.0-py3.11.10-linux-slim").exists(), "staging 未清理"
+    assert not (release / "app-1.0-py3.11.10-linux-x86_64-slim").exists(), "staging 未清理"
 
 
 def test_build_tarball_cleans_existing_staging(tmp_path: Path) -> None:
@@ -71,7 +71,7 @@ def test_build_tarball_cleans_existing_staging(tmp_path: Path) -> None:
     dist = _make_dist(tmp_path)
     info = _make_info(tmp_path)
     release = dist / "release"
-    stale_staging = release / "app-1.0-py3.11.10-linux-slim"
+    stale_staging = release / "app-1.0-py3.11.10-linux-x86_64-slim"
     stale_staging.mkdir(parents=True)
     (stale_staging / "stale.txt").write_text("stale")
 
@@ -80,7 +80,7 @@ def test_build_tarball_cleans_existing_staging(tmp_path: Path) -> None:
 
     with tarfile.open(out) as tf:
         names = tf.getnames()
-    assert "app-1.0-py3.11.10-linux-slim/stale.txt" not in names, "旧 staging 未清理"
+    assert "app-1.0-py3.11.10-linux-x86_64-slim/stale.txt" not in names, "旧 staging 未清理"
 
 
 def test_build_deb_creates_deb(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -187,7 +187,7 @@ def test_build_linux_installer_no_build_success(tmp_path: Path, monkeypatch: pyt
 
     def fake_build_tarball(dist_dir: Path, info: object, release_dir: Path) -> Path:
         captured["tarball"] = info
-        return release_dir / "app-1.0-py3.11.10-linux-slim.tar.gz"
+        return release_dir / "app-1.0-py3.11.10-linux-x86_64-slim.tar.gz"
 
     def fake_build_deb(dist_dir: Path, info: object, release_dir: Path) -> Path:
         captured["deb"] = info

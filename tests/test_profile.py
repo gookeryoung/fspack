@@ -1064,13 +1064,13 @@ def test_build_sbom_manifest_parallel_in_threads(tmp_path: Path, monkeypatch: py
     # Barrier(2) 强制两个任务同时活跃：只有两个任务都在不同线程执行时才能通过
     barrier: threading.Barrier = threading.Barrier(2)
 
-    def fake_generate_sbom(dist_dir: Path, info: object) -> Path:
+    def fake_generate_sbom(dist_dir: Path, info: object, target: object = None) -> Path:
         """记录 SBOM 调用线程 ID，等待 manifest 也到达后返回."""
         sbom_threads.add(threading.get_ident())
         barrier.wait(timeout=2.0)
         return dist_dir / "release" / "app-0.1-sbom.json"
 
-    def fake_generate_manifest(dist_dir: Path, info: object) -> Path:
+    def fake_generate_manifest(dist_dir: Path, info: object, target: object = None) -> Path:
         """记录 manifest 调用线程 ID，等待 sbom 也到达后返回."""
         manifest_threads.add(threading.get_ident())
         barrier.wait(timeout=2.0)

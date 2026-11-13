@@ -27,6 +27,7 @@ from fspack.packaging.installer import (
     compile_installer,
     generate_nsis_script,
 )
+from fspack.packaging.installer.dist_prep import _target_arch
 from fspack.packaging.installer.nsis import dist_needs_ucrt, sign_exe_file, sign_exe_files
 from fspack.platform import Platform
 from fspack.progress import BuildTracker
@@ -57,7 +58,7 @@ def test_generate_nsis_script_cli(tmp_path: Path) -> None:
     assert nsi == dist / "installer.nsi"
     assert release.is_dir()
     assert 'Name "app 1.0"' in content
-    assert 'OutFile "release\\app-1.0-py3.11.9-windows-slim-setup.exe"' in content
+    assert 'OutFile "release\\app-1.0-py3.11.9-windows-x86_64-slim-setup.exe"' in content
     assert 'InstallDir "$PROGRAMFILES64\\app"' in content
     # 从注册表读取上次安装路径作为默认目录
     assert (
@@ -288,7 +289,7 @@ def test_build_installer_no_build_success(tmp_path: Path, monkeypatch: pytest.Mo
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "app.exe").write_bytes(b"")
-    out_setup = dist / "release" / "app-1.0-py3.11.9-windows-slim-setup.exe"
+    out_setup = dist / "release" / "app-1.0-py3.11.9-windows-x86_64-slim-setup.exe"
 
     def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         out_setup.parent.mkdir(parents=True, exist_ok=True)
@@ -299,13 +300,13 @@ def test_build_installer_no_build_success(tmp_path: Path, monkeypatch: pytest.Mo
     result = build_installer(ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True))
     assert result == out_setup
     assert (dist / "installer.nsi").is_file()
-    assert "app-1.0-py3.11.9-windows-slim-setup.exe" in (dist / "installer.nsi").read_text(encoding="utf-8")
+    assert "app-1.0-py3.11.9-windows-x86_64-slim-setup.exe" in (dist / "installer.nsi").read_text(encoding="utf-8")
 
 
 def test_build_installer_with_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     write_project(tmp_path, version="1.0")
     dist = tmp_path / "dist"
-    out_setup = dist / "release" / "app-1.0-py3.11.9-windows-slim-setup.exe"
+    out_setup = dist / "release" / "app-1.0-py3.11.9-windows-x86_64-slim-setup.exe"
 
     def fake_build(  # noqa: PLR0913
         project_dir: Path,
@@ -452,14 +453,14 @@ def test_make_zip_creates_archive_with_top_dir(tmp_path: Path) -> None:
 
     result = _make_zip(dist, info, release, Platform.WINDOWS)
     assert result.is_file()
-    assert result.name == "myapp-1.0-py3.11.9-windows-slim.zip"
+    assert result.name == "myapp-1.0-py3.11.9-windows-x86_64-slim.zip"
     with zipfile.ZipFile(result) as zf:
         names = zf.namelist()
-    # 顶层目录为 myapp-1.0-py3.11.9-windows-slim/
-    assert any(n.startswith("myapp-1.0-py3.11.9-windows-slim/") for n in names)
+    # 顶层目录为 myapp-1.0-py3.11.9-windows-x86_64-slim/
+    assert any(n.startswith("myapp-1.0-py3.11.9-windows-x86_64-slim/") for n in names)
     # 包含 exe 与 runtime/python311.dll
-    assert "myapp-1.0-py3.11.9-windows-slim/myapp.exe" in names
-    assert "myapp-1.0-py3.11.9-windows-slim/runtime/python311.dll" in names
+    assert "myapp-1.0-py3.11.9-windows-x86_64-slim/myapp.exe" in names
+    assert "myapp-1.0-py3.11.9-windows-x86_64-slim/runtime/python311.dll" in names
     # 排除 release/ 子目录
     assert not any("release" in n for n in names)
 
@@ -485,8 +486,8 @@ def test_make_zip_excludes_intermediate_markers_and_hidden_dirs(tmp_path: Path) 
     result = _make_zip(dist, info, release, Platform.WINDOWS)
     with zipfile.ZipFile(result) as zf:
         names = zf.namelist()
-    assert "myapp-1.0-py3.11.9-windows-slim/myapp.exe" in names
-    assert "myapp-1.0-py3.11.9-windows-slim/src/app.py" in names
+    assert "myapp-1.0-py3.11.9-windows-x86_64-slim/myapp.exe" in names
+    assert "myapp-1.0-py3.11.9-windows-x86_64-slim/src/app.py" in names
     for marker in (".build_ok", ".build_failed", ".dep_cache.json", ".pyc_stamp", ".nuitka_compile_stamp"):
         assert not any(marker in n for n in names), f"中间标记应被排除: {marker}"
     assert not any(".pnpm-store" in n for n in names), "隐藏目录残留应被排除"
@@ -501,7 +502,7 @@ def test_make_zip_linux_platform_suffix(tmp_path: Path) -> None:
     release = dist / "release"
     release.mkdir()
     result = _make_zip(dist, info, release, Platform.LINUX)
-    assert result.name == "app-1.0-py3.11.9-linux-slim.zip"
+    assert result.name == "app-1.0-py3.11.9-linux-x86_64-slim.zip"
 
 
 def test_make_zip_macos_platform_suffix(tmp_path: Path) -> None:
@@ -513,7 +514,7 @@ def test_make_zip_macos_platform_suffix(tmp_path: Path) -> None:
     release = dist / "release"
     release.mkdir()
     result = _make_zip(dist, info, release, Platform.MACOS)
-    assert result.name == "app-1.0-py3.11.9-macos-slim.zip"
+    assert result.name == f"app-1.0-py3.11.9-macos-{_target_arch('macos')}-slim.zip"
 
 
 def test_make_zip_overwrites_existing(tmp_path: Path) -> None:
@@ -529,7 +530,7 @@ def test_make_zip_overwrites_existing(tmp_path: Path) -> None:
     second = _make_zip(dist, info, release, Platform.WINDOWS)
     assert second.read_bytes() != b"stale"
     with zipfile.ZipFile(second) as zf:
-        assert "app-1.0-py3.11.9-windows-slim/app.exe" in zf.namelist()
+        assert "app-1.0-py3.11.9-windows-x86_64-slim/app.exe" in zf.namelist()
 
 
 # ---- build_zip 编排测试 ----
@@ -557,7 +558,7 @@ def test_build_zip_no_build_success(tmp_path: Path) -> None:
     (dist / "app.exe").write_bytes(b"")
     result = build_zip(ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True))
     assert result.is_file()
-    assert result.name == "app-1.0-py3.11.9-windows-slim.zip"
+    assert result.name == "app-1.0-py3.11.9-windows-x86_64-slim.zip"
 
 
 def test_build_zip_with_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -590,7 +591,7 @@ def test_build_zip_with_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr("fspack.builder.build", fake_build)
     result = build_zip(ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9", no_build=False))
     assert result.is_file()
-    assert result.name == "app-1.0-py3.11.9-windows-slim.zip"
+    assert result.name == "app-1.0-py3.11.9-windows-x86_64-slim.zip"
 
 
 # ---- 7z 便携包（_find_7z / _make_7z / build_sevenzip）测试 ----
@@ -644,17 +645,17 @@ def test_make_7z_invokes_system_tool(tmp_path: Path, monkeypatch: pytest.MonkeyP
     monkeypatch.setattr("fspack.packaging.installer.subprocess.run", fake_run)
     result = _make_7z(dist, info, release, Platform.WINDOWS)
 
-    assert result.name == "app-1.0-py3.11.9-windows-slim.7z"
+    assert result.name == "app-1.0-py3.11.9-windows-x86_64-slim.7z"
     assert result.read_bytes() == b"fake 7z"
     cmd = cmds[0]
     assert cmd[0] == "7z"
     # a=add -t7z 格式 -mx=9 超高压缩 -mmt=on 多线程 -y 免交互
     assert cmd[1:6] == ["a", "-t7z", "-mx=9", "-mmt=on", "-y"]
     # 顶层目录为 <base>（相对路径），cwd 为 release 目录（相对路径的基准）
-    assert cmd[-1] == "app-1.0-py3.11.9-windows-slim"
+    assert cmd[-1] == "app-1.0-py3.11.9-windows-x86_64-slim"
     assert cwds[0] == release
     # 打包后 staging 已清理
-    assert not (release / "app-1.0-py3.11.9-windows-slim").exists()
+    assert not (release / "app-1.0-py3.11.9-windows-x86_64-slim").exists()
 
 
 def test_make_7z_missing_tool_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -685,7 +686,7 @@ def test_build_sevenzip_no_build_success(tmp_path: Path, monkeypatch: pytest.Mon
     monkeypatch.setattr("fspack.packaging.installer.subprocess.run", fake_run)
     result = build_sevenzip(ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True))
     assert result.is_file()
-    assert result.name == "app-1.0-py3.11.9-windows-slim.7z"
+    assert result.name == "app-1.0-py3.11.9-windows-x86_64-slim.7z"
 
 
 def test_build_sevenzip_linux_platform_suffix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -706,7 +707,7 @@ def test_build_sevenzip_linux_platform_suffix(tmp_path: Path, monkeypatch: pytes
     result = build_sevenzip(
         ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True), target=Platform.LINUX
     )
-    assert result.name == "app-1.0-py3.11.9-linux-slim.7z"
+    assert result.name == "app-1.0-py3.11.9-linux-x86_64-slim.7z"
 
 
 def test_build_release_7z_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -727,7 +728,7 @@ def test_build_release_7z_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     outputs = build_release(
         ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True), target=Platform.WINDOWS, fmt="7z"
     )
-    assert [p.name for p in outputs] == ["app-1.0-py3.11.9-windows-slim.7z"]
+    assert [p.name for p in outputs] == ["app-1.0-py3.11.9-windows-x86_64-slim.7z"]
 
 
 def test_build_tarball_release_no_build_success(tmp_path: Path) -> None:
@@ -744,7 +745,7 @@ def test_build_tarball_release_no_build_success(tmp_path: Path) -> None:
     (dist / "src" / "pkg.build" / "artifact.o").write_bytes(b"")
     result = build_tarball_release(ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True))
     assert result.is_file()
-    assert result.name == "app-1.0-py3.11.9-linux-slim.tar.gz"
+    assert result.name == "app-1.0-py3.11.9-linux-x86_64-slim.tar.gz"
     # 验证 tar.gz 中不包含构建中间文件
     import tarfile
 
@@ -802,7 +803,7 @@ def test_build_release_auto_windows_dispatches_nsis(tmp_path: Path, monkeypatch:
 
     def fake_nsis_build_installer(cls: Any, *args: Any, **kw: Any) -> Path:
         calls.append("nsis")
-        out = dist / "release" / "app-1.0-py3.11.9-windows-slim-setup.exe"
+        out = dist / "release" / "app-1.0-py3.11.9-windows-x86_64-slim-setup.exe"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_bytes(b"")
         return out
@@ -827,7 +828,7 @@ def test_build_release_zip_only(tmp_path: Path) -> None:
         ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True), target=Platform.WINDOWS, fmt="zip"
     )
     assert len(outputs) == 1
-    assert outputs[0].name == "app-1.0-py3.11.9-windows-slim.zip"
+    assert outputs[0].name == "app-1.0-py3.11.9-windows-x86_64-slim.zip"
 
 
 def test_build_release_all_windows_generates_three_formats(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -841,7 +842,7 @@ def test_build_release_all_windows_generates_three_formats(tmp_path: Path, monke
 
     def fake_nsis_build_installer(cls: Any, *args: Any, **kw: Any) -> Path:
         build_calls.append("nsis-build")
-        out = dist / "release" / "app-1.0-py3.11.9-windows-slim-setup.exe"
+        out = dist / "release" / "app-1.0-py3.11.9-windows-x86_64-slim-setup.exe"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_bytes(b"")
         return out
@@ -868,13 +869,13 @@ def test_build_release_all_windows_generates_three_formats(tmp_path: Path, monke
         ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9", no_build=True), target=Platform.WINDOWS, fmt="all"
     )
     assert len(outputs) == 3
-    assert outputs[0].name == "app-1.0-py3.11.9-windows-slim-setup.exe"
-    assert outputs[1].name == "app-1.0-py3.11.9-windows-slim.zip"
-    assert outputs[2].name == "app-1.0-py3.11.9-windows-slim.7z"
+    assert outputs[0].name == "app-1.0-py3.11.9-windows-x86_64-slim-setup.exe"
+    assert outputs[1].name == "app-1.0-py3.11.9-windows-x86_64-slim.zip"
+    assert outputs[2].name == "app-1.0-py3.11.9-windows-x86_64-slim.7z"
     # no_build=True 时不应触发 build()
     assert "build" not in build_calls
     # zip 与 7z 共享 staging，全部格式完成后已清理
-    assert not (dist / "release" / "app-1.0-py3.11.9-windows-slim").exists()
+    assert not (dist / "release" / "app-1.0-py3.11.9-windows-x86_64-slim").exists()
 
 
 def test_build_release_all_linux_shares_tar_zip_staging(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -920,14 +921,14 @@ def test_build_release_all_linux_shares_tar_zip_staging(tmp_path: Path, monkeypa
     )
 
     assert [p.name for p in outputs] == [
-        "app-1.0-py3.11.10-linux-slim.tar.gz",
+        "app-1.0-py3.11.10-linux-x86_64-slim.tar.gz",
         "app_1.0-py3.11.10-slim_amd64.deb",
-        "app-1.0-py3.11.10-linux-slim.zip",
-        "app-1.0-py3.11.10-linux-slim.7z",
+        "app-1.0-py3.11.10-linux-x86_64-slim.zip",
+        "app-1.0-py3.11.10-linux-x86_64-slim.7z",
     ]
     assert len(copy_calls) == 2, f"期望 copytree 仅 2 次（tar/deb 各一次），实际 {len(copy_calls)} 次"
     # 全部格式完成后共享 staging 已清理
-    assert not (dist / "release" / "app-1.0-py3.11.10-linux-slim").exists(), "共享 staging 未清理"
+    assert not (dist / "release" / "app-1.0-py3.11.10-linux-x86_64-slim").exists(), "共享 staging 未清理"
 
 
 def test_build_release_invalid_fmt_raises(tmp_path: Path) -> None:
@@ -953,14 +954,14 @@ def test_build_release_auto_macos_dispatches_pkg_dmg(tmp_path: Path, monkeypatch
 
     def fake_build_pkg_release(*args: Any, **kw: Any) -> Path:
         calls.append(("pkg", kw.get("codesign", False)))
-        out = dist / "release" / "app-1.0-py3.11.9-macos-slim.pkg"
+        out = dist / "release" / f"app-1.0-py3.11.9-macos-{_target_arch('macos')}-slim.pkg"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_bytes(b"")
         return out
 
     def fake_build_dmg_release(*args: Any, **kw: Any) -> Path:
         calls.append(("dmg", kw.get("codesign", False)))
-        out = dist / "release" / "app-1.0-py3.11.9-macos-slim.dmg"
+        out = dist / "release" / f"app-1.0-py3.11.9-macos-{_target_arch('macos')}-slim.dmg"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_bytes(b"")
         return out
@@ -989,7 +990,7 @@ def test_build_release_pkg_only_macos(tmp_path: Path, monkeypatch: pytest.Monkey
 
     def fake_build_pkg_release(*args: Any, **kw: Any) -> Path:
         calls.append("pkg")
-        out = dist / "release" / "app-1.0-py3.11.9-macos-slim.pkg"
+        out = dist / "release" / f"app-1.0-py3.11.9-macos-{_target_arch('macos')}-slim.pkg"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_bytes(b"")
         return out
@@ -1051,7 +1052,7 @@ def test_prepare_dist_passes_build_defaults_to_build(tmp_path: Path, monkeypatch
 
     monkeypatch.setattr("fspack.builder.build", fake_build)
     # mock makensis 编译，避免 Linux CI 无 NSIS 导致测试失败
-    out_setup = tmp_path / "dist" / "release" / "app-1.0-py3.11.9-windows-slim-setup.exe"
+    out_setup = tmp_path / "dist" / "release" / "app-1.0-py3.11.9-windows-x86_64-slim-setup.exe"
 
     def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         out_setup.parent.mkdir(parents=True, exist_ok=True)
@@ -1106,7 +1107,7 @@ def test_prepare_dist_no_config_uses_default_options(tmp_path: Path, monkeypatch
 
     monkeypatch.setattr("fspack.builder.build", fake_build)
     # mock makensis 编译，避免 Linux CI 无 NSIS 导致测试失败
-    out_setup = tmp_path / "dist" / "release" / "app-1.0-py3.11.9-windows-slim-setup.exe"
+    out_setup = tmp_path / "dist" / "release" / "app-1.0-py3.11.9-windows-x86_64-slim-setup.exe"
 
     def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         out_setup.parent.mkdir(parents=True, exist_ok=True)
@@ -1161,7 +1162,7 @@ def test_prepare_dist_skips_build_when_dist_and_exe_ready(tmp_path: Path, monkey
 
     monkeypatch.setattr("fspack.builder.build", fake_build)
     # mock makensis 编译，避免 Linux CI 无 NSIS 导致测试失败
-    out_setup = dist / "release" / "app-1.0-py3.11.9-windows-slim-setup.exe"
+    out_setup = dist / "release" / "app-1.0-py3.11.9-windows-x86_64-slim-setup.exe"
 
     def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         out_setup.parent.mkdir(parents=True, exist_ok=True)
@@ -1215,7 +1216,7 @@ def test_prepare_dist_rebuilds_when_dist_exists_but_exe_missing(
 
     monkeypatch.setattr("fspack.builder.build", fake_build)
     # mock makensis 编译，避免 Linux CI 无 NSIS 导致测试失败
-    out_setup = dist / "release" / "app-1.0-py3.11.9-windows-slim-setup.exe"
+    out_setup = dist / "release" / "app-1.0-py3.11.9-windows-x86_64-slim-setup.exe"
 
     def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         out_setup.parent.mkdir(parents=True, exist_ok=True)

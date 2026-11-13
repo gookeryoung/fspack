@@ -342,13 +342,13 @@ _BUILD_OPTS: tuple[_Opt, ...] = (
     _Opt(
         ("--no-sbom",),
         "关闭构建结束后的 SBOM 生成（默认输出 SPDX 2.3 兼容 JSON "
-        "到 dist/release/<name>-<version>-sbom.json，含依赖名称/版本/许可证/SHA256）",
+        "到 dist/release/<name>-<version>-py<ver>-<platform>-sbom.json，含依赖名称/版本/许可证/SHA256）",
         action="store_true",
     ),
     _Opt(
         ("--no-manifest",),
         "关闭构建结束后的产物清单生成（默认输出 JSON "
-        "到 dist/release/<name>-<version>-manifest.json，含每个文件的大小/SHA256/分类）",
+        "到 dist/release/<name>-<version>-py<ver>-<platform>-manifest.json，含每个文件的大小/SHA256/分类）",
         action="store_true",
         dest="no_manifest",
     ),
@@ -651,8 +651,14 @@ def _add_manifest_subparser(sub: argparse._SubParsersAction[argparse.ArgumentPar
             _Opt(("project",), "项目目录", default=".", nargs="?"),
             _Opt(("--py-version",), "embed python 版本（用于构建 ProjectInfo，不传则从项目解析）", default=None),
             _Opt(
+                ("--target",),
+                "目标平台（用于默认文件名），默认当前平台",
+                choices=("windows", "linux", "macos"),
+                default=None,
+            ),
+            _Opt(
                 ("-o", "--output"),
-                "输出 manifest 路径，默认写入 dist/release/<name>-<version>-manifest.json",
+                "输出 manifest 路径，默认写入 dist/release/<name>-<version>-py<ver>-<platform>-manifest.json",
                 default=None,
                 metavar="OUTPUT",
             ),
