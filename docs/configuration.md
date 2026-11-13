@@ -68,14 +68,29 @@ include-dirs = [".claude/skills"]   # 该目录树原样进入 dist/src
 
 ```toml
 [tool.fspack]
-nuitka = false           # 启用 Nuitka 编译模式
-pyc_strip = false        # 剥离 .py 仅留 .pyc
-pyc_optimize = 2         # 字节码优化级别 0/1/2
-no_site = false          # 禁用 site.py
-no_pyc = false           # 关闭字节码预编译
-no_stdlib_trim = false   # 关闭标准库精简
-ccache = false           # Nuitka 编译启用 ccache
-nuitka_packages = []     # Nuitka 编译包含的额外包
+nuitka = false               # 启用 Nuitka 编译模式
+pyc_strip = false            # 剥离 .py 仅留 .pyc
+pyc_optimize = 2             # 字节码优化级别 0/1/2
+no_site = false              # 禁用 site.py
+no_pyc = false               # 关闭字节码预编译
+no_stdlib_trim = false       # 关闭标准库精简
+no_slim_runtime = false      # 关闭 Linux/macOS runtime 精简（保留调试符号/二进制/头文件）
+no_stdlib_zip = false        # 关闭 Linux/macOS 标准库 zip 化
+slim-stdlib = "default"      # Windows embed stdlib zip 档位：default / aggressive
+splash = false               # Windows splash 启动画面（默认关闭）
+ccache = false               # Nuitka 编译启用 ccache
+nuitka_packages = []         # Nuitka 编译包含的额外包
+no_size_report = false       # 关闭构建结束后的体积报告
+analyze_deps = false         # 启用二进制依赖分析（默认关闭）
+lazy_imports = []            # 延迟导入的顶层模块名（如 ["numpy", "pandas"]）
+require_hashes = false       # 依赖下载强制哈希校验（uv 不可用时 fail-fast）
+no_sbom = false              # 关闭 SBOM 生成
+no_manifest = false          # 关闭产物清单生成
+sign-exe-certificate = ""    # Windows 代码签名 PFX 路径（CLI --sign-exe-certificate 优先）
+sign-exe-password = ""       # PFX 证书密码
+sign-deb-key = ""            # Linux .deb GPG 签名密钥 ID（CLI --sign-deb-key 优先）
+open_browser = false         # WEB 应用启动后自动打开浏览器（WEB 类型默认启用）
+compiler = "auto"            # Windows Nuitka 编译器：auto / msvc / mingw
 ```
 
 ## 可选依赖分组（extras）

@@ -5,17 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+> 文档站版更新日志见 [docs/changelog.rst](docs/changelog.rst)，两处互为指针，历史版本均保留。
+
 ## [Unreleased]
+
+（暂无）
+
+## [0.6.13] - 2026-11-13
 
 ### Added
 - 新增端到端测试：真实构建并运行产物、多入口/包级入口、冷缓存并行下载、Linux 交叉构建 Windows 目标的 marker 取舍、`--lock`/`--frozen` 锁校验回归，由独立 CI job 执行
+- 新增 `--lock`/`--frozen` 生成并校验 `requirements.lock`（`name==version + sha256`，同输入可复现）
+- embed zip 与 standalone tarball 按 `runtime/hashes.py` 清单校验 sha256；`FSPACK_SKIP_RUNTIME_HASH=1` 可跳过，`FSPACK_STANDALONE_RELEASE_TAG` 可覆盖 release tag
+- 新增通用增量 action 缓存，统一图标转换、embed stdlib 精简、Win7 dist 扫描、loader 校验与 manifest 哈希备忘录的键/版本/损坏语义
+- Win7 兼容扫描与 PE 枚举复用优化，热构建跳过重复整树解析
 
 ### Changed
-- 单测门禁按实测耗时重新分档：超过 0.5 秒的用例标记 `slow`，`-m "not slow"` 主门禁只保留 0.5 秒以内用例
+- 依赖解析链路重构：本地 wheel 缓存改用 `uv pip compile --no-index` 离线解析，替代 pip 全量预检（M1）
+- manifest SHA256 改为按 (size, mtime_ns) 备忘录复用（M3）
+- AST 并行门槛改按采样预估的串行成本决策，注释密集型源码保持串行（M5）
+- 层间解耦：`config`↔`analyzer`、`slim`→`packaging`、`packaging`→`progress` 不再跨层往返
+- wheel 下载模块拆分为 `pip_args`/`process`/`output`/`cache`，内嵌 C loader 源码外置到 `src/fspack/assets/loader/*.c`
+- 单测门禁按实测耗时重新分档：超过 0.5 秒的用例标记 `slow`，主门禁只保留 0.5 秒以内用例
+- 明确最低支持 Python 版本为 3.8（以 `pyproject.toml` 的 `requires-python` 为准）
 
 ### Fixed
+- 修复并行下载输出解析只取最后一行导致冷缓存最终只装成 1 个依赖
+- 修复环境标记未按目标 Python 版本与目标平台求值，导致 Linux 目标误下载 `pywin32`
+- 修复包级 console script（`<pkg>/<mod>/__init__.py`）入口解析
+- 修复 macOS arm64 运行时资产名误用 `arm64-apple-darwin`，归一化为上游名称 `aarch64-apple-darwin`
+- 修复 Python 3.8 下 `ProcessPoolExecutor.shutdown(cancel_futures=)` 与 `typing.override` 兼容问题
 - 修复 build_perf 基准 CI 假性退化，类别级绝对噪声下限判定
-- 修复 macOS arm64 运行时 tarball 资产名误用 `arm64-apple-darwin`，归一化为上游实际名称 `aarch64-apple-darwin`（URL 拼接与哈希清单校验同步生效）
+- 修复离线 e2e fixture 与交叉产物断言的跨平台问题
+- 升级 certifi 至 2026.10.23，修复 pip-audit 漏洞告警
+
+## [0.6.12] - 2026-10-30
+
+### Added
+- 新增 wheel 下载与依赖消解测试，覆盖冷/热缓存、sdist 回退与平台标记求值
+
+### Changed
+- 重构 Nuitka 编译流程与依赖分析并行处理
+- 更新 pyrefly 与 `astral-sh/setup-uv` 版本
+
+### Fixed
+- 修复 slim_unpack 基准假性退化：把清理动作移出计时区，并配合类别级绝对噪声下限
 
 ## [0.6.11] - 2026-10-10
 

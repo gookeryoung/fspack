@@ -36,11 +36,15 @@ fsp b [project] [--mirror <name>] [--py-version <ver>] [--target <platform>]
 | `--keep-module` | 显式保留子模块（如 `PySide2.QtGui`），可重复 |
 | `--icon` | exe 图标（.ico/.png/.jpg），覆盖配置与自动搜索 |
 | `--no-stdlib-trim` | 关闭标准库精简 |
+| `--no-stdlib-zip` | 关闭 Linux/macOS 标准库 zip 化（默认打包为 `lib/pythonXY[t].zip`，省去 stdlib 目录 stat 遍历，冷启动提速 30-80ms） |
+| `--slim-stdlib <default\|aggressive>` | Windows embed 标准库 zip 重写档位：`default` 保守（仅删纯文档数据）/ `aggressive` 激进（再删 xml/email/http/unittest/asyncio 等，剥离后 import 即失败）；覆盖 `[tool.fspack] slim-stdlib` |
+| `--splash` | 启用 Windows splash 启动画面（默认关闭）：loader 启动期显示应用名，GUI 首窗口出现/WEB server 启动/30s 超时自动关闭 |
 | `--no-pyc` | 关闭字节码预编译 |
 | `--pyc-strip` | 剥离 `.py` 仅留 `.pyc`（减小体积） |
 | `--pyc-optimize` | 字节码优化级别：0/1/2（默认 2，体积减 5-15%） |
 | `--no-site` | 禁用 site.py（节省 ~20-30ms 启动） |
 | `--nuitka` | 启用 Nuitka 本机编译（提速 30-50%） |
+| `--compiler <auto\|msvc\|mingw>` | Windows Nuitka 编译器选择：`auto`（默认，MSVC > winlibs > zig）/ `msvc`（缺失 MSVC 时 fail-fast）/ `mingw`（强制 winlibs gcc）；仅 Windows + `--nuitka` 生效，覆盖配置 `compiler` |
 | `--extra` | 启用 `[project.optional-dependencies]` 分组（可重复，覆盖 `[tool.fspack] extras`） |
 | `-R`/`--recursive` | 递归扫描子项目依次构建 |
 | `--dry-run` | 仅预览打包计划，不执行实际构建（不下载/不编译/不复制） |
@@ -51,6 +55,8 @@ fsp b [project] [--mirror <name>] [--py-version <ver>] [--target <platform>]
 | `--log-file` | 将构建日志写入文件（UTF-8 追加，含时间戳/级别/异常栈） |
 | `--log-format` | 日志文件格式：`text`（默认）/`json`（结构化，便于采集） |
 | `--profile` | 启用耗时分析报告（wall/CPU/内存峰值 + 各阶段占比） |
+| `--lazy-import <modules>` | 延迟导入的顶层模块名（逗号分隔，如 `--lazy-import numpy,pandas`）：首个属性访问时才执行 `__init__.py`；C 扩展无法延迟；覆盖配置 `lazy_imports` |
+| `--open-browser` | WEB 应用启动后自动打开浏览器（WEB 类型默认启用；非 WEB 类型显式指定也可启用，与配置 `open_browser` 任一启用即生效） |
 
 `--dry-run` 输出打包计划表格（项目信息/依赖分析/构建选项），便于打包前确认配置正确，避免无效构建。
 
@@ -90,13 +96,19 @@ fsp r [project] [--entry <name>] [--debug] [--profile] [-- <args>...]
 
 ```text
 fsp p [project] [--mirror <name>] [--py-version <ver>] [--target <plat>] [--no-build] [--format <fmt>]
-              [--extra <name>] [-R|--recursive]
+              [--codesign] [--sign-exe] [--sign-deb] [--extra <name>] [-R|--recursive]
 ```
 
 | 选项 | 说明 |
 |------|------|
 | `--no-build` | 跳过重建，直接打包已有 dist |
-| `--format` | 发行包格式（auto/zip/nsis/tar.gz/deb/all，默认 auto） |
+| `--format` | 发行包格式（auto/zip/7z/nsis/tar.gz/deb/pkg/dmg/all，默认 auto） |
+| `--codesign` | macOS 产物做 ad-hoc 签名（`codesign --sign -`），仅 pkg/dmg 生效；仅用于本地执行 |
+| `--sign-exe` | Windows 产物代码签名（signtool），需配合 `--sign-exe-certificate`；签名 dist 内 exe 与 NSIS 安装包 |
+| `--sign-exe-certificate <pfx>` | Windows 代码签名 PFX 证书路径（与 `--sign-exe` 配套，配置 `sign-exe-certificate` 作为回退） |
+| `--sign-exe-password <pwd>` | PFX 证书密码（配置 `sign-exe-password` 作为回退） |
+| `--sign-deb` | Linux `.deb` 做 GPG 分离签名（产出 `<deb>.asc`），需配合 `--sign-deb-key` 或 GPG 默认密钥 |
+| `--sign-deb-key <keyid>` | `.deb` GPG 签名密钥 ID（配置 `sign-deb-key` 作为回退） |
 | `--extra` | 启用 `[project.optional-dependencies]` 分组（可重复，仅在重建时生效） |
 | `-R`/`--recursive` | 递归扫描子项目依次打包 |
 
@@ -106,6 +118,7 @@ fsp p [project] [--mirror <name>] [--py-version <ver>] [--target <plat>] [--no-b
 |------|------|
 | `auto` | 平台默认（Windows=nsis，Linux=tar.gz+deb，macOS=pkg+dmg） |
 | `zip` | 跨平台便携包 |
+| `7z` | 跨平台高压缩便携包（调用系统 7-Zip） |
 | `nsis` | Windows 安装包 |
 | `tar.gz`/`deb` | Linux 便携包/安装包 |
 | `pkg`/`dmg` | macOS 安装包/磁盘镜像 |
@@ -166,7 +179,7 @@ fsp doctor                # 环境诊断：检查打包工具与配置
 | `webview_app` | 前后端分离 | Vue + Vite + pywebview |
 | `multi_entry` | 多入口 | cli+gui+web 三入口 |
 
-完整模板列表见 [src/fspack/assets/templates/](../src/fspack/assets/templates/) 目录。
+完整模板列表见 `src/fspack/assets/init_templates/` 目录。
 
 `--test` 可选基准剖析选项（与 `fsp b -P`/`fsp r -P` 体系对齐）：`-P` 输出各模板构建阶段耗时报告并聚合落盘单个剖析日志（`.benchmarks/fsp-d-<时间戳>.json`），`-PO <路径>` 指定输出路径，`-PC [REF]` 与历史基准日志对比（不带值趋势表 / `last` / 近 N 次 / 基准文件路径）。
 

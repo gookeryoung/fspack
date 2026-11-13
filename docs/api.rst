@@ -185,6 +185,26 @@ packaging 子包
    :undoc-members:
    :show-inheritance:
 
+.. automodule:: fspack.packaging.manifest
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: fspack.packaging.dep_analyzer
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: fspack.packaging.dep_analyzer.common
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: fspack.packaging.dep_analyzer.graph
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
 slim 子包
 ---------
 
@@ -219,6 +239,62 @@ slim 子包
    :show-inheritance:
 
 .. automodule:: fspack.slim.unpack
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+doctor 子包
+-----------
+
+.. automodule:: fspack.doctor
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: fspack.doctor.models
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: fspack.doctor.runner
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: fspack.doctor.report
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: fspack.doctor.tools
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: fspack.doctor.benchmark_compare
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+templates 子包
+--------------
+
+.. automodule:: fspack.templates
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: fspack.templates.engine
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: fspack.templates.registry
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: fspack.templates.project_template
    :members:
    :undoc-members:
    :show-inheritance:
