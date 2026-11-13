@@ -51,24 +51,46 @@ R = TypeVar("R")
 class BuildTracker:
     """构建全流程进度跟踪器."""
 
-    def __init__(self, *, title: str = "构建阶段汇总") -> None:
+    def __init__(self, *, title: str = "构建阶段汇总", announce: bool = True) -> None:
         """初始化空跟踪器，开始总计时.
 
         Args:
             title: 汇总表标题，区分不同流程（构建/打包/编译等）。
+            announce: 是否在阶段进入/退出时打印阶段骨架（构建与打包命令
+                为 ``True``；纯指标收集场景可关闭以免污染输出）。
         """
         self._records: list[StageRecord] = []
         self._title = title
         self._start = time.perf_counter()
+        self._announce = announce
+        self._index = 0
 
     @contextmanager
     def stage(self, name: str) -> Iterator[StageRecorder]:
-        """进入一个构建阶段，返回 ``StageRecorder`` 上下文."""
+        """进入一个构建阶段，返回 ``StageRecorder`` 上下文.
+
+        交互式终端在进入时打印 ``[i] 阶段名``、退出时补一行 ``ok 耗时 · 备注``；
+        非 TTY（CI/重定向）只打印退出时的单行 ``[i] 阶段名 ... ok 耗时``——
+        ``rich`` 的 ``Live``/``Status`` 在非 TTY 下不渲染任何内容，需要这条
+        显式文本保证阶段骨架始终可读。阶段序号在本流程内自增；总数依赖运行期
+        条件（前端/tkinter/lock 等），故不显示可能出错的 ``i/n``。
+        """
+        self._index += 1
+        index = self._index
+        if self._announce:
+            console.stage_header(index, name)
         rec = StageRecorder(name)
+        failed = False
         try:
             yield rec
+        except BaseException:
+            failed = True
+            raise
         finally:
-            self._records.append(rec._finalize())
+            record = rec._finalize()
+            self._records.append(record)
+            if self._announce:
+                console.stage_finish(index, name, _fmt_seconds(record.elapsed), record.detail, failed=failed)
 
     @property
     def total_elapsed(self) -> float:

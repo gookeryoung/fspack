@@ -156,6 +156,11 @@ class ConsoleUI:
         """底层 rich Console，供 Progress/Status 等 rich 组件使用."""
         return self._console
 
+    @property
+    def is_interactive(self) -> bool:
+        """当前输出是否为交互式终端（TTY 且非 dumb）."""
+        return self._console.is_terminal
+
     def setup_logging(self, verbose: bool = False) -> None:
         """配置 root logger 使用 RichHandler，按级别着色。
 
@@ -179,6 +184,43 @@ class ConsoleUI:
     def step(self, title: str) -> None:
         """打印构建步骤标题."""
         self._console.print(f"[step]> {title}[/]")
+
+    def stage_header(self, index: int, name: str) -> None:
+        """打印阶段标题（交互式终端专用，非 TTY 只保留完成行）.
+
+        ``index`` 为本次流程内的阶段序号。阶段总数依赖构建参数与 AST 结果
+        （是否有前端/tkinter、是否启用 lock 等），无法在开始时准确预知，
+        因此只给序号不给总数，避免显示错误的 ``i/n``。
+        """
+        if not self.is_interactive:
+            return
+        self._console.print(f"[step]> [{index}] {markup_escape(name)}[/]")
+
+    def stage_finish(
+        self,
+        index: int,
+        name: str,
+        elapsed_text: str,
+        detail: str = "",
+        *,
+        failed: bool = False,
+    ) -> None:
+        """打印阶段完成行（TTY 缩进补在标题下，非 TTY 单行且带 ``[i]`` 前缀）.
+
+        非 TTY（CI/重定向/``TERM=dumb``）下 rich 的 ``Live``/``Status`` 不渲染
+        任何内容，此行为非交互场景提供唯一可读的阶段骨架：
+        ``[3] 分析依赖 ... ok 0.48s (缓存命中)``，可直接 grep ``^\\[``。
+        """
+        suffix = f" ({detail})" if detail else ""
+        if not self.is_interactive:
+            status = "FAIL" if failed else "ok"
+            self._console.print(f"[{index}] {markup_escape(name)} ... {status} {elapsed_text}{markup_escape(suffix)}")
+            return
+        mark = "x" if self._legacy_console else "×"
+        if failed:
+            self._console.print(f"    [error]{mark}[/] {elapsed_text}{markup_escape(f' · {detail}' if detail else '')}")
+        else:
+            self._console.print(f"    [success]ok[/] {elapsed_text}{markup_escape(f' · {detail}' if detail else '')}")
 
     def success(self, msg: str) -> None:
         """打印成功消息（legacy 控制台用 ASCII ``v`` 避免 Ambiguous 宽度偏移）.

@@ -20,6 +20,59 @@ def test_step_prints_title() -> None:
     assert ">" in out
 
 
+def test_stage_header_and_finish_interactive(monkeypatch: pytest.MonkeyPatch) -> None:
+    """交互式终端：阶段标题 + 缩进完成行（耗时与备注）."""
+    from fspack.console import ConsoleUI
+
+    monkeypatch.setattr(ConsoleUI, "is_interactive", property(lambda self: True))
+    ui = ConsoleUI()
+    with ui.rich.capture() as capture:
+        ui.stage_header(3, "分析依赖")
+        ui.stage_finish(3, "分析依赖", "0.48s", "缓存命中")
+    out = capture.get()
+    assert "[3] 分析依赖" in out
+    assert "ok" in out
+    assert "0.48s" in out
+    assert "缓存命中" in out
+
+
+def test_stage_non_tty_emits_single_line(monkeypatch: pytest.MonkeyPatch) -> None:
+    """非 TTY：跳过标题行，完成行带 [i] 前缀单行输出（CI 可 grep）."""
+    from fspack.console import ConsoleUI
+
+    monkeypatch.setattr(ConsoleUI, "is_interactive", property(lambda self: False))
+    ui = ConsoleUI()
+    with ui.rich.capture() as capture:
+        ui.stage_header(3, "分析依赖")
+        ui.stage_finish(3, "分析依赖", "0.48s", "缓存命中")
+    out = capture.get()
+    assert out.count("分析依赖") == 1
+    assert "[3] 分析依赖 ... ok 0.48s (缓存命中)" in out
+
+
+def test_stage_finish_non_tty_failure_marked(monkeypatch: pytest.MonkeyPatch) -> None:
+    """非 TTY 失败阶段输出 FAIL，便于 CI 直接判定."""
+    from fspack.console import ConsoleUI
+
+    monkeypatch.setattr(ConsoleUI, "is_interactive", property(lambda self: False))
+    ui = ConsoleUI()
+    with ui.rich.capture() as capture:
+        ui.stage_finish(9, "Nuitka 编译", "42.10s", failed=True)
+    out = capture.get()
+    assert "[9] Nuitka 编译 ... FAIL 42.10s" in out
+
+
+def test_stage_header_escapes_markup(monkeypatch: pytest.MonkeyPatch) -> None:
+    """阶段名中的方括号按字面显示，不被 rich 当作 markup 吞掉."""
+    from fspack.console import ConsoleUI
+
+    monkeypatch.setattr(ConsoleUI, "is_interactive", property(lambda self: True))
+    ui = ConsoleUI()
+    with ui.rich.capture() as capture:
+        ui.stage_header(1, "[project.scripts] 校验")
+    assert "[project.scripts] 校验" in capture.get()
+
+
 def test_success_prints_check() -> None:
     """success 打印成功消息，含 √ 标记."""
     with console.rich.capture() as capture:
