@@ -789,7 +789,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--json",
         action="store_true",
-        help="在 stdout 输出单行 JSON 结果信封（人读进度改走 stderr，退出码语义不变）",
+        help="在 stdout 输出单行 JSON 信封：build/package/clean/init/doctor/verify "
+        "有，run/manifest/cache 不输出（自带主输出），人读输出去 stderr",
     )
 
     sub = parser.add_subparsers(dest="command", metavar="<command>")

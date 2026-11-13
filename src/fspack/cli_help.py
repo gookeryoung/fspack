@@ -40,5 +40,6 @@ options:
   -V, --version   show program's version number and exit
   -v, --verbose   显示 DEBUG 级别日志（含外部工具原始输出）
   -q, --quiet     静默模式：只输出错误与最终结果
-  --json          在 stdout 输出单行 JSON 结果信封（人读进度改走 stderr，退出码语义不变）
+  --json          在 stdout 输出单行 JSON 信封：build/package/clean/init/doctor/verify
+                  有，run/manifest/cache 不输出（自带主输出），人读输出去 stderr
 """

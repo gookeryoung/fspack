@@ -1,6 +1,35 @@
 # CLI 参考
 
-全局选项：`-V/--version` 显示版本，`-v/--verbose` 开启 DEBUG 日志。
+## 全局选项
+
+| 选项 | 说明 |
+|------|------|
+| `-V/--version` | 显示版本 |
+| `-v/--verbose` | 开启 DEBUG 日志（含外部工具原始输出、每文件编译日志） |
+| `-q/--quiet` | 静默模式：抑制步骤/阶段骨架/成功/警告与进度条，只保留错误与 `RESULT` 行 |
+| `--json` | 在 stdout 输出单行 JSON 结果信封；人读进度全部改走 stderr |
+
+全局选项需放在子命令之前：`fsp --json b .`、`fsp -q b .`。
+
+### `--json` 信封边界
+
+**输出信封**：`build`(b)、`package`(p)、`clean`(c)、`init`(i)、`doctor`(d)、`verify`。
+
+**不输出信封**：`run`(r)、`manifest`(m)、`cache`。这些命令自身的主输出占用 stdout
+（被运行程序的 stdout、`manifest diff` 的差异文本、缓存状态列表），再加信封会破坏其
+既有输出契约。
+
+信封 schema（单行、UTF-8、不换行）：
+
+```json
+{"ok": true, "command": "build", "version": "0.6.14", "data": {"project": "F:\\proj", "dist_dir": "F:\\proj\\dist"}, "error": null}
+{"ok": false, "command": "build", "version": "0.6.14", "data": null, "error": {"type": "DependencyError", "message": "wheel 下载失败: ..."}}
+```
+
+- `data` 仅在成功时非空；`build`/`package` 含 `project` 与 `dist_dir`，其余命令含 `project`；
+- `error` 仅在失败时非空，`type` 为异常类名（子命令显式退出时为 `ExecutionError`）；
+- 退出码语义不变：成功 0，领域错误 2，`verify` 等命令沿用原有退出码；
+- `--json` 下所有人类可读输出（阶段骨架、日志、`RESULT`、错误）都在 stderr。
 
 命令速查：
 
