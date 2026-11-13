@@ -42,6 +42,10 @@ ALLOWED_DISPLAY_IMPORTERS = frozenset(
         "packaging/loader/compile.py",
         "packaging/manifest.py",
         "packaging/net.py",
+        # 编译/前端驱动：需要把 nuitka/gcc、npm/vite 的原始输出按行转发到 DEBUG，
+        # 属于「阶段执行 + 展示」入口，不是纯逻辑模块。
+        "packaging/nuitka/progress.py",
+        "packaging/pipeline/frontend_stage.py",
         "packaging/pipeline/context.py",
         "packaging/pipeline/dist_helpers.py",
         "packaging/pipeline/executor.py",

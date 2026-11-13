@@ -221,7 +221,7 @@ def test_cli_build_unknown_extra_raises_project_error(
     with pytest.raises(SystemExit) as excinfo:
         cli.main(["b", str(tmp_path), "--extra", "unknown_group"])
     assert excinfo.value.code == 2
-    assert "未知的 extras 分组" in capsys.readouterr().out
+    assert "未知的 extras 分组" in capsys.readouterr().err
 
 
 def test_cli_package_unknown_extra_raises_project_error(
@@ -241,7 +241,7 @@ def test_cli_package_unknown_extra_raises_project_error(
     with pytest.raises(SystemExit) as excinfo:
         cli.main(["p", str(tmp_path), "--extra", "unknown_group", "--no-build"])
     assert excinfo.value.code == 2
-    assert "未知的 extras 分组" in capsys.readouterr().out
+    assert "未知的 extras 分组" in capsys.readouterr().err
 
 
 # ---- CLI --extra 透传到 package 子命令 ----

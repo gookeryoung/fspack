@@ -108,8 +108,7 @@ def test_build_bad_pyproject_exits_cleanly(tmp_path: Path, capsys: pytest.Captur
     with pytest.raises(SystemExit) as excinfo:
         cli.main(["b", str(tmp_path)])
     assert excinfo.value.code == 2
-    out = capsys.readouterr().out
-    assert "语法错误" in out
+    assert "语法错误" in capsys.readouterr().err
 
 
 def test_build_non_utf8_pyproject_exits_cleanly(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -123,8 +122,7 @@ def test_build_non_utf8_pyproject_exits_cleanly(tmp_path: Path, capsys: pytest.C
     with pytest.raises(SystemExit) as excinfo:
         cli.main(["b", str(tmp_path)])
     assert excinfo.value.code == 2
-    out = capsys.readouterr().out
-    assert "编码错误" in out
+    assert "编码错误" in capsys.readouterr().err
 
 
 def test_build_unknown_extra_exits_cleanly(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -133,8 +131,7 @@ def test_build_unknown_extra_exits_cleanly(tmp_path: Path, capsys: pytest.Captur
     with pytest.raises(SystemExit) as excinfo:
         cli.main(["b", str(tmp_path), "--extra", "nope"])
     assert excinfo.value.code == 2
-    out = capsys.readouterr().out
-    assert "未知的 extras 分组" in out
+    assert "未知的 extras 分组" in capsys.readouterr().err
 
 
 def test_build_fspack_error_from_build_exits_cleanly(
@@ -152,8 +149,7 @@ def test_build_fspack_error_from_build_exits_cleanly(
     with pytest.raises(SystemExit) as excinfo:
         cli.main(["b", str(tmp_path)])
     assert excinfo.value.code == 2
-    out = capsys.readouterr().out
-    assert "wheel 下载失败" in out
+    assert "wheel 下载失败" in capsys.readouterr().err
 
 
 def _make_minimal_project(tmp_path: Path) -> Path:
@@ -1276,3 +1272,78 @@ def test_build_no_win7_dll_config_only(tmp_path: Path, monkeypatch: pytest.Monke
     monkeypatch.setattr("fspack.builder.build", fake_build)
     cli.main(["b", str(tmp_path)])
     assert called["options"].no_win7_dll is True
+
+
+def test_json_envelope_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--json 成功：stdout 单行信封，人读输出（含阶段/成功提示）改走 stderr."""
+    import json
+
+    _make_minimal_project(tmp_path)
+    monkeypatch.setattr("fspack.builder.build", lambda *_a, **_k: None)
+    cli.main(["--json", "b", str(tmp_path), "--no-log-file"])
+    captured = capsys.readouterr()
+    lines = [line for line in captured.out.splitlines() if line.strip()]
+    assert len(lines) == 1
+    payload = json.loads(lines[0])
+    assert payload["ok"] is True
+    assert payload["command"] == "build"
+    assert payload["version"] == __version__
+    assert payload["data"]["project"] == str(tmp_path.resolve())
+    assert payload["data"]["dist_dir"] == str(tmp_path.resolve() / "dist")
+    assert payload["error"] is None
+
+
+def test_json_envelope_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--json 失败：stdout 仍只有一行错误信封，退出码保持 2，人读错误在 stderr."""
+    import json
+
+    from fspack.exceptions import DependencyError
+
+    _make_minimal_project(tmp_path)
+
+    def fake_build(*_args: Any, **_kwargs: Any) -> None:
+        raise DependencyError("wheel 下载失败: connection reset")
+
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main(["--json", "b", str(tmp_path), "--no-log-file"])
+    assert excinfo.value.code == 2
+    captured = capsys.readouterr()
+    lines = [line for line in captured.out.splitlines() if line.strip()]
+    assert len(lines) == 1
+    payload = json.loads(lines[0])
+    assert payload["ok"] is False
+    assert payload["command"] == "build"
+    assert payload["data"] is None
+    assert payload["error"]["type"] == "DependencyError"
+    assert "wheel 下载失败" in payload["error"]["message"]
+    assert "wheel 下载失败" in captured.err
+
+
+def test_quiet_suppresses_human_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--quiet：抑制步骤/成功/警告，保留错误与 RESULT 结果行."""
+    _make_minimal_project(tmp_path)
+
+    def fake_build(*_args: Any, **_kwargs: Any) -> None:
+        from fspack.console import console
+
+        console.step("不应出现的步骤")
+        console.success("不应出现的成功")
+        console.warn("不应出现的警告")
+        console.error("应保留的错误")
+        console.result(True, "total=1.0s artifacts=1")
+
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    cli.main(["--quiet", "b", str(tmp_path), "--no-log-file"])
+    captured = capsys.readouterr()
+    assert "不应出现的步骤" not in captured.err
+    assert "不应出现的成功" not in captured.err
+    assert "不应出现的警告" not in captured.err
+    assert "应保留的错误" in captured.err
+    assert "RESULT ok total=1.0s artifacts=1" in captured.err

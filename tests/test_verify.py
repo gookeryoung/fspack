@@ -246,7 +246,7 @@ def test_host_arch_mapping(monkeypatch: pytest.MonkeyPatch, machine: str, expect
 def test_cli_verify_success(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     path = _write_elf(tmp_path / "app", ELF_X86_64)
     cli.main(["verify", str(path), "--target", "linux", "--arch", "x86_64"])
-    assert "ELF" in capsys.readouterr().out
+    assert "ELF" in capsys.readouterr().err
 
 
 def test_cli_verify_failure(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -254,4 +254,4 @@ def test_cli_verify_failure(tmp_path: Path, capsys: pytest.CaptureFixture[str]) 
     with pytest.raises(SystemExit) as excinfo:
         cli.main(["verify", str(path), "--target", "linux", "--arch", "x86_64"])
     assert excinfo.value.code == 1
-    assert "格式不匹配" in capsys.readouterr().out
+    assert "格式不匹配" in capsys.readouterr().err

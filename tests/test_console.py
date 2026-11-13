@@ -252,7 +252,7 @@ def test_make_console_keeps_auto_detection_outside_ci(monkeypatch: pytest.Monkey
     monkeypatch.setattr(Console, "__init__", spy_init)
     for name in ("CI", "GITHUB_ACTIONS", "BUILD_NUMBER"):
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setattr(CICompat, "is_legacy_windows_console", staticmethod(lambda: False))
+    monkeypatch.setattr(CICompat, "is_legacy_windows_console", staticmethod(lambda *_a, **_k: False))
     CICompat.make_console()
     assert captured.get("legacy_windows") is None
     assert captured.get("file") is None
@@ -357,7 +357,7 @@ def test_make_console_legacy_uses_ascii_proxy(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(Console, "__init__", spy_init)
     for name in ("CI", "GITHUB_ACTIONS", "BUILD_NUMBER"):
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setattr(CICompat, "is_legacy_windows_console", staticmethod(lambda: True))
+    monkeypatch.setattr(CICompat, "is_legacy_windows_console", staticmethod(lambda *_a, **_k: True))
     fake_stdout = _TtyFakeStream(tty=True)
     monkeypatch.setattr(sys, "stdout", fake_stdout)
 
@@ -380,7 +380,7 @@ def test_make_console_ci_overrides_legacy_console(monkeypatch: pytest.MonkeyPatc
     captured, spy_init = _spy_console_init()
     monkeypatch.setattr(Console, "__init__", spy_init)
     monkeypatch.setenv("CI", "true")
-    monkeypatch.setattr(CICompat, "is_legacy_windows_console", staticmethod(lambda: True))
+    monkeypatch.setattr(CICompat, "is_legacy_windows_console", staticmethod(lambda *_a, **_k: True))
     CICompat.make_console()
     assert captured.get("legacy_windows") is False
     assert captured.get("file") is None
@@ -390,7 +390,7 @@ def test_console_ui_ascii_marks_on_legacy_console(monkeypatch: pytest.MonkeyPatc
     """legacy 控制台下 success/error 用 ASCII v/x 替代 Ambiguous 宽度的 √/×."""
     from fspack.console import CICompat, ConsoleUI
 
-    monkeypatch.setattr(CICompat, "is_legacy_windows_console", staticmethod(lambda: True))
+    monkeypatch.setattr(CICompat, "is_legacy_windows_console", staticmethod(lambda *_a, **_k: True))
     ui = ConsoleUI()
     with ui.rich.capture() as capture:
         ui.success("构建完成")
@@ -408,7 +408,7 @@ def test_console_ui_unicode_marks_on_modern_console(monkeypatch: pytest.MonkeyPa
     """现代控制台保持 √/× 标记."""
     from fspack.console import CICompat, ConsoleUI
 
-    monkeypatch.setattr(CICompat, "is_legacy_windows_console", staticmethod(lambda: False))
+    monkeypatch.setattr(CICompat, "is_legacy_windows_console", staticmethod(lambda *_a, **_k: False))
     ui = ConsoleUI()
     with ui.rich.capture() as capture:
         ui.success("构建完成")

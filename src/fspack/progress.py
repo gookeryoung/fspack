@@ -177,6 +177,9 @@ def spinner(label: str) -> Iterator[None]:
     不封装子进程：调用方在 ``with`` 块内自行调 ``subprocess.run``。
     异常会正常传播，不会吞噬。
     """
+    if console.quiet:
+        yield
+        return
     status: Status = console.rich.status(label, spinner="dots")
     status.start()
     try:
@@ -201,7 +204,7 @@ def iter_with_progress(
     退化为简单 for 循环。
     """
     total = len(items)
-    use_progress = console.rich.is_terminal and total > 1
+    use_progress = console.is_interactive and not console.quiet and total > 1
     if not use_progress:
         # 无进度条开销的快速路径
         for item in items:

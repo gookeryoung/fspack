@@ -784,7 +784,13 @@ def build_parser() -> argparse.ArgumentParser:
         description="极速 Python 打包器（cargo 风格短命令）。",
     )
     parser.add_argument("-V", "--version", action="version", version=f"%(prog)s {__version__}")
-    parser.add_argument("-v", "--verbose", action="store_true", help="显示 DEBUG 级别日志")
+    parser.add_argument("-v", "--verbose", action="store_true", help="显示 DEBUG 级别日志（含外部工具原始输出）")
+    parser.add_argument("-q", "--quiet", action="store_true", help="静默模式：只输出错误与最终结果")
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="在 stdout 输出单行 JSON 结果信封（人读进度改走 stderr，退出码语义不变）",
+    )
 
     sub = parser.add_subparsers(dest="command", metavar="<command>")
     _add_build_subparser(sub)

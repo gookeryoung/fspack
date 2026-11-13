@@ -84,21 +84,23 @@ class CICompat:
                     reconfigure(encoding="utf-8")
 
     @staticmethod
-    def is_legacy_windows_console() -> bool:
+    def is_legacy_windows_console(stream: IO[str] | None = None) -> bool:
         """检测是否 Win7 等旧版 Windows 的 legacy 控制台（无 VT 处理）.
 
-        判定条件：Windows 平台 + stdout 为真实 tty + 控制台不支持 VT
-        转义（Win7/8 的 conhost；Win10+ 默认开启）。重定向输出（管道/
-        文件，含 pytest capture）不算——宽度补偿只针对真实控制台显示，
-        rich 对重定向流本就退化为纯文本无盒线布局问题。
+        判定条件：Windows 平台 + ``stream``（默认 stdout）为真实 tty +
+        控制台不支持 VT 转义（Win7/8 的 conhost；Win10+ 默认开启）。重定向
+        输出（管道/文件，含 pytest capture）不算——宽度补偿只针对真实控制台
+        显示，rich 对重定向流本就退化为纯文本无盒线布局问题。
 
+        :param stream: 待检测的输出流，默认 ``sys.stdout``。
         :return: legacy Windows 控制台返回 ``True``；探测失败按非 legacy
             处理（保持现代渲染路径）。
         """
         if sys.platform != "win32":
             return False
+        target = stream if stream is not None else sys.stdout
         try:
-            if not sys.stdout.isatty():
+            if not target.isatty():
                 return False
             from rich.console import detect_legacy_windows
 
@@ -112,7 +114,7 @@ class CICompat:
         return os.environ.get("GITHUB_ACTIONS", "").lower() in ("1", "true")
 
     @classmethod
-    def make_console(cls) -> Console:
+    def make_console(cls, *, stderr: bool = False) -> Console:
         """创建 rich Console 实例。
 
         CI 环境（``CI`` 或 ``GITHUB_ACTIONS`` 等环境变量存在）下显式禁用
@@ -131,18 +133,20 @@ class CICompat:
         """
         cls.ensure_utf8_stdio()
 
+        target = sys.stderr if stderr else sys.stdout
         in_ci = any(os.environ.get(name) for name in ("CI", "GITHUB_ACTIONS", "BUILD_NUMBER"))
-        legacy = not in_ci and cls.is_legacy_windows_console()
+        legacy = not in_ci and cls.is_legacy_windows_console(target)
         legacy_windows: bool | None = None
         if in_ci:
             legacy_windows = False
         elif legacy:
             legacy_windows = True
-        file: Any = _AsciiEncodingStream(sys.stdout) if legacy else None
+        file: Any = _AsciiEncodingStream(target) if legacy else None
         return Console(
             theme=cls.get_theme(),
             legacy_windows=legacy_windows,
             file=file,
+            stderr=stderr and file is None,
         )
 
 
@@ -157,6 +161,7 @@ class ConsoleUI:
     def __init__(self) -> None:
         self._legacy_console = CICompat.is_legacy_windows_console()
         self._gha = CICompat.is_github_actions()
+        self._quiet = False
         self._console: Console = CICompat.make_console()
 
     @property
@@ -168,6 +173,28 @@ class ConsoleUI:
     def is_interactive(self) -> bool:
         """当前输出是否为交互式终端（TTY 且非 dumb）."""
         return self._console.is_terminal
+
+    @property
+    def quiet(self) -> bool:
+        """静默模式：只保留错误与最终结果行."""
+        return self._quiet
+
+    def setup_output(self, *, machine: bool = False, quiet: bool = False) -> None:
+        """按输出场景重建人类可读 Console.
+
+        - ``machine``（``--json``）：stdout 专供机读信封，人读进度改走 stderr；
+        - 否则仅在 **stdout 被重定向（非 TTY）** 时改走 stderr，交互终端
+          保持原有观感；
+        - ``quiet``：抑制阶段骨架、成功/警告与进度条，只留错误和 RESULT。
+        """
+        self._quiet = quiet
+        use_stderr = machine or not sys.stdout.isatty()
+        self._console = CICompat.make_console(stderr=use_stderr)
+
+    def reset_output(self) -> None:
+        """恢复默认输出通道与 quiet 状态（CLI 单次执行结束后复位）."""
+        self._quiet = False
+        self._console = CICompat.make_console()
 
     def setup_logging(self, verbose: bool = False) -> None:
         """配置 root logger 使用 RichHandler，按级别着色。
@@ -193,7 +220,9 @@ class ConsoleUI:
         )
 
     def step(self, title: str) -> None:
-        """打印构建步骤标题."""
+        """打印构建步骤标题（``--quiet`` 下抑制）."""
+        if self._quiet:
+            return
         self._console.print(f"[step]> {title}[/]")
 
     def stage_header(self, index: int, name: str) -> None:
@@ -203,6 +232,8 @@ class ConsoleUI:
         （是否有前端/tkinter、是否启用 lock 等），无法在开始时准确预知，
         因此只给序号不给总数，避免显示错误的 ``i/n``。
         """
+        if self._quiet:
+            return
         if not self.is_interactive:
             if self._gha:
                 # GitHub Actions：阶段标题作为可折叠分组，阶段内的心跳与
@@ -229,6 +260,8 @@ class ConsoleUI:
         任何内容，此行为非交互场景提供唯一可读的阶段骨架：
         ``[3] 分析依赖 ... ok 0.48s (缓存命中)``，可直接 grep ``^\\[``。
         """
+        if self._quiet:
+            return
         suffix = f" ({detail})" if detail else ""
         if not self.is_interactive:
             status = "FAIL" if failed else "ok"
@@ -269,17 +302,21 @@ class ConsoleUI:
         self._console.print(f"RESULT {status}{markup_escape(suffix)}")
 
     def success(self, msg: str) -> None:
-        """打印成功消息（legacy 控制台用 ASCII ``v`` 避免 Ambiguous 宽度偏移）.
+        """打印成功消息（``--quiet`` 下抑制；legacy 控制台用 ASCII ``v``）.
 
         消息体经 ``rich.markup.escape`` 转义：消息是纯文本（含路径/异常
         文本等），其中的方括号（如 ``[project.scripts]``）不得被 rich 当作
         markup 标签吞掉；样式仅由前缀标记（``[success]``）提供。
         """
         mark = "v" if self._legacy_console else "√"
+        if self._quiet:
+            return
         self._console.print(f"[success]{mark}[/] {markup_escape(msg)}")
 
     def warn(self, msg: str) -> None:
-        """打印警告消息（消息体转义，见 :meth:`success` 说明）."""
+        """打印警告消息（``--quiet`` 下抑制；消息体转义，见 :meth:`success` 说明）."""
+        if self._quiet:
+            return
         self._console.print(f"[warning]![/] {markup_escape(msg)}")
 
     def error(self, msg: str) -> None:

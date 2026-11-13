@@ -223,6 +223,7 @@ class Downloader:
                         TimeRemainingColumn(),
                         console=console.rich,
                         transient=True,
+                        disable=console.quiet,
                     )
                     with progress, urllib.request.urlopen(req, timeout=self._timeout, context=self._ssl_ctx) as resp:
                         try:

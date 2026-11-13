@@ -19,7 +19,7 @@ from __future__ import annotations
 # 生成 HELP_TEXT 的 Python 次版本；与此不符的解释器不启用快照路径
 HELP_SNAPSHOT_PY: tuple[int, int] = (3, 14)
 
-HELP_TEXT = """usage: fspack [-h] [-V] [-v] <command> ...
+HELP_TEXT = """usage: fspack [-h] [-V] [-v] [-q] [--json] <command> ...
 
 极速 Python 打包器（cargo 风格短命令）。
 
@@ -38,5 +38,7 @@ positional arguments:
 options:
   -h, --help      show this help message and exit
   -V, --version   show program's version number and exit
-  -v, --verbose   显示 DEBUG 级别日志
+  -v, --verbose   显示 DEBUG 级别日志（含外部工具原始输出）
+  -q, --quiet     静默模式：只输出错误与最终结果
+  --json          在 stdout 输出单行 JSON 结果信封（人读进度改走 stderr，退出码语义不变）
 """

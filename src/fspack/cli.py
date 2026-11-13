@@ -21,7 +21,7 @@ import argparse
 import os
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from fspack import __version__
 from fspack.cli_parser import build_parser
@@ -119,6 +119,8 @@ def main(argv: list[str] | None = None) -> None:
     # console 延迟导入：仅在实际执行子命令时加载 rich（~17ms）
     from fspack.console import console
 
+    json_mode = bool(getattr(ns, "json", False))
+    console.setup_output(machine=json_mode, quiet=bool(getattr(ns, "quiet", False)))
     console.setup_logging(verbose=ns.verbose)
 
     # -O/--offline 单次约定：设 FSPACK_OFFLINE 使 is_offline() 生效，
@@ -134,10 +136,78 @@ def main(argv: list[str] | None = None) -> None:
         # 完整堆栈仅在 --verbose（DEBUG）时记录，便于排查而不干扰普通用户。
         console.error(str(exc))
         console.result(False, str(exc))
+        if json_mode:
+            _emit_json(command, ns, error=exc)
         import logging
 
         logging.getLogger(__name__).debug("命令 %s 执行失败", command, exc_info=exc)
         raise SystemExit(2) from None
+    except SystemExit as exc:
+        # 子命令内部的显式退出（如输入校验失败）同样保持退出码不变，
+        # 但 --json 下补一个错误信封，避免脚本只看到空 stdout。
+        code = exc.code if isinstance(exc.code, int) else 1
+        if json_mode and code != 0:
+            _emit_json(command, ns, error_message=f"命令以退出码 {code} 结束")
+        raise
+    else:
+        if json_mode:
+            _emit_json(command, ns)
+    finally:
+        console.reset_output()
+
+
+_JSON_COMMANDS: dict[str, str] = {
+    "b": "build",
+    "build": "build",
+    "p": "package",
+    "package": "package",
+    "clean": "clean",
+    "init": "init",
+    "i": "init",
+    "doctor": "doctor",
+    "d": "doctor",
+    "verify": "verify",
+}
+
+
+def _emit_json(
+    command: str,
+    ns: argparse.Namespace,
+    *,
+    error: FspackError | None = None,
+    error_message: str | None = None,
+) -> None:
+    """在 stdout 输出单行 JSON 信封（``--json`` 专用）.
+
+    run/manifest/cache 等自带主输出的命令不在 :data:`_JSON_COMMANDS` 中，
+    不输出信封以免污染其 stdout。退出码仍由调用方原有逻辑决定，信封只影响
+    机读结果通道。
+    """
+    canonical = _JSON_COMMANDS.get(command)
+    if canonical is None:
+        return
+    import json
+
+    project = getattr(ns, "project", None)
+    project_path = Path(project).resolve() if project else None
+    data: dict[str, str | None] | None = None
+    failed = error is not None or error_message is not None
+    if not failed:
+        data = {"project": str(project_path) if project_path else None}
+        if canonical in ("build", "package") and project_path is not None:
+            data["dist_dir"] = str(project_path / "dist")
+    envelope: dict[str, Any] = {
+        "ok": not failed,
+        "command": canonical,
+        "version": __version__,
+        "data": data,
+        "error": None,
+    }
+    if error is not None:
+        envelope["error"] = {"type": type(error).__name__, "message": str(error)}
+    elif error_message is not None:
+        envelope["error"] = {"type": "ExecutionError", "message": error_message}
+    print(json.dumps(envelope, ensure_ascii=False), file=sys.stdout, flush=True)
 
 
 def _dispatch(command: str, ns: argparse.Namespace) -> None:

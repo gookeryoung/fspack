@@ -128,15 +128,15 @@ def test_cli_init_list_prints_and_exits(capsys: pytest.CaptureFixture[str]) -> N
     """fsp init --list → 打印模板列表后退出，不创建项目."""
     cli_main(["init", "--list"])
     captured = capsys.readouterr()
-    assert "helloworld" in captured.out
-    assert "可用项目模板" in captured.out
+    assert "helloworld" in captured.err
+    assert "可用项目模板" in captured.err
 
 
 def test_cli_init_list_with_alias_i(capsys: pytest.CaptureFixture[str]) -> None:
     """fsp i --list → 别名 i 同样支持 --list."""
     cli_main(["i", "--list"])
     captured = capsys.readouterr()
-    assert "helloworld" in captured.out
+    assert "helloworld" in captured.err
 
 
 # ---- CLI 未指定 --template + 非 TTY → 用 helloworld ----
@@ -182,7 +182,7 @@ def test_cli_init_unknown_template_errors(
         cli_main(["init", "app", "--template", "nonexistent"])
     assert exc_info.value.code == 1
     captured = capsys.readouterr()
-    assert "未知模板 id" in captured.out
+    assert "未知模板 id" in captured.err
 
 
 # ---- CLI --description 透传 ----
@@ -243,7 +243,7 @@ def test_cli_init_python_version_invalid_format_errors(
         cli_main(["init", "bad-app", "--template", "helloworld", "--python-version", "3"])
     assert exc_info.value.code == 1
     captured = capsys.readouterr()
-    assert "无效的 Python 版本号" in captured.out
+    assert "无效的 Python 版本号" in captured.err
 
 
 def test_cli_init_python_version_non_numeric_errors(
@@ -472,5 +472,5 @@ def test_cli_init_fastapi_on_win7_errors(
         cli_main(["init", "win7-api", "--template", "fastapi"])
     assert exc_info.value.code == 1
     captured = capsys.readouterr()
-    assert "Win7" in captured.out
-    assert "fastapi" in captured.out.lower() or "fastapi" in captured.out
+    assert "Win7" in captured.err
+    assert "fastapi" in captured.err.lower() or "fastapi" in captured.err
