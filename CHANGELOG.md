@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 （暂无）
 
+## [0.6.14] - 2026-11-13
+
+### Added
+- 新增模板一致性护栏测试：校验 `template.toml` 与 `pyproject.toml` 的依赖、`app_type`、`requires-python` 口径，模板增删必须显式更新契约期望
+- 新增 `tests/_projects.py` 场景工厂，统一测试侧最小/中等工程夹具，收敛散落的内联 `pyproject.toml` 构造
+
+### Changed
+- 统一模板版本口径：18 个 init 模板与 8 个 doctor 模板的 `requires-python` 收敛到 `>=3.8`（PySide2 保留 `<3.10` 上限），`cli_init` 默认值改为从模板注册表派生
+- 退役 `ProjectTemplate` 兼容 shim，doctor 模板统一通过 `list_templates(role="doctor")` 加载
+- 测试不再手抄模板依赖与 `app_type` 期望，改为「模板 → 生成 → 断言」；关键契约保留一份人工评审的独立期望表
+
+### Fixed
+- 修复 `game/snake`（`<3.12`）与 `game/pygame_snake`（`>=3.13`）对同一示例给出互斥 Python 版本约束的问题
+- 修复 `test_init_smoke` 注释仍写「24 个模板」、断言仅要求 `>= 18` 导致模板误删无法发现的漂移
+
 ## [0.6.13] - 2026-11-13
 
 ### Added

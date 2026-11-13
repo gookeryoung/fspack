@@ -9,6 +9,17 @@
 
 （暂无）
 
+v0.6.14
+-------
+
+- test(templates): 新增模板一致性护栏——校验 ``template.toml`` 与 ``pyproject.toml`` 的依赖、``app_type``、``requires-python`` 口径，模板增删必须显式更新契约期望
+- test(templates): 新增 ``tests/_projects.py`` 场景工厂，统一测试侧最小/中等工程夹具，收敛内联 ``pyproject.toml`` 构造
+- refactor(templates): 统一 18 个 init 模板与 8 个 doctor 模板的 ``requires-python`` 口径为 ``>=3.8``（PySide2 保留 ``<3.10`` 上限），``cli_init`` 默认值改为从注册表派生
+- refactor(templates): 退役 ``ProjectTemplate`` 兼容 shim，doctor 模板统一通过 ``list_templates(role="doctor")`` 加载
+- fix(templates): 修复 ``game/snake``（``<3.12``）与 ``game/pygame_snake``（``>=3.13``）对同一示例给出互斥 Python 版本约束
+- fix(test): 修复 ``test_init_smoke`` 注释仍写「24 个模板」、断言仅要求 ``>= 18`` 导致模板误删无法发现的漂移
+- docs: 新增模板与测试示例工程的冗余盘点及整合方案分析
+
 v0.6.13
 -------
 
