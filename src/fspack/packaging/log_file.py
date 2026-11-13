@@ -170,7 +170,7 @@ def setup_log_file(path: Path, fmt: LogFormat = LogFormat.TEXT) -> LogFileHandle
     root = logging.getLogger()
     # root 级别高于 DEBUG 时，-v 才会产生的 DEBUG 细节（外部工具原始输出、
     # 每文件编译日志）在 logger 层就被丢弃，日志文件里看不到失败上下文。
-    # 统一降到 DEBUG：控制台 RichHandler 自带 INFO 级别过滤，终端观感不变；
+    # 统一降到 DEBUG：控制台 StageLogHandler 自带 INFO 级别过滤，终端观感不变；
     # teardown 恢复原级别。
     previous_level = root.level
     if previous_level > logging.DEBUG:

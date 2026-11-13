@@ -30,6 +30,7 @@ __all__ = [
     "reset",
     "short_path",
     "truncate_middle",
+    "wrap_message",
 ]
 
 _logger = logging.getLogger(__name__)
@@ -76,7 +77,12 @@ def is_verbose() -> bool:
 
 def display_width(text: str) -> int:
     """返回文本在等宽终端上的显示列数（全角/宽字符按 2 列）."""
-    return sum(2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1 for ch in text)
+    return sum(_char_width(ch) for ch in text)
+
+
+def _char_width(ch: str) -> int:
+    """单字符显示列数：East Asian Width 的 W/F 记 2 列，其余 1 列."""
+    return 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
 
 
 def _take_head(text: str, budget: int) -> str:
@@ -84,7 +90,7 @@ def _take_head(text: str, budget: int) -> str:
     used = 0
     out: list[str] = []
     for ch in text:
-        width = 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+        width = _char_width(ch)
         if used + width > budget:
             break
         out.append(ch)
@@ -97,7 +103,7 @@ def _take_tail(text: str, budget: int) -> str:
     used = 0
     out: list[str] = []
     for ch in reversed(text):
-        width = 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+        width = _char_width(ch)
         if used + width > budget:
             break
         out.append(ch)
@@ -146,3 +152,55 @@ def short_path(path: str | PathLike[str], *, max_width: int | None = None) -> st
     # 完整路径不因截断而丢失：落到 DEBUG，``-v`` 与 CI 默认日志文件仍可找回
     _logger.debug("完整路径: %s", text)
     return truncate_middle(text, width)
+
+
+# 可断行位置：路径分隔符与空格之后（保留分隔符在前一行末尾）
+_BREAK_AFTER = frozenset("\\/ ")
+# 宽/全角字符（CJK、全角标点）逐字断开：中文没有词间空格，按字符折行才自然
+_WIDE_KINDS = ("W", "F")
+
+
+def _tokens(text: str) -> list[str]:
+    """把文本切成不可再分的折行单元（分隔符留在前一片段尾部）."""
+    tokens: list[str] = []
+    buf = ""
+    for ch in text:
+        buf += ch
+        if ch in _BREAK_AFTER or unicodedata.east_asian_width(ch) in _WIDE_KINDS:
+            tokens.append(buf)
+            buf = ""
+    if buf:
+        tokens.append(buf)
+    return tokens
+
+
+def wrap_message(text: str, width: int) -> list[str]:
+    """按显示宽度把日志消息折成多行，优先在路径分隔符/空格后断开.
+
+    - 每行显示宽度不超过 ``width``（CJK 按 2 列，不按 ``len()`` 硬切）；
+    - 断点只在目录分隔符与空格之后，**不会把文件名切成两半**；
+    - 单个片段长于 ``width`` 时（如超长文件名）退回中间省略，至少保住尾部
+      文件名——这是唯一会丢失内容的兜底，完整原文仍在日志文件里。
+
+    :param text: 单行日志正文。
+    :param width: 正文可用的显示列数（已扣除前缀与缩进）。
+    :return: 至少一行的列表，各行不含前导缩进。
+    """
+    if width <= 0:
+        return [text]
+    if display_width(text) <= width:
+        return [text]
+    lines: list[str] = []
+    current = ""
+    for part in _tokens(text):
+        token = truncate_middle(part, width) if display_width(part) > width else part
+        if not current:
+            current = token.lstrip()
+        elif display_width(current + token) <= width:
+            current += token
+        else:
+            lines.append(current.rstrip())
+            current = token.lstrip()
+    if current.strip():
+        lines.append(current.rstrip())
+    return lines or [text]

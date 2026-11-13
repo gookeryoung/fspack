@@ -20,16 +20,22 @@ import contextlib
 import logging
 import os
 import sys
-from typing import IO, Any, Final
+import time
+from typing import IO, Any, Final, override
 
 from rich.console import Console
-from rich.logging import RichHandler
 from rich.markup import escape as markup_escape
+from rich.text import Text
 from rich.theme import Theme
 
-__all__ = ["CICompat", "ConsoleUI", "console"]
+from fspack import logutil
+
+__all__ = ["CICompat", "ConsoleUI", "StageLogHandler", "console"]
 
 _logger = logging.getLogger(__name__)
+
+# 仅用于格式化异常的 traceback（Handler.formatException 在类型存根里只属于 Formatter）
+_EXC_FORMATTER = logging.Formatter()
 
 
 class _AsciiEncodingStream:
@@ -150,6 +156,79 @@ class CICompat:
         )
 
 
+class StageLogHandler(logging.Handler):
+    """阶段级日志渲染：短级别标记 + 正文固定从第 7 列起.
+
+    默认观感优先，不再沿用 ``[11/13/26 20:06:39] INFO`` 这种 30 列宽前缀：
+
+    - 级别用等宽的 5 列文本标记（``DEBUG``/``INFO ``/``WARN ``/``ERROR``）
+      加 1 个空格，正文一律从第 7 列开始，续行用等宽空格对齐到同一列；
+    - 时间戳默认不显示：阶段完成行本身带耗时，逐行时间戳只挤占左半屏；
+      ``-v`` 才补 ``HH:MM:SS``（排查 ``[pip]``/``[loader]`` 输出时序时有用）；
+    - 正文按目录段/空格折行（:func:`fspack.logutil.wrap_message`），CJK 按
+      2 列计宽，绝不把文件名劈成两半；
+    - 颜色只作辅助：重定向、CI 与日志文件里 rich 会自动去掉 ANSI，级别
+      仍靠文本标记区分，不依赖颜色。
+    """
+
+    _LABELS: Final = {
+        logging.DEBUG: ("DEBUG", "dim"),
+        logging.INFO: ("INFO ", "cyan"),
+        logging.WARNING: ("WARN ", "yellow"),
+        logging.ERROR: ("ERROR", "bold red"),
+        logging.CRITICAL: ("ERROR", "bold red"),
+    }
+
+    def __init__(self, ui_console: Console, level: int = logging.NOTSET, *, show_time: bool = False) -> None:
+        """初始化 handler.
+
+        :param ui_console: 输出目标（:attr:`ConsoleUI.rich`）。
+        :param level: handler 级别过滤。
+        :param show_time: True 时前缀补 ``HH:MM:SS``（``-v`` 场景）。
+        """
+        super().__init__(level=level)
+        self._ui_console = ui_console
+        self._show_time = show_time
+
+    @property
+    def show_time(self) -> bool:
+        """是否在每行前缀里显示时间戳."""
+        return self._show_time
+
+    @override
+    def emit(self, record: logging.LogRecord) -> None:
+        """渲染并输出一条日志（logging 契约：emit 内部异常不得外抛）."""
+        try:
+            self._ui_console.print(self.render(record))
+        except Exception:
+            self.handleError(record)
+
+    def _prefix(self, record: logging.LogRecord) -> str:
+        """构造固定宽度前缀：``INFO `` 或 ``HH:MM:SS INFO ``."""
+        label = self._LABELS.get(record.levelno, ("INFO ", "cyan"))[0]
+        if not self._show_time:
+            return f"{label} "
+        clock = time.strftime("%H:%M:%S", time.localtime(record.created))
+        return f"{clock} {label} "
+
+    def render(self, record: logging.LogRecord) -> Text:
+        """把日志记录渲染成带对齐续行的 rich Text（便于单测直接断言）."""
+        _label, style = self._LABELS.get(record.levelno, ("INFO ", "cyan"))
+        prefix = self._prefix(record)
+        pad = " " * logutil.display_width(prefix)
+        width = max(20, self._ui_console.width - logutil.display_width(prefix))
+        lines = logutil.wrap_message(record.getMessage(), width)
+        text = Text()
+        text.append(prefix, style=style)
+        text.append(lines[0])
+        for line in lines[1:]:
+            text.append("\n" + pad + line)
+        if record.exc_info:
+            exc_text = _EXC_FORMATTER.formatException(record.exc_info)
+            text.append("\n" + pad + exc_text.replace("\n", "\n" + pad))
+        return text
+
+
 class ConsoleUI:
     """控制台 UI：封装 rich Console 与彩色日志、步骤输出.
 
@@ -181,13 +260,14 @@ class ConsoleUI:
 
     @property
     def path_width(self) -> int:
-        """日志路径的显示列预算（终端宽度扣除前缀、正文与常见后缀）.
+        """日志路径的显示列预算（终端宽度扣除级别标记与常见消息前缀）.
 
-        80 列重定向终端返回 24，120 列交互终端返回 64；:mod:`fspack.logutil`
-        再收敛到 [24, 72]。预算按「标签 + 路径」整体落单行留白，避免路径本身
-        截断后仍被后缀顶到第二行。
+        80 列重定向终端返回 40，120 列交互终端返回 80；:mod:`fspack.logutil`
+        再收敛到 [24, 72]。级别标记只占 6 列（原 RichHandler 前缀约 30 列），
+        预算相应放大，让「前缀 + 路径」整体落单行；仍放不下时由
+        :func:`fspack.logutil.wrap_message` 按目录段折行并对齐续行。
         """
-        return max(24, self._console.width - 56)
+        return max(24, self._console.width - 40)
 
     def setup_output(self, *, machine: bool = False, quiet: bool = False) -> None:
         """按输出场景重建人类可读 Console.
@@ -207,27 +287,16 @@ class ConsoleUI:
         self._console = CICompat.make_console()
 
     def setup_logging(self, verbose: bool = False) -> None:
-        """配置 root logger 使用 RichHandler，按级别着色。
+        """配置 root logger 使用 :class:`StageLogHandler`.
 
-        ERROR/WARNING 红黄高亮，INFO 青色，DEBUG 灰色（仅 verbose）。
+        默认 INFO 级别不显示时间戳（阶段行自带耗时，逐行时间戳只挤占左半屏）；
+        ``-v`` 打开 DEBUG 并补 ``HH:MM:SS``，便于对齐外部工具输出时序。
         """
         level = logging.DEBUG if verbose else logging.INFO
         root = logging.getLogger()
         root.handlers.clear()
         root.setLevel(level)
-        root.addHandler(
-            RichHandler(
-                console=self._console,
-                show_time=True,
-                show_level=True,
-                show_path=False,
-                rich_tracebacks=True,
-                # 日志消息是纯文本（含路径、命令、pyproject 键名等），
-                # markup=True 会把 ``[project.scripts]`` 当作标签吞掉。
-                markup=False,
-                level=level,
-            )
-        )
+        root.addHandler(StageLogHandler(self._console, level=level, show_time=verbose))
 
     def step(self, title: str) -> None:
         """打印构建步骤标题（``--quiet`` 下抑制）."""

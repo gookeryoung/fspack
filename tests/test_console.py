@@ -8,7 +8,8 @@ from typing import Any
 
 import pytest
 
-from fspack.console import console
+from fspack import logutil
+from fspack.console import StageLogHandler, console
 
 
 def test_step_prints_title() -> None:
@@ -21,7 +22,7 @@ def test_step_prints_title() -> None:
 
 
 def test_logger_message_brackets_not_swallowed() -> None:
-    """RichHandler(markup=False)：``[project.scripts]`` 等方括号按字面输出."""
+    """阶段级 handler 不做 markup 解析：``[project.scripts]`` 等方括号按字面输出."""
     root = logging.getLogger()
     previous_handlers = list(root.handlers)
     previous_level = root.level
@@ -192,7 +193,7 @@ def test_warn_and_success_message_brackets_not_swallowed() -> None:
 
 
 def test_setup_logging_configures_root() -> None:
-    """setup_logging 配置 root logger 的 level 与 handler."""
+    """setup_logging 配置 root logger 的 level 与阶段级 handler."""
     root = logging.getLogger()
     original_level = root.level
     original_handlers = list(root.handlers)
@@ -200,13 +201,98 @@ def test_setup_logging_configures_root() -> None:
         console.setup_logging(verbose=True)
         assert root.level == logging.DEBUG
         assert len(root.handlers) == 1
-        assert root.handlers[0].__class__.__name__ == "RichHandler"
+        handler = root.handlers[0]
+        assert isinstance(handler, StageLogHandler)
+        assert handler.show_time is True
 
         console.setup_logging(verbose=False)
         assert root.level == logging.INFO
+        assert isinstance(root.handlers[0], StageLogHandler)
+        assert root.handlers[0].show_time is False
     finally:
         root.setLevel(original_level)
         root.handlers = original_handlers
+
+
+def _record(level: int, message: str) -> logging.LogRecord:
+    """构造一条日志记录（handler 渲染单测用）."""
+    return logging.LogRecord("fspack.test", level, __file__, 1, message, None, None)
+
+
+def test_stage_log_handler_prefix_is_compact() -> None:
+    """INFO 前缀只有 6 列，正文固定从第 7 列（0 基 6）起，默认不带时间戳."""
+    from rich.console import Console
+
+    from fspack.console import StageLogHandler
+
+    handler = StageLogHandler(Console(width=120, force_terminal=False))
+    rendered = handler.render(_record(logging.INFO, "项目: demo 0.1.0")).plain
+    assert rendered.startswith("INFO  项目")
+    assert rendered.index("项目") == 6
+    # 时间戳默认不出现（只在 -v 补 HH:MM:SS）
+    assert ":" not in rendered[:6]
+
+
+def test_stage_log_handler_verbose_prefix_has_clock() -> None:
+    """-v 时前缀补 HH:MM:SS，正文仍从固定列开始（与默认观感一致的对齐）."""
+    from rich.console import Console
+
+    from fspack.console import StageLogHandler
+
+    handler = StageLogHandler(Console(width=120, force_terminal=False), show_time=True)
+    rendered = handler.render(_record(logging.INFO, "下载完成")).plain
+    assert rendered[2] == ":" and rendered[5] == ":"
+    assert rendered.index("下载完成") == 15
+
+
+def test_stage_log_level_labels_distinct_without_color() -> None:
+    """级别靠文本标记区分：INFO / WARN / ERROR 前缀互不相同且等宽."""
+    from rich.console import Console
+
+    from fspack.console import StageLogHandler
+
+    handler = StageLogHandler(Console(width=80, force_terminal=False))
+    heads = {
+        level: handler.render(_record(level, "x")).plain.split(" ")[0]
+        for level in (logging.INFO, logging.WARNING, logging.ERROR)
+    }
+    assert heads == {logging.INFO: "INFO", logging.WARNING: "WARN", logging.ERROR: "ERROR"}
+    widths = {logutil.display_width(handler.render(_record(level, "x")).plain[:6]) for level in heads}
+    assert widths == {6}
+
+
+def test_stage_log_handler_wraps_path_by_directory_segments() -> None:
+    """窄终端下长路径按目录段折行：续行对齐正文列，文件名不劈开."""
+    from rich.console import Console
+
+    from fspack.console import StageLogHandler
+
+    handler = StageLogHandler(Console(width=40, force_terminal=False))
+    path = r"C:\Users\zhou\AppData\Local\spam\eggs\win7-compat-report.txt"
+    lines = handler.render(_record(logging.INFO, f"Win7 兼容报告已写入: {path}")).plain.split("\n")
+    assert len(lines) > 1
+    # 每行不超过终端宽度，续行与正文首列（第 7 列）严格对齐
+    assert all(logutil.display_width(line) <= 40 for line in lines)
+    assert all(line.startswith("      ") and not line[6:].startswith(" ") for line in lines[1:])
+    # 非末行都在目录分隔符或空格后断开，末行保留完整文件名
+    assert all(line.rstrip().endswith(("\\", "/", " ")) for line in lines[:-1])
+    assert lines[-1].endswith("win7-compat-report.txt")
+
+
+def test_stage_log_handler_plain_text_when_not_terminal() -> None:
+    """非终端（重定向/CI 日志）不输出 ANSI，级别仍以文本表达."""
+    from io import StringIO
+
+    from rich.console import Console
+
+    from fspack.console import StageLogHandler
+
+    stream = StringIO()
+    handler = StageLogHandler(Console(file=stream, width=80, force_terminal=False))
+    handler.emit(_record(logging.ERROR, "构建失败"))
+    out = stream.getvalue()
+    assert "ERROR 构建失败" in out
+    assert "\x1b[" not in out
 
 
 def _spy_console_init() -> tuple[dict[str, object], Callable[..., object]]:
