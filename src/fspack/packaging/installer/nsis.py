@@ -100,8 +100,12 @@ Function .onInit
   ${{If}} $R2 != ""
   ${{AndIf}} ${{FileExists}} "$R2\\uninstall.exe"
     ${{If}} $R0 == "{version}"
-      # 已安装相同版本，直接覆盖不打扰
-      Return
+      # 同版本重装/修复安装：先静默卸载旧版再覆盖，确保 $INSTDIR 里已从源码
+      # 移除的旧文件被清掉。仅靠 File /r 覆盖会把上一版模块留在原处（实测
+      # llmbench 从 fcmd/tools/llm 迁移到 fcmd/apps 后新旧两份同时被发现，
+      # 重复注册直接 ValueError）。
+      ExecWait '"$R2\\uninstall.exe" /S _?=$R2' $R3
+      Goto done
     ${{EndIf}}
     # 已安装不同版本，询问是否先卸载
     MessageBox MB_YESNO|MB_ICONQUESTION "检测到已安装 $R0 版本，是否先卸载再安装 {version}？" IDYES uninstall_old IDNO skip_uninstall

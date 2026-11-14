@@ -148,7 +148,7 @@ def test_generate_nsis_script_registry_block(tmp_path: Path) -> None:
 
 
 def test_generate_nsis_script_uninstall_old_version(tmp_path: Path) -> None:
-    """安装时检测已安装版本，不同版本询问并静默卸载旧版，相同版本直接覆盖."""
+    """安装时检测已安装版本；不同版本询问卸载，相同版本静默卸载后干净覆盖."""
     info = _make_info(tmp_path, name="app")
     dist = tmp_path / "dist"
     dist.mkdir()
@@ -162,9 +162,11 @@ def test_generate_nsis_script_uninstall_old_version(tmp_path: Path) -> None:
     # InstallLocation 存在且 uninstall.exe 存在时进入卸载分支
     assert '${If} $R2 != ""' in content
     assert '${AndIf} ${FileExists} "$R2\\uninstall.exe"' in content
-    # 相同版本直接 Return 不打扰
+    # 相同版本也先静默卸载，避免覆盖式安装留下已从源码移除的旧模块
     assert '${If} $R0 == "1.0"' in content
-    assert "  Return" in content
+    assert "  Return" not in content
+    same_version_block = content.split('${If} $R0 == "1.0"', 1)[1].split("${EndIf}", 1)[0]
+    assert "ExecWait '\"$R2\\uninstall.exe\" /S _?=$R2' $R3" in same_version_block
     # 不同版本询问是否卸载
     assert "MessageBox MB_YESNO|MB_ICONQUESTION" in content
     assert "检测到已安装 $R0 版本，是否先卸载再安装 1.0？" in content
