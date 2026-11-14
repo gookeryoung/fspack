@@ -25,6 +25,7 @@ from fspack.packaging.win7.dll import (
     is_win7_runtime,
     needs_win7_dll,
     win7_dll_name,
+    win7_runtime_version,
     win7_zip_cache_name,
     win7_zip_url,
 )
@@ -348,6 +349,37 @@ def test_ensure_replaces_legacy_mixed_runtime(tmp_path: Path, monkeypatch: pytes
     # 官方残留 pyd 被 win7 版覆盖，同源标记补写
     assert (dest / "_ctypes.pyd").read_bytes() == b"win7-pyd"
     assert (dest / ".win7_runtime").read_text() == _VER
+
+
+def test_ensure_replaces_marker_version_mismatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """标记版本与本次请求不一致（dist 跨版本复用）时全量重新替换.
+
+    dist 复用时 runtime 会残留上一版本整套 win7 组件；仅凭 ``.win7_runtime``
+    存在就复用会让 loader 与 runtime 版本错位（实测 3.14 loader + 3.13
+    ``_ctypes.pyd`` 直接 ImportError）。
+    """
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    (dest / "python312.dll").write_bytes(b"old-version-dll")
+    (dest / ".win7_runtime").write_text("3.12.9", encoding="ascii")
+    zip_bytes = _make_zip_bytes({"python312.dll": b"win7-dll", "_ctypes.pyd": b"win7-pyd"})
+    _patch_manifest(monkeypatch, _VER, zip_bytes)
+    monkeypatch.setattr("urllib.request.urlopen", lambda req, timeout, **kw: FakeResp(zip_bytes))
+    _patch_check_ok(monkeypatch)
+
+    dll = ensure_win7_dll(_VER, tmp_path / "cache", dest)
+    assert dll.read_bytes() == b"win7-dll"
+    assert (dest / "_ctypes.pyd").read_bytes() == b"win7-pyd"
+    assert (dest / ".win7_runtime").read_text() == _VER
+
+
+def test_win7_runtime_version_reads_marker(tmp_path: Path) -> None:
+    """win7_runtime_version 读取标记内容并去除空白；缺标记返回 None."""
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    assert win7_runtime_version(runtime) is None
+    (runtime / ".win7_runtime").write_text(" 3.13.14\n", encoding="ascii")
+    assert win7_runtime_version(runtime) == "3.13.14"
 
 
 def test_ensure_records_stage_download_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

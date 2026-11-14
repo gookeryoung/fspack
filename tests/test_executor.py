@@ -1006,3 +1006,94 @@ def test_prepare_windows_runtime_recovers_win7_residue(tmp_path: Path, monkeypat
     assert not (runtime_dir / ".win7_runtime").exists()
     assert not (runtime_dir / "win7_only_residue.txt").exists()
     assert (runtime_dir / "python313.dll").read_bytes() == b"official"
+
+
+def _windows_ctx(tmp_path: Path, py_version: str) -> Any:
+    """构造仅驱动 Windows runtime 阶段的构建上下文."""
+    from fspack.config import BuildConfig
+    from fspack.progress import BuildTracker
+
+    info = ProjectInfo.from_dir(tmp_path, py_version)
+    cfg = BuildConfig(
+        project_dir=tmp_path,
+        dist_dir=tmp_path / "dist",
+        embed_cache_dir=tmp_path / "cache",
+        mirror=get_mirror("huawei"),
+        target=Platform.WINDOWS,
+    )
+    return BuildContext(
+        tracker=BuildTracker(),
+        info=info,
+        cfg=cfg,
+        opts=BuildOptions(),
+        runtime_dir=tmp_path / "dist" / "runtime",
+    )
+
+
+def test_prepare_windows_runtime_discards_other_version_residue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """同名 dll 命中但目录混有其它版本核心文件时不得判定就绪，须清空重解压.
+
+    复现实际故障：runtime 主体是 3.13，残留上一轮构建的 python314.dll/zip；
+    若按“python313.dll 存在即就绪”复用，loader（按请求版本生成）会与
+    runtime 主体版本错位。
+    """
+    from fspack.packaging.pipeline.runtime_stage import _prepare_windows_runtime
+
+    write_project(tmp_path)
+    runtime_dir = tmp_path / "dist" / "runtime"
+    runtime_dir.mkdir(parents=True)
+    (runtime_dir / "python313.dll").write_bytes(b"old-body")
+    (runtime_dir / "python314.dll").write_bytes(b"stale-core")
+    (runtime_dir / "python314.zip").write_bytes(b"stale-stdlib")
+    (runtime_dir / "python314._pth").write_text("python314.zip", encoding="ascii")
+    (runtime_dir / "python.exe").write_bytes(b"kept")
+
+    extract_calls = {"n": 0}
+
+    def fake_extract(zip_path: Path, dest: Path) -> None:
+        extract_calls["n"] += 1
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / "python313.dll").write_bytes(b"official")
+
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.download_embed", lambda v, m, c, **kw: tmp_path / "e.zip")
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.extract_embed", fake_extract)
+
+    _prepare_windows_runtime(_windows_ctx(tmp_path, "3.13.14"))
+
+    assert extract_calls["n"] == 1
+    assert not (runtime_dir / "python314.dll").exists()
+    assert not (runtime_dir / "python314.zip").exists()
+    assert not (runtime_dir / "python314._pth").exists()
+    assert (runtime_dir / "python.exe").read_bytes() == b"kept"
+    assert (runtime_dir / "python313.dll").read_bytes() == b"official"
+
+
+def test_prepare_windows_runtime_discards_mismatched_win7_marker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """win7 同源标记记录的版本与请求版本不一致时按未就绪处理."""
+    from fspack.packaging.pipeline.runtime_stage import _prepare_windows_runtime
+
+    write_project(tmp_path)
+    runtime_dir = tmp_path / "dist" / "runtime"
+    runtime_dir.mkdir(parents=True)
+    (runtime_dir / "python313.dll").write_bytes(b"win7-314-core")
+    (runtime_dir / ".win7_runtime").write_text("3.14.6", encoding="ascii")
+
+    extract_calls = {"n": 0}
+
+    def fake_extract(zip_path: Path, dest: Path) -> None:
+        extract_calls["n"] += 1
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / "python313.dll").write_bytes(b"official")
+
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.download_embed", lambda v, m, c, **kw: tmp_path / "e.zip")
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.extract_embed", fake_extract)
+
+    _prepare_windows_runtime(_windows_ctx(tmp_path, "3.13.14"))
+
+    assert extract_calls["n"] == 1
+    assert not (runtime_dir / ".win7_runtime").exists()
+    assert (runtime_dir / "python313.dll").read_bytes() == b"official"

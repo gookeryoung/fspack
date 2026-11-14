@@ -54,6 +54,7 @@ __all__ = [
     "is_win7_runtime",
     "needs_win7_dll",
     "win7_dll_name",
+    "win7_runtime_version",
     "win7_zip_cache_name",
     "win7_zip_url",
 ]
@@ -300,7 +301,8 @@ def ensure_win7_dll(
     """
     dll = dest_dir / win7_dll_name(version)
     marker = dest_dir / _WIN7_RUNTIME_MARKER
-    if dll.is_file() and marker.is_file():
+    marker_version = win7_runtime_version(dest_dir)
+    if dll.is_file() and marker_version == version:
         try:
             _check_dll(dll)
         except Win7DllError:
@@ -314,11 +316,19 @@ def ensure_win7_dll(
             if stage is not None:
                 stage.hit_cache()
             return dll
-    elif dll.is_file():
+    elif dll.is_file() or marker.is_file():
         # 仅 dll 无标记：旧版 fspack "只换 dll" 的混搭残留（官方 pyd 与重编译版
-        # dll ABI 不兼容），无条件全量重新替换
-        _logger.info("%s 存在但缺少组件同源标记，全量重新替换 win7 组件", dll.name)
+        # dll ABI 不兼容）；或标记记录的版本与本次请求不一致：dist 跨版本复用
+        # 留下的其它版本 win7 组件（dll 名可能恰好同名，但整套组件不同源）。
+        # 两者都必须无条件全量重新替换。
+        _logger.info(
+            "%s 缺少同源标记或标记版本(%s)与请求版本(%s)不一致，全量重新替换 win7 组件",
+            dll.name,
+            marker_version,
+            version,
+        )
         dll.unlink(missing_ok=True)
+        marker.unlink(missing_ok=True)
     zip_path = download_win7_embed(version, cache_dir, stage=stage)
     dll = extract_win7_dll(zip_path, dest_dir, version)
     try:
@@ -330,6 +340,17 @@ def ensure_win7_dll(
     _logger.info("win7 组件替换完成: %s", logutil.short_path(dll))
     _logger.debug("win7 组件需 shim: %s", ", ".join(result.shim_dlls) or "无")
     return dll
+
+
+def win7_runtime_version(runtime_dir: Path) -> str | None:
+    """读取 win7 同源标记记录的版本号（标记不存在或不可读时返回 None）."""
+    marker = runtime_dir / _WIN7_RUNTIME_MARKER
+    if not marker.is_file():
+        return None
+    try:
+        return marker.read_text(encoding="ascii").strip()
+    except OSError:
+        return None
 
 
 def is_win7_runtime(runtime_dir: Path) -> bool:

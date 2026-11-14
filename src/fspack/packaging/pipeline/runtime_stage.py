@@ -47,6 +47,7 @@ from fspack.packaging.win7.dll import (
     ensure_win7_dll,
     is_win7_runtime,
     needs_win7_dll,
+    win7_runtime_version,
 )
 from fspack.packaging.win7.dll import (
     inject_win7_shims as _inject_all_win7_shims,
@@ -277,12 +278,69 @@ def _prepare_standalone_runtime(ctx: BuildContext, *, macos_arch: str | None = N
     return ctx.cfg.dist_dir / "site-packages"
 
 
+# runtime 目录内的 Python 核心 DLL（含自由线程版 ``python3XXt.dll``）
+_PY_CORE_DLL_GLOB = "python3[0-9][0-9]*.dll"
+
+
+def _windows_runtime_ready(runtime_dir: Path, py_version: str) -> bool:
+    """判断 Windows runtime 目录的内容是否确实属于请求版本.
+
+    不能只看同名 ``python3XX.dll`` 是否存在：dist 跨版本复用时，早期构建残留的
+    其它版本文件会与本次解压结果叠加，dll 名虽命中但 runtime 主体可能是另一
+    版本（实测 3.14 loader 加载 3.13 ``_ctypes.pyd`` 直接 ImportError）。因此
+    还要求目录内不存在其它版本的 Python 核心 dll，且 win7 同源标记（若有）
+    记录的版本与请求版本完全一致。
+    """
+    dll_name = f"{embed_dirname(py_version)}.dll"
+    if not (runtime_dir / dll_name).is_file():
+        return False
+    stale = sorted(p.name for p in runtime_dir.glob(_PY_CORE_DLL_GLOB) if p.name != dll_name)
+    if stale:
+        _logger.info(
+            "runtime 目录存在其它版本 Python 核心残留(%s)，按未就绪处理并重新解压",
+            ", ".join(stale),
+        )
+        return False
+    win7_version = win7_runtime_version(runtime_dir)
+    if win7_version is not None and win7_version != py_version:
+        _logger.info(
+            "runtime 的 win7 同源标记版本(%s)与请求版本(%s)不一致，按未就绪处理",
+            win7_version,
+            py_version,
+        )
+        return False
+    return True
+
+
+def _remove_stale_python_runtime_files(runtime_dir: Path, py_version: str) -> None:
+    """解压前清理其它版本的 Python 核心文件与失效的 win7 同源标记.
+
+    只删除与本次请求版本无关的 ``python3XX.dll/.zip/._pth``，保留 ``Lib/``、
+    ``python.exe`` 等其余内容：官方 embed zip 会覆盖同名文件，但不会主动删除
+    目录里上一版本留下的文件，叠加后即成为 loader 与主体版本错位的混装目录。
+    """
+    if not runtime_dir.is_dir():
+        return
+    pyxy = embed_dirname(py_version)
+    keep = {f"{pyxy}.dll", f"{pyxy}.zip", f"{pyxy}._pth"}
+    removed: list[str] = []
+    for pattern in ("python3[0-9][0-9]*.dll", "python3[0-9][0-9]*.zip", "python3[0-9][0-9]*._pth"):
+        for path in runtime_dir.glob(pattern):
+            if path.name not in keep:
+                path.unlink(missing_ok=True)
+                removed.append(path.name)
+    if removed:
+        _logger.info("清理旧版本 Python 运行时残留: %s", ", ".join(sorted(removed)))
+    # 即将解压官方 embed 覆盖 runtime 主体，win7 同源标记不再描述目录状态；
+    # 删除后 win7 阶段必然重新整套替换，避免官方 pyd 与重编译版 dll 混搭。
+    (runtime_dir / ".win7_runtime").unlink(missing_ok=True)
+
+
 def _prepare_windows_runtime(ctx: BuildContext) -> Path:
     """下载并解压 embed python 到 runtime_dir（Windows 目标）."""
     download_embed = _S("download_embed", _default_download_embed)
     extract_embed = _S("extract_embed", _default_extract_embed)
-    dll_marker = ctx.runtime_dir / f"{embed_dirname(ctx.info.py_version)}.dll"
-    runtime_ready = dll_marker.is_file()
+    runtime_ready = _windows_runtime_ready(ctx.runtime_dir, ctx.info.py_version)
     # win7 残留恢复：上次默认构建替换的 win7 重编译版 runtime（.win7_runtime
     # 标记残留），本次 --no-win7-dll 构建（含 Nuitka 互斥归一化的自动关闭）
     # 须重新解压官方 embed——官方工具链产物（Nuitka .pyd 等）在残留的
@@ -308,6 +366,7 @@ def _prepare_windows_runtime(ctx: BuildContext) -> Path:
                 # runtime 未就绪时 download_embed 应返回路径或抛异常，
                 # 此分支仅防御（assert 在 python -O 下会被剥离）
                 raise EmbedError("下载运行时未返回 embed python zip 路径")
+            _remove_stale_python_runtime_files(ctx.runtime_dir, ctx.info.py_version)
             extract_embed(zip_path, ctx.runtime_dir)
             st.processed(1)
             st.set_detail("embed python")
@@ -354,8 +413,7 @@ def _prepare_windows_t_runtime(ctx: BuildContext) -> Path:
     """
     download_standalone = _S("download_standalone", _default_download_standalone)
     extract_standalone = _S("extract_standalone", _default_extract_standalone)
-    dll_marker = ctx.runtime_dir / f"{embed_dirname(ctx.info.py_version)}.dll"
-    runtime_ready = dll_marker.is_file()
+    runtime_ready = _windows_runtime_ready(ctx.runtime_dir, ctx.info.py_version)
     tar_path = None
     with ctx.tracker.stage("下载运行时") as st:
         if runtime_ready:
@@ -379,6 +437,7 @@ def _prepare_windows_t_runtime(ctx: BuildContext) -> Path:
                 # runtime 未就绪时 download_standalone 应返回路径或抛异常，
                 # 此分支仅防御（assert 在 python -O 下会被剥离）
                 raise EmbedError("下载运行时未返回 python-build-standalone tar.gz 路径")
+            _remove_stale_python_runtime_files(ctx.runtime_dir, ctx.info.py_version)
             extract_standalone(tar_path, ctx.runtime_dir)
             _flatten_python_dir(ctx.runtime_dir)
             st.processed(1)
