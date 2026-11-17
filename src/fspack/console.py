@@ -318,10 +318,12 @@ class ConsoleUI:
             if self._gha:
                 # GitHub Actions：阶段标题作为可折叠分组，阶段内的心跳与
                 # -v 细节全部收进组内，失败时仍可展开定位。
-                self._console.print(f"::group::[{index}] {name}", markup=False)
+                self._console.print(f"::group::[{index}] {name}", markup=False, highlight=False)
             else:
                 # 普通重定向：开始行保证长阶段不会「看起来卡死」。
-                self._console.print(f"[{index}] {markup_escape(name)} ...")
+                # 纯文本行不走 markup/highlight 解析：非 TTY 本就去 ANSI，
+                # 渲染管线是纯开销（build_perf 基准对每行渲染成本敏感）。
+                self._console.print(f"[{index}] {name} ...", markup=False, highlight=False)
             return
         self._console.print(f"[step]> [{index}] {markup_escape(name)}[/]")
 
@@ -345,9 +347,10 @@ class ConsoleUI:
         suffix = f" ({detail})" if detail else ""
         if not self.is_interactive:
             status = "FAIL" if failed else "ok"
-            self._console.print(f"[{index}] {markup_escape(name)} ... {status} {elapsed_text}{markup_escape(suffix)}")
+            # 非 TTY 输出无样式，markup/highlight 解析是纯开销，直接按字面打印。
+            self._console.print(f"[{index}] {name} ... {status} {elapsed_text}{suffix}", markup=False, highlight=False)
             if self._gha:
-                self._console.print("::endgroup::", markup=False)
+                self._console.print("::endgroup::", markup=False, highlight=False)
             return
         mark = "x" if self._legacy_console else "×"
         if failed:
