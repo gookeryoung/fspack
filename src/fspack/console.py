@@ -21,7 +21,7 @@ import logging
 import os
 import sys
 import time
-from typing import IO, Any, Final, override
+from typing import IO, Any, Final
 
 from rich.console import Console
 from rich.markup import escape as markup_escape
@@ -29,6 +29,7 @@ from rich.text import Text
 from rich.theme import Theme
 
 from fspack import logutil
+from fspack._compat import override
 
 __all__ = ["CICompat", "ConsoleUI", "StageLogHandler", "console"]
 
