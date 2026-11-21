@@ -47,7 +47,7 @@ from typing import Any
 from fspack import logutil
 from fspack._compat import UTC
 from fspack.config import ProjectInfo
-from fspack.fsutil import atomic_write_text
+from fspack.fsutil import atomic_write_text, sha256_file
 from fspack.packaging.site_packages import find_site_packages
 from fspack.platform import Platform, detect_platform
 
@@ -239,17 +239,10 @@ def _sha256_file(path: Path) -> str | None:
         64 字符十六进制字符串；文件缺失/不可读（含路径为目录的场景）返回
         ``None``，调用方跳过该文件（单文件失败不应放弃整个包摘要）
     """
-    h = hashlib.sha256()
     try:
-        with path.open("rb") as f:
-            while True:
-                chunk = f.read(65536)
-                if not chunk:
-                    break
-                h.update(chunk)
+        return sha256_file(path)
     except OSError:
         return None
-    return h.hexdigest()
 
 
 def _compute_package_checksum(dist_info: Path) -> str | None:

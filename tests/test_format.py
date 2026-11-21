@@ -4,7 +4,24 @@ from __future__ import annotations
 
 import pytest
 
-from fspack.format import format_bytes_dec, format_size_bin
+from fspack.format import format_bytes_dec, format_seconds, format_size_bin
+
+
+@pytest.mark.parametrize(
+    ("seconds", "expected"),
+    [
+        (0, "0ms"),
+        (0.001, "1ms"),
+        (0.5, "500ms"),
+        (1, "1.00s"),
+        (1.5, "1.50s"),
+        (59.99, "59.99s"),
+        (60, "1m0.0s"),
+        (125.5, "2m5.5s"),
+    ],
+)
+def test_format_seconds(seconds: float, expected: str) -> None:
+    assert format_seconds(seconds) == expected
 
 
 @pytest.mark.parametrize(

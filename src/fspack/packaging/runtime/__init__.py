@@ -2,7 +2,7 @@
 
 子模块（按职责拆分）：
 
-- :mod:`fspack.packaging.runtime.urls`：常量 + URL/文件命名辅助 + SHA256
+- :mod:`fspack.packaging.runtime.urls`：常量 + URL/文件命名辅助
 - :mod:`fspack.packaging.runtime.extract`：条目安全校验 + 安全解压函数
 - :mod:`fspack.packaging.runtime.download`：基类/子类（RuntimeDownloader、
   EmbedRuntime、StandaloneRuntime）+ ensure/download/extract 函数式 API
@@ -20,6 +20,7 @@
 
 from __future__ import annotations
 
+from fspack.fsutil import sha256_file as _sha256_file
 from fspack.packaging.runtime.download import (
     EmbedRuntime,
     RuntimeDownloader,
@@ -63,7 +64,6 @@ from fspack.packaging.runtime.urls import (
     STANDALONE_BASE_URL,
     STANDALONE_RELEASE_TAG,
     STANDALONE_RELEASE_TAG_ENV,
-    _sha256_file,
     embed_dirname,
     embed_zip_name,
     standalone_release_tag,

@@ -25,6 +25,18 @@ def skip_runtime_hash(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FSPACK_SKIP_RUNTIME_HASH", "1")
 
 
+@pytest.fixture(autouse=True)
+def _fixed_rich_width(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """固定 doctor 测试的 Rich 宽度，避免终端换行影响断言."""
+    if not request.module.__name__.startswith("tests.test_doctor_"):
+        return
+
+    from fspack.console import console
+
+    # 直接 patch _width，避免 Windows width getter/setter 往返导致宽度缩水。
+    monkeypatch.setattr(console.rich, "_width", 200)
+
+
 @pytest.fixture
 def mirror():
     """测试用 :class:`MirrorConfig` 常量 fixture.

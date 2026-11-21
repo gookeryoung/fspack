@@ -25,6 +25,8 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+from fspack.fsutil import atomic_write_text
+
 __all__ = [
     "ACTION_CACHE_VERSION",
     "fingerprint",
@@ -95,11 +97,8 @@ def save(cache_dir: Path, name: str, key: str, *, payload: dict[str, Any] | None
     record: dict[str, Any] = {"version": ACTION_CACHE_VERSION, "key": key}
     if payload is not None:
         record["payload"] = payload
-    tmp = path.with_name(f"{path.name}.tmp")
     try:
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        tmp.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
-        tmp.replace(path)
+        atomic_write_text(path, json.dumps(record, ensure_ascii=False))
     except OSError as e:
         _logger.warning("写入 action 缓存 %s 失败（不影响构建）: %s", name, e)
         return False

@@ -13,7 +13,6 @@ Win7 打包链路的环境问题，避免打包中途失败：
 
 from __future__ import annotations
 
-import hashlib
 import logging
 from functools import lru_cache
 from pathlib import Path
@@ -21,14 +20,12 @@ from pathlib import Path
 from fspack.config import KNOWN_EMBED_VERSIONS
 from fspack.config.cache import win7_dll_cache_dir
 from fspack.doctor.models import CheckResult, CheckStatus
+from fspack.fsutil import sha256_file
 from fspack.packaging.win7.dll import WIN7_EMBED_SHA256, WIN7_SHIM_DLL_PATH, win7_zip_cache_name
 
 __all__ = ["_check_win7_compat"]
 
 _logger = logging.getLogger(__name__)
-
-# sha256 流式读取块大小（64KB，兼顾内存与调用次数）
-_HASH_CHUNK = 1 << 16
 
 
 def _file_sha256(path: Path) -> str:
@@ -48,11 +45,7 @@ def _file_sha256_cached(path: Path, size: int, mtime_ns: int) -> str:  # noqa: A
     缓存键为 ``(path, size, mtime_ns)`` 三元组，``size``/``mtime_ns``
     仅作失效标识不参与计算；maxsize=32 覆盖清单全部版本绰绰有余。
     """
-    digest = hashlib.sha256()
-    with path.open("rb") as f:
-        while chunk := f.read(_HASH_CHUNK):
-            digest.update(chunk)
-    return digest.hexdigest()
+    return sha256_file(path)
 
 
 def _check_win7_compat() -> CheckResult:

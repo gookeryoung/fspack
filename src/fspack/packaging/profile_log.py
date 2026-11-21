@@ -61,6 +61,8 @@ from pathlib import Path
 from statistics import median
 from typing import TYPE_CHECKING, Any
 
+from fspack.format import format_seconds
+
 if TYPE_CHECKING:
     # ProfileReport 仅用于类型注解（from __future__ import annotations 使
     # 注解不在运行时求值），顶部不导入 fspack.packaging.profile 避免连锁
@@ -368,15 +370,6 @@ def _print_trend_from_dir(log_path: Path, default_dir: Path, limit: int, kind: L
     print_profile_trend(current, history, stage_min_delta=kind.stage_min_delta, label=kind.label)
 
 
-def _fmt_seconds(s: float) -> str:
-    """格式化耗时为人类可读字符串（ms/s/m），与 profile.py 展示一致."""
-    if s < 1:
-        return f"{s * 1000:.0f}ms"
-    if s < 60:
-        return f"{s:.2f}s"
-    return f"{int(s // 60)}m{s % 60:.1f}s"
-
-
 def _fmt_signed(fmt: Callable[[float], str], delta: float) -> str:
     """带符号格式化差值：正数 ``+0.13s``，负数 ``-0.13s``，零 ``0``."""
     if delta == 0:
@@ -493,9 +486,9 @@ def print_profile_compare(
         cur, base = float(current.get(key, 0)), float(baseline.get(key, 0))
         table.add_row(label, fmt(cur), fmt(base), _delta_cell(cur, base, fmt))
 
-    _overview_row("墙钟时间", "wall_time", _fmt_seconds)
+    _overview_row("墙钟时间", "wall_time", format_seconds)
     if "cpu_time" in current or "cpu_time" in baseline:
-        _overview_row("CPU 时间", "cpu_time", _fmt_seconds)
+        _overview_row("CPU 时间", "cpu_time", format_seconds)
     if "memory_peak" in current or "memory_peak" in baseline:
         _overview_row("内存峰值", "memory_peak", lambda v: fmt_bytes(int(v)))
 
@@ -518,11 +511,11 @@ def print_profile_compare(
     if significant or added or removed or quiet:
         table.add_section()
     for name, cur, base in significant[:8]:
-        table.add_row(name, _fmt_seconds(cur), _fmt_seconds(base), _delta_cell(cur, base, _fmt_seconds))
+        table.add_row(name, format_seconds(cur), format_seconds(base), _delta_cell(cur, base, format_seconds))
     for name in added[:4]:
-        table.add_row(name, _fmt_seconds(cur_stages[name]), "-", Text("新增", style="yellow"))
+        table.add_row(name, format_seconds(cur_stages[name]), "-", Text("新增", style="yellow"))
     for name in removed[:4]:
-        table.add_row(name, "-", _fmt_seconds(base_stages[name]), Text("移除", style="dim"))
+        table.add_row(name, "-", format_seconds(base_stages[name]), Text("移除", style="dim"))
     if quiet > 0:
         table.add_row(f"其余 {quiet} 个阶段", "", "", Text("差异不显著", style="dim"))
     console.rich.print(subtitle)
@@ -597,10 +590,10 @@ def print_profile_trend(
         time_str = ("  " if env_ok else "* ") + (_fmt_trend_time(str(data.get("created", ""))) or path.stem)
         cells: list[Any] = [
             Text(time_str, style="" if env_ok else "dim"),
-            _fmt_seconds(float(data.get("wall_time", 0))),
+            format_seconds(float(data.get("wall_time", 0))),
         ]
         if show_cpu:
-            cells.append(_fmt_seconds(float(data.get("cpu_time", 0))))
+            cells.append(format_seconds(float(data.get("cpu_time", 0))))
         if show_mem:
             cells.append(fmt_bytes(int(data.get("memory_peak", 0))))
         table.add_row(*cells)
@@ -613,15 +606,15 @@ def print_profile_trend(
     # 统计三行：本次 / 中位数 / 本次 vs 中位数
     cur_wall = float(current.get("wall_time", 0))
     med_wall = median(float(d.get("wall_time", 0)) for _, d in stats_source)
-    cur_cells: list[Any] = [Text("本次", style="bold"), _fmt_seconds(cur_wall)]
-    stat_cells: list[Any] = [f"中位数(n={n_stats})", _fmt_seconds(med_wall)]
-    delta_cells: list[Any] = ["本次 vs 中位数", _delta_cell(cur_wall, med_wall, _fmt_seconds)]
+    cur_cells: list[Any] = [Text("本次", style="bold"), format_seconds(cur_wall)]
+    stat_cells: list[Any] = [f"中位数(n={n_stats})", format_seconds(med_wall)]
+    delta_cells: list[Any] = ["本次 vs 中位数", _delta_cell(cur_wall, med_wall, format_seconds)]
     if show_cpu:
         cur_cpu = float(current.get("cpu_time", 0))
         med_cpu = median(float(d.get("cpu_time", 0)) for _, d in stats_source)
-        cur_cells.append(_fmt_seconds(cur_cpu))
-        stat_cells.append(_fmt_seconds(med_cpu))
-        delta_cells.append(_delta_cell(cur_cpu, med_cpu, _fmt_seconds))
+        cur_cells.append(format_seconds(cur_cpu))
+        stat_cells.append(format_seconds(med_cpu))
+        delta_cells.append(_delta_cell(cur_cpu, med_cpu, format_seconds))
     if show_mem:
         cur_mem = int(current.get("memory_peak", 0))
         med_mem = median(int(d.get("memory_peak", 0)) for _, d in stats_source)
@@ -687,9 +680,9 @@ def _print_stage_deviation(
     deviation.add_column("中位数", justify="right")
     deviation.add_column("差异", justify="right")
     for name, cur, med in significant[:8]:
-        deviation.add_row(name, _fmt_seconds(cur), _fmt_seconds(med), _delta_cell(cur, med, _fmt_seconds))
+        deviation.add_row(name, format_seconds(cur), format_seconds(med), _delta_cell(cur, med, format_seconds))
     for name in added[:4]:
-        deviation.add_row(name, _fmt_seconds(cur_stages[name]), "-", Text("新增", style="yellow"))
+        deviation.add_row(name, format_seconds(cur_stages[name]), "-", Text("新增", style="yellow"))
     for name in removed[:4]:
-        deviation.add_row(name, "-", _fmt_seconds(median(per_stage[name])), Text("移除", style="dim"))
+        deviation.add_row(name, "-", format_seconds(median(per_stage[name])), Text("移除", style="dim"))
     console.rich.print(deviation)

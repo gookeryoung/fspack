@@ -15,6 +15,7 @@ from fspack.config import BuildOptions, get_mirror
 from fspack.packaging.profile_log import ProfileOptions
 from fspack.platform import Platform
 from fspack.runner import RunOptions
+from tests._projects import write_project
 
 
 def test_import_does_not_pull_logging() -> None:
@@ -203,9 +204,7 @@ def _make_minimal_project(tmp_path: Path) -> Path:
     cli.main 在 dispatch 到 builder.build 前会调用 ProjectInfo.from_dir
     读取 [tool.fspack] build_defaults，需要可解析的 pyproject.toml。
     """
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n', encoding="utf-8")
-    (tmp_path / "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
-    return tmp_path
+    return write_project(tmp_path)
 
 
 def _capture_build() -> tuple[dict[str, Any], Any]:

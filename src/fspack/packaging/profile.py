@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Any
 from rich.table import Table
 
 from fspack.console import console
+from fspack.format import format_seconds
 
 if TYPE_CHECKING:
     # BuildTracker / StageRecord 仅用于类型注解（``from __future__ import
@@ -139,15 +140,6 @@ class ProfileContext:
         )
 
 
-def _fmt_seconds(s: float) -> str:
-    """格式化耗时为人类可读字符串（ms/s/m）."""
-    if s < 1:
-        return f"{s * 1000:.0f}ms"
-    if s < 60:
-        return f"{s:.2f}s"
-    return f"{int(s // 60)}m{s % 60:.1f}s"
-
-
 def _fmt_percent(ratio: float) -> str:
     """格式化比率为百分比字符串."""
     return f"{ratio * 100:.1f}%"
@@ -194,7 +186,7 @@ def print_profile_report(report: ProfileReport) -> None:
         detail_str = stage.detail or "-"
         table.add_row(
             stage.name,
-            _fmt_seconds(stage.elapsed),
+            format_seconds(stage.elapsed),
             _fmt_percent(ratio),
             cache_str,
             bytes_str,
@@ -205,7 +197,7 @@ def print_profile_report(report: ProfileReport) -> None:
 
     table.add_row(
         "总计",
-        _fmt_seconds(report.wall_time),
+        format_seconds(report.wall_time),
         "100%",
         "",
         "",
@@ -220,8 +212,8 @@ def print_profile_report(report: ProfileReport) -> None:
     overview = Table(title="资源总览", show_lines=False, title_style="bold magenta")
     overview.add_column("指标", style="bold cyan")
     overview.add_column("值", justify="right")
-    overview.add_row("墙钟时间", _fmt_seconds(report.wall_time))
-    overview.add_row("CPU 时间", _fmt_seconds(report.cpu_time))
+    overview.add_row("墙钟时间", format_seconds(report.wall_time))
+    overview.add_row("CPU 时间", format_seconds(report.cpu_time))
     overview.add_row("CPU 占比", _fmt_percent(report.cpu_ratio))
     overview.add_row("内存峰值", fmt_bytes(report.memory_peak))
     console.rich.print(overview)

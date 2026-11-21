@@ -10,8 +10,8 @@
 - :mod:`fspack.packaging.pipeline`：阶段编排（``build``/``_dep_cache_*``/
   ``_slim_runtime``/``_site_packages_has_deps``/``clean_dist`` 等）
 
-私有符号 re-export 仅为两类既有引用保留：测试 ``from fspack.builder import ...``
-（test_builder/test_icon）与 ``nuitka.standalone`` 的 ``_inject_win7_compat_dll``；
+私有符号 re-export 为既有测试 ``from fspack.builder import ...``
+（test_builder/test_icon）保留；
 monkeypatch 标准库调用请直接 patch ``subprocess.run`` 等标准库属性。
 """
 

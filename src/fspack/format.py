@@ -1,4 +1,4 @@
-"""字节数格式化工具.
+"""字节数与耗时格式化工具.
 
 提供两套互斥的字节数格式化风格，由不同调用场景的历史契约决定，**不可统一**：
 
@@ -13,7 +13,15 @@
 
 from __future__ import annotations
 
-__all__ = ["format_bytes_dec", "format_size_bin"]
+__all__ = ["format_bytes_dec", "format_seconds", "format_size_bin"]
+
+
+def format_seconds(seconds: float) -> str:
+    if seconds < 1:
+        return f"{seconds * 1000:.0f}ms"
+    if seconds < 60:
+        return f"{seconds:.2f}s"
+    return f"{int(seconds // 60)}m{seconds % 60:.1f}s"
 
 
 def format_size_bin(size_bytes: int) -> str:

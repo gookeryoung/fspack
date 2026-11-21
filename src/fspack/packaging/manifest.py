@@ -33,7 +33,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
@@ -45,7 +44,7 @@ from typing import Any
 from fspack import logutil
 from fspack._compat import UTC
 from fspack.config import ProjectInfo
-from fspack.fsutil import atomic_write_text, scandir_tree
+from fspack.fsutil import atomic_write_text, scandir_tree, sha256_file
 from fspack.packaging import action_cache
 from fspack.platform import Platform, detect_platform
 
@@ -407,18 +406,10 @@ def _save_hash_memo(dist_dir: Path, files: dict[str, list[int | str]]) -> None:
 
 def _sha256_file(path: Path) -> str:
     """流式计算文件 SHA256（64 字符十六进制），避免大文件一次性读入内存."""
-    h = hashlib.sha256()
     try:
-        with path.open("rb") as f:
-            while True:
-                chunk = f.read(65536)
-                if not chunk:
-                    break
-                h.update(chunk)
+        return sha256_file(path)
     except OSError:
-        # 文件被并发删除或权限问题：返回空字符串（调用方可据此判断）
         return ""
-    return h.hexdigest()
 
 
 def _categorize(rel_posix: str) -> str:

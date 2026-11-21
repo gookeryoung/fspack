@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 from pathlib import Path
@@ -15,8 +16,33 @@ from fspack.fsutil import (
     safe_unlink,
     scandir_dir_size,
     scandir_tree,
+    sha256_file,
     walk_dir_size,
 )
+
+
+@pytest.mark.parametrize("data", [b"", b"abc", bytes(range(256)) * 1025], ids=["empty", "small", "multichunk"])
+@pytest.mark.parametrize("chunk_size", [1, 64 * 1024, 1024 * 1024])
+def test_sha256_file(tmp_path: Path, data: bytes, chunk_size: int) -> None:
+    path = tmp_path / "payload.bin"
+    path.write_bytes(data)
+    expected = hashlib.sha256(data).hexdigest()
+    assert sha256_file(path, chunk_size=chunk_size) == expected
+    assert sha256_file(path) == expected
+
+
+def test_sha256_file_missing_raises(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError):
+        sha256_file(tmp_path / "missing")
+
+
+def test_sha256_file_read_error_propagates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def denied(*args: object, **kwargs: object) -> None:
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(Path, "open", denied)
+    with pytest.raises(PermissionError, match="denied"):
+        sha256_file(tmp_path / "payload.bin")
 
 
 def _make_tree(root: Path) -> None:

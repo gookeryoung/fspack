@@ -77,6 +77,36 @@ def test_load_non_dict_discards(tmp_path: Path) -> None:
     assert action_cache.load(tmp_path, "demo") is None
 
 
+def test_save_replace_failure_preserves_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    assert action_cache.save(tmp_path, "demo", "old")
+    path = action_cache.marker_path(tmp_path, "demo")
+    original = path.read_bytes()
+
+    def denied(*args: object, **kwargs: object) -> None:
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(Path, "replace", denied)
+    assert not action_cache.save(tmp_path, "demo", "new")
+    assert path.read_bytes() == original
+    assert sorted(tmp_path.iterdir()) == [path]
+
+
+def test_save_concurrent_writers(tmp_path: Path) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    keys = [f"key-{i}" for i in range(16)]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda key: action_cache.save(tmp_path, "demo", key, payload={"value": key}), keys))
+    successful_keys = {key for key, saved in zip(keys, results) if saved}
+    # Windows 可拒绝并发 replace；尽力写入不得损坏已提交的记录。
+    assert successful_keys
+    record = action_cache.load(tmp_path, "demo")
+    assert record is not None
+    assert record["key"] in successful_keys
+    assert record["payload"] == {"value": record["key"]}
+    assert sorted(tmp_path.iterdir()) == [action_cache.marker_path(tmp_path, "demo")]
+
+
 def test_save_failure_returns_false(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     """写入失败（目标路径被文件占用）只告警不抛异常."""
     blocker = tmp_path / "build"

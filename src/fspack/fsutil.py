@@ -1,4 +1,4 @@
-"""文件系统与目录工具：目录大小计算、原子写入、安全删除.
+"""文件系统与目录工具：文件哈希、目录大小计算、原子写入、安全删除.
 
 收敛此前散落在多处的同类实现：
 
@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import logging
 import os
 import shutil
@@ -32,10 +33,19 @@ __all__ = [
     "safe_unlink",
     "scandir_dir_size",
     "scandir_tree",
+    "sha256_file",
     "walk_dir_size",
 ]
 
 _logger = logging.getLogger(__name__)
+
+
+def sha256_file(path: Path, *, chunk_size: int = 64 * 1024) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(chunk_size):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def walk_dir_size(path: Path) -> int:

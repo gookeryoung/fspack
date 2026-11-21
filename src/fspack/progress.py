@@ -26,7 +26,7 @@ from rich.progress import (
 from rich.table import Table
 
 from fspack.console import console
-from fspack.format import format_bytes_dec
+from fspack.format import format_bytes_dec, format_seconds
 from fspack.metrics import StageRecord, StageRecorder
 
 if TYPE_CHECKING:
@@ -90,7 +90,7 @@ class BuildTracker:
             record = rec._finalize()
             self._records.append(record)
             if self._announce:
-                console.stage_finish(index, name, _fmt_seconds(record.elapsed), record.detail, failed=failed)
+                console.stage_finish(index, name, format_seconds(record.elapsed), record.detail, failed=failed)
 
     @property
     def total_elapsed(self) -> float:
@@ -129,7 +129,7 @@ class BuildTracker:
             detail_str = r.detail or "-"
             table.add_row(
                 r.name,
-                _fmt_seconds(r.elapsed),
+                format_seconds(r.elapsed),
                 cache_str,
                 bytes_str,
                 saved_str,
@@ -140,7 +140,7 @@ class BuildTracker:
 
         table.add_row(
             "总计",
-            _fmt_seconds(self.total_elapsed),
+            format_seconds(self.total_elapsed),
             "",
             fmt_bytes(total_bytes) if total_bytes else "-",
             fmt_bytes(total_saved) if total_saved else "-",
@@ -150,15 +150,6 @@ class BuildTracker:
             style="bold",
         )
         return table
-
-
-def _fmt_seconds(s: float) -> str:
-    """格式化耗时为人类可读字符串."""
-    if s < 1:
-        return f"{s * 1000:.0f}ms"
-    if s < 60:
-        return f"{s:.2f}s"
-    return f"{int(s // 60)}m{s % 60:.1f}s"
 
 
 def fmt_bytes(n: int) -> str:

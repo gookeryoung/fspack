@@ -28,6 +28,7 @@ from fspack.packaging.profile import (
     profile_report_to_json,
 )
 from fspack.progress import BuildTracker, StageRecord
+from tests._projects import write_project
 
 # ---- ProfileReport 数据类 ----
 
@@ -311,9 +312,7 @@ def test_profile_report_to_json_contains_chinese() -> None:
 
 def _make_minimal_project(tmp_path: Path) -> Path:
     """创建最小可解析项目."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n', encoding="utf-8")
-    (tmp_path / "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
-    return tmp_path
+    return write_project(tmp_path)
 
 
 def test_cli_build_profile_flag_passed_to_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

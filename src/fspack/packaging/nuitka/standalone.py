@@ -215,12 +215,8 @@ class NuitkaStandalone:
 
             stage.set_detail(f"python {standalone_version} 安装完成")
 
-        # Win7 兼容性：Python 3.9+ 官方不再支持 Win7，standalone python 启动需
-        # api-ms-win-core-path-l1-1-0.dll（与 embed runtime 同样需要）。复用 builder
-        # 的注入逻辑：惰性导入避免 nuitka → builder 顶层循环依赖（builder 函数体内
-        # 才惰性导入 nuitka）。注入幂等，缓存命中与新建均安全。
-        # KNOWN_STANDALONE_VERSIONS 最低 3.10，故 standalone python 始终需要此 DLL。
-        from fspack.builder import _inject_win7_compat_dll
+        # Python 3.9+ 不再支持 Win7，standalone python 启动需要 api-ms-win-core-path-l1-1-0.dll。
+        from fspack.packaging.runtime.trim import _inject_win7_compat_dll
 
         _inject_win7_compat_dll(py_exe.parent)
         return py_exe

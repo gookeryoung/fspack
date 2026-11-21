@@ -62,8 +62,7 @@ def _prepare_dist(req: ReleaseRequest, target: Platform) -> tuple[Path, ProjectI
     dist = req.dist_dir or project_dir / "dist"
 
     def _resolve_and_maybe_build() -> tuple[Path, ProjectInfo]:
-        # 延迟导入 builder：installer 包导入期不反向依赖构建编排层（分层约束）
-        from fspack.builder import resolve_project_info
+        from fspack.packaging.pipeline.executor import resolve_project_info
 
         if req.no_build:
             if not dist.is_dir():
@@ -77,9 +76,7 @@ def _prepare_dist(req: ReleaseRequest, target: Platform) -> tuple[Path, ProjectI
         options = build_options_from_defaults(info.build_defaults)
         if req.extras is not None:
             options = replace(options, extras=frozenset(req.extras))
-        # 延迟导入 builder.build：installer 包导入期不反向依赖构建编排层（分层约束），
-        # 同时让测试 patch "fspack.builder.build" 在本调用点生效
-        from fspack.builder import build
+        from fspack.packaging.pipeline.executor import build
 
         info = build(project_dir, req.mirror, req.py_version, dist_dir=dist, target=target, options=options)
         return dist, info

@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import hashlib
 import os
-from collections.abc import Iterator
 from functools import lru_cache
 from operator import attrgetter
 from pathlib import Path
@@ -243,53 +242,3 @@ def _is_under_data_dir(entry_rel: str, prefixes: tuple[str, ...]) -> bool:
     ``entry_rel`` 与 ``prefixes`` 都是 ``"a/b/c"`` 形式的 POSIX 路径字符串。
     """
     return any(entry_rel == p or entry_rel.startswith(p + "/") for p in prefixes)
-
-
-def _iter_py_entries(
-    current: Path,
-    root: Path,
-    data_dirs: tuple[Path, ...] = (),
-) -> Iterator[tuple[str, int, int]]:
-    """递归遍历 ``.py`` 与 ``.qml`` 文件，返回 ``(相对路径, mtime_ns, size)`` 三元组.
-
-    遍历逻辑委托给 :func:`_iter_recursive`，与 :func:`source_fingerprint`
-    共用一套 depth-first 递归结构，保持迭代器接口以便测试和增量调用方复用。
-    参数 ``current``/``root``/``data_dirs`` 语义不变——``data_dirs`` 为已
-    resolve 的 Path 元组（与历史签名兼容）。
-    """
-    if data_dirs:
-        root_resolved = root.resolve()
-        prefix_list: list[str] = []
-        for dp in data_dirs:
-            try:
-                rel_parts = dp.relative_to(root_resolved).parts
-            except ValueError:
-                continue
-            if rel_parts:
-                prefix_list.append("/".join(rel_parts))
-        prefixes = tuple(prefix_list)
-    else:
-        prefixes = ()
-    yield from _iter_recursive(str(current), "", prefixes)
-
-
-def _iter_recursive(
-    current_str: str,
-    prefix: str,
-    data_prefixes: tuple[str, ...],
-) -> Iterator[tuple[str, int, int]]:
-    """depth-first 递归迭代器版本，yield ``(rel_path, mtime_ns, size)``."""
-    for entry in sorted(os.scandir(current_str), key=attrgetter("name")):
-        name = entry.name
-        entry_rel = f"{prefix}/{name}" if prefix else name
-        if entry.is_dir(follow_symlinks=False):
-            if _is_excluded_name(name):
-                continue
-            if data_prefixes and _is_under_data_dir(entry_rel, data_prefixes):
-                continue
-            yield from _iter_recursive(entry.path, entry_rel, data_prefixes)
-        elif entry.is_file(follow_symlinks=False) and name.endswith((".py", ".qml")):
-            if data_prefixes and _is_under_data_dir(entry_rel, data_prefixes):
-                continue
-            st = entry.stat(follow_symlinks=False)
-            yield (entry_rel, st.st_mtime_ns, st.st_size)

@@ -33,10 +33,11 @@ import subprocess
 import sys
 import threading
 import time
-import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
+
+from fspack.logutil import display_width
 
 __all__ = ["PROFILE_ENV", "ProfileSample", "run_with_profile"]
 
@@ -307,19 +308,14 @@ def _parse_import_lines(
     return interp_ms, roots[anchor_idx:], sorted(self_items, key=lambda x: -x[1])[:_TOP_SELF]
 
 
-def _disp_width(text: str) -> int:
-    """返回终端显示宽度（CJK 全宽/宽字符按 2 列计，其余按 1 列）."""
-    return sum(2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1 for ch in text)
-
-
 def _pad(text: str, width: int) -> str:
     """按显示宽度右侧补空格到指定列宽（超宽原样返回，不截断）."""
-    return text + " " * max(0, width - _disp_width(text))
+    return text + " " * max(0, width - display_width(text))
 
 
 def _rpad(text: str, width: int) -> str:
     """按显示宽度左侧补空格右对齐到指定列宽（超宽原样返回）."""
-    return " " * max(0, width - _disp_width(text)) + text
+    return " " * max(0, width - display_width(text)) + text
 
 
 def _fmt_ms(ms: float) -> str:

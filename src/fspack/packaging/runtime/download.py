@@ -24,10 +24,10 @@ from typing import TYPE_CHECKING, Any
 from fspack._compat import override
 from fspack.config import MirrorConfig, is_offline
 from fspack.exceptions import EmbedError
+from fspack.fsutil import sha256_file
 from fspack.packaging.runtime.extract import extract_tar_safe, extract_zip_safe
 from fspack.packaging.runtime.hashes import expected_runtime_hash
 from fspack.packaging.runtime.urls import (
-    _sha256_file,
     embed_dirname,
     embed_zip_name,
     standalone_tarball_name,
@@ -125,7 +125,7 @@ class RuntimeDownloader(abc.ABC):
         archive_path = cache_dir / cls.archive_name(version, **kwargs)
         if archive_path.is_file():
             if expected_hash is not None:
-                actual = _sha256_file(archive_path)
+                actual = sha256_file(archive_path)
                 if actual != expected_hash:
                     _logger.warning(
                         "%s 缓存 sha256 不匹配（期望 %s，实际 %s），删除重新下载",
@@ -166,7 +166,7 @@ class RuntimeDownloader(abc.ABC):
                 _logger.warning("清理下载失败的半成品归档失败 %s: %s", archive_path, unlink_err)
             raise EmbedError(f"下载 {cls.runtime_label} 失败: {url} -> {e}") from e
         if expected_hash is not None:
-            actual = _sha256_file(archive_path)
+            actual = sha256_file(archive_path)
             if actual != expected_hash:
                 archive_path.unlink(missing_ok=True)
                 raise EmbedError(

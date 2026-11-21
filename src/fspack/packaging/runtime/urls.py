@@ -1,4 +1,4 @@
-"""Runtime 常量、URL/文件名辅助、SHA256 校验.
+"""Runtime 常量与 URL/文件名辅助.
 
 拆自 :mod:`fspack.packaging.runtime`。本模块无依赖链（仅标准库 + fspack 顶层配置），
 可被 download / extract / facade 模块安全 import。
@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 from fspack.config.versions import _split_t_suffix
 
@@ -109,17 +108,3 @@ def standalone_url(
         f"{STANDALONE_BASE_URL}/{release_tag}/"
         f"{standalone_tarball_name(version, release_tag, windows=windows, macos_arch=macos_arch)}"
     )
-
-
-def _sha256_file(path: Path, *, chunk_size: int = 64 * 1024) -> str:
-    """计算文件 sha256 十六进制摘要（小写），分块读取避免大文件一次性占内存."""
-    import hashlib
-
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        while True:
-            chunk = f.read(chunk_size)
-            if not chunk:
-                break
-            h.update(chunk)
-    return h.hexdigest()

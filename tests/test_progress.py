@@ -13,7 +13,6 @@ from fspack.progress import (
     BuildTracker,
     StageRecord,
     StageRecorder,
-    _fmt_seconds,
     fmt_bytes,
     iter_with_progress,
     spinner,
@@ -278,21 +277,6 @@ class TestBuildTracker:
         table = tracker.summary()
         out = _render_table_str(table)
         assert "15.0MB" in out
-
-
-class TestFmtSeconds:
-    """_fmt_seconds 单位切换."""
-
-    def test_milliseconds(self) -> None:
-        assert _fmt_seconds(0.5) == "500ms"
-        assert _fmt_seconds(0.001) == "1ms"
-
-    def test_seconds(self) -> None:
-        assert _fmt_seconds(1.5) == "1.50s"
-        assert _fmt_seconds(59.99) == "59.99s"
-
-    def test_minutes(self) -> None:
-        assert _fmt_seconds(125.5) == "2m5.5s"
 
 
 class TestFmtBytes:

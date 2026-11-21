@@ -29,7 +29,7 @@ from fspack.config import get_mirror
 from fspack.exceptions import DependencyError, EmbedError
 from fspack.packaging.runtime import STANDALONE_RELEASE_TAG, standalone_tarball_name
 from fspack.platform import Platform
-from tests._stubs import fail_urlopen
+from tests._stubs import FakeResp, fail_urlopen
 
 _MIRROR = get_mirror()
 
@@ -128,28 +128,8 @@ def _mock_extract(monkeypatch: pytest.MonkeyPatch, kind: str) -> None:
     monkeypatch.setattr(f"fspack.packaging.pipeline.stages.{fn}", lambda *a, **kw: None)
 
 
-class _FakeResp:
-    """模拟 urlopen 响应：首次 read 返回数据，后续返回空（终止下载循环）."""
-
-    def __init__(self) -> None:
-        self._read = False
-        self.headers = {"Content-Length": "4"}
-
-    def read(self, n: int = -1) -> bytes:
-        if self._read:
-            return b""
-        self._read = True
-        return b"DATA"
-
-    def __enter__(self) -> _FakeResp:
-        return self
-
-    def __exit__(self, *a: object) -> bool:
-        return False
-
-
-def _fake_urlopen(req: Request, timeout: int, **kwargs: Any) -> _FakeResp:
-    return _FakeResp()
+def _fake_urlopen(req: Request, timeout: int, **kwargs: Any) -> FakeResp:
+    return FakeResp(b"DATA")
 
 
 def _build_without_offline_error(proj: Path, py_version: str, target: Platform) -> None:

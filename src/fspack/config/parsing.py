@@ -22,11 +22,9 @@
 ``[tool.fspack.entries]`` 已移除支持：pyproject.toml 中声明该表会报错，
 提示迁移到 ``[project.scripts]``。
 
-**解析缓存**：:func:`parse_project` 按 ``(project_dir, py_version, pyproject_mtime_ns)``
-缓存解析结果（:func:`_parse_project_cached`），同一项目目录在 pyproject.toml
-未修改时复用缓存，避免 ``fsp b``/``fsp p`` 流程内多次调用（cli → pipeline →
-installer）重复读取与 AST 扫描。缓存键含 ``mtime_ns``，pyproject.toml 修改后
-自动失效；:func:`clear_project_cache` 提供显式清空入口（测试隔离/强制重解析）。
+**解析缓存**：:func:`parse_project` 与 ``ProjectInfo.from_dir`` 共用
+:func:`_parse_project_cached`，按项目目录、Python 版本、TOML mtime_ns 与大小缓存。
+:func:`clear_project_cache` 提供显式清空入口（测试隔离/强制重解析）。
 """
 
 from __future__ import annotations
@@ -72,7 +70,7 @@ __all__ = [
 
 _logger = logging.getLogger(__name__)
 
-# 缓存上限：64 个不同 (project_dir, py_version, mtime) 组合，覆盖多数项目场景；
+# 缓存上限：64 个不同 (project_dir, py_version, mtime_ns, size) 组合，覆盖多数项目场景；
 # LRU 淘汰最久未用，避免长期运行内存膨胀。
 _PROJECT_CACHE_MAXSIZE = 64
 
@@ -285,28 +283,8 @@ def _parse_project_cached(
 
 
 def clear_project_cache() -> None:
-    """清空 :func:`parse_project` 的双层解析缓存.
-
-    ProjectInfo 解析有两层缓存，均在此清空：
-
-    - 内层：本模块 :func:`_parse_project_cached`（parse_project 直连调用方）
-    - 外层：:func:`fspack.config.models._project_info_from_dir_cached`
-      （``ProjectInfo.from_dir`` 按 mtime 键控），仅清内层会导致 ``from_dir``
-      命中外层旧值，"清缓存后重解析"失效
-
-    用于：
-
-    - 测试隔离：测试间避免缓存污染（不同测试用不同 tmp_path 通常天然隔离，
-      但同测试内修改 pyproject.toml 后强制重解析需显式清空）
-    - 强制重解析：外部进程修改 pyproject.toml 后 mtime 未变（极少见）时
-      手动清空缓存
-    - 内存管理：长期运行进程主动释放缓存条目
-    """
+    """清空 parse_project 与 ProjectInfo.from_dir 共用的解析缓存."""
     _parse_project_cached.cache_clear()
-    # 延迟导入避免 models ↔ parsing 模块级循环（models.from_dir 已延迟导入本模块）
-    from fspack.config.models import _clear_project_info_cache
-
-    _clear_project_info_cache()
 
 
 def _parse_author(authors: object) -> str:

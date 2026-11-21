@@ -333,7 +333,7 @@ def test_build_installer_with_build(tmp_path: Path, monkeypatch: pytest.MonkeyPa
             py_version=py_version,
         )
 
-    monkeypatch.setattr("fspack.builder.build", fake_build)
+    monkeypatch.setattr("fspack.packaging.pipeline.executor.build", fake_build)
 
     def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
         out_setup.parent.mkdir(parents=True, exist_ok=True)
@@ -590,7 +590,7 @@ def test_build_zip_with_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
             py_version=py_version,
         )
 
-    monkeypatch.setattr("fspack.builder.build", fake_build)
+    monkeypatch.setattr("fspack.packaging.pipeline.executor.build", fake_build)
     result = build_zip(ReleaseRequest(tmp_path, get_mirror("huawei"), "3.11.9", no_build=False))
     assert result.is_file()
     assert result.name == "app-1.0-py3.11.9-windows-x86_64-slim.zip"
@@ -856,7 +856,7 @@ def test_build_release_all_windows_generates_three_formats(tmp_path: Path, monke
     monkeypatch.setattr(
         "fspack.packaging.installer.NsisInstaller.build_installer", classmethod(fake_nsis_build_installer)
     )
-    monkeypatch.setattr("fspack.builder.build", fake_build)
+    monkeypatch.setattr("fspack.packaging.pipeline.executor.build", fake_build)
     monkeypatch.setattr("fspack.packaging.installer.sevenzip._find_7z", lambda: "7z")
 
     def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
@@ -1052,7 +1052,7 @@ def test_prepare_dist_passes_build_defaults_to_build(tmp_path: Path, monkeypatch
             py_version=py_version,
         )
 
-    monkeypatch.setattr("fspack.builder.build", fake_build)
+    monkeypatch.setattr("fspack.packaging.pipeline.executor.build", fake_build)
     # mock makensis 编译，避免 Linux CI 无 NSIS 导致测试失败
     out_setup = tmp_path / "dist" / "release" / "app-1.0-py3.11.9-windows-x86_64-slim-setup.exe"
 
@@ -1107,7 +1107,7 @@ def test_prepare_dist_no_config_uses_default_options(tmp_path: Path, monkeypatch
             py_version=py_version,
         )
 
-    monkeypatch.setattr("fspack.builder.build", fake_build)
+    monkeypatch.setattr("fspack.packaging.pipeline.executor.build", fake_build)
     # mock makensis 编译，避免 Linux CI 无 NSIS 导致测试失败
     out_setup = tmp_path / "dist" / "release" / "app-1.0-py3.11.9-windows-x86_64-slim-setup.exe"
 
@@ -1162,7 +1162,7 @@ def test_prepare_dist_skips_build_when_dist_and_exe_ready(tmp_path: Path, monkey
         build_calls += 1
         raise AssertionError("dist+exe 已就绪时不应调用 build()")
 
-    monkeypatch.setattr("fspack.builder.build", fake_build)
+    monkeypatch.setattr("fspack.packaging.pipeline.executor.build", fake_build)
     # mock makensis 编译，避免 Linux CI 无 NSIS 导致测试失败
     out_setup = dist / "release" / "app-1.0-py3.11.9-windows-x86_64-slim-setup.exe"
 
@@ -1216,7 +1216,7 @@ def test_prepare_dist_rebuilds_when_dist_exists_but_exe_missing(
             py_version=py_version,
         )
 
-    monkeypatch.setattr("fspack.builder.build", fake_build)
+    monkeypatch.setattr("fspack.packaging.pipeline.executor.build", fake_build)
     # mock makensis 编译，避免 Linux CI 无 NSIS 导致测试失败
     out_setup = dist / "release" / "app-1.0-py3.11.9-windows-x86_64-slim-setup.exe"
 

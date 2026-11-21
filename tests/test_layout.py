@@ -9,8 +9,10 @@ M4 定下的依赖方向没有被新代码改回去：
 * ``packaging`` 只有编排/展示入口可以引用 ``fspack.console`` / ``fspack.progress``，
   纯逻辑模块（解包、解析、运行时下载等）引用它们会连锁把 rich 拖进 import 链，
   直接抬高 --help/启动耗时；
-* M4 拆出的叶子模块 ``metrics`` / ``astutil`` / ``archive`` 只依赖标准库与
-  ``fspack.exceptions``，否则"叶子"名不副实。
+* ``packaging`` 不得依赖 ``builder`` facade 或 ``cli`` / ``doctor`` / ``wizard`` /
+  ``runner`` 上层入口；
+* 叶子模块（含 ``fsutil`` / ``format``）只依赖标准库与 ``fspack.exceptions``，
+  否则"叶子"名不副实。
 
 新增违规时这里先失败，而不是等到 import 链膨胀、启动耗时回退后才发现。
 """
@@ -58,7 +60,7 @@ ALLOWED_DISPLAY_IMPORTERS = frozenset(
         "packaging/wheels/process.py",
     }
 )
-LEAF_MODULES = ("metrics.py", "astutil.py", "archive.py", "jsoncache.py", "logutil.py")
+LEAF_MODULES = ("metrics.py", "astutil.py", "archive.py", "jsoncache.py", "logutil.py", "fsutil.py", "format.py")
 
 
 def _iter_sources() -> list[Path]:
@@ -127,6 +129,15 @@ def test_analyzer_does_not_depend_on_packaging() -> None:
 
 def test_slim_does_not_depend_on_packaging() -> None:
     _assert_no_dependency("slim", "fspack.packaging")
+
+
+def test_packaging_does_not_depend_on_builder() -> None:
+    _assert_no_dependency("packaging", "fspack.builder")
+
+
+def test_packaging_does_not_depend_on_upper_layer_entry_points() -> None:
+    for module in ("fspack.cli", "fspack.doctor", "fspack.wizard", "fspack.runner"):
+        _assert_no_dependency("packaging", module)
 
 
 def test_packaging_display_imports_stay_in_entry_points() -> None:

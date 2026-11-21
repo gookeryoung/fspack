@@ -428,21 +428,24 @@ def test_fingerprint_excluded_and_data_dirs(tmp_path: Path) -> None:
     assert _is_in_data_dirs(tmp_path / "main.py", (assets.resolve(),)) is False
 
 
-def test_iter_py_entries_prunes_and_drops_out_of_tree_data_dir(tmp_path: Path) -> None:
-    """_iter_py_entries 排除 .egg-info/数据目录树；root 树外的 data-dir 被丢弃不报错."""
-    from fspack.analyzer.fingerprint import _iter_py_entries
+def test_source_fingerprint_prunes_and_drops_out_of_tree_data_dir(tmp_path: Path) -> None:
+    from fspack.analyzer.fingerprint import source_fingerprint
 
-    (tmp_path / "main.py").write_text("x = 1\n", encoding="utf-8")
+    main = tmp_path / "main.py"
+    main.write_text("x = 1\n", encoding="utf-8")
+    outside = (tmp_path / "..").resolve() / "fsp-out-of-tree-data"
+    data_dirs = ("assets", str(outside))
+    original = source_fingerprint(tmp_path, data_dirs)
     (tmp_path / "app.egg-info").mkdir()
     (tmp_path / "app.egg-info" / "meta.py").write_text("x = 1\n", encoding="utf-8")
     assets = tmp_path / "assets"
     assets.mkdir()
     (assets / "tpl.py").write_text("x = 1\n", encoding="utf-8")
-    # root 树外的 data-dir：relative_to 触发 ValueError 被丢弃（不参与剪枝也不报错）
-    outside = (tmp_path / "..").resolve() / "fsp-out-of-tree-data"
-
-    entries = list(_iter_py_entries(tmp_path, tmp_path, (assets, outside)))
-    assert [rel for rel, _, _ in entries] == ["main.py"]
+    (assets / "Main.qml").write_text("import QtCharts 2.15\n", encoding="utf-8")
+    assert source_fingerprint(tmp_path, data_dirs) == original
+    assert source_fingerprint(tmp_path, ("assets",)) == original
+    main.write_text("x = 123\n", encoding="utf-8")
+    assert source_fingerprint(tmp_path, data_dirs) != original
 
 
 def test_analyze_dependencies_parallel_matches_serial(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

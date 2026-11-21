@@ -36,7 +36,7 @@ from fspack.packaging.wheels import (
 from fspack.packaging.wheels.resolver import DownloadContext
 from fspack.platform import Platform
 from fspack.progress import StageRecorder
-from tests._stubs import CompletedStub, fail_urlopen
+from tests._stubs import CompletedStub, FakeResp, fail_urlopen
 
 
 @pytest.fixture(autouse=True)
@@ -102,27 +102,8 @@ def test_download_embed_offline_disabled(tmp_path: Path, monkeypatch: pytest.Mon
     """非离线模式缓存未命中 → 正常走网络下载路径（不抛离线异常）."""
     monkeypatch.delenv("FSPACK_OFFLINE", raising=False)
 
-    class _FakeResp:
-        """模拟 urlopen 响应：首次 read 返回数据，后续返回空（终止下载循环）."""
-
-        def __init__(self) -> None:
-            self._read = False
-            self.headers = {"Content-Length": "4"}
-
-        def read(self, n: int = -1) -> bytes:
-            if self._read:
-                return b""
-            self._read = True
-            return b"DATA"
-
-        def __enter__(self) -> _FakeResp:
-            return self
-
-        def __exit__(self, *a: object) -> bool:
-            return False
-
-    def fake_urlopen(req: Request, timeout: int, **kwargs: object) -> _FakeResp:
-        return _FakeResp()
+    def fake_urlopen(req: Request, timeout: int, **kwargs: object) -> FakeResp:
+        return FakeResp(b"DATA")
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     path = download_embed("3.11.9", mirror, tmp_path / "cache")

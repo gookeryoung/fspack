@@ -28,6 +28,7 @@ from fspack.packaging.log_file import (
     setup_log_file,
     teardown_log_file,
 )
+from tests._projects import write_project
 
 # ---- LogFormat 枚举 ----
 
@@ -436,9 +437,7 @@ def test_setup_log_file_keeps_verbose_root_level(tmp_path: Path) -> None:
 
 def _make_minimal_project(tmp_path: Path) -> Path:
     """创建最小可解析项目."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n', encoding="utf-8")
-    (tmp_path / "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
-    return tmp_path
+    return write_project(tmp_path)
 
 
 def test_cli_build_log_file_passed_to_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

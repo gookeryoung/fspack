@@ -13,6 +13,7 @@ import hashlib
 from pathlib import Path
 
 from fspack.config import AppType
+from fspack.fsutil import sha256_file
 from fspack.packaging.loader.resource import LoaderVersionInfo
 from fspack.platform import Platform
 
@@ -68,6 +69,4 @@ def _version_info_hash(info: LoaderVersionInfo) -> str:
 
 def _icon_hash(icon: Path) -> str:
     """计算 icon 文件内容的 sha256 前 16 字符 hex，用于缓存键。"""
-    h = hashlib.sha256()
-    h.update(icon.read_bytes())
-    return h.hexdigest()[:16]
+    return sha256_file(icon)[:16]

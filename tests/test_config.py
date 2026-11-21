@@ -1976,8 +1976,8 @@ def test_parse_project_private_sources_in_multi_entry(tmp_path: Path) -> None:
 
 # --- 解析缓存（lru_cache）测试 ---
 #
-# parse_project 按 (project_dir, py_version, mtime_ns) 缓存
-# ProjectInfo。以下测试验证缓存命中、mtime 失效、显式清空、不同参数隔离。
+# parse_project 与 from_dir 按 (project_dir, py_version, mtime_ns, size) 共用缓存。
+# 以下测试验证缓存命中、文件变化失效、显式清空、不同参数隔离。
 
 
 def _make_minimal_project(project_dir: Path, name: str = "app", version: str = "0.1") -> None:
@@ -1995,13 +1995,34 @@ def test_parse_project_cache_hit_returns_same_object(tmp_path: Path) -> None:
     assert first is second  # lru_cache 命中返回同一实例
 
 
-def test_parse_project_cache_hit_via_from_dir(tmp_path: Path) -> None:
-    """ProjectInfo.from_dir 同样命中缓存（委托 parse_project）."""
+@pytest.mark.parametrize("py_version", [None, "3.10.0"])
+def test_parse_project_cache_hit_via_from_dir(tmp_path: Path, py_version: str | None) -> None:
+    """from_dir 与 parse_project 返回同一个缓存对象."""
+    clear_project_cache()
+    _make_minimal_project(tmp_path)
+    first = ProjectInfo.from_dir(tmp_path, py_version)
+    second = ProjectInfo.from_dir(tmp_path, py_version)
+    assert first is second
+    assert parse_project(tmp_path, py_version) is first
+
+
+def test_from_dir_cache_invalidates_on_size_change_with_same_mtime(tmp_path: Path) -> None:
+    """TOML 大小变化时 from_dir 失效，即使 mtime_ns 保持不变."""
     clear_project_cache()
     _make_minimal_project(tmp_path)
     first = ProjectInfo.from_dir(tmp_path)
+    pp = tmp_path / "pyproject.toml"
+    before = pp.stat()
+    pp.write_text('[project]\nname = "app"\nversion = "0.2.0"\n')
+    os.utime(pp, ns=(before.st_atime_ns, before.st_mtime_ns))
+    after = pp.stat()
+    assert after.st_mtime_ns == before.st_mtime_ns
+    assert after.st_size != before.st_size
+
     second = ProjectInfo.from_dir(tmp_path)
-    assert first is second
+    assert second is not first
+    assert second.version == "0.2.0"
+    assert parse_project(tmp_path) is second
 
 
 def test_parse_project_cache_invalidates_on_mtime_change(tmp_path: Path) -> None:
@@ -2025,16 +2046,29 @@ def test_parse_project_cache_invalidates_on_mtime_change(tmp_path: Path) -> None
     assert second.version == "0.2"
 
 
-def test_clear_project_cache_empties_cache(tmp_path: Path) -> None:
-    """clear_project_cache 后下次调用是新解析（不复用缓存）."""
+@pytest.mark.parametrize("from_dir_first", [False, True])
+def test_clear_project_cache_empties_cache(tmp_path: Path, from_dir_first: bool) -> None:
+    """显式清缓存使两条入口重解析，即使 TOML 大小与 mtime_ns 未变."""
     clear_project_cache()
     _make_minimal_project(tmp_path)
-    first = parse_project(tmp_path)
+    first = ProjectInfo.from_dir(tmp_path) if from_dir_first else parse_project(tmp_path)
+    assert ProjectInfo.from_dir(tmp_path) is parse_project(tmp_path) is first
+
+    pp = tmp_path / "pyproject.toml"
+    before = pp.stat()
+    pp.write_text('[project]\nname = "app"\nversion = "0.2"\n')
+    os.utime(pp, ns=(before.st_atime_ns, before.st_mtime_ns))
+    after = pp.stat()
+    assert after.st_mtime_ns == before.st_mtime_ns
+    assert after.st_size == before.st_size
+    assert ProjectInfo.from_dir(tmp_path) is parse_project(tmp_path) is first
+
     clear_project_cache()
-    second = parse_project(tmp_path)
-    assert first is not second  # 清空后重新解析
-    # 内容仍相等（frozen dataclass __eq__ 按字段比较）
-    assert first == second
+    second = parse_project(tmp_path) if from_dir_first else ProjectInfo.from_dir(tmp_path)
+    assert second is not first
+    assert first.version == "0.1"
+    assert second.version == "0.2"
+    assert ProjectInfo.from_dir(tmp_path) is parse_project(tmp_path) is second
 
 
 def test_clear_project_cache_idempotent() -> None:
@@ -2091,10 +2125,7 @@ def test_parse_project_cache_error_not_cached(tmp_path: Path) -> None:
 
 
 def test_from_dir_with_dotdot_resolves(tmp_path: Path) -> None:
-    """ProjectInfo.from_dir 对含 ``..`` 的路径走 resolve 分支而非 normpath.
-
-    覆盖 models.py 路径规范化的 else 分支（line 388）。
-    """
+    """from_dir 委托 parse_project 对含 ``..`` 的路径做规范化."""
     clear_project_cache()
     _make_minimal_project(tmp_path)
     # 构造含 .. 的路径（绝对但未规范化，触发 else 分支）

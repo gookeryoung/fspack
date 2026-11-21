@@ -28,6 +28,7 @@ from fspack.packaging.size_report import (
     collect_size_report,
     print_size_report,
 )
+from tests._projects import write_project
 
 # ---- 辅助函数 ----
 
@@ -381,9 +382,7 @@ def test_size_report_total_size_formatted() -> None:
 
 def _make_minimal_project(tmp_path: Path) -> Path:
     """创建最小可解析项目."""
-    (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n', encoding="utf-8")
-    (tmp_path / "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
-    return tmp_path
+    return write_project(tmp_path)
 
 
 def test_cli_build_no_size_report_flag_passed_to_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

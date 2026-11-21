@@ -15,7 +15,6 @@ import enum
 import fnmatch
 import functools
 import logging
-import os
 import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -301,28 +300,6 @@ class SlimRules:
 DEFAULT_SLIM_RULES = SlimRules()
 
 
-@functools.lru_cache(maxsize=64)
-def _project_info_from_dir_cached(
-    resolved_dir_str: str,
-    py_version: str | None,
-    mtime_ns: int,  # noqa: ARG001 - 作为 lru_cache 失效键，函数体内无需访问
-) -> ProjectInfo:
-    """按 (项目目录, py_version, pyproject.toml mtime) 缓存 ProjectInfo.
-
-    lru_cache 不缓存异常（parse_project 抛错时不会污染缓存），同一目录
-    pyproject.toml 未变动时命中缓存，避免二次解析 TOML / AST 扫描。
-    maxsize=64 应对 doctor/bench 模式下多模板项目批量构建场景。
-    """
-    from fspack.config.parsing import parse_project
-
-    return parse_project(Path(resolved_dir_str), py_version)
-
-
-def _clear_project_info_cache() -> None:
-    """清空 ProjectInfo 缓存（测试/调试/变更 pyproject 后手动失效）."""
-    _project_info_from_dir_cached.cache_clear()
-
-
 @dataclass(frozen=True)
 class ProjectInfo:
     """解析后的项目元信息."""
@@ -371,31 +348,10 @@ class ProjectInfo:
 
     @classmethod
     def from_dir(cls, project_dir: Path, py_version: str | None = None) -> ProjectInfo:
-        """从项目目录解析 pyproject.toml 并构造实例（按 mtime 缓存）.
+        """从项目目录解析元信息，复用 parse_project 的解析缓存."""
+        from fspack.config.parsing import parse_project
 
-        读取 ``pyproject.toml`` 的 ``st_mtime_ns`` 作为失效键：同一目录
-        文件未变动时直接命中 lru_cache，避免重复 TOML 解析 + AST 扫描。
-        文件不存在时 ``mtime_ns=0``，交给 :func:`parse_project` 抛
-        :class:`ProjectError`（lru_cache 不缓存异常）。
-
-        路径规范化：绝对路径且不含 ``.``/``..`` 组件时跳过
-        :meth:`Path.resolve`（Windows 上 ``resolve`` 触发 ``GetFinalPathNameByHandleW``
-        Win32 API 调用，耗时 ~20-50µs），直接用
-        :func:`os.path.normpath` + :meth:`Path.is_absolute` 保证键一致。
-        仅相对路径或含 ``.``/``..`` 时才做 ``resolve``。
-        """
-        p = Path(project_dir)
-        if p.is_absolute() and "." not in p.parts and ".." not in p.parts:
-            # 绝对路径且已规范化，跳过 resolve 避免昂贵的 Win32 realpath 调用
-            resolved_str = os.path.normpath(str(p))
-        else:
-            resolved_str = str(p.resolve())
-        resolved = Path(resolved_str)
-        try:
-            mtime_ns = (resolved / "pyproject.toml").stat().st_mtime_ns
-        except OSError:
-            mtime_ns = 0
-        return _project_info_from_dir_cached(resolved_str, py_version, mtime_ns)
+        return parse_project(project_dir, py_version)
 
     @property
     def exe_name(self) -> str:
