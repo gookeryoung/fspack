@@ -1,12 +1,4 @@
-"""编译与产物构建阶段：用户源码编译 + entry loader 生成 + 二进制依赖分析 + 图标解析.
-
-- :func:`_compile_user_sources`：Nuitka 编译（可选）+ 字节码预编译 + pyc_strip 源码剥离
-- :func:`_build_entry_loaders` / :func:`_write_entry_files` / :func:`_compile_entry_loader` /
-  :func:`_loader_exe_path`：多入口 C loader 配置分类去重 + 代表并行编译
-  （ThreadPoolExecutor，上限 _MAX_LOADER_WORKERS），同配置入口复制代表产物
-- :func:`_analyze_binary_dependencies`：PE/ELF/Mach-O 依赖图 BFS 剥离无引用二进制
-- :func:`_resolve_project_icon`：4 层优先级（CLI > 配置 > favicon > 默认）icon 解析
-"""
+"""源码编译、按有效子系统分组的多入口 loader 构建、依赖分析与图标解析."""
 
 from __future__ import annotations
 
@@ -21,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 from fspack import logutil
 from fspack.config import AppType, EntryPoint, nuitka_cache_dir
+from fspack.metrics import StageRecorder
 from fspack.packaging.entry import EntryWrapper
 from fspack.packaging.icon import ensure_ico, find_favicon
 from fspack.packaging.loader import (
@@ -30,6 +23,7 @@ from fspack.packaging.loader import (
 from fspack.packaging.loader import (
     compile_loader as _default_compile_loader,
 )
+from fspack.packaging.loader.cache_keys import _effective_app_type
 from fspack.packaging.pyc import _precompile_pyc
 from fspack.platform import Platform
 from fspack.platform import detect_platform as _default_detect_platform
@@ -37,7 +31,7 @@ from fspack.platform import detect_platform as _default_detect_platform
 from .context import _DEFAULT_ICON, _MAX_LOADER_WORKERS, BuildContext
 
 if TYPE_CHECKING:
-    from fspack.metrics import StageRecorder
+    from fspack.metrics import StageRecord
 
 __all__ = [
     "_analyze_binary_dependencies",
@@ -171,35 +165,7 @@ def _compile_user_sources(ctx: BuildContext, src_dst: Path) -> None:
 
 
 def _build_entry_loaders(ctx: BuildContext, resolved_icon: Path | None, has_tkinter: bool) -> list[Path]:
-    """为每个入口生成 C loader 与入口包装器，返回生成的 exe 路径列表.
-
-    用 ``tempfile.TemporaryDirectory`` 作为 loader 编译工作目录，编译完成后自动清理，
-    避免 ``dist/build/`` 残留 ``loader.c``/``icon.rc``/``icon.ico``/``icon.o`` 中间文件
-    被打包进发行包。loader 缓存命中路径不创建工作目录，无副作用。
-
-    **配置分类去重**：单次构建内 loader 源码/平台/icon 全局一致，
-    ``(app_type, version_info)`` 与 loader 持久缓存键（``sha256(source + app_type +
-    platform + icon_hash + version_info_hash)``）一一等价——同组入口的 loader 产物
-    逐字节相同，只编译组内首个入口（代表），其余从代表 exe 复制。Windows 目标因
-    ``version_info.exe_filename`` 按入口名区分，每组仅一入口（行为不变）；Linux/macOS
-    目标 ``version_info=None``，同 ``app_type`` 多入口共享一次编译，消除此前并行同键
-    全部缓存 miss 导致的重复编译。
-
-    **并行编译**（iter-133）：多个配置类用 :class:`ThreadPoolExecutor` 并行编译
-    代表入口 loader（mingw/gcc/clang 子进程释放 GIL，线程足够并行）。
-    ``max_workers = min(cpu_count, :data:`_MAX_LOADER_WORKERS`)`` 平衡并行收益与
-    Windows 资源限制。共享 ``TemporaryDirectory``，每个代表入口分配独立子目录
-    （``<tmp>/<entry_name>``）避免 ``loader.c``/``icon.rc``/``icon.o`` 文件冲突。
-
-    **线程安全**：``exes``/``st.processed()`` 仅在主线程（``future.result()`` 迭代）
-    聚合，无共享可变状态竞争。``compile_loader`` 内部 ``stage.hit_cache()``/
-    ``stage.set_detail()`` 在 worker 线程调用，``StageRecorder._hits += 1`` 在 GIL 下
-    最坏丢失一次计数（benign race，不影响正确性）。
-
-    **异常传播**：worker 内 ``compile_loader`` 抛异常（如 ``LoaderError``）时
-    ``future.result()`` 重抛，``with ThreadPoolExecutor`` 的 ``__exit__`` 调
-    ``shutdown(wait=True)`` 等待在途任务后传播；任一代表失败时不执行同组复制。
-    """
+    """按有效子系统与版本资源分组，独立记录并行编译结果后聚合。"""
     target = ctx.cfg.target
     with ctx.tracker.stage("生成 C loader") as st:
         # splash 启动画面：--splash 构建选项（默认关闭），仅 Windows 生效，
@@ -217,7 +183,7 @@ def _build_entry_loaders(ctx: BuildContext, resolved_icon: Path | None, has_tkin
         groups: dict[tuple[AppType, LoaderVersionInfo | None], list[EntryPoint]] = {}
         for ep in entries:
             app_type, version_info = _write_entry_files(ctx, ep, has_tkinter)
-            groups.setdefault((app_type, version_info), []).append(ep)
+            groups.setdefault((_effective_app_type(app_type, target), version_info), []).append(ep)
         representatives = [members[0] for members in groups.values()]
         exes = [_loader_exe_path(ctx, ep, target) for ep in entries]
 
@@ -239,7 +205,7 @@ def _build_entry_loaders(ctx: BuildContext, resolved_icon: Path | None, has_tkin
             return exes
 
         cpu = os.cpu_count() or 1
-        max_workers = min(cpu, _MAX_LOADER_WORKERS)
+        max_workers = min(cpu, _MAX_LOADER_WORKERS, len(representatives))
         _logger.info(
             "并行编译 %d 个 loader 配置类（%d 个入口，max_workers=%d）", len(representatives), len(entries), max_workers
         )
@@ -251,12 +217,14 @@ def _build_entry_loaders(ctx: BuildContext, resolved_icon: Path | None, has_tkin
 
             def _compile_rep(
                 app_type: AppType, version_info: LoaderVersionInfo | None, members: list[EntryPoint]
-            ) -> None:
-                """单配置类编译 worker：编译组内代表入口的 loader."""
+            ) -> StageRecord:
+                """使用独立记录器编译代表入口，返回度量快照."""
                 rep = members[0]
                 work_subdir = build_dir / rep.name
                 work_subdir.mkdir(parents=True, exist_ok=True)
-                _compile_entry_loader(ctx, rep, source, work_subdir, resolved_icon, app_type, version_info, st)
+                local_stage = StageRecorder(st.name)
+                _compile_entry_loader(ctx, rep, source, work_subdir, resolved_icon, app_type, version_info, local_stage)
+                return local_stage._finalize()
 
             with ThreadPoolExecutor_dispatch(max_workers=max_workers) as pool:
                 futures = [pool.submit(_compile_rep, key[0], key[1], members) for key, members in groups.items()]
@@ -266,14 +234,19 @@ def _build_entry_loaders(ctx: BuildContext, resolved_icon: Path | None, has_tkin
                 # 并行编译时常见多个配置类同时失败，静默丢弃会丢失诊断信息），
                 # 最终重抛首个异常由 with 块 __exit__ 的 shutdown 传播
                 first_exc: BaseException | None = None
+                details: list[str] = []
                 for future in futures:
                     try:
-                        future.result()
+                        record = future.result()
+                        st.hit_cache(record.cache_hit)
+                        if record.detail and record.detail not in details:
+                            details.append(record.detail)
                     except Exception as exc:
+                        _logger.warning("entry loader 编译异常: %s", exc)
                         if first_exc is None:
                             first_exc = exc
-                        else:
-                            _logger.warning("其余 entry loader 编译异常: %s", exc)
+                if details:
+                    st.set_detail("; ".join(details))
                 if first_exc is not None:
                     raise first_exc
                 # 代表全部编译成功后执行同组复制（任一代表失败时上面已抛出，不复制）

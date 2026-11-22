@@ -1,16 +1,4 @@
-"""C loader 编译器基类与平台子类：``generate → compile → cache`` 通用流程.
-
-从 :mod:`fspack.packaging.loader` 拆分而来，封装平台差异：
-
-- :class:`LoaderCompiler` 基类：缓存检查 → 命中复制 → 未命中编译 → 回写
-- :class:`WindowsLoader`：mingw 交叉编译，GUI 加 -mwindows，icon 用 windres 嵌入
-- :class:`LinuxLoader`：gcc 链接 libdl
-- :class:`MacLoader`：clang，dlopen libpython3.X.dylib
-
-工具链发现与 windres 资源编译见 :mod:`fspack.packaging.loader.toolchain`，
-缓存键计算见 :mod:`fspack.packaging.loader.cache_keys`。C 源码模板从
-:mod:`fspack.packaging.loader.source` 导入。
-"""
+"""C loader 公共对象编译、独立资源链接与三层产物缓存。"""
 
 from __future__ import annotations
 
@@ -24,9 +12,13 @@ from typing import TYPE_CHECKING
 from fspack._compat import override
 from fspack.config import AppType
 from fspack.exceptions import LoaderError
+from fspack.packaging.loader.cache import cache_lock, cached_copy, publish_cache
 from fspack.packaging.loader.cache_keys import (
+    _effective_app_type,
     _icon_hash,
     _loader_cache_key,
+    _object_cache_key,
+    _resource_cache_key,
     _version_info_hash,
     loader_cache_dir,
 )
@@ -37,7 +29,15 @@ from fspack.packaging.loader.source import (
     loader_macos_source,
     loader_windows_source,
 )
-from fspack.packaging.loader.toolchain import LINUX_GCC, MACOS_CLANG, MINGW_GCC, _compile_resource_obj, _find_mingw_gcc
+from fspack.packaging.loader.toolchain import (
+    LINUX_GCC,
+    MACOS_CLANG,
+    MINGW_GCC,
+    _compile_resource_obj,
+    _find_mingw_gcc,
+    _find_windres,
+    toolchain_fingerprint,
+)
 from fspack.platform import Platform
 
 if TYPE_CHECKING:
@@ -70,20 +70,7 @@ _LOADER_COMPILE_TIMEOUT = 300.0
 
 
 class LoaderCompiler(abc.ABC):
-    """C loader 编译器基类。
-
-    封装 ``generate → compile → cache`` 通用流程：
-
-    1. :meth:`generate_source` —— 生成 C 源码（platform-specific 模板）
-    2. :meth:`compile` —— 缓存检查 → 命中复制 → 未命中编译 → 回写缓存
-    3. 编译时调用 :meth:`_build_command` 构造命令，:meth:`_prepare_icon` 处理图标资源
-
-    类属性：
-    - ``platform``：目标平台
-    - ``exe_suffix``：可执行文件后缀（Windows 为 ``.exe``，Linux 为空）
-    - ``compiler_name``：编译器可执行名
-    - ``install_hint``：编译器缺失时的安装提示
-    """
+    """按目标平台共享 C 对象并缓存独立入口产物。"""
 
     platform: Platform
     exe_suffix: str = ""
@@ -102,7 +89,7 @@ class LoaderCompiler(abc.ABC):
     @abc.abstractmethod
     def _build_command(
         cls,
-        c_file: Path,
+        obj_file: Path,
         out_exe: Path,
         app_type: AppType,
         resource_obj: Path | None,
@@ -135,6 +122,88 @@ class LoaderCompiler(abc.ABC):
         return shutil.which(cls.compiler_name) is not None
 
     @classmethod
+    def _compiler(cls) -> str:
+        return cls.compiler_name
+
+    @classmethod
+    def _compile_flags(cls) -> tuple[str, ...]:
+        return ("-O2",)
+
+    @classmethod
+    def _run_command(cls, cmd: list[str]) -> None:
+        _logger.debug("编译 loader: %s", " ".join(cmd))
+        try:
+            completed = subprocess.run(
+                cmd,
+                check=True,
+                capture_output=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=_LOADER_COMPILE_TIMEOUT,
+            )
+            _forward_tool_output(completed)
+        except FileNotFoundError as e:
+            raise LoaderError(f"未找到编译器 {cls.compiler_name}，请安装 {cls.install_hint}") from e
+        except subprocess.TimeoutExpired as e:
+            raise LoaderError(
+                f"loader 编译超时（{int(_LOADER_COMPILE_TIMEOUT)}s）: {cls.compiler_name}，"
+                "请检查杀软是否锁定输出文件后重试"
+            ) from e
+        except subprocess.CalledProcessError as e:
+            _forward_tool_output(subprocess.CompletedProcess(cmd, e.returncode, e.stdout, e.stderr))
+            raise LoaderError(f"loader 编译失败:\n{e.stderr}") from e
+
+    @classmethod
+    def _compile_object(
+        cls,
+        source: str,
+        work_dir: Path,
+        cache: Path,
+        toolchain_key: str,
+        stage: StageRecorder | None,
+    ) -> Path:
+        flags = cls._compile_flags()
+        key = _object_cache_key(source, cls.platform, toolchain_key, flags)
+        cached_obj = cache / "objects" / f"{key}.o"
+        obj_file = work_dir / "loader.o"
+        with cache_lock(cached_obj):
+            if cached_copy(cached_obj, obj_file):
+                _logger.debug("loader C 对象缓存命中: %s", cached_obj.name)
+                if stage is not None:
+                    stage.hit_cache()
+                return obj_file
+            c_file = work_dir / "loader.c"
+            c_file.write_text(source, encoding="utf-8")
+            cls._run_command([cls._compiler(), *flags, "-c", str(c_file), "-o", str(obj_file)])
+            publish_cache(obj_file, cached_obj)
+        return obj_file
+
+    @classmethod
+    def _resource_object(
+        cls,
+        icon: Path | None,
+        version_info: LoaderVersionInfo | None,
+        work_dir: Path,
+        cache: Path,
+        key: str,
+        stage: StageRecorder | None,
+    ) -> Path | None:
+        if not cls._supports_icon():
+            return None
+        cached_obj = cache / "resources" / f"{key}.o"
+        obj_file = work_dir / "resource.o"
+        with cache_lock(cached_obj):
+            if cached_copy(cached_obj, obj_file):
+                _logger.debug("loader 资源对象缓存命中: %s", cached_obj.name)
+                if stage is not None:
+                    stage.hit_cache()
+                return obj_file
+            resource_obj = cls._prepare_resources(icon, version_info, work_dir)
+            if resource_obj is not None:
+                publish_cache(resource_obj, cached_obj)
+            return resource_obj
+
+    @classmethod
     def compile(
         cls,
         source: str,
@@ -147,84 +216,65 @@ class LoaderCompiler(abc.ABC):
         cache_dir: Path | None = None,
         stage: StageRecorder | None = None,
     ) -> Path:
-        """编译 loader 源码为可执行文件，返回路径。
-
-        缓存命中时直接复制到 ``out_exe`` 并调 ``stage.hit_cache()``；
-        未命中时编译并 best-effort 回写缓存供后续复用。缓存键为
-        ``sha256(source + app_type + platform + icon_hash + version_info_hash)``
-        前 16 字符，保证同配置命中、改配置失效。``cache_dir`` 默认 ``~/.fspack/cache/loaders/``。
-        """
+        """共享 C 对象，独立生成资源与链接；完整产物校验后复用。"""
         out_exe.parent.mkdir(parents=True, exist_ok=True)
-
-        # icon 路径不存在时不崩溃：warning 并按无 icon 处理（hash 空串），
-        # 与 _compile_resource_obj 对 version_info/icon 的宽容行为对齐
+        app_type = _effective_app_type(app_type, cls.platform)
+        if not cls._supports_icon():
+            icon = None
+            version_info = None
         icon_hash = ""
-        if icon is not None and cls._supports_icon():
+        if icon is not None:
             if icon.is_file():
                 icon_hash = _icon_hash(icon)
             else:
                 _logger.warning("icon 文件不存在，按无图标处理: %s", icon)
         version_info_hash = _version_info_hash(version_info) if version_info is not None else ""
         cache = cache_dir or loader_cache_dir()
-        cache.mkdir(parents=True, exist_ok=True)
-        key = _loader_cache_key(source, app_type, cls.platform, icon_hash, version_info_hash)
+        identities = cache / "toolchain"
+        compiler_key = toolchain_fingerprint(cls._compiler(), store=identities)
+        resource_key = ""
+        if cls._supports_icon():
+            resource_key = _resource_cache_key(
+                icon_hash,
+                version_info,
+                toolchain_fingerprint(_find_windres(), resource=True, store=identities) + compiler_key,
+            )
+        link_flags = tuple(
+            cls._build_command(
+                Path("loader.o"), Path("loader"), app_type, Path("resource.o") if cls._supports_icon() else None
+            )
+        )
+        key = _loader_cache_key(
+            source,
+            app_type,
+            cls.platform,
+            icon_hash,
+            version_info_hash,
+            toolchain_key=compiler_key,
+            compile_flags=cls._compile_flags(),
+            link_flags=link_flags,
+            resource_key=resource_key,
+        )
         cached_exe = cache / f"{key}{cls.exe_suffix}"
+        with cache_lock(cached_exe):
+            if cached_copy(cached_exe, out_exe):
+                _logger.debug("loader 缓存命中: %s", cached_exe.name)
+                if stage is not None:
+                    stage.hit_cache()
+                    stage.set_detail("缓存命中")
+                return out_exe
 
-        if cached_exe.is_file():
-            _logger.debug("loader 缓存命中: %s", cached_exe.name)
-            shutil.copy2(cached_exe, out_exe)
-            if stage is not None:
-                stage.hit_cache()
-                stage.set_detail("缓存命中")
-            return out_exe
-
-        # 缓存未命中：创建编译工作目录并写 loader.c
-        # 缓存命中路径不创建 work_dir，避免 dist/build/ 留下空目录
-        work_dir.mkdir(parents=True, exist_ok=True)
-        c_file = work_dir / "loader.c"
-        c_file.write_text(source, encoding="utf-8")
-
-        resource_obj = cls._prepare_resources(icon, version_info, work_dir)
-        cmd = cls._build_command(c_file, out_exe, app_type, resource_obj)
-        _logger.debug("编译 loader: %s", " ".join(cmd))
-        try:
-            # 延迟导入：避免 ``import fspack.builder`` 触发 fspack.progress 加载
             from fspack.progress import spinner
 
+            work_dir.mkdir(parents=True, exist_ok=True)
             with spinner(f"编译 loader ({cls.compiler_name})"):
-                completed = subprocess.run(
-                    cmd,
-                    check=True,
-                    capture_output=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    timeout=_LOADER_COMPILE_TIMEOUT,
-                )
-            _forward_tool_output(completed)
-        except FileNotFoundError as e:
-            raise LoaderError(f"未找到编译器 {cls.compiler_name}，请安装 {cls.install_hint}") from e
-        except subprocess.TimeoutExpired as e:
-            raise LoaderError(
-                f"loader 编译超时（{int(_LOADER_COMPILE_TIMEOUT)}s）: {cls.compiler_name}，"
-                "请检查杀软是否锁定输出文件后重试"
-            ) from e
-        except subprocess.CalledProcessError as e:
-            _forward_tool_output(subprocess.CompletedProcess(cmd, e.returncode, e.stdout, e.stderr))
-            raise LoaderError(f"loader 编译失败:\n{e.stderr}") from e
-        # 资源编译失败（windres 不可用或 rc 语法错误）时不缓存 exe：
-        # 此 exe 缺少 icon/版本信息/manifest 资源段，缓存后修复 resource.py
-        # 重新打包会因缓存键（icon_hash+version_info_hash）不变而命中旧缓存，
-        # 导致资源段永远无法嵌入。资源缺失时跳过缓存，下次打包重新编译。
-        resource_failed = (
-            cls._supports_icon() and (icon is not None or version_info is not None) and resource_obj is None
-        )
-        if resource_failed:
-            _logger.warning("资源段未嵌入，跳过 loader 缓存（修复后重新打包将重新编译）")
-        else:
-            try:
-                shutil.copy2(out_exe, cached_exe)
-            except OSError as e:
-                _logger.warning("loader 缓存回写失败: %s", e)
+                obj_file = cls._compile_object(source, work_dir, cache, compiler_key, stage)
+                resource_obj = cls._resource_object(icon, version_info, work_dir, cache, resource_key, stage)
+                cls._run_command(cls._build_command(obj_file, out_exe, app_type, resource_obj))
+            if cls._supports_icon() and resource_obj is None:
+                _logger.warning("资源段未嵌入，跳过 loader 缓存（修复后重新打包将重新编译）")
+            else:
+                publish_cache(out_exe, cached_exe)
         if stage is not None:
             stage.set_detail(cls.compiler_name)
         return out_exe
@@ -259,6 +309,19 @@ class WindowsLoader(LoaderCompiler):
 
     @classmethod
     @override
+    def _compiler(cls) -> str:
+        gcc = _find_mingw_gcc()
+        if gcc is None:
+            raise LoaderError(f"未找到编译器 {cls.compiler_name}，请安装 {cls.install_hint}")
+        return gcc
+
+    @classmethod
+    @override
+    def _compile_flags(cls) -> tuple[str, ...]:
+        return ("-O2", "-municode")
+
+    @classmethod
+    @override
     def available(cls) -> bool:
         """检测 mingw gcc 是否可用（带前缀或无前缀均可）。"""
         gcc = _find_mingw_gcc()
@@ -275,29 +338,13 @@ class WindowsLoader(LoaderCompiler):
     @override
     def _build_command(
         cls,
-        c_file: Path,
+        obj_file: Path,
         out_exe: Path,
         app_type: AppType,
         resource_obj: Path | None,
     ) -> list[str]:
-        """构造 mingw 编译命令：GUI/WEB 加 -mwindows，资源 .o 链接到 exe。
-
-        ``-mwindows`` 使生成的 exe 不带控制台窗口（Windows subsystem）。
-        WEB 类型与 GUI 一样需要关闭控制台（前后端分离 Web 应用作为桌面应用分发，
-        黑色控制台窗口对终端用户不友好）。CLI 类型保留 console subsystem。
-        ``resource_obj`` 为 windres 编译的资源段（icon + 版本信息 + manifest），
-        非 None 时追加到 gcc 命令末尾链接进 exe。
-        """
-        # 无 mingw 前缀编译器时（如未装 mingw-w64 的 Linux）直接抛 LoaderError，
-        # 避免 python -O 剥离 assert 后 cmd[0]=None 产生模糊 TypeError
-        gcc = _find_mingw_gcc()
-        if gcc is None:
-            raise LoaderError(f"未找到编译器 {cls.compiler_name}，请安装 {cls.install_hint}")
-        # -luser32：loader 错误报告用 MessageBoxW/GetConsoleWindow（GUI 子系统
-        # 无控制台时弹窗提示），mingw 默认不链接 user32，需显式指定
-        # -lgdi32：splash 启动画面绘制用 CreateSolidBrush/DrawTextW 等 GDI 函数
-        # （--splash 注入；未注入时多余链接无副作用，保持命令稳定）
-        cmd: list[str] = [gcc, "-O2", "-municode", "-o", str(out_exe), str(c_file), "-luser32", "-lgdi32"]
+        """链接公共对象与入口资源，链接时选择 console/windowed 子系统。"""
+        cmd = [cls._compiler(), *cls._compile_flags(), "-o", str(out_exe), str(obj_file), "-luser32", "-lgdi32"]
         if app_type in (AppType.GUI, AppType.WEB):
             cmd.insert(1, "-mwindows")
         if resource_obj is not None:
@@ -342,7 +389,7 @@ class LinuxLoader(LoaderCompiler):
     @override
     def _build_command(
         cls,
-        c_file: Path,
+        obj_file: Path,
         out_exe: Path,
         app_type: AppType,  # 抽象方法签名要求，Linux 不区分 app_type
         resource_obj: Path | None,  # 抽象方法签名要求，Linux 无 PE 资源段
@@ -360,7 +407,7 @@ class LinuxLoader(LoaderCompiler):
             "-O2",
             "-o",
             str(out_exe),
-            str(c_file),
+            str(obj_file),
             "-ldl",
             "-Wl,--disable-new-dtags",
             "-Wl,-rpath,$ORIGIN/runtime/python/lib",
@@ -397,13 +444,13 @@ class MacLoader(LoaderCompiler):
     @override
     def _build_command(
         cls,
-        c_file: Path,
+        obj_file: Path,
         out_exe: Path,
         app_type: AppType,  # 抽象方法签名要求，macOS 不区分 app_type
         resource_obj: Path | None,  # 抽象方法签名要求，macOS 无 PE 资源段
     ) -> list[str]:
         """构造 clang 编译命令（dlopen 在 libSystem，无需 -ldl）。"""
-        return [MACOS_CLANG, "-O2", "-o", str(out_exe), str(c_file)]
+        return [MACOS_CLANG, "-O2", "-o", str(out_exe), str(obj_file)]
 
 
 # ---- 函数式 API（委托给类，按 platform dispatch）----
@@ -451,24 +498,7 @@ def compile_loader(
     cache_dir: Path | None = None,
     stage: StageRecorder | None = None,
 ) -> Path:
-    """编译 loader 源码为可执行文件，返回路径。
-
-    Windows 用 mingw 交叉编译（GUI 加 -mwindows），Linux 用 gcc（链接 libdl），
-    macOS 用 clang（dlopen 在 libSystem，无需 -ldl）。
-
-    ``icon`` 为 Windows 可执行文件图标（``.ico``），用 windres 编译资源文件
-    链接到 exe。Linux 与 macOS 忽略 icon（ELF/Mach-O 无图标资源概念）。
-
-    ``version_info`` 为 Windows loader exe 的 VS_VERSIONINFO 元数据（公司/产品/版本），
-    与 icon 一并通过 windres 编译为资源段链接到 exe，并嵌入 application manifest
-    （asInvoker + DPI 感知）。资源段完整的 exe 可显著降低 Defender 等杀软启发式误报。
-    Linux 与 macOS 忽略（无 PE 资源段概念）。
-
-    缓存命中时直接复制到 ``out_exe`` 并调 ``stage.hit_cache()``；
-    未命中时编译并 best-effort 回写缓存供后续复用。缓存键为
-    ``sha256(source + app_type + platform + icon_hash + version_info_hash)``
-    前 16 字符，保证同配置命中、改配置失效。``cache_dir`` 默认 ``~/.fspack/cache/loaders/``。
-    """
+    """按平台编译 loader，复用公共对象并保留各入口 Windows 资源。"""
     cls = _loader_class_for(platform)
     return cls.compile(
         source, out_exe, app_type, work_dir, icon=icon, version_info=version_info, cache_dir=cache_dir, stage=stage

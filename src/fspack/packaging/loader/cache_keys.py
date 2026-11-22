@@ -1,15 +1,9 @@
-"""loader 编译缓存键计算.
-
-从 :mod:`fspack.packaging.loader.compile` 拆分而来，聚集「缓存」职责：
-
-- :func:`loader_cache_dir`：缓存目录解析（转发 :mod:`fspack.config.cache`）
-- :func:`_loader_cache_key`：源码 + 应用类型 + 平台 + icon + 版本信息组合哈希
-- :func:`_version_info_hash` / :func:`_icon_hash`：资源元数据哈希
-"""
+"""loader 编译缓存键与缓存目录解析."""
 
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 from fspack.config import AppType
@@ -21,52 +15,88 @@ __all__ = ["loader_cache_dir"]
 
 
 def loader_cache_dir() -> Path:
-    """返回 fspack loader 缓存目录（``FSPACK_CACHE_DIR`` 环境变量 > 默认 ``~/.fspack/cache/loaders``）."""
+    """返回 loader 缓存目录."""
     from fspack.config.cache import loader_cache_dir as _cache_dir
 
     return _cache_dir()
 
 
-def _loader_cache_key(
+def _structured_hash(kind: str, fields: dict[str, object]) -> str:
+    payload = json.dumps([kind, fields], sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def _effective_app_type(app_type: AppType, platform: Platform) -> AppType:
+    if platform is Platform.WINDOWS and app_type in (AppType.GUI, AppType.WEB):
+        return AppType.GUI
+    return AppType.CLI
+
+
+def _object_cache_key(source: str, platform: Platform, toolchain_key: str, flags: tuple[str, ...]) -> str:
+    return _structured_hash(
+        "loader-object-v1",
+        {"source": source, "platform": platform.value, "toolchain": toolchain_key, "flags": flags},
+    )
+
+
+def _resource_cache_key(icon_hash: str, version_info: LoaderVersionInfo | None, toolchain_key: str) -> str:
+    from fspack.packaging.loader import toolchain
+
+    return _structured_hash(
+        "loader-resource-v1",
+        {
+            "rc": toolchain.generate_resource_rc(version_info, has_icon=bool(icon_hash)),
+            "manifest": toolchain.generate_app_manifest(
+                version_info.name if version_info is not None else "app",
+                version_info.version if version_info is not None else "1.0.0",
+            ),
+            "icon": icon_hash,
+            "toolchain": toolchain_key,
+        },
+    )
+
+
+def _loader_cache_key(  # noqa: PLR0913
     source: str,
     app_type: AppType,
     platform: Platform,
     icon_hash: str = "",
     version_info_hash: str = "",
+    *,
+    toolchain_key: str = "",
+    compile_flags: tuple[str, ...] = (),
+    link_flags: tuple[str, ...] = (),
+    resource_key: str = "",
 ) -> str:
-    """计算 loader 缓存键：sha256(source + app_type + platform + icon_hash + version_info_hash) 前 16 字符 hex。
-
-    源码仅依赖 ``py_xy`` 与平台（入口路径运行时从 ``<exe_basename>.entry``
-    或回退 ``.entry`` 读取），应用类型影响 ``-mwindows`` 编译选项，icon_hash
-    区分不同 icon（空串表示无 icon），version_info_hash 区分不同版本信息元数据
-    （CompanyName/ProductVersion 等变化时资源段变化需重编）。五者组合哈希作为
-    缓存文件名，保证同配置命中、改配置失效。
-    """
-    h = hashlib.sha256()
-    h.update(source.encode("utf-8"))
-    h.update(app_type.value.encode("utf-8"))
-    h.update(platform.value.encode("utf-8"))
-    h.update(icon_hash.encode("utf-8"))
-    h.update(version_info_hash.encode("utf-8"))
-    return h.hexdigest()[:16]
+    return _structured_hash(
+        "loader-executable-v2",
+        {
+            "source": source,
+            "app_type": _effective_app_type(app_type, platform).value,
+            "platform": platform.value,
+            "icon": icon_hash,
+            "version_info": version_info_hash,
+            "toolchain": toolchain_key,
+            "compile_flags": compile_flags,
+            "link_flags": link_flags,
+            "resource": resource_key,
+        },
+    )
 
 
 def _version_info_hash(info: LoaderVersionInfo) -> str:
-    """计算版本信息元数据的哈希（sha256 前 16 字符），用于 loader 缓存键.
-
-    五字段（name/version/description/author/exe_filename）任一变化即视为不同配置，
-    触发资源段重编。``exe_filename`` 纳入使多入口项目不同入口的 exe 资源段独立缓存
-    （OriginalFilename 字段不同）。
-    """
-    h = hashlib.sha256()
-    h.update(info.name.encode("utf-8"))
-    h.update(info.version.encode("utf-8"))
-    h.update(info.description.encode("utf-8"))
-    h.update(info.author.encode("utf-8"))
-    h.update(info.exe_filename.encode("utf-8"))
-    return h.hexdigest()[:16]
+    return _structured_hash(
+        "loader-version-info-v1",
+        {
+            "name": info.name,
+            "version": info.version,
+            "description": info.description,
+            "author": info.author,
+            "exe_filename": info.exe_filename,
+        },
+    )
 
 
 def _icon_hash(icon: Path) -> str:
-    """计算 icon 文件内容的 sha256 前 16 字符 hex，用于缓存键。"""
+    """返回 icon 内容的 sha256 前 16 字符."""
     return sha256_file(icon)[:16]

@@ -122,6 +122,15 @@ DEFAULT_CATEGORIES: tuple[BenchmarkCategory, ...] = (
         threshold=15.0,
         description="test_entry_startup_baseline.py 启动基线，真实 subprocess 抖动 StdDev 5-8%",
     ),
+    # test_loader_perf_baseline.py：真实 MinGW 编译/链接，冷构建 StdDev 5-20%，
+    # 热构建仅校验复制（~20ms）；5ms 绝对下限抑制热路径毫秒级抖动
+    BenchmarkCategory(
+        name="loader_build",
+        pattern=r"^test_loader_(single_entry_cold|multi_entry_cold|multi_entry_warm)_baseline$",
+        threshold=25.0,
+        description="test_loader_perf_baseline.py 多入口 loader 冷/热构建，真实 MinGW subprocess 抖动",
+        noise_floor=5e-3,
+    ),
     # test_perf_baseline.py 源码指纹微基准：stat 密集，跨 runner 绝对抖动大
     # noise_floor=1.2e-4（120µs）：同一份代码在 2026-11-11~12 的 CI run 实测
     # 152.4/199.5/202.9µs，最快 run（0006_main.json，11-11）为 98.5µs——相对差
