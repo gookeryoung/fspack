@@ -96,6 +96,19 @@ data-dirs = [
 ]
 pyc_strip = true
 no_site   = true
+# rich 的部分可选能力依赖 fspack 自身从不使用（只用 Console/Table/Panel/Text/
+# Progress/Theme）：pygments 仅由 rich.syntax/rich.traceback 导入，markdown-it-py
+# 与 mdurl 仅由 rich.markdown 导入。三者合计 ~4.5MB，占自身产物 site-packages
+# 六成以上；排除后不影响 fspack 运行。注意：**这是 fspack 自打包配置**，打包
+# 依赖 rich 的普通应用若用到语法高亮/富 traceback/Markdown，请勿照搬。
+slim-exclude = [
+    "pygments/**",
+    "pygments-*.dist-info/**",
+    "markdown_it/**",
+    "markdown_it_py-*.dist-info/**",
+    "mdurl/**",
+    "mdurl-*.dist-info/**",
+]
 
 [dependency-groups]
 dev = ["fspack[dev,docs,image]"]

@@ -11,8 +11,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from rich.table import Table
-
 from fspack.config import DependencyReport
 from fspack.console import console
 from fspack.platform import Platform
@@ -43,7 +41,7 @@ def _print_build_plan(ctx: BuildContext, report: DependencyReport) -> None:  # n
     console.step("打包计划（dry-run，不执行实际构建）")
 
     # 基本信息
-    basic_table = Table(title="项目信息", show_lines=False)
+    basic_table = console.new_table("项目信息")
     basic_table.add_column("字段", style="cyan", no_wrap=True)
     basic_table.add_column("值", style="white")
     basic_table.add_row("项目名", info.name)
@@ -73,7 +71,7 @@ def _print_build_plan(ctx: BuildContext, report: DependencyReport) -> None:  # n
 
     # 依赖分析
     console.rich.print()
-    dep_table = Table(title="依赖分析", show_lines=False)
+    dep_table = console.new_table("依赖分析")
     dep_table.add_column("类别", style="cyan", no_wrap=True)
     dep_table.add_column("数量", justify="right")
     dep_table.add_column("详情")
@@ -106,7 +104,7 @@ def _print_build_plan(ctx: BuildContext, report: DependencyReport) -> None:  # n
     # 私有包源
     if info.extra_index_urls or info.find_links:
         console.rich.print()
-        src_table = Table(title="私有包源", show_lines=False)
+        src_table = console.new_table("私有包源")
         src_table.add_column("类型", style="cyan", no_wrap=True)
         src_table.add_column("路径")
         for url in info.extra_index_urls:
@@ -117,7 +115,7 @@ def _print_build_plan(ctx: BuildContext, report: DependencyReport) -> None:  # n
 
     # 构建选项
     console.rich.print()
-    opts_table = Table(title="构建选项", show_lines=False)
+    opts_table = console.new_table("构建选项")
     opts_table.add_column("选项", style="cyan", no_wrap=True)
     opts_table.add_column("值", justify="center")
     opts_table.add_row("Nuitka 编译", "启用" if ctx.opts.nuitka else "关闭")

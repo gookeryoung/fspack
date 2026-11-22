@@ -21,6 +21,7 @@ import logging
 import os
 import sys
 import time
+from collections.abc import Sequence
 from typing import IO, Any, Final
 
 from rich.console import Console
@@ -31,12 +32,41 @@ from rich.theme import Theme
 from fspack import logutil
 from fspack._compat import override
 
-__all__ = ["CICompat", "ConsoleUI", "StageLogHandler", "console"]
+__all__ = ["CICompat", "ConsoleUI", "StageLogHandler", "console", "new_table"]
 
 _logger = logging.getLogger(__name__)
 
 # 仅用于格式化异常的 traceback（Handler.formatException 在类型存根里只属于 Formatter）
 _EXC_FORMATTER = logging.Formatter()
+
+
+def new_table(title: str = "", **kwargs: Any) -> Any:
+    """创建统一外观的 rich Table（标题左对齐加粗、表头加粗、细圆角边框）.
+
+    表格样式集中在此：标题/表头/边框/内边距只在一处定义，各业务模块
+    （体积报告、阶段汇总、dry-run 计划、doctor 诊断）保持一致观感，避免
+    每处手写 ``Table(...)`` 样式漂移。
+
+    :param title: 表格标题，空字符串表示无标题。
+    :param kwargs: 覆盖默认样式（如 ``show_lines=True``/``expand=True``）。
+    :return: 已套用统一样式的 :class:`rich.table.Table`。
+    """
+    # 延迟导入：仅真正需要渲染表格的命令才加载 rich.table/box（减少 import 开销）
+    from rich import box as _box
+    from rich.table import Table as _Table
+
+    options: dict[str, Any] = {
+        "title": title or None,
+        "title_style": "bold cyan",
+        "title_justify": "left",
+        "header_style": "bold",
+        "border_style": "grey37",
+        "box": _box.ROUNDED,
+        "show_lines": False,
+        "padding": (0, 1),
+    }
+    options.update(kwargs)
+    return _Table(**options)
 
 
 class _AsciiEncodingStream:
@@ -72,6 +102,9 @@ class CICompat:
                 "error": "bold red",
                 "success": "bold green",
                 "step": "bold blue",
+                "hint": "dim italic",
+                "label": "cyan",
+                "value": "white",
             }
         )
 
@@ -174,8 +207,8 @@ class StageLogHandler(logging.Handler):
 
     _LABELS: Final = {
         logging.DEBUG: ("DEBUG", "dim"),
-        logging.INFO: ("INFO ", "cyan"),
-        logging.WARNING: ("WARN ", "yellow"),
+        logging.INFO: ("INFO ", "bold cyan"),
+        logging.WARNING: ("WARN ", "bold yellow"),
         logging.ERROR: ("ERROR", "bold red"),
         logging.CRITICAL: ("ERROR", "bold red"),
     }
@@ -212,6 +245,16 @@ class StageLogHandler(logging.Handler):
         clock = time.strftime("%H:%M:%S", time.localtime(record.created))
         return f"{clock} {label} "
 
+    def _level_style(self, record: logging.LogRecord, style: str) -> str:
+        """级别样式：交互式终端里 WARN/ERROR 加反色底（彩色标签更醒目）.
+
+        INFO/DEBUG 保持纯前景色，避免正常构建时每行都有底色而夺眼；
+        非 TTY（CI/重定向/日志文件）不加反色，只保留文本标记。
+        """
+        if record.levelno >= logging.WARNING and self._ui_console.is_terminal:
+            return f"{style} reverse"
+        return style
+
     def render(self, record: logging.LogRecord) -> Text:
         """把日志记录渲染成带对齐续行的 rich Text（便于单测直接断言）."""
         _label, style = self._LABELS.get(record.levelno, ("INFO ", "cyan"))
@@ -220,7 +263,7 @@ class StageLogHandler(logging.Handler):
         width = max(20, self._ui_console.width - logutil.display_width(prefix))
         lines = logutil.wrap_message(record.getMessage(), width)
         text = Text()
-        text.append(prefix, style=style)
+        text.append(prefix, style=self._level_style(record, style))
         text.append(lines[0])
         for line in lines[1:]:
             text.append("\n" + pad + line)
@@ -258,6 +301,94 @@ class ConsoleUI:
     def quiet(self) -> bool:
         """静默模式：只保留错误与最终结果行."""
         return self._quiet
+
+    def new_table(self, title: str = "", **kwargs: Any) -> Any:
+        """创建统一外观的 rich Table（见 :func:`new_table`）."""
+        return new_table(title, **kwargs)
+
+    def share_bar(self, fraction: float, width: int = 10) -> Text:
+        """把 ``[0, 1]`` 的占比渲染成等宽文本条（用于体积占比等可视化）.
+
+        legacy Windows 控制台（``█``/``░`` 为 Ambiguous 宽度）退回 ASCII
+        ``#``/``-``，避免物理控制台宽度计量不一致导致表格错位。
+        """
+        ratio = 0.0 if fraction <= 0 else (1.0 if fraction >= 1 else fraction)
+        filled = round(ratio * width)
+        filled = max(0, min(width, filled))
+        if self._legacy_console:
+            return Text("#" * filled + "-" * (width - filled), style="cyan")
+        text = Text("█" * filled, style="cyan")
+        text.append("░" * (width - filled), style="grey37")
+        return text
+
+    def hint(self, msg: str) -> None:
+        """打印灰暗小字提示（下一步操作/小技巧；``--quiet`` 下抑制）.
+
+        消息体按纯文本转义，样式仅由 ``[hint]`` 前缀提供。
+        """
+        if self._quiet:
+            return
+        self._console.print(f"[hint]{markup_escape(msg)}[/]")
+
+    def summary_panel(
+        self,
+        title: str,
+        rows: Sequence[tuple[str, str]],
+        *,
+        ok: bool = True,
+        hint: str = "",
+        force: bool = False,
+    ) -> None:
+        """渲染收尾摘要面板（产物/体积/耗时/下一步），对普通用户更直观.
+
+        交互式终端输出圆角面板（成功绿框/失败红框）；非 TTY（CI/重定向）
+        退化为 ``标签: 值`` 纯文本行，保持可 grep 且不引入盒线字符。
+        ``--quiet`` 下默认完全抑制（最终结果仍由 :meth:`result` 给出）。
+
+        :param title: 面板标题（如 ``构建完成``）。
+        :param rows: ``(标签, 值)`` 序列，值按纯文本渲染。
+        :param ok: 成功/失败决定面板颜色与标记。
+        :param hint: 面板底部附加的提示行（灰暗小字）。
+        :param force: True 时即使 ``--quiet`` 也输出（如 doctor 错误结论，
+            静默模式仍需向用户报告阻塞性的失败）。
+        """
+        if self._quiet and not force:
+            return
+        if not self.is_interactive:
+            for label, value in rows:
+                if label:
+                    self._console.print(f"{label}: {value}", markup=False, highlight=False)
+                else:
+                    self._console.print(f"  {value}", markup=False, highlight=False)
+            if hint:
+                self._console.print(f"提示: {hint}", markup=False, highlight=False)
+            return
+
+        from rich.panel import Panel
+        from rich.table import Table as _Table
+
+        grid = _Table.grid(padding=(0, 1))
+        grid.add_column(style="label", no_wrap=True)
+        grid.add_column(style="value", overflow="fold")
+        for label, value in rows:
+            grid.add_row(markup_escape(label), markup_escape(value))
+        if hint:
+            grid.add_row("", "")
+            grid.add_row("", f"[hint]{markup_escape(hint)}[/]")
+
+        mark = "v" if self._legacy_console else "√"
+        if not ok:
+            mark = "x" if self._legacy_console else "×"
+        style = "success" if ok else "error"
+        self._console.print(
+            Panel(
+                grid,
+                title=f"[{style}]{mark} {markup_escape(title)}[/]",
+                title_align="left",
+                border_style=style,
+                padding=(0, 1),
+            )
+        )
 
     @property
     def path_width(self) -> int:
@@ -355,6 +486,7 @@ class ConsoleUI:
         mark = "x" if self._legacy_console else "×"
         if failed:
             self._console.print(f"    [error]{mark}[/] {elapsed_text}{markup_escape(f' · {detail}' if detail else '')}")
+            self.hint("加 -v 重新运行可查看完整编译命令与工具输出；详见 --log-file 指定的日志文件")
         else:
             self._console.print(f"    [success]ok[/] {elapsed_text}{markup_escape(f' · {detail}' if detail else '')}")
 
@@ -409,6 +541,40 @@ class ConsoleUI:
         """
         mark = "x" if self._legacy_console else "×"
         self._console.print(f"[error]{mark}[/] {markup_escape(msg)}")
+
+    def error_panel(self, msg: str, *, hint: str = "") -> None:
+        """把错误渲染成醒目的红框面板（交互式终端），对普通用户更友好.
+
+        非 TTY（CI/重定向）退化为普通 :meth:`error` 单行输出，保证日志
+        仍可 grep 且不引入盒线字符；``--quiet`` 下与 error 同为必显（错误
+        不因静默而消失）。
+
+        :param msg: 错误正文（可多行）。
+        :param hint: 底部附加的排查建议（灰暗小字）。
+        """
+        if not self.is_interactive:
+            self.error(msg)
+            if hint:
+                self.hint(f"提示: {hint}")
+            return
+
+        from rich.panel import Panel
+        from rich.text import Text as _Text
+
+        body = _Text(msg)
+        if hint:
+            body.append("\n\n")
+            body.append(hint, style="hint")
+        mark = "x" if self._legacy_console else "×"
+        self._console.print(
+            Panel(
+                body,
+                title=f"[error]{mark} 出错了[/]",
+                title_align="left",
+                border_style="error",
+                padding=(0, 1),
+            )
+        )
 
 
 console: Final[ConsoleUI] = ConsoleUI()

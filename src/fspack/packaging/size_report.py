@@ -18,6 +18,7 @@ import io
 import logging
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from fspack.console import console
 from fspack.fsutil import dir_size_with_count
@@ -386,6 +387,81 @@ def collect_size_report(dist_dir: Path, *, top_n: int = _TOP_N_PACKAGES) -> Size
     )
 
 
+def _pct_text(size: int, total: int) -> tuple[float, str]:
+    """计算占比：返回 ``(fraction, 显示文本)``，总量为 0 时显示 ``-``."""
+    fraction = size / total if total else 0.0
+    return fraction, (f"{fraction * 100:.1f}%" if total else "-")
+
+
+def _render_category_table(report: SizeReport, *, interactive: bool) -> None:
+    """渲染类别分布表（交互式终端额外给一条占比条形图，直观看出体积热点）."""
+    table = console.new_table("类别分布")
+    table.add_column("类别", style="cyan", no_wrap=True)
+    table.add_column("体积", justify="right")
+    if interactive:
+        table.add_column("", no_wrap=True)
+    table.add_column("占比", justify="right")
+    table.add_column("文件数", justify="right")
+    for cat in report.categories:
+        fraction, pct = _pct_text(cat.size, report.total_size)
+        row: list[Any] = [cat.name, cat.size_formatted]
+        if interactive:
+            row.append(console.share_bar(fraction))
+        row.extend([pct, str(cat.file_count)])
+        table.add_row(*row)
+    total_row: list[Any] = ["总计", report.total_size_formatted]
+    if interactive:
+        total_row.append("")
+    total_row.extend(["100.0%", str(report.total_files)])
+    table.add_row(*total_row, style="bold")
+    console.rich.print(table)
+
+
+def _render_package_table(report: SizeReport, *, interactive: bool) -> None:
+    """渲染 site-packages Top N 包表，并在 pygments 上榜时给出剥离提示."""
+    console.rich.print()
+    sp_total = next((c.size for c in report.categories if c.name == "site-packages"), 0)
+    table = console.new_table(f"site-packages Top {len(report.top_packages)} 包")
+    table.add_column("#", justify="right", style="dim")
+    table.add_column("包名", style="cyan", no_wrap=True)
+    table.add_column("版本", style="dim")
+    table.add_column("体积", justify="right")
+    if interactive:
+        table.add_column("", no_wrap=True)
+    table.add_column("占比", justify="right")
+    table.add_column("文件数", justify="right")
+    for idx, pkg in enumerate(report.top_packages, 1):
+        fraction, pct = _pct_text(pkg.size, sp_total)
+        row: list[Any] = [str(idx), pkg.name, pkg.version, pkg.size_formatted]
+        if interactive:
+            row.append(console.share_bar(fraction))
+        row.extend([pct, str(pkg.file_count)])
+        table.add_row(*row)
+    # 当剩余包数量 > 0 时追加"其他"汇总行，显示未进入 Top N 的包合计体积与占比
+    if report.other_packages_count > 0:
+        fraction, other_pct = _pct_text(report.other_packages_size, sp_total)
+        row: list[Any] = [
+            "-",
+            f"其他（{report.other_packages_count} 个包）",
+            "",
+            fmt_bytes(report.other_packages_size),
+        ]
+        if interactive:
+            row.append(console.share_bar(fraction))
+        row.extend([other_pct, ""])
+        table.add_row(*row, style="dim")
+    console.rich.print(table)
+
+    # 体积热点提醒：rich 硬依赖 pygments，但只在语法高亮/富 traceback/
+    # rich.markdown 时才真正使用；普通 CLI 应用往往是 site-packages 最大单项。
+    pygments_pkg = next((p for p in report.top_packages if normalize_pkg_name(p.name) == "pygments"), None)
+    if interactive and pygments_pkg is not None:
+        console.hint(
+            f"pygments（{pygments_pkg.size_formatted}）仅语法高亮/富 traceback/rich.markdown 需要；"
+            "未使用可在 `[tool.fspack]` 的 `slim-exclude` 中剥离（见 docs/configuration.md）"
+        )
+
+
 def print_size_report(dist_dir: Path, *, top_n: int = _TOP_N_PACKAGES) -> SizeReport:
     """扫描 dist 目录并渲染体积报告到控制台.
 
@@ -393,66 +469,19 @@ def print_size_report(dist_dir: Path, *, top_n: int = _TOP_N_PACKAGES) -> SizeRe
     :param top_n: site-packages Top N 包数量，默认 10
     :return: :class:`SizeReport` 数据（便于调用方进一步处理）
     """
-    from rich.table import Table
-
     report = collect_size_report(dist_dir, top_n=top_n)
     if report.total_size == 0:
         _logger.debug("dist 目录为空，跳过体积报告: %s", dist_dir)
         return report
 
     console.step(f"体积报告：{report.total_size_formatted} / {report.total_files} 文件")
+    interactive = console.is_interactive
 
-    # 类别分布表
-    cat_table = Table(title="类别分布", show_lines=False)
-    cat_table.add_column("类别", style="cyan", no_wrap=True)
-    cat_table.add_column("体积", justify="right")
-    cat_table.add_column("占比", justify="right")
-    cat_table.add_column("文件数", justify="right")
-    for cat in report.categories:
-        pct = f"{cat.size / report.total_size * 100:.1f}%" if report.total_size else "-"
-        cat_table.add_row(cat.name, cat.size_formatted, pct, str(cat.file_count))
-    cat_table.add_row(
-        "总计",
-        report.total_size_formatted,
-        "100.0%",
-        str(report.total_files),
-        style="bold",
-    )
-    console.rich.print(cat_table)
-
-    # Top N 包表
+    _render_category_table(report, interactive=interactive)
     if report.top_packages:
-        console.rich.print()
-        pkg_table = Table(title=f"site-packages Top {len(report.top_packages)} 包", show_lines=False)
-        pkg_table.add_column("#", justify="right", style="dim")
-        pkg_table.add_column("包名", style="cyan", no_wrap=True)
-        pkg_table.add_column("版本", style="dim")
-        pkg_table.add_column("体积", justify="right")
-        pkg_table.add_column("占比", justify="right")
-        pkg_table.add_column("文件数", justify="right")
-        sp_total = next((c.size for c in report.categories if c.name == "site-packages"), 0)
-        for idx, pkg in enumerate(report.top_packages, 1):
-            pct = f"{pkg.size / sp_total * 100:.1f}%" if sp_total else "-"
-            pkg_table.add_row(
-                str(idx),
-                pkg.name,
-                pkg.version,
-                pkg.size_formatted,
-                pct,
-                str(pkg.file_count),
-            )
-        # 当剩余包数量 > 0 时追加"其他"汇总行，显示未进入 Top N 的包合计体积与占比
-        if report.other_packages_count > 0:
-            other_pct = f"{report.other_packages_size / sp_total * 100:.1f}%" if sp_total else "-"
-            pkg_table.add_row(
-                "-",
-                f"其他（{report.other_packages_count} 个包）",
-                "",
-                fmt_bytes(report.other_packages_size),
-                other_pct,
-                "",
-                style="dim",
-            )
-        console.rich.print(pkg_table)
+        _render_package_table(report, interactive=interactive)
+
+    if interactive:
+        console.hint("体积偏大？可用 `fsp b --slim-stdlib on` / `--no-stdlib-trim` 精简运行时，`fsp d` 检查环境")
 
     return report

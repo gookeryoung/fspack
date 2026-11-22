@@ -631,18 +631,31 @@ def _execute_build(  # noqa: PLR0912, PLR0913
     # rich.theme ~17ms）。仅在构建完成输出 summary 时加载。注意 _execute_build
     # 内 spinner（L277）已连锁加载 fspack.console，此 import 为显式自包含。
     from fspack.console import console
+    from fspack.format import format_seconds
 
     console.rich.print(tracker.summary())
+    size_report = None
     if not opts.no_size_report:
         from fspack.packaging.size_report import print_size_report
 
-        print_size_report(cfg.dist_dir)
-    if len(exes) == 1:
-        console.success(f"构建完成: {exes[0]}")
-    else:
-        console.success(f"构建完成: {len(exes)} 个入口")
-        for exe in exes:
-            console.rich.print(f"  - {exe}")
+        size_report = print_size_report(cfg.dist_dir)
+
+    # 收尾摘要面板：产物/输出目录/体积/耗时/下一步。交互式终端用圆角面板
+    # （普通用户一眼看到「生成了什么、多大、在哪、怎么用」），非 TTY 退化为
+    # ``标签: 值`` 纯文本行，CI 仍可 grep 或依赖后续的 RESULT 行。
+    rows: list[tuple[str, str]] = [("产物", str(exes[0]) if len(exes) == 1 else f"{len(exes)} 个入口")]
+    if len(exes) > 1:
+        rows.extend(("", str(exe)) for exe in exes)
+    rows.append(("输出目录", str(cfg.dist_dir)))
+    if size_report is not None and size_report.total_size:
+        rows.append(("总体积", f"{size_report.total_size_formatted} / {size_report.total_files} 文件"))
+    rows.append(("总耗时", format_seconds(tracker.total_elapsed)))
+    hint = f"直接运行 `{exes[0]}` 验证；分发时打包整个 dist 目录。" if exes else "产物已生成在 dist 目录。"
+    console.summary_panel(
+        "构建完成",
+        rows,
+        hint=hint,
+    )
     console.result(True, f"total={tracker.total_elapsed:.1f}s artifacts={len(exes)}")
     return info
 

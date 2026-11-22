@@ -43,9 +43,7 @@ def print_doctor_report(report: DoctorReport) -> None:
 
 def _build_table(title: str, results: tuple[CheckResult, ...]) -> Table:
     """构建 rich Table：名称 / 状态 / 详情 / 修复建议."""
-    from rich.table import Table
-
-    table = Table(title=title, show_lines=False)
+    table = console.new_table(title)
     table.add_column("名称", style="cyan", no_wrap=True)
     table.add_column("状态", justify="center")
     table.add_column("详情")
@@ -72,17 +70,31 @@ def _format_status(status: CheckStatus) -> tuple[str, str]:
 
 
 def _print_summary(report: DoctorReport) -> None:
-    """打印汇总：错误数 / 警告数 / 总体结论."""
+    """打印汇总：错误数 / 警告数 / 总体结论（收尾面板）.
+
+    交互式终端渲染红/绿/黄圆角面板，非 TTY 退化为 ``标签: 值`` 纯文本行。
+    存在阻塞性错误时即使 ``--quiet`` 也强制输出结论，避免静默模式吞掉
+    「无法打包」的关键信息（符合 --quiet 「保留错误」的契约）。
+    """
     errors = sum(1 for c in report.tool_checks if c.status is CheckStatus.ERROR)
     warns = sum(1 for c in report.tool_checks if c.status is CheckStatus.WARN)
     oks = sum(1 for c in report.tool_checks if c.status is CheckStatus.OK)
 
+    stats = f"{oks} OK / {warns} 警告 / {errors} 错误"
     if errors:
-        console.error(f"诊断完成：{oks} OK / {warns} 警告 / {errors} 错误")
-        console.error(f"存在 {errors} 项错误，可能导致打包失败，请按'修复建议'处理")
+        conclusion = f"存在 {errors} 项错误，可能导致打包失败，请按'修复建议'处理"
+        hint = "按表格中的'修复建议'逐项处理后重新运行 `fsp d` 验证。"
     elif warns:
-        console.warn(f"诊断完成：{oks} OK / {warns} 警告 / {errors} 错误")
-        console.warn("存在警告项，不阻塞打包但建议处理")
+        conclusion = "存在警告项，不阻塞打包但建议处理"
+        hint = "警告不阻塞构建；确认无需处理可直接运行 `fsp b` 打包。"
     else:
-        console.success(f"诊断完成：{oks} OK / {warns} 警告 / {errors} 错误")
-        console.success("环境就绪，可以开始打包")
+        conclusion = "环境就绪，可以开始打包"
+        hint = "运行 `fsp b` 开始构建，或 `fsp init` 创建新项目。"
+
+    console.summary_panel(
+        "诊断完成",
+        [("结果", stats), ("结论", conclusion)],
+        ok=not errors,
+        hint=hint,
+        force=bool(errors),
+    )

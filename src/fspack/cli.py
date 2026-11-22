@@ -139,7 +139,7 @@ def main(argv: list[str] | None = None) -> None:
         # 领域错误（如 pyproject.toml 语法/编码错误、未识别入口、未知 extras、
         # 依赖下载失败等）已携带清晰中文消息：打印后以退出码 2 退出，不暴露原始栈。
         # 完整堆栈仅在 --verbose（DEBUG）时记录，便于排查而不干扰普通用户。
-        console.error(str(exc))
+        console.error_panel(str(exc), hint="加 -v 查看详细日志；运行 `fsp d` 检查环境是否就绪。")
         console.result(False, str(exc))
         if json_mode:
             _emit_json(command, ns, error=exc)

@@ -40,6 +40,36 @@ slim-exclude = [
 ]
 ```
 
+### 依赖 `rich` 的应用：`pygments` 往往可以剥离
+
+`rich` 硬依赖 `pygments`，但 `rich` 只在 **语法高亮**（`rich.syntax`）与
+**富 traceback**（`rich.traceback`）时才导入它；`rich.markdown` 还会带入
+`markdown-it-py` 与 `mdurl`。若应用只用 `Console`/`Table`/`Panel`/`Progress`
+等基础组件，这几个包就是纯体积开销。
+
+它们体积不小：`pygments` 约 4.2MB（其中 `lexers/` 占 3.9MB、263 个文件），
+通常是 rich 应用 site-packages 中占比最大的项。确认不使用后可这样剥离：
+
+```toml
+[tool.fspack]
+slim-exclude = [
+    "pygments/**",
+    "pygments-*.dist-info/**",
+    "markdown_it/**",
+    "markdown_it_py-*.dist-info/**",
+    "mdurl/**",
+    "mdurl-*.dist-info/**",
+]
+```
+
+注意：
+
+- 一旦剥离，`rich.syntax`/`rich.traceback`/`rich.markdown` 会在运行时抛
+  `ImportError`；若用到这些能力请保留。
+- 间接使用也算：例如 `typer` 的富帮助面板会走 `rich.markdown`，此时不能剥离。
+- fspack 自身的 `pyproject.toml` 就是按上述方式排除这三者的（fspack 运行期
+  从不导入它们），可作为参考。
+
 ## 源码复制排除规则
 
 `fsp b` 复制源码到 `dist/src` 时自动排除以下内容：

@@ -104,7 +104,7 @@ class BuildTracker:
 
     def summary(self) -> Table:
         """渲染汇总表格."""
-        table = Table(title=self._title, show_lines=False, title_style="bold blue")
+        table = console.new_table(self._title)
         table.add_column("阶段", style="bold cyan", no_wrap=True)
         table.add_column("耗时", justify="right")
         table.add_column("缓存", justify="right")

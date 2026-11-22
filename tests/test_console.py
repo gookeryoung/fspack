@@ -612,3 +612,211 @@ def test_console_ui_delegates_to_ci_compat(monkeypatch: pytest.MonkeyPatch) -> N
     ui = ConsoleUI()
     assert captured.get("called") is True
     assert ui.rich is captured.get("result")
+
+
+# ---- 统一表格 / 摘要面板 / 错误面板 / 占比条 ----
+
+
+def test_new_table_default_style() -> None:
+    """new_table 套用统一样式：标题左对齐、表头加粗、细圆角边框."""
+    from rich import box
+
+    from fspack.console import new_table
+
+    table = new_table("体积报告")
+    assert table.title == "体积报告"
+    assert table.title_justify == "left"
+    assert table.box is box.ROUNDED
+    assert table.show_lines is False
+    # 空标题不渲染标题（rich 以 falsy 判断）
+    assert new_table().title is None
+    # 调用方可覆盖默认样式
+    assert new_table("x", show_lines=True).show_lines is True
+
+
+def test_console_new_table_delegates() -> None:
+    """ConsoleUI.new_table 产出与 new_table 相同的默认样式."""
+    from fspack.console import ConsoleUI
+
+    table = ConsoleUI().new_table("阶段汇总")
+    assert table.title == "阶段汇总"
+
+
+def test_share_bar_modern_uses_blocks() -> None:
+    """现代控制台用 █/░ 渲染占比条，长度固定、填充按比例."""
+    from fspack.console import ConsoleUI
+
+    monkeypatch_ui = ConsoleUI()
+    monkeypatch_ui._legacy_console = False
+    bar = monkeypatch_ui.share_bar(0.5, width=10)
+    assert bar.plain == "█" * 5 + "░" * 5
+
+
+def test_share_bar_legacy_uses_ascii() -> None:
+    """legacy 控制台退回 ASCII #/-，避免 Ambiguous 宽度偏移."""
+    from fspack.console import ConsoleUI
+
+    ui = ConsoleUI()
+    ui._legacy_console = True
+    assert ui.share_bar(0.3, width=10).plain == "###-------"
+
+
+def test_share_bar_clamps_out_of_range() -> None:
+    """占比越界（负数/超过 1）被夹到 [0,1]，不产生负长度条."""
+    from fspack.console import ConsoleUI
+
+    ui = ConsoleUI()
+    ui._legacy_console = True
+    assert ui.share_bar(-1.0, width=4).plain == "----"
+    assert ui.share_bar(2.0, width=4).plain == "####"
+
+
+def test_hint_prints_dim_message() -> None:
+    """hint 输出灰暗提示文本；--quiet 时抑制."""
+    from fspack.console import ConsoleUI
+
+    ui = ConsoleUI()
+    with ui.rich.capture() as capture:
+        ui.hint("下一步: fsp b")
+    assert "下一步: fsp b" in capture.get()
+
+    ui._quiet = True
+    with ui.rich.capture() as capture:
+        ui.hint("不应出现")
+    assert capture.get() == ""
+
+
+def test_summary_panel_interactive(monkeypatch: pytest.MonkeyPatch) -> None:
+    """交互式终端：摘要面板带标题、标记与提示行."""
+    from fspack.console import ConsoleUI
+
+    monkeypatch.setattr(ConsoleUI, "is_interactive", property(lambda self: True))
+    ui = ConsoleUI()
+    ui._legacy_console = False
+    with ui.rich.capture() as capture:
+        ui.summary_panel("构建完成", [("产物", "dist/app.exe"), ("总耗时", "1.2s")], hint="直接运行 app.exe")
+    out = capture.get()
+    assert "构建完成" in out
+    assert "dist/app.exe" in out
+    assert "1.2s" in out
+    assert "直接运行 app.exe" in out
+
+
+def test_summary_panel_failure_mark(monkeypatch: pytest.MonkeyPatch) -> None:
+    """失败摘要用 ASCII x 标记（legacy 控制台）且不抛异常."""
+    from fspack.console import ConsoleUI
+
+    monkeypatch.setattr(ConsoleUI, "is_interactive", property(lambda self: True))
+    ui = ConsoleUI()
+    ui._legacy_console = True
+    with ui.rich.capture() as capture:
+        ui.summary_panel("构建完成", [("产物", "x")], ok=False)
+    assert "构建完成" in capture.get()
+
+
+def test_summary_panel_non_tty_plain_lines(monkeypatch: pytest.MonkeyPatch) -> None:
+    """非 TTY：退化为「标签: 值」纯文本行，可 grep."""
+    from fspack.console import ConsoleUI
+
+    monkeypatch.setattr(ConsoleUI, "is_interactive", property(lambda self: False))
+    ui = ConsoleUI()
+    with ui.rich.capture() as capture:
+        ui.summary_panel("构建完成", [("产物", "dist/app.exe"), ("", "第二个入口")], hint="运行验证")
+    out = capture.get()
+    assert "产物: dist/app.exe" in out
+    assert "  第二个入口" in out
+    assert "提示: 运行验证" in out
+
+
+def test_summary_panel_quiet_suppressed() -> None:
+    """--quiet：摘要面板完全抑制（结果由 RESULT 行给出）."""
+    from fspack.console import ConsoleUI
+
+    ui = ConsoleUI()
+    ui._quiet = True
+    with ui.rich.capture() as capture:
+        ui.summary_panel("构建完成", [("产物", "x")])
+    assert capture.get() == ""
+
+
+def test_error_panel_interactive(monkeypatch: pytest.MonkeyPatch) -> None:
+    """交互式终端：错误渲染成红框面板，附排查建议."""
+    from fspack.console import ConsoleUI
+
+    monkeypatch.setattr(ConsoleUI, "is_interactive", property(lambda self: True))
+    ui = ConsoleUI()
+    ui._legacy_console = False
+    with ui.rich.capture() as capture:
+        ui.error_panel("依赖下载失败", hint="加 -v 查看详细日志")
+    out = capture.get()
+    assert "依赖下载失败" in out
+    assert "加 -v 查看详细日志" in out
+
+
+def test_error_panel_non_tty_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    """非 TTY：退化为原有单行错误 + 提示行，保持可 grep."""
+    from fspack.console import ConsoleUI
+
+    monkeypatch.setattr(ConsoleUI, "is_interactive", property(lambda self: False))
+    ui = ConsoleUI()
+    with ui.rich.capture() as capture:
+        ui.error_panel("依赖下载失败", hint="运行 fsp d")
+    out = capture.get()
+    assert "依赖下载失败" in out
+    assert "提示: 运行 fsp d" in out
+
+
+def test_stage_finish_failure_prints_expand_hint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """交互式失败阶段补一行「加 -v 查看完整命令」提示."""
+    from fspack.console import ConsoleUI
+
+    monkeypatch.setattr(ConsoleUI, "is_interactive", property(lambda self: True))
+    ui = ConsoleUI()
+    with ui.rich.capture() as capture:
+        ui.stage_finish(4, "Nuitka 编译", "42.10s", failed=True)
+    out = capture.get()
+    assert "-v" in out
+    assert "完整编译命令" in out
+
+
+def test_stage_finish_success_no_expand_hint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """成功阶段不输出「加 -v」提示，避免正常构建时噪声."""
+    from fspack.console import ConsoleUI
+
+    monkeypatch.setattr(ConsoleUI, "is_interactive", property(lambda self: True))
+    ui = ConsoleUI()
+    with ui.rich.capture() as capture:
+        ui.stage_finish(4, "复制源码", "0.1s")
+    assert "-v" not in capture.get()
+
+
+def test_summary_panel_force_bypasses_quiet() -> None:
+    """force=True 时 --quiet 仍输出（doctor 阻塞性错误结论不能被静默吞掉）."""
+    from fspack.console import ConsoleUI
+
+    ui = ConsoleUI()
+    ui._quiet = True
+    with ui.rich.capture() as capture:
+        ui.summary_panel("诊断完成", [("结论", "存在 1 项错误")], ok=False, force=True)
+    assert "存在 1 项错误" in capture.get()
+
+
+def test_level_badge_reverse_on_tty_for_warning_and_error() -> None:
+    """交互式终端：WARN/ERROR 级别标签加反色底，成为醒目彩色标签."""
+    from rich.console import Console
+
+    handler = StageLogHandler(Console(width=120, force_terminal=True))
+    for level in (logging.WARNING, logging.ERROR):
+        spans = handler.render(_record(level, "x")).spans
+        assert any("reverse" in str(span.style) for span in spans), level
+
+
+def test_level_badge_plain_for_info_and_non_tty() -> None:
+    """INFO 与非 TTY 场景不加反色底，避免正常输出被底色淹没."""
+    from rich.console import Console
+
+    tty_handler = StageLogHandler(Console(width=120, force_terminal=True))
+    assert not any("reverse" in str(s.style) for s in tty_handler.render(_record(logging.INFO, "x")).spans)
+
+    pipe_handler = StageLogHandler(Console(width=120, force_terminal=False))
+    assert not any("reverse" in str(s.style) for s in pipe_handler.render(_record(logging.ERROR, "x")).spans)

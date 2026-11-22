@@ -10,10 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- 体积报告在 `pygments` 进入 Top N 时给出剥离提示：它是 rich 应用最常见的体积热点，仅语法高亮/富 traceback/`rich.markdown` 需要，未使用时可在 `[tool.fspack].slim-exclude` 中剥离
+- 新增 `tests/test_self_build_slim.py` 护栏：静态扫描 fspack 运行期源码不得导入被自打包剥离的依赖，并用仓库真实 `slim-exclude` 配置验证整包剥离生效
+- 终端输出美化（rich）：构建/`fsp init` 收尾改为圆角摘要面板（产物/输出目录/体积/耗时/下一步），`fsp doctor` 汇总结论改为红/绿结论面板（`--quiet` 下仍强制输出阻塞性错误），体积报告新增占比条形图与精简提示，表格统一标题/表头/边框样式，领域错误改为红框面板并附排查建议，失败阶段补「加 -v 查看完整命令」提示，`-v` 下 WARN/ERROR 级别标签反色高亮；非 TTY（CI/重定向）自动退化为可 grep 的纯文本行
 - 新增 `tests/test_loader_perf_baseline.py`：普通门禁用假工具链守护 1/5/20 入口下 C 对象只编译 1 次、Windows 资源与链接按入口增长、热构建零工具调用、工具链身份热查询的探测/`which`/`stat` 有界；`slow + e2e` 用真实 MinGW 建立 `loader_build` 冷/热基线并校验热构建显著快于冷构建
 - `fsp doctor --bench-compare` 新增 `loader_build` 基线类别（25% 阈值、5ms 噪声下限），CI benchmark job 纳入新基线文件
 
 ### Changed
+- fspack 自打包 `[tool.fspack].slim-exclude` 排除 rich 从未使用的可选依赖 `pygments`/`markdown-it-py`/`mdurl`（约 4.5MB，占自身产物 site-packages 六成以上）；已在 `pyproject.toml` 注释与 `docs/configuration.md` 说明普通应用若用语法高亮/富 traceback/Markdown 不可照搬
 - 多入口 C loader 改为共享缓存 C 对象、每入口独立 Windows 资源与链接；入口按有效子系统归并，缓存键纳入工具链与资源内容身份，同键构建单飞、原子发布并做 SHA256 校验
 - Windows 资源缺失（含仅 manifest）不再缓存最终 exe，但保留已成功的 C 对象，修复后可重新链接补齐资源
 

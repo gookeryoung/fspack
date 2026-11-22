@@ -506,3 +506,40 @@ def test_cli_doctor_test_passes_profile_options() -> None:
     assert isinstance(opts, ProfileOptions)
     assert opts.enabled is True
     assert opts.compare == "last"
+
+
+def test_print_summary_quiet_still_reports_errors(capsys: pytest.CaptureFixture[str]) -> None:
+    """--quiet 下存在阻塞性错误时诊断结论仍然输出（不能静默吞掉）."""
+    from fspack.console import console
+    from fspack.doctor.report import _print_summary
+
+    report = DoctorReport(
+        env_info=(),
+        tool_checks=(CheckResult("gcc", CheckStatus.ERROR, "未找到", "安装 gcc"),),
+    )
+    previous = console.quiet
+    try:
+        console._quiet = True
+        _print_summary(report)
+    finally:
+        console._quiet = previous
+
+    output = capsys.readouterr().out
+    assert "1 错误" in output
+    assert "可能导致打包失败" in output
+
+
+def test_print_summary_quiet_suppresses_success(capsys: pytest.CaptureFixture[str]) -> None:
+    """--quiet 下全 OK 的诊断结论被抑制（正常情况不打扰）."""
+    from fspack.console import console
+    from fspack.doctor.report import _print_summary
+
+    report = DoctorReport(env_info=(), tool_checks=(CheckResult("pip", CheckStatus.OK, "24.0"),))
+    previous = console.quiet
+    try:
+        console._quiet = True
+        _print_summary(report)
+    finally:
+        console._quiet = previous
+
+    assert capsys.readouterr().out == ""

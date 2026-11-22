@@ -517,3 +517,72 @@ def test_collect_size_report_dedups_multiple_dist_infos(tmp_path: Path) -> None:
     assert top_names.count("pydantic_settings") == 1, f"同包名多版本 dist-info 未被去重: {top_names}"
     entry = next(p for p in report.top_packages if p.name == "pydantic_settings")
     assert entry.version == "2.8.1", f"去重后应保留版本最高者，实际 {entry.version}"
+
+
+def test_print_size_report_interactive_adds_share_bars(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """交互式终端下体积报告额外渲染占比条与精简提示（普通用户更直观）."""
+    from fspack.console import ConsoleUI
+
+    dist = _make_dist_with_runtime(tmp_path)
+    sp = dist / "site-packages"
+    _make_dist_info(sp, "rich", "13.0.0", {"rich/__init__.py": b"x" * 100})
+
+    monkeypatch.setattr(ConsoleUI, "is_interactive", property(lambda self: True))
+    monkeypatch.setattr(console, "_legacy_console", False)
+    with console.rich.capture() as capture:
+        print_size_report(dist)
+    out = capture.get()
+    assert "█" in out  # 占比条
+    assert "体积偏大" in out  # 精简提示
+
+
+def test_print_size_report_non_tty_omits_share_bars(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """非 TTY（CI/重定向）不渲染占比条，输出保持纯文本可 grep."""
+    from fspack.console import ConsoleUI
+
+    dist = _make_dist_with_runtime(tmp_path)
+    sp = dist / "site-packages"
+    _make_dist_info(sp, "rich", "13.0.0", {"rich/__init__.py": b"x" * 100})
+
+    monkeypatch.setattr(ConsoleUI, "is_interactive", property(lambda self: False))
+    with console.rich.capture() as capture:
+        print_size_report(dist)
+    out = capture.get()
+    assert "█" not in out
+    assert "体积偏大" not in out
+    assert "类别分布" in out
+
+
+def test_print_size_report_interactive_hints_pygments_stripping(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """rich 应用常见体积热点：pygments 在 Top N 时提示如何 slim-exclude 剥离."""
+    from fspack.console import ConsoleUI
+
+    dist = _make_dist_with_runtime(tmp_path)
+    sp = dist / "site-packages"
+    _make_dist_info(sp, "pygments", "2.21.0", {"pygments/__init__.py": b"x" * 100})
+
+    monkeypatch.setattr(ConsoleUI, "is_interactive", property(lambda self: True))
+    monkeypatch.setattr(console, "_legacy_console", False)
+    with console.rich.capture() as capture:
+        print_size_report(dist)
+    out = capture.get()
+    assert "pygments" in out
+    assert "slim-exclude" in out
+    assert "语法高亮" in out
+
+
+def test_print_size_report_non_tty_omits_pygments_hint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """非 TTY 不输出 pygments 剥离提示（保持纯文本可 grep）."""
+    from fspack.console import ConsoleUI
+
+    dist = _make_dist_with_runtime(tmp_path)
+    sp = dist / "site-packages"
+    _make_dist_info(sp, "pygments", "2.21.0", {"pygments/__init__.py": b"x" * 100})
+
+    monkeypatch.setattr(ConsoleUI, "is_interactive", property(lambda self: False))
+    with console.rich.capture() as capture:
+        print_size_report(dist)
+    out = capture.get()
+    assert "slim-exclude" not in out

@@ -7,6 +7,9 @@
 未发布
 ------
 
+- feat(ui): 体积报告在 ``pygments`` 进入 Top N 时提示其仅语法高亮/富 traceback/``rich.markdown`` 需要，未使用时可在 ``[tool.fspack].slim-exclude`` 中剥离（附 ``docs/configuration.md`` 示例）
+- perf(dist): fspack 自打包 ``slim-exclude`` 排除 rich 从未使用的可选依赖 ``pygments``/``markdown-it-py``/``mdurl``（约 4.5MB，占自身产物 site-packages 六成以上）；新增 ``tests/test_self_build_slim.py`` 护栏锁定「运行期不导入被剥离依赖 + 整包剥离生效」
+- feat(ui): 基于 rich 美化终端输出——构建/``fsp init`` 收尾改为圆角摘要面板（产物/输出目录/体积/耗时/下一步），``fsp doctor`` 汇总结论改为红/绿结论面板（``--quiet`` 下仍强制输出阻塞性错误），体积报告新增占比条形图与精简提示，表格统一标题/表头/边框样式，领域错误改为红框面板并附排查建议，失败阶段补「加 -v 查看完整命令」提示，``-v`` 下 WARN/ERROR 级别标签反色高亮；非 TTY（CI/重定向）自动退化为可 grep 的纯文本行
 - feat(test): 新增 ``tests/test_loader_perf_baseline.py``——普通门禁用假工具链守护 1/5/20 入口 C 对象只编译 1 次、资源/链接按入口增长、热构建零工具调用、工具链身份热查询探测/``which``/``stat`` 有界；``slow + e2e`` 用真实 MinGW 建立 ``loader_build`` 冷/热基线并校验热构建显著快于冷构建
 - feat(doctor): ``fsp doctor --bench-compare`` 新增 ``loader_build`` 类别（25% 阈值、5ms 噪声下限），CI benchmark job 纳入新基线文件
 - perf(loader): 多入口 C loader 改为共享缓存 C 对象、每入口独立 Windows 资源与链接；按有效子系统归并，缓存键纳入工具链与资源内容身份，同键单飞、原子发布并 SHA256 校验

@@ -289,11 +289,17 @@ def init_project(
         abs_path.write_text(content, encoding="utf-8")
 
     _logger.info("已创建项目: %s（模板: %s）", target, template.name)
-    console.success(f"已创建项目 {project_name}（模板: {template.name}）")
-    console.rich.print(f"  目录: {target}")
-    console.rich.print("  下一步:")
-    console.rich.print(f"    cd {project_name}")
-    console.rich.print("    fsp b                    # 打包")
+    console.summary_panel(
+        "项目已创建",
+        [
+            ("项目", project_name),
+            ("模板", template.name),
+            ("目录", str(target)),
+            ("下一步", f"cd {project_name}"),
+            ("", "fsp b    # 打包为可执行文件"),
+        ],
+        hint="首次打包前可先运行 `fsp d` 检查编译环境。",
+    )
     return target
 
 
