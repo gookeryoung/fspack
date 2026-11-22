@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 from typing import Any
 
 import pytest
@@ -32,6 +36,65 @@ from fspack.packaging.loader.resource import generate_app_manifest, generate_res
 from fspack.platform import Platform
 from fspack.progress import StageRecorder
 from tests._stubs import CompletedStub
+
+
+@pytest.fixture(autouse=True)
+def _stable_toolchain(monkeypatch: pytest.MonkeyPatch) -> None:
+    """编译测试不运行真实工具探测；fingerprint 自测直接调用 toolchain 模块."""
+    monkeypatch.setattr(
+        "fspack.packaging.loader.compile.toolchain_fingerprint",
+        lambda compiler, resource=False, store=None: f"fake:{compiler}:{resource}",
+    )
+    monkeypatch.setattr("fspack.packaging.loader.shutil.which", lambda name: f"/fake/bin/{name}")
+
+
+def _command_kind(cmd: list[str]) -> str:
+    if "--output" in cmd:
+        return "resource"
+    return "c" if "-c" in cmd else "link"
+
+
+def _assert_build_calls(calls: list[list[str]], *, c: int, resource: int, link: int) -> None:
+    assert {kind: sum(_command_kind(cmd) == kind for cmd in calls) for kind in ("c", "resource", "link")} == {
+        "c": c,
+        "resource": resource,
+        "link": link,
+    }
+
+
+def _fake_build(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+    """模拟三类工具输出，保留资源文本与链接子系统便于检查复用边界."""
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
+        calls.append(list(cmd))
+        kind = _command_kind(cmd)
+        flag = "--output" if kind == "resource" else "-o"
+        out = Path(cmd[cmd.index(flag) + 1])
+        if kind == "resource":
+            rc = Path(cmd[cmd.index("--input") + 1])
+            payload = rc.read_bytes() + (rc.parent / "app.manifest").read_bytes()
+            if (rc.parent / "icon.ico").is_file():
+                payload += (rc.parent / "icon.ico").read_bytes()
+        elif kind == "c":
+            payload = b"object:" + next(Path(arg).read_bytes() for arg in cmd if arg.endswith(".c"))
+        else:
+            payload = b"gui:" if "-mwindows" in cmd else b"cli:"
+            payload += b"".join(Path(arg).read_bytes() for arg in cmd if arg.endswith(".o"))
+        out.write_bytes(payload)
+        return CompletedStub()
+
+    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
+    return calls
+
+
+def _assert_cache_sidecars(cache: Path) -> None:
+    binaries = [p for p in cache.rglob("*") if p.is_file() and p.suffix not in (".sha256", ".lock")]
+    assert binaries
+    for binary in binaries:
+        sidecar = binary.with_name(binary.name + ".sha256")
+        assert sidecar.is_file(), binary
+        assert sidecar.read_text(encoding="ascii").strip() == hashlib.sha256(binary.read_bytes()).hexdigest()
 
 
 def test_generate_loader_source_contains_dll_and_entry_reading() -> None:
@@ -239,11 +302,7 @@ def _touch_out(cmd: list[str]) -> None:
 
 
 def _disable_windres(monkeypatch: pytest.MonkeyPatch) -> None:
-    """禁用 windres 使 _compile_resource_obj 跳过资源编译，用于不测试资源嵌入的场景。
-
-    新行为下 Windows loader 总是尝试嵌入 manifest（降低杀软误报），会调用 windres。
-    不测试资源嵌入的测试禁用 windres，保持 gcc-only 行为与调用计数语义不变。
-    """
+    """禁用 windres：保留 C 编译与链接，但资源缺失的 Windows exe 不应缓存."""
 
     def fake_which(name: str) -> str | None:
         return None if "windres" in name else f"/usr/bin/{name}"
@@ -252,26 +311,25 @@ def _disable_windres(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_compile_loader_cli_invokes_mingw(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, list[str]] = {}
-
-    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
-        captured["cmd"] = cmd
-        _touch_out(cmd)
-        return CompletedStub()
-
-    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
+    calls = _fake_build(monkeypatch)
     _disable_windres(monkeypatch)
     out = tmp_path / "app.exe"
     compile_loader("int wmain(){return 0;}", out, AppType.CLI, tmp_path / "w", cache_dir=tmp_path / "cache")
     assert out.is_file()
-    assert "-municode" in captured["cmd"]
-    assert "-mwindows" not in captured["cmd"]
+    _assert_build_calls(calls, c=1, resource=0, link=1)
+    c_cmd, link_cmd = calls
+    assert "-municode" in c_cmd
+    assert "-O2" in c_cmd
+    assert "-mwindows" not in c_cmd
+    assert "-mwindows" not in link_cmd
+    assert any(arg.endswith("loader.o") for arg in link_cmd)
+    assert not any(arg.endswith(".c") for arg in link_cmd)
     # 错误报告用 MessageBoxW/GetConsoleWindow，需显式链接 user32；
     # splash 启动画面绘制用 GDI 函数，需显式链接 gdi32（--splash 注入，
     # 未注入时多余链接无副作用，保持命令稳定）
-    assert "-luser32" in captured["cmd"]
-    assert "-lgdi32" in captured["cmd"]
-    assert captured["cmd"][0] == _find_mingw_gcc()
+    assert "-luser32" in link_cmd
+    assert "-lgdi32" in link_cmd
+    assert link_cmd[0] == _find_mingw_gcc()
 
 
 def test_compile_loader_gui_adds_mwindows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -463,10 +521,13 @@ def test_compile_loader_macos_cache_no_suffix(tmp_path: Path, monkeypatch: pytes
     """macOS 平台缓存文件无后缀（与 Linux 一致），缓存命中不创建编译工作目录."""
     source = "int main(){return 0;}"
     cache = tmp_path / "cache"
-    key = _loader_cache_key(source, AppType.CLI, Platform.MACOS)
-    cached = cache / key
-    cache.mkdir(parents=True)
-    cached.write_bytes(b"macos-exe")
+    calls = _fake_build(monkeypatch)
+    seed = tmp_path / "seed"
+    compile_loader(source, seed, AppType.CLI, tmp_path / "seed-build", Platform.MACOS, cache_dir=cache)
+    _assert_build_calls(calls, c=1, resource=0, link=1)
+    assert len(list(cache.glob("*.sha256"))) == 1
+    assert not list(cache.glob("*.exe"))
+    _assert_cache_sidecars(cache)
 
     def fake_run(cmd: list[str], **kw: Any) -> object:
         raise AssertionError("缓存命中不应调用编译器")
@@ -475,7 +536,7 @@ def test_compile_loader_macos_cache_no_suffix(tmp_path: Path, monkeypatch: pytes
     out = tmp_path / "app"
     work_dir = tmp_path / "build"
     compile_loader(source, out, AppType.CLI, work_dir, Platform.MACOS, cache_dir=cache)
-    assert out.read_bytes() == b"macos-exe"
+    assert out.read_bytes() == seed.read_bytes()
     assert not work_dir.exists()
 
 
@@ -539,10 +600,12 @@ def test_compile_loader_cache_hit_copies_without_compiling(tmp_path: Path, monke
     """缓存命中时直接复制，不调用编译器，也不创建编译工作目录."""
     source = "int wmain(){return 0;}"
     cache = tmp_path / "cache"
-    cache.mkdir()
-    key = _loader_cache_key(source, AppType.CLI, Platform.WINDOWS)
-    cached = cache / f"{key}.exe"
-    cached.write_bytes(b"cached-exe")
+    calls = _fake_build(monkeypatch)
+    seed = tmp_path / "seed.exe"
+    compile_loader(source, seed, AppType.CLI, tmp_path / "seed-build", Platform.WINDOWS, cache_dir=cache)
+    _assert_build_calls(calls, c=1, resource=1, link=1)
+    assert len(list(cache.glob("*.exe"))) == 1
+    _assert_cache_sidecars(cache)
 
     def fake_run(cmd: list[str], **kw: Any) -> object:
         raise AssertionError("缓存命中不应调用编译器")
@@ -552,7 +615,7 @@ def test_compile_loader_cache_hit_copies_without_compiling(tmp_path: Path, monke
     work_dir = tmp_path / "build"
     stage = StageRecorder("生成 C loader")
     compile_loader(source, out, AppType.CLI, work_dir, Platform.WINDOWS, cache_dir=cache, stage=stage)
-    assert out.read_bytes() == b"cached-exe"
+    assert out.read_bytes() == seed.read_bytes()
     record = stage._finalize()
     assert record.cache_hit == 1
     assert record.detail == "缓存命中"
@@ -564,73 +627,57 @@ def test_compile_loader_cache_miss_writes_back(tmp_path: Path, monkeypatch: pyte
     """缓存未命中时编译并回写缓存."""
     source = "int wmain(){return 0;}"
     cache = tmp_path / "cache"
-
-    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
-        out_path = Path(cmd[cmd.index("-o") + 1])
-        out_path.write_bytes(b"compiled-exe")
-        return CompletedStub()
-
-    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
-    _disable_windres(monkeypatch)
+    calls = _fake_build(monkeypatch)
     out = tmp_path / "app.exe"
     compile_loader(source, out, AppType.CLI, tmp_path / "w", Platform.WINDOWS, cache_dir=cache)
-    assert out.read_bytes() == b"compiled-exe"
-    key = _loader_cache_key(source, AppType.CLI, Platform.WINDOWS)
-    cached = cache / f"{key}.exe"
-    assert cached.is_file()
-    assert cached.read_bytes() == b"compiled-exe"
+    _assert_build_calls(calls, c=1, resource=1, link=1)
+    (cached,) = cache.glob("*.exe")
+    assert cached.read_bytes() == out.read_bytes()
+    assert len(list((cache / "objects").glob("*.o"))) == 1
+    assert len(list((cache / "resources").glob("*.o"))) == 1
+    _assert_cache_sidecars(cache)
 
 
 def test_compile_loader_second_call_hits_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """相同配置第二次调用命中缓存，只编译一次."""
-    call_count = 0
-
-    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
-        nonlocal call_count
-        call_count += 1
-        out_path = Path(cmd[cmd.index("-o") + 1])
-        out_path.write_bytes(b"compiled")
-        return CompletedStub()
-
-    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
-    _disable_windres(monkeypatch)
+    """相同完整资源配置第二次调用命中缓存，不运行任一工具."""
+    calls = _fake_build(monkeypatch)
     cache = tmp_path / "cache"
     source = "int wmain(){return 0;}"
     out1 = tmp_path / "app1.exe"
     compile_loader(source, out1, AppType.CLI, tmp_path / "w1", Platform.WINDOWS, cache_dir=cache)
     out2 = tmp_path / "app2.exe"
     compile_loader(source, out2, AppType.CLI, tmp_path / "w2", Platform.WINDOWS, cache_dir=cache)
-    assert call_count == 1
-    assert out2.read_bytes() == b"compiled"
+    _assert_build_calls(calls, c=1, resource=1, link=1)
+    assert out2.read_bytes() == out1.read_bytes()
+    assert not (tmp_path / "w2").exists()
 
 
 def test_compile_loader_cache_key_differs_by_app_type(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """相同源码不同 app_type 产生不同缓存键，互不命中."""
+    """Windows CLI/GUI 共享对象与资源，但按不同子系统各链接一次."""
     source = "int wmain(){return 0;}"
     cache = tmp_path / "cache"
-    calls: list[str] = []
-
-    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
-        calls.append(cmd[0])
-        out_path = Path(cmd[cmd.index("-o") + 1])
-        out_path.write_bytes(b"exe")
-        return CompletedStub()
-
-    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
-    _disable_windres(monkeypatch)
+    calls = _fake_build(monkeypatch)
     compile_loader(source, tmp_path / "cli.exe", AppType.CLI, tmp_path / "w1", Platform.WINDOWS, cache_dir=cache)
     compile_loader(source, tmp_path / "gui.exe", AppType.GUI, tmp_path / "w2", Platform.WINDOWS, cache_dir=cache)
-    assert len(calls) == 2
+    _assert_build_calls(calls, c=1, resource=1, link=2)
+    links = [cmd for cmd in calls if _command_kind(cmd) == "link"]
+    assert "-mwindows" not in links[0]
+    assert "-mwindows" in links[1]
+    assert (tmp_path / "cli.exe").read_bytes() != (tmp_path / "gui.exe").read_bytes()
+    assert len(list(cache.glob("*.exe"))) == 2
 
 
 def test_compile_loader_cache_linux_no_suffix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Linux 平台缓存文件无 .exe 后缀，缓存命中不创建编译工作目录."""
     source = "int main(){return 0;}"
     cache = tmp_path / "cache"
-    key = _loader_cache_key(source, AppType.CLI, Platform.LINUX)
-    cached = cache / key
-    cache.mkdir(parents=True)
-    cached.write_bytes(b"linux-exe")
+    calls = _fake_build(monkeypatch)
+    seed = tmp_path / "seed"
+    compile_loader(source, seed, AppType.CLI, tmp_path / "seed-build", Platform.LINUX, cache_dir=cache)
+    _assert_build_calls(calls, c=1, resource=0, link=1)
+    assert len(list(cache.glob("*.sha256"))) == 1
+    assert not list(cache.glob("*.exe"))
+    _assert_cache_sidecars(cache)
 
     def fake_run(cmd: list[str], **kw: Any) -> object:
         raise AssertionError("缓存命中不应调用编译器")
@@ -639,7 +686,7 @@ def test_compile_loader_cache_linux_no_suffix(tmp_path: Path, monkeypatch: pytes
     out = tmp_path / "app"
     work_dir = tmp_path / "build"
     compile_loader(source, out, AppType.CLI, work_dir, Platform.LINUX, cache_dir=cache)
-    assert out.read_bytes() == b"linux-exe"
+    assert out.read_bytes() == seed.read_bytes()
     assert not work_dir.exists()
 
 
@@ -675,58 +722,77 @@ def test_compile_loader_compile_path_sets_stage_detail(tmp_path: Path, monkeypat
     assert record.cache_hit == 0
 
 
-def test_compile_loader_cache_writeback_failure_logged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """缓存回写失败时不影响构建，仅记录警告."""
-
-    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
-        out_path = Path(cmd[cmd.index("-o") + 1])
-        out_path.write_bytes(b"exe")
-        return CompletedStub()
-
-    def fake_copy2(src: Path, dst: Path) -> None:
-        raise OSError("disk full")
-
-    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
-    monkeypatch.setattr("fspack.packaging.loader.shutil.copy2", fake_copy2)
-    _disable_windres(monkeypatch)
-    compile_loader(
-        "x", tmp_path / "app.exe", AppType.CLI, tmp_path / "w", Platform.WINDOWS, cache_dir=tmp_path / "cache"
-    )
-    assert (tmp_path / "app.exe").is_file()
-
-
-def test_compile_loader_resource_failure_skips_cache(
+def test_compile_loader_cache_writeback_failure_logged(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """资源编译失败（windres 不可用）但有 version_info 时不缓存 exe.
-
-    回归：资源段缺失的 exe 被缓存后，修复 resource.py 重新打包会因缓存键不变
-    命中旧缓存，导致资源段永远无法嵌入。资源失败时跳过缓存，下次打包重新编译。
-    """
-
-    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
-        out_path = Path(cmd[cmd.index("-o") + 1])
-        out_path.write_bytes(b"exe-no-resource")
-        return CompletedStub()
-
-    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
-    _disable_windres(monkeypatch)
-    info = LoaderVersionInfo("app", "1.0.0", "desc", "author", "app.exe")
+    """仅缓存写入失败时构建仍成功；正常的工作目录/热缓存复制不可被 mock 吞掉."""
+    calls = _fake_build(monkeypatch)
     cache = tmp_path / "cache"
-    compile_loader(
-        "x",
-        tmp_path / "app.exe",
-        AppType.CLI,
-        tmp_path / "w",
-        Platform.WINDOWS,
-        cache_dir=cache,
-        version_info=info,
-    )
-    # exe 生成成功（资源缺失不影响编译）
-    assert (tmp_path / "app.exe").read_bytes() == b"exe-no-resource"
-    # 缓存未写入（resource_obj=None + version_info 非 None → resource_failed=True）
-    assert not any(cache.glob("*.exe"))
+    original_copy2 = shutil.copy2
+
+    def fake_copy2(src: Path, dst: Path, **kw: Any) -> str | Path:
+        if cache in Path(dst).parents:
+            raise OSError("disk full")
+        return original_copy2(src, dst, **kw)
+
+    monkeypatch.setattr("fspack.packaging.loader.shutil.copy2", fake_copy2)
+    compile_loader("x", tmp_path / "app", AppType.CLI, tmp_path / "w", Platform.LINUX, cache_dir=cache)
+    assert (tmp_path / "app").is_file()
+    _assert_build_calls(calls, c=1, resource=0, link=1)
+    assert "缓存回写失败" in caplog.text
+    assert not list(cache.glob("*.sha256"))
+
+    monkeypatch.setattr("fspack.packaging.loader.shutil.copy2", original_copy2)
+    compile_loader("x", tmp_path / "seed", AppType.CLI, tmp_path / "seed-w", Platform.LINUX, cache_dir=cache)
+    monkeypatch.setattr("fspack.packaging.loader.shutil.copy2", fake_copy2)
+    compile_loader("x", tmp_path / "warm", AppType.CLI, tmp_path / "warm-w", Platform.LINUX, cache_dir=cache)
+    _assert_build_calls(calls, c=2, resource=0, link=2)
+    assert (tmp_path / "warm").read_bytes() == (tmp_path / "seed").read_bytes()
+    assert not (tmp_path / "warm-w").exists()
+
+
+@pytest.mark.parametrize("with_version", [False, True], ids=["manifest-only", "version-info"])
+def test_compile_loader_resource_failure_skips_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, with_version: bool
+) -> None:
+    """资源缺失不缓存 exe，但保留 C 对象；重复构建重链，恢复 windres 后补齐资源."""
+    calls = _fake_build(monkeypatch)
+    _disable_windres(monkeypatch)
+    info = LoaderVersionInfo("app", "1.0.0", "desc", "author", "app.exe") if with_version else None
+    cache = tmp_path / "cache"
+    for i in range(2):
+        compile_loader(
+            "x",
+            tmp_path / f"app{i}.exe",
+            AppType.CLI,
+            tmp_path / f"w{i}",
+            Platform.WINDOWS,
+            cache_dir=cache,
+            version_info=info,
+        )
+        assert (tmp_path / f"app{i}.exe").is_file()
+        assert not list(cache.glob("*.exe"))
+    _assert_build_calls(calls, c=1, resource=0, link=2)
+    assert len(list((cache / "objects").glob("*.o"))) == 1
+    assert not list((cache / "resources").glob("*.o"))
     assert "跳过 loader 缓存" in caplog.text
+
+    monkeypatch.setattr("fspack.packaging.loader.shutil.which", lambda name: f"/fake/bin/{name}")
+    for i in range(2, 4):
+        compile_loader(
+            "x",
+            tmp_path / f"app{i}.exe",
+            AppType.CLI,
+            tmp_path / f"w{i}",
+            Platform.WINDOWS,
+            cache_dir=cache,
+            version_info=info,
+        )
+    _assert_build_calls(calls, c=1, resource=1, link=3)
+    assert (tmp_path / "app2.exe").read_bytes() != (tmp_path / "app0.exe").read_bytes()
+    assert (tmp_path / "app3.exe").read_bytes() == (tmp_path / "app2.exe").read_bytes()
+    assert not (tmp_path / "w3").exists()
+    _assert_cache_sidecars(cache)
 
 
 # --- icon 相关测试 ---
@@ -994,24 +1060,7 @@ def test_compile_loader_cache_key_differs_by_icon(tmp_path: Path) -> None:
 
 def test_compile_loader_with_icon_second_call_hits_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """相同 icon 第二次调用命中缓存（icon_hash 相同）。"""
-    call_count = 0
-
-    def fake_which(name: str) -> str | None:
-        return "/usr/bin/" + name
-
-    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
-        nonlocal call_count
-        call_count += 1
-        if "--output-format=coff" in cmd:
-            output = Path(cmd[cmd.index("--output") + 1])
-            output.write_bytes(b"obj")
-        else:
-            out_path = Path(cmd[cmd.index("-o") + 1])
-            out_path.write_bytes(b"exe")
-        return CompletedStub()
-
-    monkeypatch.setattr("fspack.packaging.loader.shutil.which", fake_which)
-    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
+    calls = _fake_build(monkeypatch)
 
     icon = tmp_path / "icon.ico"
     icon.write_bytes(b"ico-content")
@@ -1034,31 +1083,15 @@ def test_compile_loader_with_icon_second_call_hits_cache(tmp_path: Path, monkeyp
         icon=icon,
         cache_dir=cache,
     )
-    # windres + gcc 只调一次（第二次缓存命中）
-    assert call_count == 2  # windres + gcc
+    _assert_build_calls(calls, c=1, resource=1, link=1)
+    assert (tmp_path / "app2.exe").read_bytes() == (tmp_path / "app1.exe").read_bytes()
     # 缓存命中不应创建第二个编译工作目录
     assert not (tmp_path / "w2").exists()
 
 
 def test_compile_loader_different_icon_misses_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """不同 icon 内容产生不同缓存键，第二次不命中。"""
-    calls: list[str] = []
-
-    def fake_which(name: str) -> str | None:
-        return "/usr/bin/" + name
-
-    def fake_run(cmd: list[str], **kw: Any) -> CompletedStub:
-        calls.append(cmd[0])
-        if "--output-format=coff" in cmd:
-            output = Path(cmd[cmd.index("--output") + 1])
-            output.write_bytes(b"obj")
-        else:
-            out_path = Path(cmd[cmd.index("-o") + 1])
-            out_path.write_bytes(b"exe")
-        return CompletedStub()
-
-    monkeypatch.setattr("fspack.packaging.loader.shutil.which", fake_which)
-    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fake_run)
+    calls = _fake_build(monkeypatch)
 
     icon1 = tmp_path / "icon1.ico"
     icon1.write_bytes(b"ico-1")
@@ -1083,8 +1116,8 @@ def test_compile_loader_different_icon_misses_cache(tmp_path: Path, monkeypatch:
         icon=icon2,
         cache_dir=cache,
     )
-    # 两次都完整编译（windres + gcc 各两次）
-    assert len(calls) == 4
+    _assert_build_calls(calls, c=1, resource=2, link=2)
+    assert (tmp_path / "app1.exe").read_bytes() != (tmp_path / "app2.exe").read_bytes()
 
 
 # --- iter-148 前后端分离 Web 打包：WEB 类型 loader 加 -mwindows ---
@@ -1277,3 +1310,360 @@ def test_forward_compile_output_empty_is_noop(caplog: pytest.LogCaptureFixture) 
     with caplog.at_level(logging.DEBUG, logger="fspack.console"):
         _forward_tool_output(subprocess.CompletedProcess(["gcc"], 0, stdout="", stderr=""))
     assert caplog.records == []
+
+
+@pytest.mark.parametrize("platform", [Platform.WINDOWS, Platform.LINUX, Platform.MACOS])
+@pytest.mark.parametrize("app_type", [AppType.CLI, AppType.GUI, AppType.WEB])
+def test_effective_app_type(platform: Platform, app_type: AppType) -> None:
+    from fspack.packaging.loader.cache_keys import _effective_app_type
+
+    expected = AppType.GUI if platform is Platform.WINDOWS and app_type is not AppType.CLI else AppType.CLI
+    assert _effective_app_type(app_type, platform) is expected
+
+
+def test_cache_keys_have_unambiguous_structured_fields() -> None:
+    from fspack.packaging.loader.cache_keys import _object_cache_key, _resource_cache_key
+
+    assert _version_info_hash(LoaderVersionInfo("a", "bc", "", "", "app.exe")) != _version_info_hash(
+        LoaderVersionInfo("ab", "c", "", "", "app.exe")
+    )
+    assert _loader_cache_key("x", AppType.CLI, Platform.WINDOWS, "a", "bc") != _loader_cache_key(
+        "x", AppType.CLI, Platform.WINDOWS, "ab", "c"
+    )
+    assert _object_cache_key("a", Platform.LINUX, "bc", ()) != _object_cache_key("ab", Platform.LINUX, "c", ())
+    assert _resource_cache_key("a", None, "bc") != _resource_cache_key("ab", None, "c")
+    assert _loader_cache_key("x", AppType.CLI, Platform.LINUX, compile_flags=("ab", "c")) != _loader_cache_key(
+        "x", AppType.CLI, Platform.LINUX, compile_flags=("a", "bc")
+    )
+
+
+@pytest.mark.parametrize("field", ["toolchain_key", "compile_flags", "link_flags", "resource_key"])
+def test_loader_cache_key_tracks_build_inputs(field: str) -> None:
+    kwargs: dict[str, Any] = {field: ("changed",) if field.endswith("flags") else "changed"}
+    assert _loader_cache_key("x", AppType.CLI, Platform.WINDOWS) != _loader_cache_key(
+        "x", AppType.CLI, Platform.WINDOWS, **kwargs
+    )
+
+
+@pytest.mark.parametrize("platform", [Platform.LINUX, Platform.MACOS])
+def test_compile_loader_posix_all_app_types_reuse_complete_binary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: Platform
+) -> None:
+    calls = _fake_build(monkeypatch)
+    cache = tmp_path / "cache"
+    outputs = []
+    for app_type in (AppType.CLI, AppType.GUI, AppType.WEB):
+        out = tmp_path / app_type.value
+        outputs.append(out)
+        compile_loader("x", out, app_type, tmp_path / f"w-{app_type.value}", platform, cache_dir=cache)
+    _assert_build_calls(calls, c=1, resource=0, link=1)
+    assert len({out.read_bytes() for out in outputs}) == 1
+    assert not (tmp_path / "w-gui").exists()
+    assert not (tmp_path / "w-web").exists()
+
+
+def test_compile_loader_gui_web_reuse_complete_binary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _fake_build(monkeypatch)
+    cache = tmp_path / "cache"
+    info = LoaderVersionInfo("app", "1.0", "desc", "author", "shared.exe")
+    for app_type in (AppType.GUI, AppType.WEB):
+        compile_loader(
+            "x",
+            tmp_path / f"{app_type.value}.exe",
+            app_type,
+            tmp_path / f"w-{app_type.value}",
+            Platform.WINDOWS,
+            version_info=info,
+            cache_dir=cache,
+        )
+    _assert_build_calls(calls, c=1, resource=1, link=1)
+    assert (tmp_path / "gui.exe").read_bytes() == (tmp_path / "web.exe").read_bytes()
+    assert not (tmp_path / "w-web").exists()
+    assert len(list(cache.glob("*.exe"))) == 1
+
+
+def test_compile_loader_multi_entry_shares_c_preserves_filename_and_subsystem(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _fake_build(monkeypatch)
+    cache = tmp_path / "cache"
+    for app_type in (AppType.CLI, AppType.GUI, AppType.WEB):
+        name = app_type.value
+        info = LoaderVersionInfo("app", "1.0", "desc", "author", f"{name}.exe")
+        out = tmp_path / f"{name}.exe"
+        compile_loader("x", out, app_type, tmp_path / f"w-{name}", version_info=info, cache_dir=cache)
+        content = out.read_bytes().decode("utf-8")
+        assert f'VALUE "OriginalFilename", "{name}.exe"' in content
+        assert content.startswith("cli:" if app_type is AppType.CLI else "gui:")
+        for other in (AppType.CLI, AppType.GUI, AppType.WEB):
+            if other is not app_type:
+                assert f'VALUE "OriginalFilename", "{other.value}.exe"' not in content
+    _assert_build_calls(calls, c=1, resource=3, link=3)
+    assert len(list((cache / "objects").glob("*.o"))) == 1
+    assert len(list((cache / "resources").glob("*.o"))) == 3
+    assert len(list(cache.glob("*.exe"))) == 3
+    _assert_cache_sidecars(cache)
+
+
+@pytest.mark.parametrize("resource_tool", [False, True], ids=["compiler", "windres"])
+def test_compile_loader_tool_identity_change_invalidates_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, resource_tool: bool
+) -> None:
+    calls = _fake_build(monkeypatch)
+    cache = tmp_path / "cache"
+    compile_loader("x", tmp_path / "before.exe", AppType.CLI, tmp_path / "w1", cache_dir=cache)
+
+    def changed_identity(compiler: str, resource: bool = False, store: Path | None = None) -> str:
+        return f"{'changed' if resource == resource_tool else 'fake'}:{compiler}:{resource}"
+
+    monkeypatch.setattr("fspack.packaging.loader.compile.toolchain_fingerprint", changed_identity)
+    compile_loader("x", tmp_path / "after.exe", AppType.CLI, tmp_path / "w2", cache_dir=cache)
+    _assert_build_calls(calls, c=1 if resource_tool else 2, resource=2, link=2)
+    assert len(list(cache.glob("*.exe"))) == 2
+
+
+@pytest.mark.parametrize("generator", ["generate_resource_rc", "generate_app_manifest"])
+def test_resource_content_change_invalidates_resource_and_exe_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, generator: str
+) -> None:
+    from fspack.packaging.loader import cache_keys, resource, toolchain
+
+    calls = _fake_build(monkeypatch)
+    cache = tmp_path / "cache"
+    info = LoaderVersionInfo("app", "1.0", "desc", "author", "app.exe")
+    compile_loader("x", tmp_path / "before.exe", AppType.CLI, tmp_path / "w1", version_info=info, cache_dir=cache)
+    original = getattr(resource, generator)
+
+    def changed(*args: Any, **kwargs: Any) -> str:
+        suffix = "\n// changed resource\n" if generator == "generate_resource_rc" else "\n<!-- changed manifest -->\n"
+        return original(*args, **kwargs) + suffix
+
+    for module in (resource, cache_keys, toolchain):
+        if hasattr(module, generator):
+            monkeypatch.setattr(module, generator, changed)
+    compile_loader("x", tmp_path / "after.exe", AppType.CLI, tmp_path / "w2", version_info=info, cache_dir=cache)
+    _assert_build_calls(calls, c=1, resource=2, link=2)
+    assert (tmp_path / "before.exe").read_bytes() != (tmp_path / "after.exe").read_bytes()
+    assert len(list((cache / "resources").glob("*.o"))) == 2
+    assert len(list(cache.glob("*.exe"))) == 2
+
+
+@pytest.mark.parametrize("layer", ["exe", "objects", "resources"])
+@pytest.mark.parametrize("damage", ["binary", "missing-sidecar", "bad-sidecar"])
+def test_compile_loader_recovers_corrupted_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, layer: str, damage: str
+) -> None:
+    calls = _fake_build(monkeypatch)
+    cache = tmp_path / "cache"
+    compile_loader("x", tmp_path / "seed.exe", AppType.CLI, tmp_path / "w1", cache_dir=cache)
+    (cached_exe,) = cache.glob("*.exe")
+    if layer == "exe":
+        binary = cached_exe
+    else:
+        (binary,) = (cache / layer).glob("*.o")
+        cached_exe.unlink()
+        cached_exe.with_name(cached_exe.name + ".sha256").unlink()
+    sidecar = binary.with_name(binary.name + ".sha256")
+    if damage == "binary":
+        binary.write_bytes(b"corrupt")
+    elif damage == "missing-sidecar":
+        sidecar.unlink()
+    else:
+        sidecar.write_text("invalid hash", encoding="ascii")
+    calls.clear()
+    compile_loader("x", tmp_path / "fixed.exe", AppType.CLI, tmp_path / "w2", cache_dir=cache)
+    _assert_build_calls(calls, c=int(layer == "objects"), resource=int(layer == "resources"), link=1)
+    assert (tmp_path / "fixed.exe").read_bytes() == (tmp_path / "seed.exe").read_bytes()
+    _assert_cache_sidecars(cache)
+    calls.clear()
+    compile_loader("x", tmp_path / "warm.exe", AppType.CLI, tmp_path / "w3", cache_dir=cache)
+    _assert_build_calls(calls, c=0, resource=0, link=0)
+    assert (tmp_path / "warm.exe").read_bytes() == (tmp_path / "seed.exe").read_bytes()
+
+
+@pytest.mark.parametrize("same_resources", [False, True], ids=["different-entry", "same-key"])
+def test_compile_loader_concurrent_misses_share_c(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, same_resources: bool
+) -> None:
+    calls = _fake_build(monkeypatch)
+    barrier = Barrier(4)
+    cache = tmp_path / "cache"
+
+    def build(i: int) -> Path:
+        info = LoaderVersionInfo("app", "1.0", "desc", "author", "same.exe" if same_resources else f"app{i}.exe")
+        barrier.wait(timeout=5)
+        return compile_loader(
+            "x",
+            tmp_path / f"app{i}.exe",
+            AppType.GUI,
+            tmp_path / f"w{i}",
+            version_info=info,
+            cache_dir=cache,
+        )
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        outputs = list(pool.map(build, range(4)))
+    count = 1 if same_resources else 4
+    _assert_build_calls(calls, c=1, resource=count, link=count)
+    assert len({out.read_bytes() for out in outputs}) == count
+    assert len(list(cache.glob("*.exe"))) == count
+    _assert_cache_sidecars(cache)
+
+
+@pytest.mark.parametrize("failure_phase", ["c", "link"])
+def test_compile_loader_compile_failure_can_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_phase: str
+) -> None:
+    calls = _fake_build(monkeypatch)
+    successful_run = subprocess.run
+    failed = False
+
+    def fail_once(cmd: list[str], **kw: Any) -> CompletedStub | subprocess.CompletedProcess[str]:
+        nonlocal failed
+        if _command_kind(cmd) == failure_phase and not failed:
+            failed = True
+            calls.append(list(cmd))
+            Path(cmd[cmd.index("-o") + 1]).write_bytes(b"partial")
+            raise subprocess.CalledProcessError(1, cmd, stderr="compile broken")
+        return successful_run(cmd, **kw)
+
+    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", fail_once)
+    cache = tmp_path / "cache"
+    with pytest.raises(LoaderError, match="compile broken"):
+        compile_loader("x", tmp_path / "app", AppType.CLI, tmp_path / "w1", Platform.LINUX, cache_dir=cache)
+    assert not list(cache.glob("*.sha256"))
+    assert len(list((cache / "objects").glob("*.o"))) == int(failure_phase == "link")
+    compile_loader("x", tmp_path / "app", AppType.CLI, tmp_path / "w1", Platform.LINUX, cache_dir=cache)
+    compile_loader("x", tmp_path / "warm", AppType.CLI, tmp_path / "w2", Platform.LINUX, cache_dir=cache)
+    _assert_build_calls(calls, c=2 if failure_phase == "c" else 1, resource=0, link=1 if failure_phase == "c" else 2)
+    assert b"partial" not in (tmp_path / "app").read_bytes()
+    assert (tmp_path / "warm").read_bytes() == (tmp_path / "app").read_bytes()
+    _assert_cache_sidecars(cache)
+
+
+@pytest.mark.parametrize("error", ["missing", "invalid", "timeout"])
+def test_compile_loader_resource_error_recovers_without_recompiling_c(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: str
+) -> None:
+    calls = _fake_build(monkeypatch)
+    successful_run = subprocess.run
+    resource_broken = True
+
+    def maybe_fail(cmd: list[str], **kw: Any) -> CompletedStub | subprocess.CompletedProcess[str]:
+        if _command_kind(cmd) == "resource" and resource_broken:
+            calls.append(list(cmd))
+            if error == "missing":
+                raise FileNotFoundError("windres missing")
+            if error == "timeout":
+                raise subprocess.TimeoutExpired(cmd, 120)
+            Path(cmd[cmd.index("--output") + 1]).write_bytes(b"partial resource")
+            raise subprocess.CalledProcessError(1, cmd, stderr="invalid rc")
+        return successful_run(cmd, **kw)
+
+    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", maybe_fail)
+    cache = tmp_path / "cache"
+    compile_loader("x", tmp_path / "broken.exe", AppType.CLI, tmp_path / "w", cache_dir=cache)
+    assert not list(cache.glob("*.exe"))
+    assert not list((cache / "resources").glob("*.o"))
+    assert len(list((cache / "objects").glob("*.o"))) == 1
+    resource_broken = False
+    compile_loader("x", tmp_path / "fixed.exe", AppType.CLI, tmp_path / "w", cache_dir=cache)
+    compile_loader("x", tmp_path / "warm.exe", AppType.CLI, tmp_path / "warm-w", cache_dir=cache)
+    _assert_build_calls(calls, c=1, resource=2, link=2)
+    assert (tmp_path / "fixed.exe").read_bytes() != (tmp_path / "broken.exe").read_bytes()
+    assert b"partial resource" not in (tmp_path / "fixed.exe").read_bytes()
+    assert (tmp_path / "warm.exe").read_bytes() == (tmp_path / "fixed.exe").read_bytes()
+    _assert_cache_sidecars(cache)
+
+
+@pytest.mark.parametrize("platform", [Platform.WINDOWS, Platform.LINUX, Platform.MACOS])
+def test_compile_loader_cache_keys_use_canonical_build_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: Platform
+) -> None:
+    from fspack.packaging.loader.cache_keys import _object_cache_key, _resource_cache_key
+    from fspack.packaging.loader.compile import LinuxLoader, MacLoader, WindowsLoader
+
+    cls = {Platform.WINDOWS: WindowsLoader, Platform.LINUX: LinuxLoader, Platform.MACOS: MacLoader}[platform]
+    flags = ("-O2", "-municode") if platform is Platform.WINDOWS else ("-O2",)
+    assert cls._compile_flags() == flags
+    cmd = cls._build_command(
+        Path("loader.o"), Path("loader"), AppType.GUI, Path("resource.o") if platform is Platform.WINDOWS else None
+    )
+    assert "loader.o" in cmd and "loader.c" not in cmd
+    compiler_key = f"fake:{cmd[0]}:False"
+    resource_key = (
+        _resource_cache_key("", None, f"fake:{_find_windres()}:True" + compiler_key)
+        if platform is Platform.WINDOWS
+        else ""
+    )
+    key = _loader_cache_key(
+        "x",
+        AppType.GUI,
+        platform,
+        toolchain_key=compiler_key,
+        compile_flags=flags,
+        link_flags=tuple(cmd),
+        resource_key=resource_key,
+    )
+    calls = _fake_build(monkeypatch)
+    cache = tmp_path / "cache"
+    out = tmp_path / ("app.exe" if platform is Platform.WINDOWS else "app")
+    compile_loader("x", out, AppType.GUI, tmp_path / "w", platform, cache_dir=cache)
+    cached = cache / (f"{key}.exe" if platform is Platform.WINDOWS else key)
+    assert cached.read_bytes() == out.read_bytes()
+    object_key = _object_cache_key("x", platform, compiler_key, flags)
+    assert (cache / "objects" / f"{object_key}.o").is_file()
+    c_cmd = next(cmd for cmd in calls if _command_kind(cmd) == "c")
+    assert tuple(c_cmd[1 : c_cmd.index("-c")]) == flags
+    if platform is Platform.WINDOWS:
+        assert (cache / "resources" / f"{resource_key}.o").is_file()
+    _assert_cache_sidecars(cache)
+
+
+@pytest.mark.parametrize("resource", [False, True], ids=["compiler", "windres"])
+def test_toolchain_fingerprint_memoizes_probes_and_tracks_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, resource: bool
+) -> None:
+    from fspack.packaging.loader.toolchain import toolchain_fingerprint
+
+    tools = [tmp_path / name for name in ("gcc.exe", "windres.exe", "other-gcc.exe", "other-windres.exe")]
+    for tool in tools:
+        tool.write_bytes(b"fake tool")
+    current = tools[1 if resource else 0]
+    version = "version 1"
+    calls: list[list[str]] = []
+
+    def which(name: str) -> str:
+        return str(current if ("windres" in name) == resource else tools[0])
+
+    def probe(cmd: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+        assert len(cmd) == 2 and "-o" not in cmd and "--output" not in cmd
+        calls.append(list(cmd))
+        output = version if cmd[1] in ("-v", "--version") else ""
+        return subprocess.CompletedProcess(cmd, 0, stdout=output, stderr="")
+
+    monkeypatch.setattr("fspack.packaging.loader.shutil.which", which)
+    monkeypatch.setattr("fspack.packaging.loader.subprocess.run", probe)
+    name = "windres" if resource else "gcc"
+    first = toolchain_fingerprint(name, resource=resource)
+    assert calls
+    probe_count = len(calls)
+    assert toolchain_fingerprint(name, resource=resource) == first
+    assert len(calls) == probe_count
+
+    current = tools[3 if resource else 2]
+    monkeypatch.setenv("PATH", str(tmp_path / "moved"))
+    moved = toolchain_fingerprint(name, resource=resource)
+    assert moved != first
+    assert len(calls) > probe_count
+    version = "version 2"
+    current.write_bytes(b"updated fake tool")
+    updated = toolchain_fingerprint(name, resource=resource)
+    assert updated != moved
+
+    monkeypatch.setenv("CPATH", str(tmp_path / "new-include"))
+    environment_changed = toolchain_fingerprint(name, resource=resource)
+    assert environment_changed != updated
+    probe_count = len(calls)
+    assert toolchain_fingerprint(name, resource=resource) == environment_changed
+    assert len(calls) == probe_count

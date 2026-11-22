@@ -509,6 +509,19 @@ class TestMatchCategory:
             assert cat.name == "entry_startup"
             assert cat.threshold == 15.0
 
+    def test_loader_build_category_matched(self) -> None:
+        """test_loader_perf_baseline.py 的 3 个冷/热构建测试匹配 loader_build 类别."""
+        for name in (
+            "test_loader_single_entry_cold_baseline",
+            "test_loader_multi_entry_cold_baseline",
+            "test_loader_multi_entry_warm_baseline",
+        ):
+            cat = cb._match_category(name)
+            assert cat is not None
+            assert cat.name == "loader_build"
+            assert cat.threshold == 25.0
+            assert cat.noise_floor == pytest.approx(5e-3)
+
     def test_unknown_test_no_match(self) -> None:
         """未知测试名不匹配任何类别."""
         assert cb._match_category("test_unknown_baseline") is None

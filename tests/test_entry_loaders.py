@@ -1,15 +1,20 @@
-"""``pipeline/stages.py`` 入口 loader 并行编译测试：_build_entry_loaders 线程池行为."""
+"""多入口 loader 有效子系统分组、并行隔离与度量聚合测试."""
 
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from pathlib import Path
+from threading import Barrier, get_ident
 from typing import Any, cast
 
 import pytest
 
+from fspack._compat import override
 from fspack.config import AppType, BuildOptions, EntryPoint, ProjectInfo, get_mirror
 from fspack.exceptions import LoaderError
+from fspack.metrics import StageRecorder
+from fspack.packaging.loader import LoaderVersionInfo
 from fspack.packaging.pipeline.stages import _MAX_LOADER_WORKERS, BuildContext, _build_entry_loaders
 from fspack.platform import Platform
 
@@ -22,11 +27,7 @@ def _make_multi_entry_context(
     *,
     target: Platform = Platform.WINDOWS,
 ) -> BuildContext:
-    """构造多入口 BuildContext 用于 _build_entry_loaders 测试.
-
-    在 ``tmp_path/src`` 下为每个 entry name 创建 ``<name>.py``，生成对应 EntryPoint
-    元组（cli/web/api 为 CLI，gui 为 GUI），返回 BuildContext。
-    """
+    """构造多入口上下文：gui/web 使用对应类型，其余为 CLI."""
     from fspack.config import BuildConfig
     from fspack.progress import BuildTracker
 
@@ -36,7 +37,7 @@ def _make_multi_entry_context(
     for name in entry_names:
         script = src_dir / f"{name}.py"
         script.write_text("def main():\n    pass\n")
-        app_type = AppType.GUI if name == "gui" else AppType.CLI
+        app_type = {"gui": AppType.GUI, "web": AppType.WEB}.get(name, AppType.CLI)
         entries.append(EntryPoint(name=name, module=name, file=script, app_type=app_type))
     info = ProjectInfo(
         name="multi",
@@ -309,18 +310,26 @@ def test_build_entry_loaders_dedup_same_app_type_linux(tmp_path: Path, monkeypat
         assert exe.read_text() == "compiled-loader", "同组入口 exe 应与代表产物一致"
 
 
-def test_build_entry_loaders_dedup_group_by_app_type_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Linux 目标不同 app_type 分属不同配置类：各编译一次，GUI/CLI 互不复制."""
-    ctx = _make_multi_entry_context(tmp_path, ("a", "gui", "b"), target=Platform.LINUX)
+@pytest.mark.parametrize("target", [Platform.LINUX, Platform.MACOS])
+def test_build_entry_loaders_dedup_all_app_types_posix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: Platform
+) -> None:
+    """POSIX 的 CLI/GUI/WEB 均为同一有效子系统，只编译一个代表."""
+    ctx = _make_multi_entry_context(tmp_path, ("a", "gui", "web", "b"), target=target)
     calls: list[Path] = []
     _spy_compile(monkeypatch, calls)
+    monkeypatch.setattr(
+        "fspack.packaging.pipeline.stages.ThreadPoolExecutor",
+        lambda **kw: pytest.fail("单配置类不应创建线程池"),
+    )
 
     exes = _build_entry_loaders(ctx, resolved_icon=None, has_tkinter=False)
 
-    assert len(exes) == 3
-    assert len(calls) == 2, "CLI 与 GUI 两个配置类各编译一次"
-    # 代表产物：a（CLI）与 gui（GUI）被编译，b 从 a 复制
-    assert {c.name for c in calls} == {"a", "gui"}
+    assert len(exes) == 4
+    assert calls == [ctx.cfg.dist_dir / "a"]
+    assert all(exe.read_text() == "compiled-loader" for exe in exes)
+    assert ctx.tracker.records[-1].items == 4
+    assert "webbrowser" in (ctx.cfg.dist_dir / "_entry_web.py").read_text(encoding="utf-8")
 
 
 def test_build_entry_loaders_dedup_all_same_config_no_pool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -346,7 +355,7 @@ def test_build_entry_loaders_dedup_all_same_config_no_pool(tmp_path: Path, monke
 
 
 def test_build_entry_loaders_windows_compiles_per_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Windows 目标 version_info.exe_filename 按入口区分：多入口仍每入口编译（方案 A 边界）."""
+    """Windows 目标 OriginalFilename 按入口区分，仍逐入口调用编译器."""
     ctx = _make_multi_entry_context(tmp_path, ("a", "b", "c"), target=Platform.WINDOWS)
     calls: list[Path] = []
     _spy_compile(monkeypatch, calls)
@@ -393,3 +402,156 @@ def test_build_entry_loaders_dedup_representative_failure_skips_copy(
     with pytest.raises(LoaderError, match="模拟编译失败"):
         _build_entry_loaders(ctx, resolved_icon=None, has_tkinter=False)
     assert not copied, "代表编译失败时不应复制同组入口"
+
+
+@pytest.mark.parametrize("cpu", [None, 1, 16])
+def test_build_entry_loaders_workers_bounded_by_representatives(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cpu: int | None
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    ctx = _make_multi_entry_context(tmp_path, ("a", "b"))
+    captured: list[int] = []
+
+    class SpyPool(ThreadPoolExecutor):
+        def __init__(self, *, max_workers: int) -> None:
+            captured.append(max_workers)
+            super().__init__(max_workers=max_workers)
+
+    monkeypatch.setattr(os, "cpu_count", lambda: cpu)
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.ThreadPoolExecutor", SpyPool)
+    _spy_compile(monkeypatch, [])
+    _build_entry_loaders(ctx, resolved_icon=None, has_tkinter=False)
+    assert captured == [min(cpu or 1, _MAX_LOADER_WORKERS, 2)]
+
+
+def test_build_entry_loaders_worker_metrics_are_local(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ctx = _make_multi_entry_context(tmp_path, ("a", "b", "c"))
+    stages: list[StageRecorder] = []
+    barrier = Barrier(3)
+
+    class OwnedRecorder(StageRecorder):
+        def __init__(self, name: str) -> None:
+            super().__init__(name)
+            self.owner = get_ident()
+
+        @override
+        def hit_cache(self, n: int = 1) -> None:
+            assert get_ident() == self.owner, "不允许 worker 修改主线程记录器"
+            super().hit_cache(n)
+
+        @override
+        def set_detail(self, text: str) -> None:
+            assert get_ident() == self.owner, "不允许 worker 修改主线程记录器"
+            super().set_detail(text)
+
+    def fake_compile(source: str, out_exe: Path, app_type: object, work_dir: Path, platform: object, **kw: Any) -> Path:
+        stage = kw["stage"]
+        stages.append(stage)
+        barrier.wait(timeout=5)
+        stage.hit_cache({"a": 1, "b": 2, "c": 3}[out_exe.stem])
+        stage.set_detail("gcc" if out_exe.stem != "b" else "缓存命中")
+        out_exe.write_text("compiled")
+        return out_exe
+
+    monkeypatch.setattr(os, "cpu_count", lambda: 3)
+    monkeypatch.setattr("fspack.progress.StageRecorder", OwnedRecorder)
+    monkeypatch.setattr("fspack.packaging.pipeline.compile_stage.StageRecorder", OwnedRecorder)
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.compile_loader", fake_compile)
+    _build_entry_loaders(ctx, resolved_icon=None, has_tkinter=False)
+    assert len({id(stage) for stage in stages}) == 3
+    record = ctx.tracker.records[-1]
+    assert record.cache_hit == 6
+    assert record.items == 3
+    assert record.detail == "gcc; 缓存命中"
+
+
+def test_build_entry_loaders_windows_effective_type_preserves_resources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = _make_multi_entry_context(tmp_path, ("cli", "gui", "web"))
+    calls: dict[str, tuple[AppType, LoaderVersionInfo]] = {}
+
+    def fake_compile(
+        source: str, out_exe: Path, app_type: AppType, work_dir: Path, platform: object, **kw: Any
+    ) -> Path:
+        calls[out_exe.stem] = app_type, kw["version_info"]
+        out_exe.write_text("compiled")
+        return out_exe
+
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.compile_loader", fake_compile)
+    _build_entry_loaders(ctx, resolved_icon=None, has_tkinter=False)
+    assert {name: app_type for name, (app_type, _) in calls.items()} == {
+        "cli": AppType.CLI,
+        "gui": AppType.GUI,
+        "web": AppType.GUI,
+    }
+    assert {name: info.exe_filename for name, (_, info) in calls.items()} == {
+        "cli": "cli.exe",
+        "gui": "gui.exe",
+        "web": "web.exe",
+    }
+
+
+def test_build_entry_loaders_windows_gui_web_same_resource_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from fspack.packaging.pipeline import compile_stage
+
+    ctx = _make_multi_entry_context(tmp_path, ("gui", "web"))
+    write_entry_files = compile_stage._write_entry_files
+
+    def same_resources(
+        ctx: BuildContext, ep: EntryPoint, has_tkinter: bool
+    ) -> tuple[AppType, LoaderVersionInfo | None]:
+        app_type, info = write_entry_files(ctx, ep, has_tkinter)
+        assert info is not None
+        return app_type, replace(info, exe_filename="shared.exe")
+
+    calls: list[Path] = []
+    _spy_compile(monkeypatch, calls)
+    monkeypatch.setattr(compile_stage, "_write_entry_files", same_resources)
+    exes = _build_entry_loaders(ctx, resolved_icon=None, has_tkinter=False)
+    assert calls == [ctx.cfg.dist_dir / "gui.exe"]
+    assert exes[0].read_bytes() == exes[1].read_bytes()
+    assert (ctx.cfg.dist_dir / "web.entry").read_text() == "_entry_web.py"
+
+
+def test_build_entry_loaders_reports_all_failures_and_never_copies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from fspack.packaging.pipeline import compile_stage
+
+    ctx = _make_multi_entry_context(tmp_path, ("a", "b", "fail1", "fail2"))
+    write_entry_files = compile_stage._write_entry_files
+    calls: list[str] = []
+    copies: list[Path] = []
+
+    def grouped_resources(
+        ctx: BuildContext, ep: EntryPoint, has_tkinter: bool
+    ) -> tuple[AppType, LoaderVersionInfo | None]:
+        app_type, info = write_entry_files(ctx, ep, has_tkinter)
+        assert info is not None
+        filename = "shared.exe" if ep.name in ("a", "b") else f"{ep.name}.exe"
+        return app_type, replace(info, exe_filename=filename)
+
+    def fake_compile(source: str, out_exe: Path, app_type: object, work_dir: Path, platform: object, **kw: Any) -> Path:
+        calls.append(out_exe.stem)
+        if out_exe.stem.startswith("fail"):
+            raise LoaderError(out_exe.stem)
+        kw["stage"].hit_cache()
+        kw["stage"].set_detail("缓存命中")
+        out_exe.write_text("compiled")
+        return out_exe
+
+    monkeypatch.setattr(compile_stage, "_write_entry_files", grouped_resources)
+    monkeypatch.setattr("fspack.packaging.pipeline.stages.compile_loader", fake_compile)
+    monkeypatch.setattr(compile_stage.shutil, "copy2", lambda src, dst: copies.append(dst))
+    with pytest.raises(LoaderError, match="fail1"):
+        _build_entry_loaders(ctx, resolved_icon=None, has_tkinter=False)
+    assert set(calls) == {"a", "fail1", "fail2"}
+    assert "fail1" in caplog.text and "fail2" in caplog.text
+    assert not copies
+    assert not (ctx.cfg.dist_dir / "b.exe").exists()
+    assert ctx.tracker.records[-1].cache_hit == 1
+    assert ctx.tracker.records[-1].items == 0
