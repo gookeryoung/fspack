@@ -110,9 +110,19 @@ req-49 驱动的 20 轮迭代分 4 个阶段交付：阶段 1 健壮性基础（
 | 性能基线测试数 | 10 | 26 | +16 |
 | CI 退化检测精度 | 单一 25% | 6 类别 10-25% | 误报↓ 灵敏度↑ |
 
+### 多入口 loader 性能门禁
+
+`tests/test_loader_perf_baseline.py` 补充多入口 C loader 的确定性门禁与真实
+MinGW 基线。普通门禁（非 slow）用假工具链断言：1/5/20 入口下 C 对象恒编译
+1 次、Windows 资源与链接各按入口数增长、工具链探测次数与入口数无关；
+预热构建零工具调用；持久化工具链身份命中时只做有限 `stat`/`which`。
+`slow + e2e` 基线用真实 MinGW 测量单入口冷构建、5 入口冷构建与热构建，
+供 `fsp doctor --bench-compare` 按 `loader_build` 类别（25% 阈值、5ms 噪声
+下限）检测退化；缺少 MinGW/windres 时自动跳过。
+
 ## 基线测试清单
 
-共 26 个基线测试，按 6 个类别分组，各类别有不同的 StdDev 特性与退化阈值：
+共 29 个基线测试，按 7 个类别分组，各类别有不同的 StdDev 特性与退化阈值：
 
 ### core（9 个，阈值 10%）
 
@@ -185,6 +195,17 @@ req-49 驱动的 20 轮迭代分 4 个阶段交付：阶段 1 健壮性基础（
 | `test_no_site_startup_baseline` | `python -S` 模拟 `--no-site` |
 | `test_no_site_lazy_combined_baseline` | `python -S` + lazy 双重优化 |
 
+### loader_build（3 个，阈值 25%）
+
+`tests/test_loader_perf_baseline.py`，真实 MinGW 编译/链接基线，冷构建
+StdDev 5-20%，热构建只做校验与复制。缺少 MinGW/windres 时自动跳过。
+
+| 测试名 | 场景 |
+|--------|------|
+| `test_loader_single_entry_cold_baseline` | 单入口冷缓存（C 1 次、资源 1 次、链接 1 次） |
+| `test_loader_multi_entry_cold_baseline` | 5 入口冷缓存（C 仍 1 次，资源/链接各 5 次） |
+| `test_loader_multi_entry_warm_baseline` | 5 入口热缓存（零工具调用） |
+
 ## 运行方式
 
 ### 本地运行基线测试
@@ -217,7 +238,7 @@ uv run pytest tests/test_perf_baseline.py -m slow --benchmark-only \
 
 CI benchmark job（`.github/workflows/ci.yml`）仅在 `push to main` 时触发：
 
-1. 运行 5 个基线测试文件（26 个测试），`--benchmark-min-rounds=20 --benchmark-warmup=on`
+1. 运行 6 个基线测试文件（29 个测试），`--benchmark-min-rounds=20 --benchmark-warmup=on`
 2. 保存结果到 `.benchmarks/`（按平台 + Python 版本缓存）
 3. 调用 `fsp doctor --bench-compare --bench-threshold 25` 与历史最佳基准对比
 4. 退化超阈值则 exit 1 阻断 CI；系统性退化（机器抖动）不阻断
@@ -250,11 +271,11 @@ uv run fsp doctor --bench-compare --bench-no-categories --bench-threshold 25
 
 ```
 当前运行: 0126_iter145-final_Windows-CPython-3.11-64bit_20260804T120000.json
-类别阈值: build_perf=25%, nuitka_compile=10%, wheel_download=10%, entry_startup=15%, fingerprint=10%, core=10% | 全局阈值: 25%
+类别阈值: build_perf=25%, nuitka_compile=10%, wheel_download=10%, entry_startup=15%, loader_build=25%, fingerprint=10%, core=10% | 全局阈值: 25%
 
 测试名                       当前 median    最佳 median          Δ   阈值        类别      最佳来源     状态
 ...
-汇总: 26 项 | 退化 0 | 提升 0 | 首次 26 | 全局阈值 25%
+汇总: 29 项 | 退化 0 | 提升 0 | 首次 29 | 全局阈值 25%
 ```
 
 ### 退出码

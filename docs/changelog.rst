@@ -7,7 +7,10 @@
 未发布
 ------
 
-（暂无）
+- feat(test): 新增 ``tests/test_loader_perf_baseline.py``——普通门禁用假工具链守护 1/5/20 入口 C 对象只编译 1 次、资源/链接按入口增长、热构建零工具调用、工具链身份热查询探测/``which``/``stat`` 有界；``slow + e2e`` 用真实 MinGW 建立 ``loader_build`` 冷/热基线并校验热构建显著快于冷构建
+- feat(doctor): ``fsp doctor --bench-compare`` 新增 ``loader_build`` 类别（25% 阈值、5ms 噪声下限），CI benchmark job 纳入新基线文件
+- perf(loader): 多入口 C loader 改为共享缓存 C 对象、每入口独立 Windows 资源与链接；按有效子系统归并，缓存键纳入工具链与资源内容身份，同键单飞、原子发布并 SHA256 校验
+- fix(loader): Windows 资源缺失（含仅 manifest）不缓存最终 exe，但保留成功 C 对象；并行 worker 改用本地 ``StageRecorder`` 并在主线程聚合，任一代表失败不复制同组产物
 
 v0.6.14
 -------

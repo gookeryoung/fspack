@@ -9,7 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-（暂无）
+### Added
+- 新增 `tests/test_loader_perf_baseline.py`：普通门禁用假工具链守护 1/5/20 入口下 C 对象只编译 1 次、Windows 资源与链接按入口增长、热构建零工具调用、工具链身份热查询的探测/`which`/`stat` 有界；`slow + e2e` 用真实 MinGW 建立 `loader_build` 冷/热基线并校验热构建显著快于冷构建
+- `fsp doctor --bench-compare` 新增 `loader_build` 基线类别（25% 阈值、5ms 噪声下限），CI benchmark job 纳入新基线文件
+
+### Changed
+- 多入口 C loader 改为共享缓存 C 对象、每入口独立 Windows 资源与链接；入口按有效子系统归并，缓存键纳入工具链与资源内容身份，同键构建单飞、原子发布并做 SHA256 校验
+- Windows 资源缺失（含仅 manifest）不再缓存最终 exe，但保留已成功的 C 对象，修复后可重新链接补齐资源
+
+### Fixed
+- 修复多入口并行编译时 worker 共享 `StageRecorder` 的缓存命中计数竞态，改为 worker 本地记录、主线程聚合
+- 并行编译收集全部入口失败并逐条记录，任一代表失败时不复制同组产物
 
 ## [0.6.14] - 2026-11-13
 
