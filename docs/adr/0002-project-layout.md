@@ -1,6 +1,6 @@
 # ADR 0002：项目结构布局与包内分层
 
-- 状态：已接受（2026-06，P0-P5 落地；旧路径保留一个 minor 的兼容垫片）
+- 状态：已接受（2026-06，P0-P5 落地；0.7.0 已删除旧路径兼容垫片）
 - 关联：`docs/adr/0001-layering.md`（依赖方向）、`tests/unit/core/test_layout.py`（守卫）
 - 目标：把平铺的入口/工具/资源收拢为可读、可扩展、可验证的目录结构，
   同时保持 ADR-0001 的依赖方向与 CLI 懒加载性能约束不变。
@@ -50,8 +50,8 @@ cli/commands → builder/runner/doctor/templates/packaging（服务与编排）
 ## 迁移规则
 
 1. 每个阶段单独 PR：先加/改守卫，再 `git mv`，最后全量测试。
-2. 旧模块路径在至少一个 minor 版本内保留薄 shim（`__all__` + re-export），
-   shim 不得新增内部依赖；下个 minor 在 CHANGELOG 标注后删除。
+2. 迁移期的旧模块路径 shim 在 0.7.0 删除；后续若再次迁移公共路径，须先在
+   同一 minor 内保留垫片并在 CHANGELOG 标注删除版本。
 3. 资源只允许通过 `fspack.core.resources` 定位；新增资源目录必须同步
    `pyproject.toml` 的 `[tool.fspack] data-dirs` 与 `test_resources.py`。
 4. CLI 顶层 import 白名单与 `fsp --help` 冷启动基线是硬门禁：任一阶段回退

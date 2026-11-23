@@ -81,7 +81,7 @@ find-links = ["./wheels", "/shared/wheels"]
 便于快速定位：
 
 ```text
-fspack.exceptions.DependencyError: 离线模式下依赖缓存未命中: pypdf，
+fspack.core.exceptions.DependencyError: 离线模式下依赖缓存未命中: pypdf，
 已搜索路径: /home/user/.fspack/cache/wheels; /data/wheels。
 请预先下载 wheel 放入上述路径之一，或通过 --find-links 指定本地 wheel 目录，
 或取消 FSPACK_OFFLINE 环境变量

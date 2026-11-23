@@ -4,11 +4,12 @@
 仓库根目录的 ``CHANGELOG.md`` 按 Keep a Changelog 分节记录同一版本历史，
 两处互为指针、均保留完整历史。
 
-未发布
-------
+v0.7.0
+-------
 
 - feat(doctor): ``fsp doctor --test`` 新增 ``--keep`` 保留临时构建目录；运行验证采集 ``gui_ready`` 与 stdout 首行，GUI 模板显示「已启动（首帧后自动退出）」，``-v`` 打印各模板 stdout 首行，避免「未看到窗口=没启动」的误判
-- refactor(layout): 项目结构 P0–P5 落地——CLI 拆包、资源统一到 ``resources/``、叶子原语进 ``core/``、展示层进 ``ui/``、运行/profile 进 ``runner/``、init 建项进 ``templates/init.py``、测试按源码域镜像、工具配置并入 ``pyproject.toml``；旧路径保留一个 minor 的兼容垫片，新增 ``tests/unit/core/test_layout.py`` 的 core 叶子层守卫
+- **破坏性变更**：删除 0.6 系列旧模块路径兼容垫片（``fspack.exceptions``/``_compat``/``platform``/``fsutil``/``archive``/``jsoncache``/``logutil``/``format``/``astutil``/``metrics``/``console``/``progress``/``wizard``/``runner_profile``/``cli_init``/``cli_parser``/``cli_help``），改用 ``fspack.core.*``/``fspack.ui.*``/``fspack.runner.profile``/``fspack.templates.init``/``fspack.cli.*``
+- refactor(layout): 项目结构 P0–P5 落地——CLI 拆包、资源统一到 ``resources/``、叶子原语进 ``core/``、展示层进 ``ui/``、运行/profile 进 ``runner/``、init 建项进 ``templates/init.py``、测试按源码域镜像、工具配置并入 ``pyproject.toml``；旧路径兼容垫片在 0.7.0 删除，新增 ``tests/unit/core/test_layout.py`` 的 core 叶子层守卫
 - feat(dist): 新增 ``[tool.fspack] python-versions`` 多版本打包——配置多个 Python 版本时 ``fsp b``/``fsp p`` 逐版本构建与打包，各版本产物落在 ``dist/py<完整版本>/``（发行包在各自 ``release/``，文件名含 ``py<版本>``），互不覆盖；不配置或仅一个版本时行为不变，``--py-version`` 显式优先
 - feat(ui): 体积报告在 ``pygments`` 进入 Top N 时提示其仅语法高亮/富 traceback/``rich.markdown`` 需要，未使用时可在 ``[tool.fspack].slim-exclude`` 中剥离（附 ``docs/user/configuration.md`` 示例）
 - perf(dist): fspack 自打包 ``slim-exclude`` 排除 rich 从未使用的可选依赖 ``pygments``/``markdown-it-py``/``mdurl``（约 4.5MB，占自身产物 site-packages 六成以上）；新增 ``tests/test_self_build_slim.py`` 护栏锁定「运行期不导入被剥离依赖 + 整包剥离生效」

@@ -471,7 +471,7 @@ def _init_with_pyproject(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pyproj
 
     绕过真实模板（均有 requires-python 行），用于构造缺键的兜底场景。
     """
-    from fspack import cli_init
+    from fspack.templates import init as cli_init
 
     monkeypatch.setattr(
         cli_init,

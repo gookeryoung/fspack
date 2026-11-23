@@ -524,7 +524,7 @@ def test_tkinter_offline_cache_zip_hit(tmp_path: Path, monkeypatch: pytest.Monke
 
 def test_build_offline_flag_parsed() -> None:
     """``--offline``/``-O`` 解析为 ns.offline=True，未指定时为 False."""
-    from fspack.cli_parser import build_parser
+    from fspack.cli.parser import build_parser
 
     assert build_parser().parse_args(["b", ".", "--offline"]).offline is True
     assert build_parser().parse_args(["b", ".", "-O"]).offline is True

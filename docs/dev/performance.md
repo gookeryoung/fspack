@@ -91,7 +91,7 @@ req-49 驱动的 20 轮迭代分 4 个阶段交付：阶段 1 健壮性基础（
 #### 冷启动 import 终极惰性化
 
 - **iter-135**：
-  - `pipeline/__init__.py` 顶部 `fspack.console` 移至函数内（解决 ~17ms）
+  - `pipeline/__init__.py` 顶部 `fspack.ui.console` 移至函数内（解决 ~17ms）
   - `stages.py` 顶部 `BuildTracker` 类型注解改用字符串前向引用，`progress`
     导入移至 `build()` 内（解决 ~8ms）
   - `wheels/downloader.py` 顶部 `threading` 移至方法内
