@@ -2,12 +2,20 @@ name: Release
 
 # 触发：push v*.*.* tag
 #
-# 三个并行 job：
+# 三个 job 组：
 #   - pypi        : uv build → uv publish（OIDC）→ 上传 sdist/wheel artifact
-#   - pack-windows: windows-latest 原生打包 fspack 自身（mingw + NSIS）
-#   - pack-linux   : ubuntu-latest  原生打包 fspack 自身（gcc + dpkg-dev）
+#   - pack-windows: windows-latest 原生打包 fspack 自身（mingw + NSIS），
+#                   按 Python 版本矩阵逐格并行（3.8–3.14，python.org embed）
+#   - pack-linux  : ubuntu-latest  原生打包 fspack 自身（gcc + dpkg-dev），
+#                   按 Python 版本矩阵逐格并行（3.10–3.14，standalone）
 #
-# release job 依赖以上三个 job，收集构建产物（exe/deb/tar.gz/zip）+
+# 矩阵是显式列表，与 [tool.fspack] python-versions 及运行时资产表对齐：
+# Linux/macOS 的 python-build-standalone 没有 3.8/3.9 资产，这两版只在 Windows 发布。
+# 每格显式传 --py-version，产物落在该格自己的 dist 根（不走配置的多版本
+# dist/py<ver>/ 布局）；发行包文件名已含 py<完整版本>，各格产物汇总到同一个
+# GitHub Release 不会重名。矩阵漂移由 tests/test_release_workflow.py 守护。
+#
+# release job 依赖以上 job，收集构建产物（exe/deb/tar.gz/zip）+
 # PyPI 产物（whl/sdist），统一上传到 GitHub Release。
 # 任一前置 job 失败时 release 仍尝试发布已成功产物，但最终标记 workflow 失败。
 
@@ -53,11 +61,16 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
-  # ===== Windows 原生打包（用 fspack 打包 fspack 自身）=====
+  # ===== Windows 原生打包（用 fspack 打包 fspack 自身，每个 Python 版本一格）=====
   pack-windows:
-    name: Pack (Windows native)
+    name: Pack (Windows native, Python ${{ matrix.python-version }})
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.8–3.14 与 KNOWN_EMBED_VERSIONS 对齐（tests/test_release_workflow.py 守护）
+        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v5
 
@@ -90,20 +103,22 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.fspack/cache/
-          key: fspack-windows-${{ hashFiles('pyproject.toml') }}
+          # 运行时归档与 wheel 按 Python 版本区分，缓存键必须含版本，否则各格
+          # 争抢同一个键、只有第一格能写入
+          key: fspack-windows-py${{ matrix.python-version }}-${{ hashFiles('pyproject.toml') }}
           restore-keys: |
+            fspack-windows-py${{ matrix.python-version }}-
             fspack-windows-
-            fspack-
 
       - name: Build fspack with fspack
         env:
           PYTHONIOENCODING: utf-8
-        run: uv run fspack b . --target windows
+        run: uv run fspack b . --target windows --py-version ${{ matrix.python-version }}
 
       - name: Generate installer
         env:
           PYTHONIOENCODING: utf-8
-        run: uv run fspack p . --target windows --format all --no-build
+        run: uv run fspack p . --target windows --format all --no-build --py-version ${{ matrix.python-version }}
 
       - name: Smoke test (version)
         run: ./dist/fspack.exe -V
@@ -118,7 +133,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v6
         with:
-          name: pack-windows-failure
+          name: pack-windows-py${{ matrix.python-version }}-failure
           path: dist/
           retention-days: 3
 
@@ -126,16 +141,22 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v6
         with:
-          name: release-windows
+          name: release-windows-py${{ matrix.python-version }}
           path: dist/release/
           retention-days: 7
           if-no-files-found: error
 
-  # ===== Linux 原生打包（用 fspack 打包 fspack 自身）=====
+  # ===== Linux 原生打包（用 fspack 打包 fspack 自身，每个 Python 版本一格）=====
   pack-linux:
-    name: Pack (Linux native)
+    name: Pack (Linux native, Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.10–3.14 与 KNOWN_STANDALONE_VERSIONS 对齐：3.8/3.9 无上游运行时资产
+        # （tests/test_release_workflow.py 守护）
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v5
 
@@ -162,16 +183,17 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.fspack/cache/
-          key: fspack-linux-${{ hashFiles('pyproject.toml') }}
+          # 同 Windows：运行时归档按 Python 版本区分，缓存键必须含版本
+          key: fspack-linux-py${{ matrix.python-version }}-${{ hashFiles('pyproject.toml') }}
           restore-keys: |
+            fspack-linux-py${{ matrix.python-version }}-
             fspack-linux-
-            fspack-
 
       - name: Build fspack with fspack
-        run: uv run fspack b . --target linux
+        run: uv run fspack b . --target linux --py-version ${{ matrix.python-version }}
 
       - name: Generate installer
-        run: uv run fspack p . --target linux --format all --no-build
+        run: uv run fspack p . --target linux --format all --no-build --py-version ${{ matrix.python-version }}
 
       - name: Smoke test (version)
         run: ./dist/fspack -V
@@ -186,7 +208,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v6
         with:
-          name: pack-linux-failure
+          name: pack-linux-py${{ matrix.python-version }}-failure
           path: dist/
           retention-days: 3
 
@@ -194,7 +216,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v6
         with:
-          name: release-linux
+          name: release-linux-py${{ matrix.python-version }}
           path: dist/release/
           retention-days: 7
           if-no-files-found: error

@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `fsp doctor --bench-compare` 新增 `loader_build` 基线类别（25% 阈值、5ms 噪声下限），CI benchmark job 纳入新基线文件
 
 ### Changed
+- 发布工作流改为按「平台 × Python 版本」矩阵逐格打包：Windows 发布 3.8–3.14 共 7 个版本、Linux 发布 3.10–3.14 共 5 个版本（3.8/3.9 无 standalone 运行时资产，仅 Windows 发布），每格显式 `--py-version` 打包、产物名含 `py<版本>`，统一汇入同一个 GitHub Release；新增 `tests/test_release_workflow.py` 守护矩阵与 `[tool.fspack] python-versions`、运行时资产表保持一致
 - fspack 自打包 `[tool.fspack].slim-exclude` 排除 rich 从未使用的可选依赖 `pygments`/`markdown-it-py`/`mdurl`（约 4.5MB，占自身产物 site-packages 六成以上）；已在 `pyproject.toml` 注释与 `docs/configuration.md` 说明普通应用若用语法高亮/富 traceback/Markdown 不可照搬
 - 多入口 C loader 改为共享缓存 C 对象、每入口独立 Windows 资源与链接；入口按有效子系统归并，缓存键纳入工具链与资源内容身份，同键构建单飞、原子发布并做 SHA256 校验
 - Windows 资源缺失（含仅 manifest）不再缓存最终 exe，但保留已成功的 C 对象，修复后可重新链接补齐资源
