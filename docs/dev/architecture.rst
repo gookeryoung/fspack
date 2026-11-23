@@ -313,7 +313,7 @@ facade 例外见 :doc:`../adr/0001-layering` 与 :doc:`../adr/0002-project-layou
    * - 模块
      - 职责
    * - ``cli/``（``main.py`` / ``parser.py`` / ``help.py`` / ``dispatch.py`` / ``recursive.py`` / ``commands/``）
-     - CLI 入口与命令分发（cargo 风格短命令 ``fsp b/c/r/p``）+ argparse 参数声明 + 各子命令实现 + 帮助/版本快速路径；延迟导入重模块使 ``--help`` 提速。``templates/init.py`` 提供 ``init`` 渲染入口（旧 ``cli_init`` 保留垫片）
+     - CLI 入口与命令分发（cargo 风格短命令 ``fsp b/c/r/p``）+ argparse 参数声明 + 各子命令实现 + 帮助/版本快速路径；延迟导入重模块使 ``--help`` 提速。``templates/init.py`` 提供 ``init`` 渲染入口
    * - ``builder.py``
      - 高层构建 facade，re-export ``pipeline.build``/``runtime``/``loader``/``sync`` 等
    * - ``analyzer/``（子包：``analysis`` / ``ast_scan`` / ``fingerprint``）
@@ -321,7 +321,7 @@ facade 例外见 :doc:`../adr/0001-layering` 与 :doc:`../adr/0002-project-layou
        串行/并行调度（按采样预估的串行成本决定是否启用进程池），``ast_scan`` 负责
        单文件 AST 与 QML 解析，``fingerprint`` 负责源码指纹
    * - ``runner/``（``__init__.py`` / ``profile.py``）
-     - 运行已打包项目（原生可执行文件直跑；Linux 下 ``.exe`` 用 wine）与运行期 profile；``runner_profile`` 旧路径保留 ``sys.modules`` 垫片
+     - 运行已打包项目（原生可执行文件直跑；Linux 下 ``.exe`` 用 wine）与运行期 profile
    * - ``ui/``（``console.py`` / ``progress.py`` / ``wizard.py``）
      - 终端展示层：rich 彩色输出与日志配置、``BuildTracker``/spinner、交互式向导
    * - ``core/``

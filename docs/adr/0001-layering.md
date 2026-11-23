@@ -57,7 +57,7 @@ cli / builder / wizard / doctor
 `fspack/core/jsoncache.py`（JSON 缓存读取骨架）同样按叶子模块对待：只依赖标准库。
 
 > 注：ADR-0002 已把上述叶子模块与展示层分别迁入 `core/`、`ui/`；旧路径
-> 在过渡期保留 `sys.modules` 兼容垫片。
+> 兼容垫片已于 0.7.0 删除。
 
 ### 3. 包门面（facade）的例外
 

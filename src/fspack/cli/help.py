@@ -4,8 +4,8 @@
 ``fsp --help`` 冷启动的最大单项。非交互场景（CI/脚本/管道）不需要按终端宽度
 自适应换行，直接输出静态文本可省去 parser 构建。
 
-**维护约定：** 修改 :mod:`fspack.cli_parser` 的任何 help 文案/参数后，运行
-``python -c "from fspack.cli_parser import build_parser; print(build_parser().format_help(), end='')"``
+**维护约定：** 修改 :mod:`fspack.cli.parser` 的任何 help 文案/参数后，运行
+``python -c "from fspack.cli.parser import build_parser; print(build_parser().format_help(), end='')"``
 重新生成本文件；``tests/test_cli.py::test_help_snapshot_matches_parser`` 会在
 快照与 parser 输出不一致时失败（仅快照对应的 Python 版本上校验）。
 

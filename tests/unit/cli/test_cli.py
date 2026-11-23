@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from fspack import __version__, cli
-from fspack.cli_help import HELP_SNAPSHOT_PY, HELP_TEXT
+from fspack.cli.help import HELP_SNAPSHOT_PY, HELP_TEXT
 from fspack.config import BuildOptions, get_mirror
 from fspack.core.platform import Platform
 from fspack.packaging.profile_log import ProfileOptions

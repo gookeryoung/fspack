@@ -29,12 +29,12 @@ API 参考
    :undoc-members:
    :show-inheritance:
 
-.. automodule:: fspack.platform
+.. automodule:: fspack.core.platform
    :members:
    :undoc-members:
    :show-inheritance:
 
-.. automodule:: fspack.exceptions
+.. automodule:: fspack.core.exceptions
    :members:
    :undoc-members:
    :show-inheritance:
@@ -290,6 +290,34 @@ templates 子包
    :show-inheritance:
 
 .. automodule:: fspack.templates.registry
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: fspack.templates.init
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+core / ui 子包
+--------------
+
+.. automodule:: fspack.core
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: fspack.core.resources
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: fspack.ui
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: fspack.api
    :members:
    :undoc-members:
    :show-inheritance:
