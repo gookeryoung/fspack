@@ -1,6 +1,6 @@
 """模板渲染引擎与 init 命令单元测试.
 
-覆盖 :mod:`fspack.templates.engine`（渲染引擎）与 :mod:`fspack.cli_init`
+覆盖 :mod:`fspack.templates.engine`（渲染引擎）与 :mod:`fspack.templates.init`
 （init 命令骨架）的核心场景：
 
 - :func:`render_string`：变量替换、缺失变量报错、``$$`` 转义
@@ -17,7 +17,6 @@ from pathlib import Path
 
 import pytest
 
-from fspack.cli_init import init_project, print_template_list
 from fspack.templates import (
     Template,
     TemplateFile,
@@ -28,6 +27,7 @@ from fspack.templates import (
     render_string,
     render_template,
 )
+from fspack.templates.init import init_project, print_template_list
 
 # ---- render_string ----
 

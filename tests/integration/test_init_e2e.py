@@ -13,8 +13,8 @@ from pathlib import Path
 
 import pytest
 
-from fspack.cli_init import init_project
 from fspack.config import ProjectInfo
+from fspack.templates.init import init_project
 
 
 def test_init_helloworld_then_parse(tmp_path: Path) -> None:

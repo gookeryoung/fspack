@@ -21,6 +21,7 @@ SHIMS = {
     "progress": "fspack.ui.progress",
     "wizard": "fspack.ui.wizard",
     "runner_profile": "fspack.runner.profile",
+    "cli_init": "fspack.templates.init",
 }
 
 

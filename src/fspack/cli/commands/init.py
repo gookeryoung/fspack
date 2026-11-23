@@ -19,7 +19,7 @@ def _run_init(ns: argparse.Namespace) -> None:
     - ``--template`` 未指定 → 调 :func:`prompt_template_selection` 交互式选择
       （非 TTY 环境自动回退到 helloworld）
     """
-    from fspack.cli_init import init_project, print_template_list, prompt_template_selection
+    from fspack.templates.init import init_project, print_template_list, prompt_template_selection
 
     if ns.list:
         print_template_list()

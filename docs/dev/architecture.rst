@@ -313,7 +313,7 @@ facade 例外见 :doc:`../adr/0001-layering` 与 :doc:`../adr/0002-project-layou
    * - 模块
      - 职责
    * - ``cli/``（``main.py`` / ``parser.py`` / ``help.py`` / ``dispatch.py`` / ``recursive.py`` / ``commands/``）
-     - CLI 入口与命令分发（cargo 风格短命令 ``fsp b/c/r/p``）+ argparse 参数声明 + 各子命令实现 + 帮助/版本快速路径；延迟导入重模块使 ``--help`` 提速。``cli_init.py`` 保留 ``init`` 渲染入口
+     - CLI 入口与命令分发（cargo 风格短命令 ``fsp b/c/r/p``）+ argparse 参数声明 + 各子命令实现 + 帮助/版本快速路径；延迟导入重模块使 ``--help`` 提速。``templates/init.py`` 提供 ``init`` 渲染入口（旧 ``cli_init`` 保留垫片）
    * - ``builder.py``
      - 高层构建 facade，re-export ``pipeline.build``/``runtime``/``loader``/``sync`` 等
    * - ``analyzer/``（子包：``analysis`` / ``ast_scan`` / ``fingerprint``）
@@ -330,8 +330,8 @@ facade 例外见 :doc:`../adr/0001-layering` 与 :doc:`../adr/0002-project-layou
        ``archive`` zip 安全校验、``jsoncache`` JSON 缓存骨架、``logutil`` 日志路径、
        ``fsutil``/``format`` 文件与格式化、``exceptions`` 异常层次、``_compat`` 版本兼容、
        ``resources`` 包内资源定位
-   * - ``templates/``
-     - 模板注册表与 ``string.Template`` 渲染引擎（``fsp init`` / ``fsp doctor`` 共用）
+   * - ``templates/``（``engine.py`` / ``registry.py`` / ``init.py``）
+     - 模板注册表、``string.Template`` 渲染引擎与 ``fsp init`` 建项逻辑（``fsp init`` / ``fsp doctor`` 共用）
    * - ``resources/``
      - 包内数据：``icons/`` / ``loader/`` / ``runtime/`` / ``templates/{init,doctor}/``；
        代码统一经 ``core.resources`` 定位

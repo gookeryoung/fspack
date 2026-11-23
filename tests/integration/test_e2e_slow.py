@@ -36,12 +36,12 @@ from pathlib import Path
 
 import pytest
 
-from fspack.cli_init import init_project
 from fspack.config import BuildOptions, get_mirror
 from fspack.core.exceptions import DependencyError
 from fspack.core.platform import Platform
 from fspack.packaging.pipeline import build
 from fspack.packaging.verify import host_arch, verify_artifact
+from fspack.templates.init import init_project
 
 pytestmark = [pytest.mark.slow, pytest.mark.e2e]
 

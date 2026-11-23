@@ -18,8 +18,8 @@ from pathlib import Path
 
 import pytest
 
-from fspack.cli_init import init_project
 from fspack.templates import default_variables, get_template, list_templates, render_template
+from fspack.templates.init import init_project
 
 # ---- GUI 模板注册与元数据 ----
 

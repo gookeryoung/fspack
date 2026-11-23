@@ -1,6 +1,6 @@
 """init 命令模板列表与交互式选择测试.
 
-覆盖 :func:`fspack.cli_init.prompt_template_selection` 与 CLI 入口的
+覆盖 :func:`fspack.templates.init.prompt_template_selection` 与 CLI 入口的
 ``--template`` 未指定时的交互式选择分发逻辑。
 
 测试场景：
@@ -21,7 +21,7 @@ from typing import Any
 import pytest
 
 from fspack.cli import main as cli_main
-from fspack.cli_init import prompt_template_selection
+from fspack.templates.init import prompt_template_selection
 
 # ---- prompt_template_selection ----
 
@@ -166,7 +166,7 @@ def test_cli_init_explicit_template_skips_prompt(tmp_path: Path, monkeypatch: py
     def fail_prompt() -> str:
         raise AssertionError("显式指定 --template 时不应触发交互选择")
 
-    monkeypatch.setattr("fspack.cli_init.prompt_template_selection", fail_prompt)
+    monkeypatch.setattr("fspack.templates.init.prompt_template_selection", fail_prompt)
     cli_main(["init", "my-app", "--template", "helloworld"])
     target = tmp_path / "my-app"
     assert target.is_dir()
@@ -258,7 +258,7 @@ def test_cli_init_python_version_non_numeric_errors(
 
 def test_init_project_python_version_none_keeps_default(tmp_path: Path) -> None:
     """init_project(python_version=None) → 保持模板默认 requires-python."""
-    from fspack.cli_init import init_project
+    from fspack.templates.init import init_project
 
     target = init_project("def-app", template_id="helloworld", directory=tmp_path)
     pyproject = (target / "pyproject.toml").read_text(encoding="utf-8")
@@ -271,28 +271,28 @@ def test_init_project_python_version_none_keeps_default(tmp_path: Path) -> None:
 
 def test_format_requires_python_3_8() -> None:
     """3.8 → >=3.8."""
-    from fspack.cli_init import _format_requires_python
+    from fspack.templates.init import _format_requires_python
 
     assert _format_requires_python("3.8") == ">=3.8"
 
 
 def test_format_requires_python_3_10() -> None:
     """3.10 → >=3.10."""
-    from fspack.cli_init import _format_requires_python
+    from fspack.templates.init import _format_requires_python
 
     assert _format_requires_python("3.10") == ">=3.10"
 
 
 def test_format_requires_python_3_11() -> None:
     """3.11 → >=3.11."""
-    from fspack.cli_init import _format_requires_python
+    from fspack.templates.init import _format_requires_python
 
     assert _format_requires_python("3.11") == ">=3.11"
 
 
 def test_format_requires_python_invalid_single_component() -> None:
     """3 → ValueError（缺 minor）."""
-    from fspack.cli_init import _format_requires_python
+    from fspack.templates.init import _format_requires_python
 
     with pytest.raises(ValueError, match="无效的 Python 版本号"):
         _format_requires_python("3")
@@ -300,7 +300,7 @@ def test_format_requires_python_invalid_single_component() -> None:
 
 def test_format_requires_python_invalid_non_numeric() -> None:
     """3.x → ValueError（minor 非数字）."""
-    from fspack.cli_init import _format_requires_python
+    from fspack.templates.init import _format_requires_python
 
     with pytest.raises(ValueError, match="无效的 Python 版本号"):
         _format_requires_python("3.x")
@@ -308,7 +308,7 @@ def test_format_requires_python_invalid_non_numeric() -> None:
 
 def test_format_requires_python_invalid_empty() -> None:
     """空字符串 → ValueError."""
-    from fspack.cli_init import _format_requires_python
+    from fspack.templates.init import _format_requires_python
 
     with pytest.raises(ValueError, match="无效的 Python 版本号"):
         _format_requires_python("")
@@ -319,8 +319,8 @@ def test_format_requires_python_invalid_empty() -> None:
 
 def test_template_detail_contains_structure_line() -> None:
     """helloworld 详情含结构行：入口占位符显示为 <项目名>，pyproject 一并展示."""
-    from fspack.cli_init import _template_detail
     from fspack.templates import get_template
+    from fspack.templates.init import _template_detail
 
     tpl = get_template("helloworld")
     assert tpl is not None
@@ -334,8 +334,8 @@ def test_template_detail_contains_structure_line() -> None:
 
 def test_template_detail_contains_dependency_line() -> None:
     """fastapi 详情含依赖行（fastapi + uvicorn）."""
-    from fspack.cli_init import _template_detail
     from fspack.templates import get_template
+    from fspack.templates.init import _template_detail
 
     tpl = get_template("fastapi")
     assert tpl is not None
@@ -344,8 +344,8 @@ def test_template_detail_contains_dependency_line() -> None:
 
 def test_template_detail_python_line_only_for_deviating_constraint() -> None:
     """Python 行仅在约束偏离基线（>=3.8）时显示：pyside2 显示 <3.10，helloworld 不显示."""
-    from fspack.cli_init import _template_detail
     from fspack.templates import get_template
+    from fspack.templates.init import _template_detail
 
     pyside2 = get_template("pyside2")
     assert pyside2 is not None
@@ -358,8 +358,8 @@ def test_template_detail_python_line_only_for_deviating_constraint() -> None:
 
 def test_template_detail_qml_structure_contains_main_qml() -> None:
     """pyside6-qml 详情结构行含 main.qml（QML 资源文件可见）."""
-    from fspack.cli_init import _template_detail
     from fspack.templates import get_template
+    from fspack.templates.init import _template_detail
 
     tpl = get_template("pyside6-qml")
     assert tpl is not None
@@ -368,8 +368,8 @@ def test_template_detail_qml_structure_contains_main_qml() -> None:
 
 def test_template_detail_folds_long_file_lists() -> None:
     """结构行超过 6 个文件时折叠：显示前 6 个 + "等 N 个文件"."""
-    from fspack.cli_init import _template_detail
     from fspack.templates import Template, TemplateFile
+    from fspack.templates.init import _template_detail
 
     files = tuple(TemplateFile(rel_path=f"mod_{i}.py", content="pass\n") for i in range(8))
     tpl = Template(
@@ -387,8 +387,8 @@ def test_template_detail_folds_long_file_lists() -> None:
 
 def test_template_detail_empty_for_blank_template() -> None:
     """无描述/依赖/文件的模板返回空串（详情区不渲染）."""
-    from fspack.cli_init import _template_detail
     from fspack.templates import Template
+    from fspack.templates.init import _template_detail
 
     tpl = Template(id="blank", name="Blank", description="", category="cli", files=())
     assert _template_detail(tpl) == ""
@@ -399,7 +399,7 @@ def test_template_detail_empty_for_blank_template() -> None:
 
 def test_is_windows_7_non_windows_returns_false(monkeypatch: pytest.MonkeyPatch) -> None:
     """非 Windows 系统 → _is_windows_7 返回 False."""
-    from fspack.cli_init import _is_windows_7
+    from fspack.templates.init import _is_windows_7
 
     monkeypatch.setattr("sys.platform", "linux")
     assert _is_windows_7() is False
@@ -407,7 +407,7 @@ def test_is_windows_7_non_windows_returns_false(monkeypatch: pytest.MonkeyPatch)
 
 def test_is_windows_7_win10_returns_false(monkeypatch: pytest.MonkeyPatch) -> None:
     """Win10（NT 10.0）→ _is_windows_7 返回 False."""
-    from fspack.cli_init import _is_windows_7
+    from fspack.templates.init import _is_windows_7
 
     monkeypatch.setattr("sys.platform", "win32")
 
@@ -421,7 +421,7 @@ def test_is_windows_7_win10_returns_false(monkeypatch: pytest.MonkeyPatch) -> No
 
 def test_is_windows_7_win7_returns_true(monkeypatch: pytest.MonkeyPatch) -> None:
     """Win7（NT 6.1）→ _is_windows_7 返回 True."""
-    from fspack.cli_init import _is_windows_7
+    from fspack.templates.init import _is_windows_7
 
     monkeypatch.setattr("sys.platform", "win32")
 
@@ -435,18 +435,18 @@ def test_is_windows_7_win7_returns_true(monkeypatch: pytest.MonkeyPatch) -> None
 
 def test_init_project_fastapi_on_win7_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Win7 下选择 fastapi 模板 → ValueError 提示 Win7 不可用."""
-    from fspack.cli_init import init_project
+    from fspack.templates.init import init_project
 
-    monkeypatch.setattr("fspack.cli_init._is_windows_7", lambda: True)
+    monkeypatch.setattr("fspack.templates.init._is_windows_7", lambda: True)
     with pytest.raises(ValueError, match="Win7 下不可用"):
         init_project("api-app", template_id="fastapi", directory=tmp_path)
 
 
 def test_init_project_fastapi_on_non_win7_succeeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """非 Win7 下选择 fastapi 模板 → 正常创建项目."""
-    from fspack.cli_init import init_project
+    from fspack.templates.init import init_project
 
-    monkeypatch.setattr("fspack.cli_init._is_windows_7", lambda: False)
+    monkeypatch.setattr("fspack.templates.init._is_windows_7", lambda: False)
     target = init_project("api-ok", template_id="fastapi", directory=tmp_path)
     assert target.is_dir()
     entry = (target / "api_ok.py").read_text(encoding="utf-8")
@@ -455,9 +455,9 @@ def test_init_project_fastapi_on_non_win7_succeeds(tmp_path: Path, monkeypatch: 
 
 def test_init_project_helloworld_on_win7_succeeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Win7 下选择 helloworld 模板 → 正常创建（helloworld 不在 Win7 黑名单）."""
-    from fspack.cli_init import init_project
+    from fspack.templates.init import init_project
 
-    monkeypatch.setattr("fspack.cli_init._is_windows_7", lambda: True)
+    monkeypatch.setattr("fspack.templates.init._is_windows_7", lambda: True)
     target = init_project("hw-win7", template_id="helloworld", directory=tmp_path)
     assert target.is_dir()
 
@@ -467,7 +467,7 @@ def test_cli_init_fastapi_on_win7_errors(
 ) -> None:
     """fsp init --template fastapi（Win7）→ 打印错误并退出码 1."""
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("fspack.cli_init._is_windows_7", lambda: True)
+    monkeypatch.setattr("fspack.templates.init._is_windows_7", lambda: True)
     with pytest.raises(SystemExit) as exc_info:
         cli_main(["init", "win7-api", "--template", "fastapi"])
     assert exc_info.value.code == 1

@@ -26,7 +26,8 @@ src/fspack/
 │   └── resources.py       # 唯一资源定位入口
 ├── ui/                    # 终端展示：console/progress/wizard
 ├── runner/                # 运行与启动 profile：__init__.py / profile.py
-├── analyzer/ config/ doctor/ packaging/ slim/ templates/
+├── templates/             # 模板注册表/渲染引擎 + init 建项（engine/registry/init）
+├── analyzer/ config/ doctor/ packaging/ slim/
 └── resources/             # 包内数据：icons/loader/runtime/templates/{init,doctor}
 ```
 
