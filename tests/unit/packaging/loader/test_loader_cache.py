@@ -124,7 +124,7 @@ with cache_lock(target):
         assert cached_copy(target, output)
 """
     env = dict(os.environ)
-    source_root = str(Path(__file__).resolve().parents[1] / "src")
+    source_root = str(Path(__file__).resolve().parents[4] / "src")
     env["PYTHONPATH"] = os.pathsep.join(filter(None, (source_root, env.get("PYTHONPATH", ""))))
     processes: list[subprocess.Popen[str]] = []
     try:

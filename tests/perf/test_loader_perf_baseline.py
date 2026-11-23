@@ -28,7 +28,7 @@ from fspack.packaging.loader import toolchain as toolchain_module
 from fspack.packaging.loader.toolchain import _find_windres
 from fspack.packaging.pipeline.stages import _build_entry_loaders
 from fspack.platform import Platform
-from tests.test_entry_loaders import _make_multi_entry_context
+from tests.unit.packaging.pipeline.test_entry_loaders import _make_multi_entry_context
 
 _WINDOWS = Platform.WINDOWS
 _TOOL_NAMES = ("x86_64-w64-mingw32-gcc", "x86_64-w64-mingw32-windres", "gcc", "windres")

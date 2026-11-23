@@ -19,7 +19,7 @@ from pathlib import Path
 
 from fspack.config import KNOWN_STANDALONE_VERSIONS, ProjectInfo
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release.yml"
 
 

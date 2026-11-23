@@ -19,7 +19,7 @@ from fspack.packaging.win7.scan import (
     scan_dist_win7,
     write_win7_report,
 )
-from tests.test_win7_check import _build_pe
+from tests.unit.packaging.win7.test_win7_check import _build_pe
 
 # 内置 shim 实际导出的 PathCch* 函数（test_win7_check 已实测覆盖）
 _SHIM_EXPORTED = "PathCchSkipRoot"

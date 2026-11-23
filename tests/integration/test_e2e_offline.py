@@ -24,7 +24,7 @@ from fspack.packaging.wheels.output import _parse_pip_download_wheels
 
 pytestmark = pytest.mark.e2e
 
-_DATA = Path(__file__).parent / "data" / "pip_download"
+_DATA = Path(__file__).resolve().parents[1] / "data" / "pip_download"
 
 
 def _read(name: str) -> str:

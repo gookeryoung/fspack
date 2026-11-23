@@ -24,7 +24,7 @@ from fspack._compat import tomllib
 from fspack.config import SlimRules
 from fspack.slim import slim_unpack
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 _SRC = _REPO_ROOT / "src" / "fspack"
 
 # 被自打包配置整包剥离的顶层模块
