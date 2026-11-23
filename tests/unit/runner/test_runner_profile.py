@@ -21,7 +21,7 @@ from fspack.config import AppType, ProjectInfo
 from fspack.packaging.profile_log import ProfileOptions
 from fspack.runner import RunOptions, _run_log_data
 from fspack.runner import run as run_run
-from fspack.runner_profile import (
+from fspack.runner.profile import (
     PROFILE_ENV,
     ProfileSample,
     _fmt_bar,
@@ -315,7 +315,7 @@ def test_run_with_profile_timeout_terminates_long_run(capsys: pytest.CaptureFixt
 
 def test_terminate_on_timeout_marks_and_terminates() -> None:
     """watchdog 回调置 timed_out 并调用 terminate（不等待进程退出）."""
-    from fspack.runner_profile import _terminate_on_timeout
+    from fspack.runner.profile import _terminate_on_timeout
 
     calls: list[str] = []
 

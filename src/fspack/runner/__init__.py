@@ -4,7 +4,7 @@ Linux 下 ``.exe`` 用 wine 运行，原生无后缀可执行文件直跑；Wind
 ``--debug`` 模式绕过 loader exe，用 embed python 直接执行入口包装器，使 GUI
 应用（Windows subsystem）的 stdout/stderr 可见，便于排查启动失败。
 ``--profile`` 模式注入打点环境变量（loader/wrapper/importtime），流式采集
-stderr 并在退出后打印启动耗时汇总（见 :mod:`fspack.runner_profile`），并按
+stderr 并在退出后打印启动耗时汇总（见 :mod:`fspack.runner.profile`），并按
 :class:`ProfileOptions` 落盘启动剖析日志与历史对比（见
 :mod:`fspack.packaging.profile_log`）。
 """
@@ -26,7 +26,7 @@ from fspack.config import AppType, EntryPoint, ProjectInfo
 from fspack.config.versions import _split_t_suffix
 from fspack.core.exceptions import FspackError
 from fspack.packaging.profile_log import RUN_LOG_KIND, ProfileOptions
-from fspack.runner_profile import PROFILE_ENV, run_with_profile
+from fspack.runner.profile import PROFILE_ENV, run_with_profile
 
 __all__ = ["RunOptions", "run"]
 

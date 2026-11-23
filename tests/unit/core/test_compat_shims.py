@@ -20,6 +20,7 @@ SHIMS = {
     "console": "fspack.ui.console",
     "progress": "fspack.ui.progress",
     "wizard": "fspack.ui.wizard",
+    "runner_profile": "fspack.runner.profile",
 }
 
 

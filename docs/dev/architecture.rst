@@ -320,8 +320,8 @@ facade 例外见 :doc:`../adr/0001-layering` 与 :doc:`../adr/0002-project-layou
      - AST 扫描源码 import，分类标准库/本地/第三方依赖；``analysis`` 负责编排与
        串行/并行调度（按采样预估的串行成本决定是否启用进程池），``ast_scan`` 负责
        单文件 AST 与 QML 解析，``fingerprint`` 负责源码指纹
-   * - ``runner.py`` / ``runner_profile.py``
-     - 运行已打包项目（原生可执行文件直跑；Linux 下 ``.exe`` 用 wine）与运行期 profile
+   * - ``runner/``（``__init__.py`` / ``profile.py``）
+     - 运行已打包项目（原生可执行文件直跑；Linux 下 ``.exe`` 用 wine）与运行期 profile；``runner_profile`` 旧路径保留 ``sys.modules`` 垫片
    * - ``ui/``（``console.py`` / ``progress.py`` / ``wizard.py``）
      - 终端展示层：rich 彩色输出与日志配置、``BuildTracker``/spinner、交互式向导
    * - ``core/``

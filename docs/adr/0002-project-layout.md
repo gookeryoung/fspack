@@ -25,8 +25,8 @@ src/fspack/
 ├── core/                  # 叶子原语：exceptions/compat/platform/fsutil/jsoncache/...
 │   └── resources.py       # 唯一资源定位入口
 ├── ui/                    # 终端展示：console/progress/wizard
+├── runner/                # 运行与启动 profile：__init__.py / profile.py
 ├── analyzer/ config/ doctor/ packaging/ slim/ templates/
-├── runner.py runner_profile.py  # 运行与 profile（后续可再收拢为 runner/）
 └── resources/             # 包内数据：icons/loader/runtime/templates/{init,doctor}
 ```
 
