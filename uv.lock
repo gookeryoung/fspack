@@ -333,7 +333,7 @@ wheels = [
 
 [[package]]
 name = "fspack"
-version = "0.6.15"
+version = "0.6.16"
 source = { editable = "." }
 dependencies = [
     { name = "certifi" },
@@ -393,7 +393,7 @@ requires-dist = [
     { name = "pillow", marker = "python_full_version >= '3.9' and extra == 'image'", specifier = ">=11.0" },
     { name = "pillow", marker = "python_full_version < '3.9' and extra == 'image'", specifier = ">=9.4.0" },
     { name = "prek", marker = "extra == 'dev'", specifier = ">=0.4.5" },
-    { name = "pyrefly", marker = "extra == 'lint'", specifier = ">=1.1.1,<1.5" },
+    { name = "pyrefly", marker = "extra == 'lint'", specifier = ">=1.1.1,<1.6" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0.0" },
     { name = "pytest-benchmark", marker = "extra == 'test'", specifier = ">=4.0" },
     { name = "pytest-cov", marker = "extra == 'test'", specifier = ">=5.0.0" },
