@@ -1,5 +1,5 @@
 force-exclude = true # pre-commit 显式传入文件同样遵循 exclude 规则，跳过模板占位文件
-extend-exclude      = ["docs", "examples", "template", "src/fspack/assets"]
+extend-exclude      = ["docs", "examples", "template", "src/fspack/resources"]
 line-length         = 120
 target-version      = "py38"
 

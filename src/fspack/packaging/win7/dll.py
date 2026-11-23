@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING
 from fspack import logutil
 from fspack._compat import override
 from fspack.config.versions import _split_t_suffix
+from fspack.core.resources import resource_path
 from fspack.exceptions import EmbedError, FspackError
 from fspack.packaging.runtime.download import RuntimeDownloader
 from fspack.packaging.runtime.extract import extract_zip_safe
@@ -81,25 +82,23 @@ WIN7_EMBED_SHA256: dict[str, str] = {
 
 # 内置 api-ms-win-core-path shim（随 fspack 分发），dll 导入表校验时验证导出覆盖。
 # 公开常量：win7.scan 全量扫描复用同一 shim 做覆盖校验。
-WIN7_SHIM_DLL_PATH = Path(__file__).parent.parent.parent / "assets" / "runtime" / "api-ms-win-core-path-l1-1-0.dll"
+WIN7_SHIM_DLL_PATH = resource_path("runtime", "api-ms-win-core-path-l1-1-0.dll")
 
 # bcryptprimitives.ProcessPrng shim（随 fspack 分发），供 Rust 1.78+ 编译的
 # wheel（pydantic-core/bcrypt/cryptography/watchfiles 等）在 Win7 上加载。
 # Rust 1.78（2024-05）将 Windows 默认 target 最低 OS 提升到 Win10，之后
 # 编译的二进制硬链接 ProcessPrng（Win10+ bcryptprimitives.dll 导出）。
-WIN7_BCRYPTPRIMITIVES_SHIM_PATH = Path(__file__).parent.parent.parent / "assets" / "runtime" / "bcryptprimitives.dll"
+WIN7_BCRYPTPRIMITIVES_SHIM_PATH = resource_path("runtime", "bcryptprimitives.dll")
 
 # api-ms-win-core-synch-l1-2-0 shim（随 fspack 分发，源自 cndb 项目的 stub.c）。
 # 解决 Rust wheel（pydantic-core 等）和 Python 3.9+ embed runtime 静态导入
 # WaitOnAddress / WakeByAddress*（Win8+ API set）导致 Win7 无法加载的问题。
-# shim 源码见 assets/runtime/api-ms-win-core-synch-l1-2-0.c，通过
+# shim 源码见 resources/runtime/api-ms-win-core-synch-l1-2-0.c，通过
 # CONDITION_VARIABLE polyfill 实现 WaitOnAddress，并把 Sleep/SleepEx 转发
 # 到 kernel32（Python embed runtime 也经此 DLL 解析 Sleep）。
-WIN7_SYNCH_SHIM_DLL_PATH = (
-    Path(__file__).parent.parent.parent / "assets" / "runtime" / "api-ms-win-core-synch-l1-2-0.dll"
-)
+WIN7_SYNCH_SHIM_DLL_PATH = resource_path("runtime", "api-ms-win-core-synch-l1-2-0.dll")
 
-# 全部 Win7 shim 映射表：{DLL 名（小写）: fspack assets/runtime 下的源路径}
+# 全部 Win7 shim 映射表：{DLL 名（小写）: fspack resources/runtime 下的源路径}
 # shim DLL 统一注入到 dist/runtime/ 目录（loader 用 SetDllDirectory(runtime\)
 # 替换了默认 DLL 搜索路径，python3XX.dll 及其传递依赖只从 runtime/ 找）。
 WIN7_SYSTEM_SHIMS: dict[str, Path] = {

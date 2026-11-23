@@ -61,7 +61,7 @@
 11. **精简 runtime**（Linux/macOS 生效）：strip libpython 调试符号、删 python
     二进制/include/share，非 tkinter 项目剥离 Tcl/Tk；``--no-slim-runtime`` 关闭
 12. **解析图标**：CLI ``--icon`` > ``[tool.fspack] icon`` > ``favicon.*`` > 默认
-    ``assets/icons/app.ico``；非 ``.ico`` 经 Pillow 转换（同一源图按内容摘要
+    ``resources/icons/app.ico``；非 ``.ico`` 经 Pillow 转换（同一源图按内容摘要
     缓存，命中跳过转换）。仅 Windows 目标生效
 13. **生成 C loader**：按平台模板生成 C 源码（烧入入口脚本相对路径），
     mingw（Windows）、gcc（Linux）或 clang（macOS）编译为可执行文件；编译产物
@@ -369,7 +369,7 @@ packaging/ 子包
    * - ``runtime/``（``__init__.py`` / ``download.py`` / ``extract.py`` / ``urls.py`` / ``hashes.py`` / ``trim.py`` / ``stdlib_zip.py`` / ``pth.py``）
      - ``RuntimeDownloader``：embed python / python-build-standalone 下载解压 + sha256 清单校验 + 安全解压 + stdlib 精简/zip 化 + ``._pth`` 生成
    * - ``loader/``（``__init__.py`` / ``source.py`` / ``compile.py`` / ``toolchain.py`` / ``cache_keys.py`` / ``resource.py``）
-     - C loader facade：源码资源读取（``assets/loader/*.c``）+ 编译器基类/平台子类 + 工具链发现 + 缓存键 + icon/版本信息资源
+     - C loader facade：源码资源读取（``resources/loader/*.c``）+ 编译器基类/平台子类 + 工具链发现 + 缓存键 + icon/版本信息资源
    * - ``installer/``（``__init__.py`` / ``base.py`` / ``facade.py`` / ``dist_prep.py`` / ``request.py`` / ``linux.py`` / ``macos.py`` / ``nsis.py`` / ``zip.py`` / ``sevenzip.py``）
      - 安装包 facade：NSIS / .deb + tar.gz / .pkg + .dmg / 跨平台 zip 与 7z（``ReleaseRequest``/``SignOptions`` 参数收敛）
    * - ``wheels/``（``__init__.py`` / ``downloader.py`` / ``pip_args.py`` / ``process.py`` / ``output.py`` / ``resolver.py`` / ``local_cache.py`` / ``uv_bridge.py`` / ``parallel.py`` / ``sdist.py`` / ``cache.py`` / ``markers.py``）

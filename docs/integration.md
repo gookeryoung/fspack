@@ -201,11 +201,11 @@ done
 
 ## 完整示例
 
-`src/fspack/assets/templates/config/multi_entry` 是多入口项目示例，以下 workflow 片段展示如何在 CI 中验证其三个入口：
+`src/fspack/resources/templates/doctor/config/multi_entry` 是多入口项目示例，以下 workflow 片段展示如何在 CI 中验证其三个入口：
 
 ```yaml
 - name: Build multi-entry project
-  run: fspack b src/fspack/assets/templates/config/multi_entry --target windows
+  run: fspack b src/fspack/resources/templates/doctor/config/multi_entry --target windows
 
 - name: Verify all entries
   env:
@@ -214,7 +214,7 @@ done
     QT_QPA_PLATFORM: offscreen
   run: |
     wineboot --init
-    cd src/fspack/assets/templates/config/multi_entry
+    cd src/fspack/resources/templates/doctor/config/multi_entry
     # CLI 与 Web 入口用 wine 运行
     for ep in cli web; do
       output=$(wine ./dist/${ep}.exe 2>&1 | tr -d '\r')

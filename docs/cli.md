@@ -217,7 +217,7 @@ fsp doctor                # 环境诊断：检查打包工具与配置
 
 打包失败时先跑 `fsp doctor` 前置发现环境问题。
 
-`fsp doctor --test` 用内置典型项目模板验证环境可打包性。`src/fspack/assets/templates/` 下共 8 个模板，每个代表一类打包能力维度（依赖形态/入口数/前端/运行时段）：
+`fsp doctor --test` 用内置典型项目模板验证环境可打包性。`src/fspack/resources/templates/doctor/` 下共 8 个模板，每个代表一类打包能力维度（依赖形态/入口数/前端/运行时段）：
 
 | 模板 | 类型 | 亮点 |
 |------|------|------|
@@ -230,7 +230,7 @@ fsp doctor                # 环境诊断：检查打包工具与配置
 | `webview_app` | 前后端分离 | Vue + Vite + pywebview |
 | `multi_entry` | 多入口 | cli+gui+web 三入口 |
 
-完整模板列表见 `src/fspack/assets/init_templates/` 目录。
+完整模板列表见 `src/fspack/resources/templates/init/` 目录。
 
 `--test` 可选基准剖析选项（与 `fsp b -P`/`fsp r -P` 体系对齐）：`-P` 输出各模板构建阶段耗时报告并聚合落盘单个剖析日志（`.benchmarks/fsp-d-<时间戳>.json`），`-PO <路径>` 指定输出路径，`-PC [REF]` 与历史基准日志对比（不带值趋势表 / `last` / 近 N 次 / 基准文件路径）。
 

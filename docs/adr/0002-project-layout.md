@@ -9,7 +9,7 @@
 
 `src/fspack` 当前有 22 个顶层模块，CLI 三个文件合计 2000+ 行；资源路径
 （`assets/templates`、`assets/init_templates`、`assets/loader`、`assets/runtime`、
-`assets/icons`）以字符串硬编码散落在 10+ 模块；测试 104 个文件全部平铺。
+`assets/icons`，P2 已迁移到 `resources/`）以字符串硬编码散落在 10+ 模块；测试 104 个文件全部平铺。
 结构问题不阻断功能，但会持续抬高定位成本，并让"新增代码放哪里"依赖口口相传。
 
 ## 决策

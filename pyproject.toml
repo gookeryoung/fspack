@@ -89,9 +89,9 @@ exclude = [
 
 [tool.fspack]
 data-dirs = [
-    "src/fspack/assets/templates",
-    "src/fspack/assets/init_templates",
-    "src/fspack/assets/loader"          # C loader 源码资源，构建期读取
+    "src/fspack/resources/templates/doctor",
+    "src/fspack/resources/templates/init",
+    "src/fspack/resources/loader"       # C loader 源码资源，构建期读取
 ]
 exclude = [ ".trae" ]
 no_site = true

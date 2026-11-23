@@ -39,12 +39,13 @@ def _reset_template_cache() -> Iterator[None]:
 # ---- 根目录 ----
 
 
-def test_doctor_root_points_to_assets_templates() -> None:
-    """根目录指向 fspack 包内 ``assets/templates`` 且存在."""
+def test_doctor_root_points_to_resources_templates() -> None:
+    """根目录指向 fspack 包内 ``resources/templates/doctor`` 且存在."""
     root = _doctor_templates_root()
     assert root.is_dir()
-    assert root.name == "templates"
-    assert root.parent.name == "assets"
+    assert root.name == "doctor"
+    assert root.parent.name == "templates"
+    assert root.parent.parent.name == "resources"
 
 
 # ---- list_templates(role="doctor")：真实模板扫描 ----

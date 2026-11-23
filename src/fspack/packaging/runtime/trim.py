@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any
 
 from fspack import logutil
 from fspack.config.versions import _split_t_suffix
+from fspack.core.resources import resource_path
 from fspack.packaging import action_cache
 from fspack.packaging.runtime.urls import embed_dirname
 from fspack.packaging.sync import _dir_size
@@ -37,7 +38,7 @@ _logger = logging.getLogger(__name__)
 
 # Win7 兼容性 DLL：Python 3.9+ 官方不再支持 Win7，需注入 api-ms-win-core-path-l1-1-0.dll。
 # DLL 来源 https://github.com/adang1345/api-ms-win-core-path（LGPL-2.1，基于 Wine 实现）。
-# 随 fspack 分发（assets/runtime/），无需网络下载。
+# 随 fspack 分发（resources/runtime/），无需网络下载。
 _WIN7_COMPAT_DLL_NAME = "api-ms-win-core-path-l1-1-0.dll"
 
 # Linux standalone 标准库精简：剥离运行时无用的模块目录。
@@ -189,7 +190,7 @@ def _inject_win7_compat_dll(runtime_dir: Path) -> None:
     """将内置 ``api-ms-win-core-path-l1-1-0.dll`` 复制到 runtime 根目录.
 
     Python 3.9+ 在 Win7 SP1 上启动时需此 DLL（提供 ``PathCchSkipRoot`` 等 API）。
-    DLL 随 fspack 分发（``assets/runtime/``），无需网络下载。重复构建时若
+    DLL 随 fspack 分发（``resources/runtime/``），无需网络下载。重复构建时若
     DLL 已存在则跳过。DLL 缺失时仅告警不报错（向后兼容旧 fspack 安装）。
     常量名 ``_WIN7_COMPAT_DLL_NAME`` 通过 pyc facade dispatch，确保
     ``monkeypatch.setattr("pyc._WIN7_COMPAT_DLL_NAME", ...)`` 生效。
@@ -199,7 +200,7 @@ def _inject_win7_compat_dll(runtime_dir: Path) -> None:
     if dest.is_file():
         _logger.debug("Win7 兼容 DLL 已就绪: %s", dest)
         return
-    src = Path(__file__).parent.parent.parent / "assets" / "runtime" / _WIN7_COMPAT_DLL_NAME_dispatch
+    src = resource_path("runtime", _WIN7_COMPAT_DLL_NAME_dispatch)
     if not src.is_file():
         _logger.warning("Win7 兼容 DLL 缺失: %s，跳过注入", src)
         return

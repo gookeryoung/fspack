@@ -25,8 +25,8 @@ from pathlib import Path
 import fspack
 
 PACKAGE_ROOT = Path(fspack.__file__).parent
-# 模板工程是被打包的示例载荷，不参与 fspack 自身的 import 图。
-_SKIP_DIRS = ("assets",)
+# 包内资源（模板工程/二进制）是被打包的示例载荷，不参与 fspack 自身的 import 图。
+_SKIP_DIRS = ("resources",)
 
 DISPLAY_MODULES = ("fspack.console", "fspack.progress")
 # 允许引用 console/progress 的 packaging 模块：全部是"阶段编排入口"或

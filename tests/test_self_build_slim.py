@@ -47,9 +47,9 @@ def _iter_imported_modules(path: Path) -> Iterator[str]:
 
 
 def _iter_fspack_sources() -> Iterator[Path]:
-    """遍历 fspack 运行期源码（排除 assets 下的用户项目模板）."""
+    """遍历 fspack 运行期源码（排除 resources 下的用户项目模板）."""
     for path in _SRC.rglob("*.py"):
-        if "assets" in path.relative_to(_SRC).parts:
+        if "resources" in path.relative_to(_SRC).parts:
             continue
         yield path
 

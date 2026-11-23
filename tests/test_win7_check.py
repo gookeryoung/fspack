@@ -13,11 +13,11 @@ from typing import Any
 
 import pytest
 
-import fspack
+# 内置 api-ms-win-core-path shim（随 fspack 分发，LGPL-2.1）
+from fspack.core.resources import resource_path
 from fspack.packaging.win7.check import PeParseError, check_win7_imports, main
 
-# 内置 api-ms-win-core-path shim（随 fspack 分发，LGPL-2.1）
-_ASSETS_SHIM = Path(fspack.__file__).parent / "assets" / "runtime" / "api-ms-win-core-path-l1-1-0.dll"
+_ASSETS_SHIM = resource_path("runtime", "api-ms-win-core-path-l1-1-0.dll")
 
 _FILE_ALIGN = 0x200
 _RDATA_RVA = 0x1000
