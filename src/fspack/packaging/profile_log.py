@@ -61,12 +61,12 @@ from pathlib import Path
 from statistics import median
 from typing import TYPE_CHECKING, Any
 
-from fspack.format import format_seconds
+from fspack.core.format import format_seconds
 
 if TYPE_CHECKING:
     # ProfileReport 仅用于类型注解（from __future__ import annotations 使
     # 注解不在运行时求值），顶部不导入 fspack.packaging.profile 避免连锁
-    # 触发 fspack.console/rich 加载。
+    # 触发 fspack.ui.console/rich 加载。
     from fspack.packaging.profile import ProfileReport
 
 __all__ = [
@@ -462,8 +462,8 @@ def print_profile_compare(
     from rich.table import Table
     from rich.text import Text
 
-    from fspack.console import console
-    from fspack.progress import fmt_bytes
+    from fspack.ui.console import console
+    from fspack.ui.progress import fmt_bytes
 
     if current.get("schema") != baseline.get("schema"):
         raise ValueError(
@@ -566,8 +566,8 @@ def print_profile_trend(
     from rich.table import Table
     from rich.text import Text
 
-    from fspack.console import console
-    from fspack.progress import fmt_bytes
+    from fspack.ui.console import console
+    from fspack.ui.progress import fmt_bytes
 
     matched = [(p, d) for p, d in history if _env_matches(current, d)]
     mismatched_rows = [(p, d) for p, d in history if not _env_matches(current, d)]
@@ -652,7 +652,7 @@ def _print_stage_deviation(
     from rich.table import Table
     from rich.text import Text
 
-    from fspack.console import console
+    from fspack.ui.console import console
 
     per_stage: dict[str, list[float]] = {}
     for _, data in stats_source:

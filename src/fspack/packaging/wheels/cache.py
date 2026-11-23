@@ -21,11 +21,11 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from fspack.fsutil import atomic_write_text
-from fspack.jsoncache import load_json_dict
+from fspack.core.fsutil import atomic_write_text
+from fspack.core.jsoncache import load_json_dict
 
 if TYPE_CHECKING:
-    from fspack.metrics import StageRecorder
+    from fspack.core.metrics import StageRecorder
 
 __all__ = [
     "_cleanup_partial_wheels",
@@ -83,7 +83,7 @@ def _load_deps_cache(cache_dir: Path, key: str) -> list[Path] | None:
     删除反而误伤可恢复的缓存。iter-128 引入。
 
     读取 → 解析 → 根 dict 校验 → 损坏删除的公共骨架委托
-    :func:`fspack.jsoncache.load_json_dict`；``wheels`` 字段类型校验与
+    :func:`fspack.core.jsoncache.load_json_dict`；``wheels`` 字段类型校验与
     wheel 文件存在性校验为本函数专属外壳，故保留在此。
     """
     cache_file = cache_dir / f".deps-{key}.json"

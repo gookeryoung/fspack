@@ -31,6 +31,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from fspack.core.resources import resource_path
+
 __all__ = [
     "ALL_SHIMS",
     "SHIM_SRC_DIR",
@@ -47,7 +49,7 @@ _logger = logging.getLogger(__name__)
 
 # shim C 源码与编译产物所在目录 —— 与 loader C 源码内联不同，shim 源码以 .c
 # 文件形式随仓库分发，编译输出也落在同一目录，方便 make shims 一键重建。
-_SHIM_DIR = Path(__file__).parent.parent.parent / "assets" / "runtime"
+_SHIM_DIR = resource_path("runtime")
 
 
 @dataclass(frozen=True)
@@ -264,7 +266,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     """CLI 入口：重建指定 / 全部 shim DLL."""
     parser = argparse.ArgumentParser(
         prog="python -m fspack.packaging.win7.shim_build",
-        description="编译 Win7 shim DLL（synch / bcryptprimitives）到 assets/runtime/",
+        description="编译 Win7 shim DLL（synch / bcryptprimitives）到 resources/runtime/",
     )
     parser.add_argument("--force", "-f", action="store_true", help="强制重建所有 shim（即使已存在）")
     parser.add_argument(

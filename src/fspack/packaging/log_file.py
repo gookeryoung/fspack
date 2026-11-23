@@ -31,8 +31,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from fspack import logutil
-from fspack._compat import override
+from fspack.core import logutil
+from fspack.core._compat import override
 
 __all__ = [
     "JsonFormatter",

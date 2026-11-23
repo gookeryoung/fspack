@@ -29,7 +29,6 @@ from pathlib import Path
 from typing import Any
 
 from fspack import __version__
-from fspack.console import console
 from fspack.doctor.models import TemplateBuildResult
 from fspack.packaging.profile_log import (
     DOCTOR_LOG_KIND,
@@ -37,6 +36,7 @@ from fspack.packaging.profile_log import (
     DOCTOR_PROFILE_LOG_SCHEMA,
     ProfileOptions,
 )
+from fspack.ui.console import console
 
 __all__ = [
     "_bench_profile_log_data",

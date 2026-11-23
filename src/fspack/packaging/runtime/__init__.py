@@ -20,7 +20,7 @@
 
 from __future__ import annotations
 
-from fspack.fsutil import sha256_file as _sha256_file
+from fspack.core.fsutil import sha256_file as _sha256_file
 from fspack.packaging.runtime.download import (
     EmbedRuntime,
     RuntimeDownloader,

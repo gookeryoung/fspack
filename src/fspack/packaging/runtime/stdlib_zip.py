@@ -37,10 +37,10 @@ import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from fspack.platform import Platform
+from fspack.core.platform import Platform
 
 if TYPE_CHECKING:
-    from fspack.metrics import StageRecorder
+    from fspack.core.metrics import StageRecorder
 
 __all__ = ["zip_stdlib"]
 

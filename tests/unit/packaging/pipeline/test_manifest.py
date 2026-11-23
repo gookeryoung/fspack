@@ -1,0 +1,761 @@
+"""manifest 产物清单生成与差异对比测试.
+
+覆盖 :mod:`fspack.packaging.manifest` 公共 API 与内部辅助函数：
+
+- :func:`collect_manifest`：扫描 dist 目录返回 manifest 字典（entries/summary）
+- :func:`generate_manifest`：生成 JSON 文件到 dist/release/<name>-<version>-manifest.json
+- :func:`load_manifest`：加载 manifest JSON + 版本兼容校验
+- :func:`diff_manifest`：新增/删除/修改三类差异检测
+- :func:`print_manifest_diff`：控制台格式化输出（无差异/有差异路径均覆盖）
+- 分类规则（runtime/site-packages/src/release/build/other）验证
+- manifest 自身被扫描时跳过（避免每次生成 sha256 变化）
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from dataclasses import asdict
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from fspack.config import AppType, BuildOptions, MirrorConfig, ProjectInfo
+from fspack.core.platform import Platform
+from fspack.packaging import manifest as _manifest_mod
+from fspack.packaging.manifest import (
+    ManifestDiff,
+    ManifestEntry,
+    _categorize,
+    _format_size,
+    _format_size_delta,
+    _sha256_file,
+    collect_manifest,
+    diff_manifest,
+    generate_manifest,
+    load_manifest,
+    print_manifest_diff,
+)
+from fspack.packaging.pipeline import executor
+
+
+def _make_info(tmp_path: Path, name: str = "app", version: str = "1.0") -> ProjectInfo:
+    """构造最小 ProjectInfo 用于 manifest 测试."""
+    return ProjectInfo(
+        name=name,
+        version=version,
+        src_dir=tmp_path,
+        entry_module=name,
+        entry_file=tmp_path / f"{name}.py",
+        app_type=AppType.CLI,
+        dependencies=(),
+        py_version="3.11.9",
+    )
+
+
+def _make_dist_tree(dist: Path) -> dict[str, bytes]:
+    """构造多分类 dist 目录，返回 {相对路径: 字节内容}.
+
+    覆盖所有分类：runtime / site-packages / src / release / build / other（根目录文件）
+    """
+    files: dict[str, bytes] = {
+        "runtime/python3.11.exe": b"fake-python-binary",
+        "runtime/Lib/site-packages/_distutils_hack/__init__.py": b"hack",
+        "site-packages/requests/__init__.py": b"import requests",
+        "site-packages/requests/api.py": b"def get():\n    pass",
+        "src/app/main.py": b"def main():\n    print('hi')",
+        "src/app/data/config.json": b'{"key": "val"}',
+        "release/README.txt": "发布说明".encode(),
+        "build/icon.ico": b"fake-ico-bytes",
+        "python311._pth": b".\\src\\n.\\site-packages",
+        "python.exe": b"stub-python",
+    }
+    for rel, content in files.items():
+        p = dist / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(content)
+    return files
+
+
+def test_collect_manifest_categories_and_summary(tmp_path: Path) -> None:
+    """collect_manifest 应正确分类各子目录并汇总总大小/文件数."""
+    dist = tmp_path / "dist"
+    info = _make_info(tmp_path)
+    files = _make_dist_tree(dist)
+
+    data = collect_manifest(dist, info)
+
+    assert data["manifestVersion"] == 1
+    assert data["project"] == {"name": "app", "version": "1.0", "py_version": "3.11.9"}
+    assert data["summary"]["total_files"] == len(files)
+    assert data["summary"]["total_size"] == sum(len(v) for v in files.values())
+
+    # entries 按 path 排序
+    paths = [e["path"] for e in data["entries"]]
+    assert paths == sorted(paths)
+
+    # 分类校验：按相对路径前缀分配正确分类
+    by_path = {e["path"]: e for e in data["entries"]}
+    assert by_path["runtime/python3.11.exe"]["category"] == "runtime"
+    assert by_path["site-packages/requests/__init__.py"]["category"] == "site-packages"
+    assert by_path["src/app/main.py"]["category"] == "src"
+    assert by_path["release/README.txt"]["category"] == "release"
+    assert by_path["build/icon.ico"]["category"] == "build"
+    assert by_path["python311._pth"]["category"] == "other"
+
+    # sha256 与大小值与原始内容一致
+    for rel, content in files.items():
+        e = by_path[rel]
+        assert e["size"] == len(content)
+        assert e["sha256"] == hashlib.sha256(content).hexdigest()
+
+    # category_count 汇总与实际分类一致
+    cc = data["summary"]["category_count"]
+    for e in data["entries"]:
+        cat = e["category"]
+        assert cc[cat]["files"] >= 1
+        assert cc[cat]["size"] >= e["size"]
+
+
+def test_generate_manifest_writes_json_and_skips_self(tmp_path: Path) -> None:
+    """generate_manifest 写 JSON 到 release/，且下次 collect 跳过自身."""
+    dist = tmp_path / "dist"
+    info = _make_info(tmp_path)
+    _make_dist_tree(dist)
+
+    out = generate_manifest(dist, info, Platform.WINDOWS)
+
+    assert out.is_file()
+    assert out.name == "app-1.0-py3.11.9-windows-manifest.json"
+    assert out.parent.name == "release"
+
+    raw = json.loads(out.read_text(encoding="utf-8"))
+    # 写入内容与 collect_manifest 返回一致（版本/条目结构）
+    assert raw["manifestVersion"] == 1
+    assert len(raw["entries"]) == 10
+
+    # 重新 collect（manifest 已存在）：manifest JSON 自身应被跳过，entries 数量不变
+    data2 = collect_manifest(dist, info)
+    # 10 个原始文件，不包含 manifest 自身
+    assert data2["summary"]["total_files"] == 10
+
+
+def test_collect_manifest_empty_dist_returns_no_entries(tmp_path: Path) -> None:
+    """空 dist 目录（无文件）应返回空 entries、total_files=0 不崩溃."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    info = _make_info(tmp_path)
+
+    data = collect_manifest(dist, info)
+
+    assert data["summary"]["total_files"] == 0
+    assert data["summary"]["total_size"] == 0
+    assert data["entries"] == []
+
+
+@pytest.mark.parametrize("marker", [".build_ok", ".build_failed"])
+def test_manifest_excludes_only_root_build_status(tmp_path: Path, marker: str) -> None:
+    dist = tmp_path / "dist"
+    info = _make_info(tmp_path)
+    _make_dist_tree(dist)
+    (dist / "src" / marker).write_bytes(b"user data")
+    (dist / f"{marker}.data").write_bytes(b"runtime data")
+    baseline = collect_manifest(dist, info)
+
+    status = dist / marker
+    status.write_bytes(b"old build status")
+    first = load_manifest(generate_manifest(dist, info))
+    status.write_bytes(b"new build status with timestamp")
+    second = load_manifest(generate_manifest(dist, info))
+    status.unlink()
+    final = collect_manifest(dist, info)
+
+    for data in (first, second, final):
+        assert data["entries"] == baseline["entries"]
+        assert data["summary"] == baseline["summary"]
+    paths = {e["path"] for e in final["entries"]}
+    assert f"src/{marker}" in paths
+    assert f"{marker}.data" in paths
+    assert marker not in paths
+
+
+def test_diff_manifest_added_removed_modified(tmp_path: Path) -> None:
+    """diff_manifest 三类差异均能正确检测."""
+    old_entries = [
+        ManifestEntry(path="a.txt", size=10, sha256="a" * 64, category="src"),
+        ManifestEntry(path="b.txt", size=20, sha256="b" * 64, category="src"),
+        ManifestEntry(path="c.txt", size=30, sha256="c" * 64, category="runtime"),
+    ]
+    new_entries = [
+        ManifestEntry(path="b.txt", size=20, sha256="b" * 64, category="src"),  # 未变化
+        ManifestEntry(path="c.txt", size=99, sha256="c" * 64, category="runtime"),  # 仅大小变
+        ManifestEntry(path="d.txt", size=5, sha256="d" * 64, category="release"),  # 新增
+    ]
+
+    old: dict[str, Any] = {"entries": [asdict(e) for e in old_entries]}
+    new: dict[str, Any] = {"entries": [asdict(e) for e in new_entries]}
+
+    diff = diff_manifest(old, new)
+
+    # added: d.txt
+    assert [e.path for e in diff.added] == ["d.txt"]
+    # removed: a.txt
+    assert [e.path for e in diff.removed] == ["a.txt"]
+    # modified: c.txt（大小变化）
+    assert [(o.path, n.path) for o, n in diff.modified] == [("c.txt", "c.txt")]
+    old_c, new_c = diff.modified[0]
+    assert old_c.size == 30
+    assert new_c.size == 99
+
+    # is_empty 属性
+    assert diff.is_empty is False
+    assert ManifestDiff(added=[], removed=[], modified=[]).is_empty is True
+
+
+def test_diff_manifest_sha256_change_only_is_modified(tmp_path: Path) -> None:
+    """内容变化（sha256 变但大小不变）也应判为 modified."""
+    old: dict[str, Any] = {
+        "entries": [
+            asdict(ManifestEntry(path="x.bin", size=4, sha256="0" * 64, category="other")),
+        ]
+    }
+    new: dict[str, Any] = {
+        "entries": [
+            asdict(ManifestEntry(path="x.bin", size=4, sha256="f" * 64, category="other")),
+        ]
+    }
+    diff = diff_manifest(old, new)
+    assert len(diff.modified) == 1
+    assert diff.added == []
+    assert diff.removed == []
+
+
+def test_load_manifest_rejects_incompatible_version(tmp_path: Path) -> None:
+    """load_manifest 对非法结构 / 不兼容版本应抛 ValueError."""
+    # 结构非法
+    bad = tmp_path / "bad.json"
+    bad.write_text("[]", encoding="utf-8")
+    with pytest.raises(ValueError, match="非法 manifest 结构"):
+        load_manifest(bad)
+
+    # 缺少 manifestVersion 键
+    no_ver = tmp_path / "no_ver.json"
+    no_ver.write_text(json.dumps({"entries": []}), encoding="utf-8")
+    with pytest.raises(ValueError, match="非法 manifest 结构"):
+        load_manifest(no_ver)
+
+    # 版本不兼容
+    wrong_ver = tmp_path / "wrong_ver.json"
+    wrong_ver.write_text(
+        json.dumps({"manifestVersion": 999, "entries": []}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="版本不兼容"):
+        load_manifest(wrong_ver)
+
+    # 正常版本可加载
+    ok = tmp_path / "ok.json"
+    ok.write_text(
+        json.dumps({"manifestVersion": 1, "entries": []}),
+        encoding="utf-8",
+    )
+    assert load_manifest(ok) == {"manifestVersion": 1, "entries": []}
+
+
+def test_categorize_rules(tmp_path: Path) -> None:
+    """_categorize 按前缀顺序匹配，未命中返回 other."""
+    assert _categorize("runtime/python.exe") == "runtime"
+    assert _categorize("runtime/sub/a.dll") == "runtime"
+    assert _categorize("site-packages/pkg/__init__.py") == "site-packages"
+    assert _categorize("src/app/main.py") == "src"
+    assert _categorize("release/sbom.json") == "release"
+    assert _categorize("build/stamp.txt") == "build"
+    # 无前缀：dist 根或未知子目录 → other
+    assert _categorize("python._pth") == "other"
+    assert _categorize("unknown/sub/x") == "other"
+
+
+def test_sha256_file_missing_returns_empty(tmp_path: Path) -> None:
+    """_sha256_file 读取不存在文件时返回空串（不抛异常）."""
+    missing = tmp_path / "nope.bin"
+    assert _sha256_file(missing) == ""
+
+
+def test_format_size_and_delta(tmp_path: Path) -> None:
+    """_format_size 按量级切换单位；_format_size_delta 带正负号."""
+    assert _format_size(0) == "0B"
+    assert _format_size(1023) == "1023B"
+    assert _format_size(1024).endswith("KB")
+    assert _format_size(1024 * 1024 * 5).endswith("MB")
+    assert _format_size_delta(1024).startswith("+")
+    assert _format_size_delta(-2048).startswith("-")
+    assert "+" not in _format_size_delta(0)
+
+
+def test_print_manifest_diff_both_paths(capsys: pytest.CaptureFixture[str]) -> None:
+    """print_manifest_diff 无差异/有差异路径均输出且不崩溃."""
+    # 无差异
+    diff_empty = ManifestDiff(added=[], removed=[], modified=[])
+    print_manifest_diff(diff_empty)
+    # 有差异
+    diff = ManifestDiff(
+        added=[ManifestEntry(path="n.py", size=8, sha256="a" * 64, category="src")],
+        removed=[ManifestEntry(path="o.py", size=4, sha256="b" * 64, category="src")],
+        modified=[
+            (
+                ManifestEntry(path="c.txt", size=100, sha256="c" * 64, category="runtime"),
+                ManifestEntry(path="c.txt", size=200, sha256="d" * 64, category="runtime"),
+            )
+        ],
+    )
+    print_manifest_diff(diff)
+    # 控制台输出通过 rich 输出到 stdout/stderr，关键字段均应被渲染
+    out = capsys.readouterr().out
+    # 注意：rich 可能输出 ANSI 码，按关键字匹配即可
+    assert "新增" in out or "n.py" in out or "差异概览" in out
+
+
+# ---- CLI 入口（``fsp manifest`` 子命令）：cli._run_generate / cli._run_diff ----
+
+
+def _make_cli_project(tmp_path: Path) -> Path:
+    """构造含 pyproject.toml 与 dist 产物的最小项目，供 CLI 入口测试."""
+    proj = tmp_path / "app"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n', encoding="utf-8")
+    (proj / "app.py").write_text("def main():\n    pass\n", encoding="utf-8")
+    dist = proj / "dist"
+    (dist / "runtime").mkdir(parents=True)
+    (dist / "runtime" / "python3.11.exe").write_bytes(b"fake-python")
+    return proj
+
+
+def _write_manifest_json(path: Path, files: dict[str, tuple[int, str]]) -> None:
+    """手写最小合法 manifest JSON（load_manifest 仅校验 manifestVersion/entries）."""
+    data = {
+        "manifestVersion": 1,
+        "summary": {"total_files": len(files), "total_size": sum(s for s, _ in files.values())},
+        "entries": [{"path": p, "size": s, "sha256": h, "category": "other"} for p, (s, h) in sorted(files.items())],
+    }
+    path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+
+def test_run_generate_creates_manifest_in_release(tmp_path: Path) -> None:
+    """_run_generate 默认输出到 dist/release/<name>-<version>-manifest.json."""
+    from argparse import Namespace
+
+    from fspack import cli
+
+    proj = _make_cli_project(tmp_path)
+    cli._run_generate(Namespace(project=str(proj), py_version="3.11.9", output=None, target="windows"))
+
+    out = proj / "dist" / "release" / "app-0.1-py3.11.9-windows-manifest.json"
+    assert out.is_file()
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert data["summary"]["total_files"] >= 1
+    assert any(e["path"].startswith("runtime/") for e in data["entries"])
+
+
+def test_run_generate_explicit_output(tmp_path: Path) -> None:
+    """_run_generate --output 显式路径写入指定文件."""
+    from argparse import Namespace
+
+    from fspack import cli
+
+    proj = _make_cli_project(tmp_path)
+    out = tmp_path / "custom-manifest.json"
+    cli._run_generate(Namespace(project=str(proj), py_version="3.11.9", output=str(out), target="windows"))
+    assert out.is_file()
+
+
+def test_run_generate_missing_dist_exits(tmp_path: Path) -> None:
+    """dist 目录不存在时 _run_generate 以退出码 2 终止."""
+    from argparse import Namespace
+
+    from fspack import cli
+
+    proj = tmp_path / "app"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n', encoding="utf-8")
+    ns = Namespace(project=str(proj), py_version=None, output=None, target=None)
+    with pytest.raises(SystemExit) as ei:
+        cli._run_generate(ns)
+    assert ei.value.code == 2
+
+
+def test_run_generate_invalid_project_exits(tmp_path: Path) -> None:
+    """项目缺 pyproject.toml 时 ProjectError 转退出码 2 终止."""
+    from argparse import Namespace
+
+    from fspack import cli
+
+    proj = tmp_path / "empty"
+    proj.mkdir()
+    (proj / "dist").mkdir()
+    ns = Namespace(project=str(proj), py_version=None, output=None, target=None)
+    with pytest.raises(SystemExit) as ei:
+        cli._run_generate(ns)
+    assert ei.value.code == 2
+
+
+def test_run_diff_prints_difference(tmp_path: Path) -> None:
+    """_run_diff 正常对比两份 manifest 并打印差异（新增/修改均出现）."""
+    from argparse import Namespace
+
+    from fspack import cli
+
+    old = tmp_path / "old.json"
+    new = tmp_path / "new.json"
+    _write_manifest_json(old, {"a.txt": (10, "1" * 64)})
+    _write_manifest_json(new, {"a.txt": (20, "2" * 64), "b.bin": (5, "3" * 64)})
+    # 输出经 rich console 渲染，重点验证对比流程不抛异常（差异内容渲染由 print_manifest_diff 测试覆盖）
+    cli._run_diff(Namespace(old=str(old), new=str(new), exit_code=False))
+
+
+def test_run_diff_missing_file_exits(tmp_path: Path) -> None:
+    """旧 manifest 文件不存在时 _run_diff 以退出码 2 终止."""
+    from argparse import Namespace
+
+    from fspack import cli
+
+    new = tmp_path / "new.json"
+    _write_manifest_json(new, {"a.txt": (10, "1" * 64)})
+    ns = Namespace(old=str(tmp_path / "nope.json"), new=str(new), exit_code=False)
+    with pytest.raises(SystemExit) as ei:
+        cli._run_diff(ns)
+    assert ei.value.code == 2
+
+
+def test_run_diff_invalid_manifest_exits(tmp_path: Path) -> None:
+    """manifest 结构非法（缺 manifestVersion 键）时 ValueError 转退出码 2 终止."""
+    from argparse import Namespace
+
+    from fspack import cli
+
+    old = tmp_path / "old.json"
+    new = tmp_path / "new.json"
+    old.write_text('{"entries": {}}', encoding="utf-8")
+    _write_manifest_json(new, {"a.txt": (10, "1" * 64)})
+    ns = Namespace(old=str(old), new=str(new), exit_code=False)
+    with pytest.raises(SystemExit) as ei:
+        cli._run_diff(ns)
+    assert ei.value.code == 2
+
+
+def test_run_diff_exit_code_flag_exits_nonzero(tmp_path: Path) -> None:
+    """--exit-code 且存在差异时 _run_diff 以退出码 1 终止."""
+    from argparse import Namespace
+
+    from fspack import cli
+
+    old = tmp_path / "old.json"
+    new = tmp_path / "new.json"
+    _write_manifest_json(old, {"a.txt": (10, "1" * 64)})
+    _write_manifest_json(new, {"a.txt": (20, "2" * 64)})
+    ns = Namespace(old=str(old), new=str(new), exit_code=True)
+    with pytest.raises(SystemExit) as ei:
+        cli._run_diff(ns)
+    assert ei.value.code == 1
+
+
+@pytest.fixture
+def report_pipeline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    import socket
+    import subprocess
+
+    from fspack.packaging.win7.scan import Win7ScanReport
+
+    def forbidden(*args: Any, **kwargs: Any) -> None:
+        pytest.fail("报告流水线测试禁止联网或启动外部进程")
+
+    monkeypatch.setattr(socket.socket, "connect", forbidden)
+    monkeypatch.setattr(socket.socket, "connect_ex", forbidden)
+    monkeypatch.setattr(socket, "getaddrinfo", forbidden)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+
+    dist = tmp_path / "dist"
+    files = {
+        "runtime/python311.dll": b"runtime",
+        "site-packages/pkg/native.pyd": b"old-imports",
+        "site-packages/pkg-1.0.dist-info/METADATA": b"Name: pkg\nVersion: 1.0\nLicense: MIT\n",
+        "site-packages/pkg-1.0.dist-info/RECORD": b"pkg/native.pyd,,11\n",
+        "src/app.py": b"print('hi')\n",
+        "app.exe": b"loader",
+    }
+    for rel, content in files.items():
+        path = dist / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+
+    monkeypatch.setattr(executor, "resolve_project_info", lambda *a: _make_info(tmp_path))
+    monkeypatch.setattr(executor, "_detect_frontends", lambda *a: [])
+    monkeypatch.setattr(executor, "_prepare_runtime", lambda *a: dist / "site-packages")
+    monkeypatch.setattr(executor, "_analyze_dependencies", lambda *a: None)
+    monkeypatch.setattr(executor, "_download_dependencies", lambda *a: False)
+    for name in (
+        "write_pth",
+        "copy_source",
+        "_compile_user_sources",
+        "_zip_stdlib",
+        "_slim_runtime",
+        "_resolve_project_icon",
+    ):
+        monkeypatch.setattr(executor, name, lambda *a, **kw: None)
+    monkeypatch.setattr(executor, "_build_entry_loaders", lambda *a: [dist / "app.exe"])
+    monkeypatch.setattr("fspack.packaging.win7.scan.enforce_win7_loaders", lambda *a, **kw: None)
+
+    def patch_binary(dist_dir: Path, **kwargs: object) -> tuple[tuple[str, tuple[str, ...]], ...]:
+        assert dist_dir == dist
+        binary = dist / "site-packages/pkg/native.pyd"
+        assert binary.read_bytes() == b"old-imports"
+        binary.write_bytes(b"new-imports")
+        return (("site-packages/pkg/native.pyd", ("old-imports→new-imports",)),)
+
+    def scan_binary(dist_dir: Path, **kwargs: object) -> Win7ScanReport:
+        assert dist_dir == dist
+        assert (dist / "site-packages/pkg/native.pyd").read_bytes() == b"new-imports"
+        return Win7ScanReport(scanned=3, dist_dir=dist)
+
+    def inject_shim(dist_dir: Path, *, needed: object = None) -> tuple[str, ...]:
+        assert dist_dir == dist
+        (dist / "runtime/bcryptprimitives.dll").write_bytes(b"injected shim")
+        return ("bcryptprimitives.dll",)
+
+    monkeypatch.setattr("fspack.packaging.win7.patch.patch_dist_win7", patch_binary)
+    monkeypatch.setattr("fspack.packaging.win7.scan.scan_dist_win7", scan_binary)
+    monkeypatch.setattr("fspack.packaging.win7.scan.inject_win7_shims", inject_shim)
+    return dist
+
+
+@pytest.mark.parametrize("no_sbom", [False, True])
+@pytest.mark.parametrize("previous_build", [False, True])
+def test_pipeline_manifest_records_final_win7_files(
+    report_pipeline: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mirror: MirrorConfig,
+    no_sbom: bool,
+    previous_build: bool,
+) -> None:
+    from threading import Barrier
+
+    from fspack.packaging import sbom
+
+    dist = report_pipeline
+    if previous_build:
+        (dist / ".build_ok").write_text("{}", encoding="utf-8")
+        (dist / ".build_failed").write_text('{"error": "previous failure"}', encoding="utf-8")
+    barrier = Barrier(2)
+    real_sbom = sbom.generate_sbom
+
+    def concurrent_manifest(dist_dir: Path, info: ProjectInfo, target: Platform | None = None) -> Path:
+        if not no_sbom:
+            barrier.wait(timeout=10)
+        return generate_manifest(dist_dir, info, target)
+
+    def concurrent_sbom(dist_dir: Path, info: ProjectInfo, target: Platform | None = None) -> Path:
+        barrier.wait(timeout=10)
+        return real_sbom(dist_dir, info, target)
+
+    monkeypatch.setattr("fspack.packaging.manifest.generate_manifest", concurrent_manifest)
+    monkeypatch.setattr(sbom, "generate_sbom", concurrent_sbom)
+    info = executor.build(
+        dist.parent,
+        mirror,
+        dist_dir=dist,
+        embed_cache=dist.parent / "cache",
+        target=Platform.WINDOWS,
+        options=BuildOptions(no_sbom=no_sbom, no_size_report=True),
+    )
+
+    data = load_manifest(dist / "release/app-1.0-py3.11.9-windows-manifest.json")
+    entries = {e["path"]: e for e in data["entries"]}
+    binary_hash = hashlib.sha256(b"new-imports").hexdigest()
+    assert entries["site-packages/pkg/native.pyd"]["sha256"] == binary_hash
+    assert entries["runtime/bcryptprimitives.dll"]["sha256"] == hashlib.sha256(b"injected shim").hexdigest()
+    assert "release/win7-compat-report.txt" in entries
+    assert (dist / ".build_ok").is_file()
+    assert not (dist / ".build_failed").exists()
+    excluded = {
+        ".build_ok",
+        ".build_failed",
+        "release/app-1.0-py3.11.9-windows-manifest.json",
+        "release/app-1.0-py3.11.9-windows-sbom.json",
+        # 哈希备忘录是构建缓存，按设计不进 manifest
+        "build/action-manifest-hashes.json",
+    }
+    disk_files = {p.relative_to(dist).as_posix(): p for p in dist.rglob("*") if p.is_file()}
+    expected_files = {rel: p for rel, p in disk_files.items() if rel not in excluded}
+    assert set(entries) == set(expected_files)
+    for rel, path in expected_files.items():
+        assert entries[rel]["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
+        assert entries[rel]["size"] == path.stat().st_size
+    assert data["summary"]["total_files"] == len(expected_files)
+    assert data["summary"]["total_size"] == sum(p.stat().st_size for p in expected_files.values())
+    recollected = collect_manifest(dist, info)
+    assert recollected["entries"] == data["entries"]
+    assert recollected["summary"] == data["summary"]
+    sbom_path = dist / "release/app-1.0-py3.11.9-windows-sbom.json"
+    if no_sbom:
+        assert not sbom_path.exists()
+    else:
+        sbom_data = json.loads(sbom_path.read_text(encoding="utf-8"))
+        expected_checksum = hashlib.sha256(f"pkg/native.pyd:{binary_hash}".encode()).hexdigest()
+        assert sbom_data["packages"][0]["checksums"] == [{"algorithm": "SHA256", "checksumValue": expected_checksum}]
+
+
+@pytest.mark.parametrize("failure_mode", [("sbom", False), ("manifest", False), ("sbom", True), ("manifest", True)])
+def test_pipeline_report_failure_remains_nonfatal(
+    report_pipeline: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mirror: MirrorConfig,
+    caplog: pytest.LogCaptureFixture,
+    failure_mode: tuple[str, bool],
+) -> None:
+    dist = report_pipeline
+    failed_report, parallel = failure_mode
+
+    def fail_report(dist_dir: Path, info: ProjectInfo, target: object = None) -> Path:
+        assert (dist_dir / "release/win7-compat-report.txt").is_file()
+        raise ValueError("report failure stub")
+
+    monkeypatch.setattr(f"fspack.packaging.{failed_report}.generate_{failed_report}", fail_report)
+    info = executor.build(
+        dist.parent,
+        mirror,
+        dist_dir=dist,
+        embed_cache=dist.parent / "cache",
+        target=Platform.WINDOWS,
+        options=BuildOptions(
+            no_sbom=not parallel and failed_report != "sbom",
+            no_manifest=not parallel and failed_report != "manifest",
+            no_size_report=True,
+        ),
+    )
+    assert info.name == "app"
+    assert "report failure stub" in caplog.text
+    assert (dist / ".build_ok").is_file()
+    assert not (dist / f"release/app-1.0-py3.11.9-windows-{failed_report}.json").exists()
+    if parallel:
+        successful_report = "manifest" if failed_report == "sbom" else "sbom"
+        assert (dist / f"release/app-1.0-py3.11.9-windows-{successful_report}.json").is_file()
+
+
+@pytest.mark.parametrize("no_sbom", [False, True])
+@pytest.mark.parametrize("no_manifest", [False, True])
+def test_pipeline_report_flags_without_win7_scan(
+    report_pipeline: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mirror: MirrorConfig,
+    no_sbom: bool,
+    no_manifest: bool,
+) -> None:
+    dist = report_pipeline
+
+    def disabled_stage(*args: Any, **kwargs: Any) -> None:
+        pytest.fail("已关闭的阶段不应执行")
+
+    for name in ("patch.patch_dist_win7", "scan.scan_dist_win7", "scan.inject_win7_shims", "scan.write_win7_report"):
+        monkeypatch.setattr(f"fspack.packaging.win7.{name}", disabled_stage)
+    if no_sbom:
+        monkeypatch.setattr("fspack.packaging.sbom.generate_sbom", disabled_stage)
+    if no_manifest:
+        monkeypatch.setattr("fspack.packaging.manifest.generate_manifest", disabled_stage)
+    executor.build(
+        dist.parent,
+        mirror,
+        dist_dir=dist,
+        embed_cache=dist.parent / "cache",
+        target=Platform.WINDOWS,
+        options=BuildOptions(no_sbom=no_sbom, no_manifest=no_manifest, no_win7_scan=True, no_size_report=True),
+    )
+    assert (dist / "release/app-1.0-py3.11.9-windows-sbom.json").is_file() is (not no_sbom)
+    manifest_path = dist / "release/app-1.0-py3.11.9-windows-manifest.json"
+    assert manifest_path.is_file() is (not no_manifest)
+    assert not (dist / "release/win7-compat-report.txt").exists()
+    assert not (dist / "runtime/bcryptprimitives.dll").exists()
+    assert (dist / "site-packages/pkg/native.pyd").read_bytes() == b"old-imports"
+    if not no_manifest:
+        entries = {e["path"]: e for e in load_manifest(manifest_path)["entries"]}
+        assert entries["site-packages/pkg/native.pyd"]["sha256"] == hashlib.sha256(b"old-imports").hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# M3：SHA256 备忘录复用（dist/build/action-manifest-hashes.json）
+# ---------------------------------------------------------------------------
+
+
+def test_manifest_hash_memo_reuses_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """二次收集时未变化文件不再读盘计算 SHA256（备忘录命中）."""
+    dist = tmp_path / "dist"
+    info = _make_info(tmp_path)
+    _make_dist_tree(dist)
+    first = collect_manifest(dist, info)
+    assert (dist / "build" / "action-manifest-hashes.json").is_file()
+
+    def boom(_path: Path) -> str:
+        raise AssertionError("未变化文件不应重算 SHA256")
+
+    monkeypatch.setattr("fspack.packaging.manifest._sha256_file", boom)
+    second = collect_manifest(dist, info)
+    assert second["entries"] == first["entries"]
+    assert second["summary"] == first["summary"]
+
+
+def test_manifest_hash_memo_recomputes_changed(tmp_path: Path) -> None:
+    """size/mtime 变化的文件重新计算哈希（备忘录按键失配重算）."""
+    dist = tmp_path / "dist"
+    info = _make_info(tmp_path)
+    _make_dist_tree(dist)
+    collect_manifest(dist, info)
+    target = dist / "src" / "app" / "main.py"
+    target.write_bytes(b"def main():\n    return 2  # changed\n")
+    data = collect_manifest(dist, info)
+    entry = next(e for e in data["entries"] if e["path"] == "src/app/main.py")
+    assert entry["sha256"] == hashlib.sha256(target.read_bytes()).hexdigest()
+    assert entry["size"] == len(target.read_bytes())
+
+
+def test_manifest_hash_memo_matches_full_recompute(tmp_path: Path) -> None:
+    """缓存口径与全量重算结果逐条一致（审计可交叉验证）."""
+    dist = tmp_path / "dist"
+    info = _make_info(tmp_path)
+    _make_dist_tree(dist)
+    collect_manifest(dist, info)
+    (dist / "src" / "app" / "main.py").write_bytes(b"changed-content")
+    (dist / "src" / "app" / "new.py").write_bytes(b"new file")
+    reused = collect_manifest(dist, info)
+    full = collect_manifest(dist, info, reuse_hashes=False)
+    assert reused["entries"] == full["entries"]
+    assert reused["summary"] == full["summary"]
+
+
+def test_manifest_hash_memo_corrupt_falls_back(tmp_path: Path) -> None:
+    """备忘录损坏时退化为全量重算，结果仍正确."""
+    dist = tmp_path / "dist"
+    info = _make_info(tmp_path)
+    _make_dist_tree(dist)
+    baseline = collect_manifest(dist, info, reuse_hashes=False)
+    (dist / "build" / "action-manifest-hashes.json").write_text("{bad", encoding="utf-8")
+    data = collect_manifest(dist, info)
+    assert data["entries"] == baseline["entries"]
+    assert (dist / "build" / "action-manifest-hashes.json").is_file()
+
+
+def test_manifest_hash_memo_disabled_hashes_everything(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """reuse_hashes=False 时逐个重算（开关用于审计/测试对比）."""
+    dist = tmp_path / "dist"
+    info = _make_info(tmp_path)
+    _make_dist_tree(dist)
+    calls: list[Path] = []
+    real = _manifest_mod._sha256_file
+
+    def spy(path: Path) -> str:
+        calls.append(path)
+        return real(path)
+
+    monkeypatch.setattr("fspack.packaging.manifest._sha256_file", spy)
+    collect_manifest(dist, info, reuse_hashes=False)
+    expected = sum(1 for p in dist.rglob("*") if p.is_file() and not p.is_symlink())
+    assert len(calls) == expected
+    assert not (dist / "build" / "action-manifest-hashes.json").exists()

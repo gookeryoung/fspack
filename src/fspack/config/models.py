@@ -20,8 +20,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-from fspack.exceptions import ProjectError
-from fspack.platform import Platform
+from fspack.core.exceptions import ProjectError
+from fspack.core.platform import Platform
 
 __all__ = [
     "DEFAULT_MIRROR",

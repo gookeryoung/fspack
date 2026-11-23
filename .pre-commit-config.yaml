@@ -16,7 +16,7 @@ repos:
       - id: check-merge-conflict
       - id: debug-statements
         # 模板占位文件（$entry_module）非合法 Python，跳过 ast 解析
-        exclude: ^src/fspack/assets/
+        exclude: ^src/fspack/resources/
       - id: fix-byte-order-marker
       - id: trailing-whitespace
         args: [--markdown-linebreak-ext=md]

@@ -1,7 +1,7 @@
-"""C loader 源码资源：从 ``assets/loader/*.c`` 读取并注入平台常量.
+"""C loader 源码资源：从 ``resources/loader/*.c`` 读取并注入平台常量.
 
 从 :mod:`fspack.packaging.loader` 拆分而来，C 源码本体存放在
-``src/fspack/assets/loader/`` 下（``loader_windows.c``/``loader_linux.c``/
+``src/fspack/resources/loader/`` 下（``loader_windows.c``/``loader_linux.c``/
 ``loader_macos.c``/``splash_windows.c``），构建期按需读取，避免在 Python 模块
 中内嵌大段 C 文本。平台特定常量以 ``{python_dll}``/``{libpython}`` 占位符
 保留在 C 源码中，由 :mod:`fspack.packaging.loader.compile` 的
@@ -20,9 +20,9 @@ Windows 模板含三个 ``FSPACK:SPLASH*`` 标记，由 :func:`apply_splash` 注
 from __future__ import annotations
 
 import functools
-from pathlib import Path
 
-from fspack.exceptions import LoaderError
+from fspack.core.exceptions import LoaderError
+from fspack.core.resources import resource_path
 
 __all__ = [
     "apply_splash",
@@ -32,22 +32,21 @@ __all__ = [
     "splash_windows_source",
 ]
 
-# source.py 位于 src/fspack/packaging/loader/，assets 在其三级父目录 fspack/ 下
-_LOADER_ASSET_DIR = Path(__file__).resolve().parent.parent.parent / "assets" / "loader"
+_LOADER_ASSET_DIR = resource_path("loader")
 
 
 @functools.lru_cache(maxsize=None)
 def _loader_asset(name: str) -> str:
-    """读取 ``assets/loader/<name>`` 的 C 源码（构建期按需加载并缓存）.
+    """读取 ``resources/loader/<name>`` 的 C 源码（构建期按需加载并缓存）.
 
     Raises:
-        LoaderError: 资源文件缺失（wheel 打包清单未包含 assets/loader 时）。
+        LoaderError: 资源文件缺失（wheel 打包清单未包含 resources/loader 时）。
     """
     path = _LOADER_ASSET_DIR / name
     try:
         return path.read_text(encoding="utf-8")
     except OSError as e:
-        raise LoaderError(f"loader C 源码资源缺失: {path}（请检查打包清单是否包含 assets/loader）") from e
+        raise LoaderError(f"loader C 源码资源缺失: {path}（请检查打包清单是否包含 resources/loader）") from e
 
 
 def loader_windows_source() -> str:

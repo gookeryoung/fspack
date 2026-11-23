@@ -22,14 +22,14 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from fspack.fsutil import atomic_write_text
-from fspack.platform import Platform
+from fspack.core.fsutil import atomic_write_text
+from fspack.core.platform import Platform
 
 from .source_strip import _strip_compiled_py
 from .stamp import _pyc_stamp_key, _pyc_stamp_path
 
 if TYPE_CHECKING:
-    from fspack.metrics import StageRecorder
+    from fspack.core.metrics import StageRecorder
 
 _logger = logging.getLogger(__name__)
 

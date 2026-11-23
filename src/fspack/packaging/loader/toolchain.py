@@ -168,7 +168,7 @@ def _forward_tool_output(stdout: str | None, stderr: str | None) -> None:
     """把 windres 原始输出转发到 DEBUG（``[loader]`` 前缀，默认不显示）."""
     if not stdout and not stderr:
         return
-    from fspack.console import console
+    from fspack.ui.console import console
 
     for text in (stdout, stderr):
         if text:

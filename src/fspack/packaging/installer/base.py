@@ -28,12 +28,12 @@ from pathlib import Path
 from typing import TypeVar
 
 from fspack.config import ProjectInfo
-from fspack.console import console
-from fspack.exceptions import InstallerError
+from fspack.core.exceptions import InstallerError
+from fspack.core.platform import Platform
 from fspack.packaging.installer.dist_prep import _prepare_dist
 from fspack.packaging.installer.request import ReleaseRequest
-from fspack.platform import Platform
-from fspack.progress import BuildTracker, spinner
+from fspack.ui.console import console
+from fspack.ui.progress import BuildTracker, spinner
 
 __all__ = ["Installer", "_run_stage", "_run_tool"]
 

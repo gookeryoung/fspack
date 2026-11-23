@@ -11,9 +11,11 @@ from concurrent.futures import ThreadPoolExecutor as _DefaultThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from fspack import logutil
 from fspack.config import AppType, EntryPoint, nuitka_cache_dir
-from fspack.metrics import StageRecorder
+from fspack.core import logutil
+from fspack.core.metrics import StageRecorder
+from fspack.core.platform import Platform
+from fspack.core.platform import detect_platform as _default_detect_platform
 from fspack.packaging.entry import EntryWrapper
 from fspack.packaging.icon import ensure_ico, find_favicon
 from fspack.packaging.loader import (
@@ -25,13 +27,11 @@ from fspack.packaging.loader import (
 )
 from fspack.packaging.loader.cache_keys import _effective_app_type
 from fspack.packaging.pyc import _precompile_pyc
-from fspack.platform import Platform
-from fspack.platform import detect_platform as _default_detect_platform
 
 from .context import _DEFAULT_ICON, _MAX_LOADER_WORKERS, BuildContext
 
 if TYPE_CHECKING:
-    from fspack.metrics import StageRecord
+    from fspack.core.metrics import StageRecord
 
 __all__ = [
     "_analyze_binary_dependencies",

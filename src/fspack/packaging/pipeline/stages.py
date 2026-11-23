@@ -22,6 +22,7 @@ from __future__ import annotations
 # ---------------------------------------------------------------------------
 from concurrent.futures import ThreadPoolExecutor
 
+from fspack.core.platform import detect_platform
 from fspack.packaging.builtin import TkinterBundler
 from fspack.packaging.loader import compile_loader
 from fspack.packaging.pipeline.compile_stage import (
@@ -69,7 +70,6 @@ from fspack.packaging.runtime import (
 )
 from fspack.packaging.site_packages import normalize_pkg_name as _normalize_pkg_name
 from fspack.packaging.wheels import download_wheels
-from fspack.platform import detect_platform
 
 __all__ = [
     "_DEFAULT_ICON",

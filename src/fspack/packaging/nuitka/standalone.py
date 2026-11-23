@@ -34,10 +34,10 @@ from typing import TYPE_CHECKING
 
 from fspack.config import KNOWN_STANDALONE_VERSIONS
 from fspack.config.versions import _split_t_suffix
-from fspack.exceptions import EmbedError, NuitkaError
-from fspack.metrics import StageRecorder
+from fspack.core.exceptions import EmbedError, NuitkaError
+from fspack.core.metrics import StageRecorder
+from fspack.core.platform import Platform
 from fspack.packaging.runtime.extract import extract_tar_safe
-from fspack.platform import Platform
 
 if TYPE_CHECKING:
     from fspack.packaging.nuitka.protocol import NuitkaCompilerProtocol

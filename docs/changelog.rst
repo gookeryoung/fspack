@@ -7,8 +7,9 @@
 未发布
 ------
 
+- refactor(layout): 项目结构 P0–P5 落地——CLI 拆包、资源统一到 ``resources/``、叶子原语进 ``core/``、展示层进 ``ui/``、运行/profile 进 ``runner/``、init 建项进 ``templates/init.py``、测试按源码域镜像、工具配置并入 ``pyproject.toml``；旧路径保留一个 minor 的兼容垫片，新增 ``tests/unit/core/test_layout.py`` 的 core 叶子层守卫
 - feat(dist): 新增 ``[tool.fspack] python-versions`` 多版本打包——配置多个 Python 版本时 ``fsp b``/``fsp p`` 逐版本构建与打包，各版本产物落在 ``dist/py<完整版本>/``（发行包在各自 ``release/``，文件名含 ``py<版本>``），互不覆盖；不配置或仅一个版本时行为不变，``--py-version`` 显式优先
-- feat(ui): 体积报告在 ``pygments`` 进入 Top N 时提示其仅语法高亮/富 traceback/``rich.markdown`` 需要，未使用时可在 ``[tool.fspack].slim-exclude`` 中剥离（附 ``docs/configuration.md`` 示例）
+- feat(ui): 体积报告在 ``pygments`` 进入 Top N 时提示其仅语法高亮/富 traceback/``rich.markdown`` 需要，未使用时可在 ``[tool.fspack].slim-exclude`` 中剥离（附 ``docs/user/configuration.md`` 示例）
 - perf(dist): fspack 自打包 ``slim-exclude`` 排除 rich 从未使用的可选依赖 ``pygments``/``markdown-it-py``/``mdurl``（约 4.5MB，占自身产物 site-packages 六成以上）；新增 ``tests/test_self_build_slim.py`` 护栏锁定「运行期不导入被剥离依赖 + 整包剥离生效」
 - feat(ui): 基于 rich 美化终端输出——构建/``fsp init`` 收尾改为圆角摘要面板（产物/输出目录/体积/耗时/下一步），``fsp doctor`` 汇总结论改为红/绿结论面板（``--quiet`` 下仍强制输出阻塞性错误），体积报告新增占比条形图与精简提示，表格统一标题/表头/边框样式，领域错误改为红框面板并附排查建议，失败阶段补「加 -v 查看完整命令」提示，``-v`` 下 WARN/ERROR 级别标签反色高亮；非 TTY（CI/重定向）自动退化为可 grep 的纯文本行
 - feat(test): 新增 ``tests/test_loader_perf_baseline.py``——普通门禁用假工具链守护 1/5/20 入口 C 对象只编译 1 次、资源/链接按入口增长、热构建零工具调用、工具链身份热查询探测/``which``/``stat`` 有界；``slow + e2e`` 用真实 MinGW 建立 ``loader_build`` 冷/热基线并校验热构建显著快于冷构建
@@ -23,7 +24,7 @@ v0.6.14
 - ci(e2e): macOS 原生真实构建 job ``e2e-macos`` 扩为双格矩阵（``macos-latest``/arm64 与 ``macos-15-intel``/x86_64）——真实构建、校验 Mach-O 机器类型并运行产物；架构期望由宿主推导，不写死 arm64
 - fix(macos): 架构探测不再在非 macOS 宿主静默回退 ``x86_64``，非 macOS 宿主或未知架构显式报错，避免产物名与 Mach-O 实际架构不符
 - refactor(naming): **产物命名加架构段（破坏性）**——发行包基名改为 ``<name>-<ver>-py<ver>-<platform>-<arch>-slim``；manifest/SBOM 改为 ``<name>-<ver>-py<ver>-<platform>-{manifest,sbom}.json``；``.deb`` 的 ``Architecture`` 由 Linux 目标架构推导（x86_64→amd64、arm64→arm64），不再写死 amd64
-- refactor(naming): 不保留旧名兼容开关；下游脚本改用通配匹配，迁移对照与 release 说明见 ``docs/distribution.md`` 的「产物命名与迁移」
+- refactor(naming): 不保留旧名兼容开关；下游脚本改用通配匹配，迁移对照与 release 说明见 ``docs/user/distribution.md`` 的「产物命名与迁移」
 - test(templates): 新增模板一致性护栏——以人工维护的契约期望表为独立 oracle，校验 init/doctor 模板 id 集合、分类、``app_type``、依赖与 ``requires-python``，模板增删必须显式更新期望
 - test(templates): 新增 ``tests/_projects.py`` fixture 工厂（``write_project`` / ``doctor_template_dir`` / ``copy_doctor_project``），迁移 5 个测试文件的重复工程构造
 - refactor(templates): 统一 18 个 init 模板的 ``requires-python`` 为 ``>=3.8``（依据根 ``pyproject.toml``、CI 矩阵 3.8–3.14、运行时 embed/standalone 支持范围；PySide2 保留 ``>=3.8,<3.10`` 例外），``Template`` 默认约束改为 ``>=3.8``，``cli_init`` 基线改为引用 ``DEFAULT_REQUIRES_PYTHON``
@@ -31,7 +32,7 @@ v0.6.14
 - refactor(templates): 退役 ``ProjectTemplate`` 兼容 shim（删除 95 行），doctor 模板统一经 ``list_templates(role="doctor")`` / ``get_template(id, role)`` 加载；``test_template_loader`` 改写为注册表 doctor 加载路径测试并补充缓存隔离
 - fix(templates): 修复 init ``game/snake`` 的 ``<3.12`` 上界与 doctor ``game/pygame_snake``（``>=3.13``）对同一示例给出互斥约束
 - fix(test): 修复 ``test_init_smoke`` 注释仍写「24 个模板」、断言仅要求 ``>= 18`` 导致模板误删无法发现
-- docs: 说明已有生成项目不受影响——``fsp init`` 不改写既有 ``pyproject.toml``，新口径仅作用于之后生成的项目；``docs/cli.md`` 补充默认值与 PySide2 例外；新增模板与测试示例工程整合分析文档
+- docs: 说明已有生成项目不受影响——``fsp init`` 不改写既有 ``pyproject.toml``，新口径仅作用于之后生成的项目；``docs/user/cli.md`` 补充默认值与 PySide2 例外；新增模板与测试示例工程整合分析文档
 - docs: 平台支持矩阵校正——Linux/macOS 运行时仅 3.10–3.14、3.8/3.9 仅 Windows embed、macOS 尚无 CI 真实构建；补充「一次构建只产出一个目标、无 ``--arch``、共用 ``dist/``」说明；新增多目标打包分析文档
 
 v0.6.13
@@ -487,7 +488,7 @@ v0.3.10
 - refactor: 抽离 CI 兼容逻辑到 ``_compat`` 模块，移除始终失效的 ``inject_mingw_runtime_dlls`` 函数
 - ci: CI 三 job 增强（Windows 矩阵 + slow-e2e cron + benchmark 门禁），actions 升级 v5/v6 消除 Node.js 20 警告，benchmark 退化门禁改为监控模式
 - test: 补充 dep_analyzer 单元测试至 74 个、Linux 平台离线集成测试与 py313 pygame conway CI 测试
-- docs: README 重构为使用导向并添加 doctor 命令说明，技术细节移到 ``docs/architecture.rst``
+- docs: README 重构为使用导向并添加 doctor 命令说明，技术细节移到 ``docs/dev/architecture.rst``
 - chore: 删除废弃的 pyqt5_cli_pyall 模板与 GitHub Actions 工作流模板，简化 PyQt/PySide 模板配置
 
 v0.3.9

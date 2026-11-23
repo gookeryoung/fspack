@@ -23,7 +23,7 @@ facade 子包：编排 :mod:`fspack.doctor.envs`（环境信息检查）、
 - 工具检查用 ``subprocess.run([tool, "--version"], ...)``
   + ``shell=False``，超时 5s，失败返回 :class:`CheckResult` 标记缺失
 - 缓存目录大小扫描用 ``os.scandir`` 递归累加文件大小，避免引入额外依赖
-- 报告渲染用 :class:`rich.table.Table`，复用 :data:`fspack.console.console`
+- 报告渲染用 :class:`rich.table.Table`，复用 :data:`fspack.ui.console.console`
 - 所有 check 函数返回 :class:`CheckResult`，主入口 :func:`run_doctor`
   聚合为 :class:`DoctorReport`，便于测试断言
 

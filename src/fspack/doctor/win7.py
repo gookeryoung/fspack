@@ -19,8 +19,8 @@ from pathlib import Path
 
 from fspack.config import KNOWN_EMBED_VERSIONS
 from fspack.config.cache import win7_dll_cache_dir
+from fspack.core.fsutil import sha256_file
 from fspack.doctor.models import CheckResult, CheckStatus
-from fspack.fsutil import sha256_file
 from fspack.packaging.win7.dll import WIN7_EMBED_SHA256, WIN7_SHIM_DLL_PATH, win7_zip_cache_name
 
 __all__ = ["_check_win7_compat"]

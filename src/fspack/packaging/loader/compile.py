@@ -9,9 +9,10 @@ import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from fspack._compat import override
 from fspack.config import AppType
-from fspack.exceptions import LoaderError
+from fspack.core._compat import override
+from fspack.core.exceptions import LoaderError
+from fspack.core.platform import Platform
 from fspack.packaging.loader.cache import cache_lock, cached_copy, publish_cache
 from fspack.packaging.loader.cache_keys import (
     _effective_app_type,
@@ -38,12 +39,11 @@ from fspack.packaging.loader.toolchain import (
     _find_windres,
     toolchain_fingerprint,
 )
-from fspack.platform import Platform
 
 if TYPE_CHECKING:
-    # StageRecorder 仅用于类型注解；顶部不导入 fspack.progress 避免连锁触发
+    # StageRecorder 仅用于类型注解；顶部不导入 fspack.ui.progress 避免连锁触发
     # rich.progress 加载（``import fspack.builder`` 热路径不编译 loader）。
-    from fspack.metrics import StageRecorder
+    from fspack.core.metrics import StageRecorder
 
 __all__ = [
     "LinuxLoader",
@@ -264,7 +264,7 @@ class LoaderCompiler(abc.ABC):
                     stage.set_detail("缓存命中")
                 return out_exe
 
-            from fspack.progress import spinner
+            from fspack.ui.progress import spinner
 
             work_dir.mkdir(parents=True, exist_ok=True)
             with spinner(f"编译 loader ({cls.compiler_name})"):
@@ -292,7 +292,7 @@ def _forward_tool_output(completed: subprocess.CompletedProcess[str]) -> None:
     """
     if not completed.stdout and not completed.stderr:
         return
-    from fspack.console import console
+    from fspack.ui.console import console
 
     for text in (completed.stdout, completed.stderr):
         if text:

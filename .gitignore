@@ -39,3 +39,8 @@ coverage.xml
 
 # Sphinx 文档构建输出
 docs/_build/
+
+# 本地测试/工具缓存
+.pytest_cache/
+.benchmarks/
+.screenshots/

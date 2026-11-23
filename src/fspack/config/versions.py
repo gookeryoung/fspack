@@ -4,7 +4,7 @@
 Nuitka 版本锁定，以及 PEP 440 ``requires-python`` 规范符解析与匹配。
 ``config.py`` 通过 re-export 保持公开 API 不变。
 
-依赖 :mod:`fspack.platform` 与 :mod:`fspack.exceptions`，独立于
+依赖 :mod:`fspack.core.platform` 与 :mod:`fspack.core.exceptions`，独立于
 :mod:`fspack.config.models` / :mod:`fspack.config.parsing`。
 """
 
@@ -17,8 +17,8 @@ import re
 from collections.abc import Callable
 from pathlib import Path
 
-from fspack.exceptions import ProjectError
-from fspack.platform import Platform
+from fspack.core.exceptions import ProjectError
+from fspack.core.platform import Platform
 
 __all__ = [
     "DEFAULT_LINUX_PY_VERSION",

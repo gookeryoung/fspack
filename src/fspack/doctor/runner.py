@@ -57,7 +57,7 @@ def run_doctor() -> DoctorReport:
 
     from fspack.config import DEFAULT_MIRROR, MIRRORS
     from fspack.config.cache import cache_root
-    from fspack.platform import Platform, detect_platform
+    from fspack.core.platform import Platform, detect_platform
 
     platform = detect_platform()
     # 快速检查串行：纯内存/配置读取，无 I/O 等待
@@ -110,7 +110,7 @@ def run_doctor_cache_check() -> CheckResult:
     （未被任何 deps 引用）计数，并提示用户用 ``fsp cache clean`` 清理。
     """
     from fspack.config.cache import wheel_cache_dir
-    from fspack.console import console
+    from fspack.ui.console import console
 
     result = _check_cache_integrity(wheel_cache_dir())
     console.step("缓存完整性检查")

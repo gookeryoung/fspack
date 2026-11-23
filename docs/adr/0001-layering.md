@@ -2,7 +2,7 @@
 
 - 状态：已接受（2026-11-12，M4 落地）
 - 相关提交：M4「层间解耦」（config→analyzer 反向依赖，slim→packaging 反向依赖）
-- 相关守卫：`tests/test_layout.py`（AST 扫描，CI 与本地 `make test` 均会跑）
+- 相关守卫：`tests/unit/core/test_layout.py`（AST 扫描，CI 与本地 `make test` 均会跑）
 
 ## 背景
 
@@ -29,31 +29,35 @@ cli / builder / wizard / doctor
         ↓
  runtime / wheels / loader / pyc / win7 / installer / nuitka / slim
         ↓
- analyzer / config / progress(展示) / metrics(数据) / astutil / archive / jsoncache
+ analyzer / config
         ↓
-        exceptions / _compat / platform / console(仅展示)
+ core（叶子：exceptions/_compat/platform/fsutil/astutil/archive/jsoncache/metrics/...）
+ ui（仅展示：console/progress/wizard）
 ```
 
 - 下层不得 import 上层：`config` 不依赖 `analyzer`；`analyzer`、`slim` 不依赖
   `packaging`。
 - `packaging` 内部只有**编排入口**（pipeline 各 stage、installer 各平台实现、
   `profile*`、`size_report`、`manifest` 打印、`net` 下载进度、`wheels.process`
-  的 spinner）可以引用 `fspack.console` / `fspack.progress`；纯逻辑模块
+  的 spinner）可以引用 `fspack.ui.console` / `fspack.ui.progress`；纯逻辑模块
   （解包、解析、运行时准备）不得引用，避免 `fspack --help` 连锁加载 `rich`。
-- 允许清单登记在 `tests/test_layout.py` 的 `ALLOWED_DISPLAY_IMPORTERS`，双向
+- 允许清单登记在 `tests/unit/core/test_layout.py` 的 `ALLOWED_DISPLAY_IMPORTERS`，双向
   校验：新增违规失败；清理后忘记删条目也失败（防"僵尸豁免"）。
 
 ### 2. 叶子模块
 
-拆出三个无内部依赖（或仅依赖 `fspack.exceptions`）的叶子模块，供多层复用：
+拆出三个无内部依赖（或仅依赖 `fspack.core.exceptions`）的叶子模块，供多层复用：
 
 | 模块 | 职责 | 替换掉的旧路径 |
 | --- | --- | --- |
-| `fspack/astutil.py` | `collect_imports`：单棵 AST 的导入收集 | `config` → `analyzer.ast_scan` 的反向依赖 |
-| `fspack/archive.py` | `validate_zip_member`：zip 条目越界校验 | `slim` → `runtime`/`packaging` 的调用 |
-| `fspack/metrics.py` | `StageRecord` / `StageRecorder`：阶段指标数据 | `progress` 里的数据结构部分 |
+| `fspack/core/astutil.py` | `collect_imports`：单棵 AST 的导入收集 | `config` → `analyzer.ast_scan` 的反向依赖 |
+| `fspack/core/archive.py` | `validate_zip_member`：zip 条目越界校验 | `slim` → `runtime`/`packaging` 的调用 |
+| `fspack/core/metrics.py` | `StageRecord` / `StageRecorder`：阶段指标数据 | `progress` 里的数据结构部分 |
 
-`jsoncache.py`（JSON 缓存读取骨架）同样按叶子模块对待：只依赖标准库。
+`fspack/core/jsoncache.py`（JSON 缓存读取骨架）同样按叶子模块对待：只依赖标准库。
+
+> 注：ADR-0002 已把上述叶子模块与展示层分别迁入 `core/`、`ui/`；旧路径
+> 在过渡期保留 `sys.modules` 兼容垫片。
 
 ### 3. 包门面（facade）的例外
 
@@ -65,7 +69,7 @@ cli / builder / wizard / doctor
 
 - `import fspack.config`、`fspack.analyzer` 不再加载 `rich`；实测 8 个环境
   模块的 import 从 257 个模块 / ~130ms 降到 195 个 / ~107ms。
-- 新增跨层引用会在 `tests/test_layout.py` 立即失败，并在报错信息里直接给出
+- 新增跨层引用会在 `tests/unit/core/test_layout.py` 立即失败，并在报错信息里直接给出
   ADR 与允许清单，减少"改一行 import 让启动变慢"的隐性回退。
 - 代价：需要同时维护 `ALLOWED_DISPLAY_IMPORTERS`；纯逻辑模块若确实要用进度
   显示，必须把展示逻辑上移到编排入口（显式参数或回调），这是有意的约束。

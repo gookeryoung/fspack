@@ -29,7 +29,8 @@ from fspack.config import (
     SlimRules,
     cache_root,
 )
-from fspack.fsutil import atomic_write_text
+from fspack.core.fsutil import atomic_write_text
+from fspack.core.platform import Platform, wheel_platform_tags
 from fspack.packaging.builtin import TkinterBundler as _DefaultTkinterBundler
 from fspack.packaging.lockfile import (
     LOCK_FILE_NAME,
@@ -39,12 +40,11 @@ from fspack.packaging.lockfile import (
     write_requirements_lock,
 )
 from fspack.packaging.wheels import download_wheels as _default_download_wheels
-from fspack.platform import Platform, wheel_platform_tags
 
 from .context import BuildContext, fspack_wheel_cache_dir
 
 if TYPE_CHECKING:
-    from fspack.metrics import StageRecorder
+    from fspack.core.metrics import StageRecorder
 
 __all__ = [
     "_analyze_dependencies",

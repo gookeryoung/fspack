@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fspack._compat import override
+from fspack.core._compat import override
 from fspack.slim.base import SlimSpec, normalize_name
 from fspack.slim.qt_closure import (
     _QT_ABI_DLL_DEPS,

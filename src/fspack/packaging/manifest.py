@@ -41,12 +41,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from fspack import logutil
-from fspack._compat import UTC
 from fspack.config import ProjectInfo
-from fspack.fsutil import atomic_write_text, scandir_tree, sha256_file
+from fspack.core import logutil
+from fspack.core._compat import UTC
+from fspack.core.fsutil import atomic_write_text, scandir_tree, sha256_file
+from fspack.core.platform import Platform, detect_platform
 from fspack.packaging import action_cache
-from fspack.platform import Platform, detect_platform
 
 __all__ = [
     "ManifestDiff",
@@ -296,7 +296,7 @@ def diff_manifest(old: dict[str, Any], new: dict[str, Any]) -> ManifestDiff:
 
 
 def print_manifest_diff(diff: ManifestDiff) -> None:
-    """将差异结果格式化输出到控制台（用 :mod:`fspack.console` 的 rich 控制台）.
+    """将差异结果格式化输出到控制台（用 :mod:`fspack.ui.console` 的 rich 控制台）.
 
     输出顺序：概览 → 新增 → 删除 → 修改 → 分类汇总字节数。
     无差异时只输出"无差异"。
@@ -304,7 +304,7 @@ def print_manifest_diff(diff: ManifestDiff) -> None:
     Args:
         diff: :func:`diff_manifest` 返回的差异结果
     """
-    from fspack.console import console
+    from fspack.ui.console import console
 
     if diff.is_empty:
         console.success("两份 manifest 无差异")

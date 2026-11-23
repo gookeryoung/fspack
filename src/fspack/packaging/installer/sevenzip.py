@@ -26,8 +26,8 @@ import sys
 from pathlib import Path
 
 from fspack.config import ProjectInfo
-from fspack.console import console
-from fspack.exceptions import InstallerError
+from fspack.core.exceptions import InstallerError
+from fspack.core.platform import Platform
 from fspack.packaging.installer.base import _run_stage, _run_tool
 from fspack.packaging.installer.dist_prep import (
     _check_exe,
@@ -37,8 +37,8 @@ from fspack.packaging.installer.dist_prep import (
 )
 from fspack.packaging.installer.request import ReleaseRequest
 from fspack.packaging.installer.zip import _zip_platform_suffix
-from fspack.platform import Platform
-from fspack.progress import BuildTracker
+from fspack.ui.console import console
+from fspack.ui.progress import BuildTracker
 
 __all__ = ["_find_7z", "_make_7z", "build_sevenzip"]
 

@@ -51,7 +51,7 @@
 
 | 维度 | 决定方式 | 代码位置 | 是否可显式指定 |
 |---|---|---|---|
-| 平台 | `--target windows\|linux\|macos`，默认宿主平台 | [executor.py:212](../../src/fspack/packaging/pipeline/executor.py#L212)；[cli.md:35](../../docs/cli.md#L35) | 是 |
+| 平台 | `--target windows\|linux\|macos`，默认宿主平台 | [executor.py:212](../../src/fspack/packaging/pipeline/executor.py#L212)；[cli.md:35](../../docs/user/cli.md#L35) | 是 |
 | 架构 | **完全隐式**：Linux/Windows 固定 x86_64；macOS 取 `platform.machine()` | [urls.py:87-92](../../src/fspack/packaging/runtime/urls.py#L87-L92)；[runtime_stage.py:213-218](../../src/fspack/packaging/pipeline/runtime_stage.py#L213-L218) | **否（无 `--arch`）** |
 | Python 版本 | `--py-version` > `.python-version` > `requires-python` > 平台默认，单值解析 | [versions.py:218-272](../../src/fspack/config/versions.py#L218-L272) | 只能一次一个 |
 | 运行时形态 | 平台决定：Windows 标准版→embed；Windows 自由线程→standalone；Linux/macOS→standalone | [runtime_stage.py:110-115](../../src/fspack/packaging/pipeline/runtime_stage.py#L110-L115) | **否（无开关）** |
@@ -68,7 +68,7 @@
 |---|---|---|---|---|---|
 | Windows | x86_64 | 3.8–3.14 | embed | **部分已验证（3.11、3.14.6），其余未验证** | 版本表 [versions.py:43-60](../../src/fspack/config/versions.py#L43-L60)；哈希 `hashes.py:39`；真实构建 `release.yml:101` |
 | Windows | x86_64 | 3.13t / 3.14t | standalone（freethreaded tarball） | **未验证** | 分流 [runtime_stage.py:113-115](../../src/fspack/packaging/pipeline/runtime_stage.py#L113-L115)；命名 [urls.py:93-97](../../src/fspack/packaging/runtime/urls.py#L93-L97)；无 e2e |
-| Windows | x86_64 | 任意 | stdlib zip / slim runtime | **不适用** | 显式跳过 [stdlib_zip.py:140-141](../../src/fspack/packaging/runtime/stdlib_zip.py#L140-L141)；[architecture.rst:54-57](../../docs/architecture.rst#L54-L57) |
+| Windows | x86_64 | 任意 | stdlib zip / slim runtime | **不适用** | 显式跳过 [stdlib_zip.py:140-141](../../src/fspack/packaging/runtime/stdlib_zip.py#L140-L141)；[architecture.rst:54-57](../../docs/dev/architecture.rst#L54-L57) |
 | Windows | arm64 | — | — | **空白** | URL 硬编码 `x86_64-pc-windows-msvc` [urls.py:90](../../src/fspack/packaging/runtime/urls.py#L90) |
 | Linux | x86_64 | 3.10–3.14 | standalone | **部分已验证（3.11.15、3.14.6），其余未验证** | 版本表 [versions.py:66-76](../../src/fspack/config/versions.py#L66-L76)；真实构建 `release.yml:171` |
 | Linux | x86_64 | 3.13t / 3.14t | standalone | **未验证** | `versions.py:74-75`；命名 `urls.py:95-97` |
@@ -223,7 +223,7 @@ fspack 目前的 21 格单测矩阵与 `release.yml` 的两个打包 job 是三�
 | 运行时下载 | 所有交叉路径 | URL 平台段写死 `x86_64-*`（`urls.py:87-92`），新增架构必须同时补 URL、资产名归一化、sha256 清单（`hashes.py`）与 `test_runtime_hash.py` |
 | C loader 编译 | Linux→Windows 已解决；其他路径未解决 | loader 由内置 C 源码 + 编译器产出（`packaging/loader/toolchain.py:28-29`）；`mingw` 前缀只在 Windows 目标使用 |
 | 二进制兼容 | Linux 目标、arm64 | 交叉产出的 ELF 必须满足最老 glibc；`auditwheel` 类修复缺失；wheel 平台标签必须与产物一致 |
-| 签名 | 全部交叉路径 | Windows `signtool` 只在 Windows；macOS `codesign` 只在 macOS（`docs/distribution.md:30-40`）；跨机构建后无法本地签名 |
+| 签名 | 全部交叉路径 | Windows `signtool` 只在 Windows；macOS `codesign` 只在 macOS（`docs/user/distribution.md:30-40`）；跨机构建后无法本地签名 |
 | 可验证性 | macOS arm64 from Intel / 任意跨架构 | 产物无法在构建机上执行，冒烟测试必须跳过——「构建成功」不能等同于「可用」 |
 | 可复现性 | Linux→Windows | pyc/Nuitka 静默跳过（`compile_stage.py:110,156`），产物内容与原生格不同，但名字相同 |
 
@@ -657,8 +657,8 @@ Phase 0–2 只要求「打印正确的复现指令」，不接管容器生命�
 | 交叉构建 e2e | [test_e2e_slow.py:199-237](../../tests/test_e2e_slow.py#L199-L237) |
 | 交叉守卫测试 | [test_build_dry_run.py:469-503](../../tests/test_build_dry_run.py#L469-L503) |
 | 哈希清单完整性测试 | [test_runtime_hash.py:44-59](../../tests/test_runtime_hash.py#L44-L59) |
-| 文档中的平台承诺 | [README.md:177-191](../../README.md#L177-L191)、[architecture.rst:19-22](../../docs/architecture.rst#L19-L22) |
-| 签名能力矩阵 | [distribution.md:27-40](../../docs/distribution.md#L27-L40) |
+| 文档中的平台承诺 | [README.md:177-191](../../README.md#L177-L191)、[architecture.rst:19-22](../../docs/dev/architecture.rst#L19-L22) |
+| 签名能力矩阵 | [distribution.md:27-40](../../docs/user/distribution.md#L27-L40) |
 
 ## 附录 B 不建议做的事
 

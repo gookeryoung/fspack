@@ -5,7 +5,7 @@
 web 框架共存，按 GUI 处理关闭控制台更合理）。
 
 依赖 :mod:`fspack.config.models` 提供 ``AppType`` 枚举；
-:func:`fspack.astutil.collect_imports` 是叶子模块，config 不再依赖 analyzer。
+:func:`fspack.core.astutil.collect_imports` 是叶子模块，config 不再依赖 analyzer。
 """
 
 from __future__ import annotations
@@ -14,8 +14,8 @@ import ast
 import re
 from pathlib import Path
 
-from fspack.astutil import collect_imports
 from fspack.config.models import AppType
+from fspack.core.astutil import collect_imports
 
 __all__ = ["infer_app_type"]
 
@@ -53,7 +53,7 @@ def infer_app_type(path: Path, declared: tuple[str, ...]) -> AppType:
     Web 框架（Flask/FastAPI 等），因 matplotlib 等可视化库偶尔与 web 框架共存，
     按 GUI 处理关闭控制台更合理。
 
-    import 收集使用叶子模块 :func:`fspack.astutil.collect_imports`，config
+    import 收集使用叶子模块 :func:`fspack.core.astutil.collect_imports`，config
     不再依赖 analyzer（此前靠函数内惰性导入掩盖跨层往复）。
     """
     try:

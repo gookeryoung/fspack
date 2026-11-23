@@ -14,7 +14,7 @@ import logging
 from pathlib import Path
 
 from fspack.config import ProjectInfo
-from fspack.console import console
+from fspack.core.platform import Platform
 from fspack.packaging.installer.base import _run_stage
 from fspack.packaging.installer.dist_prep import (
     _check_exe,
@@ -23,8 +23,8 @@ from fspack.packaging.installer.dist_prep import (
     _release_base,
 )
 from fspack.packaging.installer.request import ReleaseRequest
-from fspack.platform import Platform
-from fspack.progress import BuildTracker
+from fspack.ui.console import console
+from fspack.ui.progress import BuildTracker
 
 __all__ = ["build_zip"]
 

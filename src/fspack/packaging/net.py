@@ -25,11 +25,11 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     # SSLContext / StageRecorder 仅用于类型注解（``from __future__ import
-    # annotations`` 使注解不在运行时求值），顶部不导入 ssl / fspack.progress
+    # annotations`` 使注解不在运行时求值），顶部不导入 ssl / fspack.ui.progress
     # 避免连锁触发 rich.progress 加载。
     from ssl import SSLContext
 
-    from fspack.metrics import StageRecorder
+    from fspack.core.metrics import StageRecorder
 
 __all__ = ["Downloader"]
 
@@ -168,7 +168,7 @@ class Downloader:
            进程被杀/断电等中途退出只留下 ``.part``（缓存按精确文件名命中，
            不会误用半成品），不会污染缓存
 
-        ``urllib.request`` / ``rich.progress`` / ``fspack.console`` 在方法内延迟导入：
+        ``urllib.request`` / ``rich.progress`` / ``fspack.ui.console`` 在方法内延迟导入：
         ``import fspack.builder`` 热路径不触发 urllib.request（省 ~15ms）与
         rich.progress 多 column 类加载（省 ~8ms），仅在实际下载时才加载。
         测试通过 ``monkeypatch.setattr("urllib.request.urlopen", ...)`` 全局 patch
@@ -193,7 +193,7 @@ class Downloader:
             TransferSpeedColumn,
         )
 
-        from fspack.console import console
+        from fspack.ui.console import console
 
         dest.parent.mkdir(parents=True, exist_ok=True)
         # 原子写入：先写 .part 临时文件，成功后 replace 到 dest。中途退出

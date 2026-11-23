@@ -19,11 +19,11 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
-from fspack.console import console
-from fspack.exceptions import InstallerError
+from fspack.core.exceptions import InstallerError
+from fspack.core.platform import Platform, detect_platform
 from fspack.packaging.installer.request import _NO_SIGN, ReleaseRequest, SignOptions
-from fspack.platform import Platform, detect_platform
-from fspack.progress import BuildTracker
+from fspack.ui.console import console
+from fspack.ui.progress import BuildTracker
 
 __all__ = ["_VALID_FORMATS", "_resolve_formats", "build_installer", "build_linux_installer", "build_release"]
 

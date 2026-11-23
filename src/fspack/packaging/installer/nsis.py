@@ -14,10 +14,10 @@ import logging
 import subprocess  # noqa: F401  # 保留 patch 路径 fspack.packaging.installer.nsis.subprocess.run
 from pathlib import Path
 
-from fspack._compat import override
 from fspack.config import ProjectInfo
-from fspack.console import console
-from fspack.exceptions import InstallerError
+from fspack.core._compat import override
+from fspack.core.exceptions import InstallerError
+from fspack.core.platform import Platform
 from fspack.packaging.installer.base import Installer, _run_stage, _run_tool
 from fspack.packaging.installer.dist_prep import (
     _DIST_INTERMEDIATE_EXCLUDES,
@@ -27,8 +27,8 @@ from fspack.packaging.installer.dist_prep import (
 )
 from fspack.packaging.installer.request import _NO_SIGN, ReleaseRequest, SignOptions
 from fspack.packaging.win7.scan import iter_pe_files
-from fspack.platform import Platform
-from fspack.progress import BuildTracker
+from fspack.ui.console import console
+from fspack.ui.progress import BuildTracker
 
 __all__ = [
     "NsisInstaller",

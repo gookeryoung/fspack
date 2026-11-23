@@ -33,13 +33,13 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from fspack.console import console
 from fspack.doctor.bench import _save_and_compare_bench
 from fspack.doctor.envs import _dir_size, _format_size
 from fspack.doctor.models import TemplateBuildResult, TemplateRunResult
 from fspack.doctor.template_report import _print_template_build_summary
 from fspack.packaging.profile_log import ProfileOptions
 from fspack.templates.registry import _TEMPLATE_SKIP_DIRS, _TEMPLATE_SKIP_SUFFIXES
+from fspack.ui.console import console
 
 if TYPE_CHECKING:
     from fspack.templates.registry import Template
@@ -102,7 +102,7 @@ def _find_dist_exe(proj_dir: Path, name: str) -> Path | None:
     :param name: 可执行文件名（取自 ``pyproject.toml`` 的 ``name``）
     :return: 可执行文件路径或 ``None``（未找到）
     """
-    from fspack.platform import Platform, detect_platform
+    from fspack.core.platform import Platform, detect_platform
 
     dist = proj_dir / "dist"
     candidates: list[Path]
@@ -125,7 +125,7 @@ def _build_run_cmd(exe: Path) -> list[str]:
 
     仅作为 debug 模式不可用时的回退方案（直跑 loader exe）。
     """
-    from fspack.platform import Platform, detect_platform
+    from fspack.core.platform import Platform, detect_platform
 
     if exe.suffix == ".exe" and detect_platform() is Platform.LINUX:
         wine = shutil.which("wine") or "wine"
@@ -143,7 +143,7 @@ def _find_debug_python(proj_dir: Path, py_version: str | None = None) -> Path | 
     （``pythonX.Y`` > ``pythonX`` > ``python3`` > ``python``），避免
     ``python3.11-config`` 等带后缀工具被 ``sorted(glob)[0]`` 误选。
     """
-    from fspack.platform import Platform, detect_platform
+    from fspack.core.platform import Platform, detect_platform
 
     dist = proj_dir / "dist"
     if detect_platform() is Platform.WINDOWS:
@@ -187,7 +187,7 @@ def _build_debug_cmd(
         侧 ``bin/`` 下解释器候选集精确匹配；``None`` 时仅匹配通用候选名
     :return: ``(cmd, env)`` 或 ``None``（wrapper/embed python 缺失，调用方回退直跑 exe）
     """
-    from fspack.platform import Platform, detect_platform
+    from fspack.core.platform import Platform, detect_platform
 
     py = _find_debug_python(proj_dir, py_version)
     wrapper = _find_wrapper(proj_dir, name)
@@ -304,7 +304,7 @@ def _platform_skip_reason(tpl: Template) -> str | None:
     仍可正常构建——跳过而非失败，避免 doctor 在 Linux 上永久误报。
     """
     from fspack.config.versions import _satisfies, known_versions
-    from fspack.platform import detect_platform
+    from fspack.core.platform import detect_platform
 
     versions = known_versions(detect_platform())
     if any(_satisfies(v, tpl.requires_python) for v in versions.values()):
@@ -339,7 +339,7 @@ def _build_single_template(  # pragma: no cover
     """
     from fspack.builder import build
     from fspack.config import BuildOptions, ProjectInfo, get_mirror
-    from fspack.platform import detect_platform
+    from fspack.core.platform import detect_platform
 
     proj_dir = work_dir / template.id
     shutil.copytree(template.dir, proj_dir, dirs_exist_ok=True, ignore=_copy_ignore)

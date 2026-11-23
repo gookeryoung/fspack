@@ -19,7 +19,7 @@ import re
 import sys
 from pathlib import Path
 
-from fspack.astutil import collect_imports as _collect_imports
+from fspack.core.astutil import collect_imports as _collect_imports
 
 __all__ = [
     "_qml_module_to_qt_sub",
@@ -168,7 +168,7 @@ def collect_imports_and_submodules(tree: ast.AST) -> tuple[list[str], dict[str, 
 def collect_imports(tree: ast.AST) -> list[str]:
     """收集 AST 中所有 import 的顶层模块名，去重保序.
 
-    实现在叶子模块 :func:`fspack.astutil.collect_imports`（供 ``config``
+    实现在叶子模块 :func:`fspack.core.astutil.collect_imports`（供 ``config``
     app_type 推断共用，避免 config ↔ analyzer 跨层依赖）；此处保留同名引用
     以维持 ``fspack.analyzer.collect_imports`` 的公开 API。
     """

@@ -17,7 +17,7 @@ import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 
-from fspack.exceptions import DependencyError
+from fspack.core.exceptions import DependencyError
 
 __all__ = ["_build_sdist_wheels", "_handle_sdist_fallback", "_parse_missing_packages"]
 

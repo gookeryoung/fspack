@@ -24,16 +24,16 @@ from typing import TYPE_CHECKING
 # 触发 net 模块定义不再连带加载 rich.progress。
 from fspack.config import is_offline
 from fspack.config.versions import _split_t_suffix
-from fspack.exceptions import BuiltinError, EmbedError
+from fspack.core.exceptions import BuiltinError, EmbedError
+from fspack.core.platform import Platform
 from fspack.packaging.net import Downloader
 from fspack.packaging.runtime import STANDALONE_BASE_URL, standalone_release_tag
 from fspack.packaging.runtime.extract import _validate_tar_member, extract_zip_safe
-from fspack.platform import Platform
 
 if TYPE_CHECKING:
-    # StageRecorder 仅用于类型注解；顶部不导入 fspack.progress 避免连锁触发
+    # StageRecorder 仅用于类型注解；顶部不导入 fspack.ui.progress 避免连锁触发
     # rich.progress 加载（``import fspack.builder`` 热路径不打包 tkinter）。
-    from fspack.metrics import StageRecorder
+    from fspack.core.metrics import StageRecorder
 
 __all__ = ["TkinterBundler"]
 

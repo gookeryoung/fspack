@@ -30,8 +30,8 @@ from pathlib import Path
 from typing import Protocol
 
 from fspack.config import MirrorConfig
-from fspack.metrics import StageRecorder
-from fspack.platform import Platform
+from fspack.core.metrics import StageRecorder
+from fspack.core.platform import Platform
 
 
 class NuitkaCompilerProtocol(Protocol):  # pragma: no cover - 纯类型契约，无运行时代码

@@ -21,7 +21,7 @@ from typing import Any
 
 from fspack.config.app_type import infer_app_type
 from fspack.config.models import AppType, EntryPoint
-from fspack.exceptions import ProjectError
+from fspack.core.exceptions import ProjectError
 
 __all__ = ["detect_entry"]
 

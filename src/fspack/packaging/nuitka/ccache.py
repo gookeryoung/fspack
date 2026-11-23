@@ -27,10 +27,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fspack.config import is_offline
-from fspack.exceptions import EmbedError
-from fspack.metrics import StageRecorder
+from fspack.core.exceptions import EmbedError
+from fspack.core.metrics import StageRecorder
+from fspack.core.platform import Platform
 from fspack.packaging.runtime.extract import extract_tar_safe, extract_zip_safe
-from fspack.platform import Platform
 
 if TYPE_CHECKING:
     from fspack.packaging.nuitka.protocol import NuitkaCompilerProtocol

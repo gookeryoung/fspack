@@ -21,10 +21,10 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from fspack._compat import override
 from fspack.config import MirrorConfig, is_offline
-from fspack.exceptions import EmbedError
-from fspack.fsutil import sha256_file
+from fspack.core._compat import override
+from fspack.core.exceptions import EmbedError
+from fspack.core.fsutil import sha256_file
 from fspack.packaging.runtime.extract import extract_tar_safe, extract_zip_safe
 from fspack.packaging.runtime.hashes import expected_runtime_hash
 from fspack.packaging.runtime.urls import (
@@ -35,7 +35,7 @@ from fspack.packaging.runtime.urls import (
 )
 
 if TYPE_CHECKING:
-    from fspack.metrics import StageRecorder
+    from fspack.core.metrics import StageRecorder
 
 _logger = logging.getLogger(__name__)
 

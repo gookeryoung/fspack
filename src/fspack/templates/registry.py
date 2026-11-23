@@ -2,12 +2,12 @@
 
 定义 :class:`Template`/``TemplateFile`` 数据结构，并从两个目录加载模板：
 
-- ``assets/init_templates/<category>/<name>/`` — ``fsp init`` 内联模板
+- ``resources/templates/init/<category>/<name>/`` — ``fsp init`` 内联模板
   - 含 ``template.toml`` 元数据清单 + ``$variable`` 占位符源文件
   - 渲染路径：:func:`fspack.templates.engine.render_template`
   - 默认 ``roles = {"init"}``
 
-- ``assets/templates/<category>/<name>/`` — ``fsp doctor`` 富示例模板
+- ``resources/templates/doctor/<category>/<name>/`` — ``fsp doctor`` 富示例模板
   - 含 ``pyproject.toml``（无占位符，doctor 流程直接 ``copytree``）
   - 默认 ``roles = {"doctor"}``
 
@@ -27,7 +27,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from fspack._compat import tomllib
+from fspack.core._compat import tomllib
+from fspack.core.resources import templates_root
 
 __all__ = [
     "DEFAULT_REQUIRES_PYTHON",
@@ -44,7 +45,7 @@ _logger = logging.getLogger(__name__)
 _CATEGORIES: frozenset[str] = frozenset({"cli", "gui", "game", "sci", "web", "config"})
 
 # 默认角色集合：init 模板仅用于 ``fsp init``。doctor 流程用
-# ``list_templates(role="doctor")`` 扫描 ``assets/templates/``。
+# ``list_templates(role="doctor")`` 扫描 ``resources/templates/doctor/``。
 _DEFAULT_ROLES: frozenset[str] = frozenset({"init"})
 
 # 模板默认 Python 版本约束：与根 pyproject.toml、CI 矩阵（3.8–3.14）及运行时
@@ -118,13 +119,13 @@ class Template:
 
 
 def _init_templates_root() -> Path:
-    """返回 ``assets/init_templates/`` 目录的绝对路径（``fsp init`` 内联模板）."""
-    return Path(__file__).resolve().parent.parent / "assets" / "init_templates"
+    """返回 ``resources/templates/init/`` 目录（``fsp init`` 内联模板）."""
+    return templates_root("init")
 
 
 def _doctor_templates_root() -> Path:
-    """返回 ``assets/templates/`` 目录的绝对路径（``fsp doctor`` 富示例模板）."""
-    return Path(__file__).resolve().parent.parent / "assets" / "templates"
+    """返回 ``resources/templates/doctor/`` 目录（``fsp doctor`` 富示例模板）."""
+    return templates_root("doctor")
 
 
 def _roles_from_data(data: dict[str, object]) -> frozenset[str]:

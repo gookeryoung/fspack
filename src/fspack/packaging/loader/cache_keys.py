@@ -7,9 +7,9 @@ import json
 from pathlib import Path
 
 from fspack.config import AppType
-from fspack.fsutil import sha256_file
+from fspack.core.fsutil import sha256_file
+from fspack.core.platform import Platform
 from fspack.packaging.loader.resource import LoaderVersionInfo
-from fspack.platform import Platform
 
 __all__ = ["loader_cache_dir"]
 

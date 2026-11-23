@@ -157,7 +157,7 @@ fsp doctor                # Environment diagnostics (--test validates built-in t
 fsp cache status|clean    # Cache health check and cleanup
 ```
 
-Detailed option listing: [CLI Reference](docs/cli.md).
+Detailed option listing: [CLI Reference](docs/user/cli.md).
 
 ## ⚙️ Configuration
 
@@ -174,7 +174,7 @@ slim-exclude = ["PySide6/translations/*"]   # Force-strip during wheel slimming
 gui = "myapp.gui:main"                       # Produces gui.exe (no console window)
 ```
 
-Full configuration reference: [Configuration Guide](docs/configuration.md).
+Full configuration reference: [Configuration Guide](docs/user/configuration.md).
 
 ## 🖥️ Platform Support
 
@@ -203,7 +203,7 @@ arm64 on `macos-latest` and x86_64 on `macos-15-intel`.
 
 **Win7 SP1 support**: fspack automatically injects API shim DLLs or replaces with
 Win7-recompiled `python3XX.dll`, and outputs a full compatibility scan report.
-Supports Python 3.9–3.14. See [Distribution Guide](docs/distribution.md).
+Supports Python 3.9–3.14. See [Distribution Guide](docs/user/distribution.md).
 
 ## 🔧 CI/CD Integration
 
@@ -211,7 +211,7 @@ fspack itself packages and publishes to GitHub Release with platform-native
 runners when a `v*.*.*` tag is pushed (see
 [release.yml](.github/workflows/release.yml)). For your own projects, follow
 that workflow to set up packaging verification and release pipelines — full
-guide: [CI/CD Integration](docs/integration.md).
+guide: [CI/CD Integration](docs/dev/integration.md).
 
 ## 📂 Output Layout
 
@@ -231,7 +231,7 @@ dist/
 
 Windows executables automatically embed PE resource sections (VS_VERSIONINFO /
 manifest / icon) to reduce antivirus false positives. Production distribution
-recommendations including code signing: [Distribution Guide](docs/distribution.md).
+recommendations including code signing: [Distribution Guide](docs/user/distribution.md).
 
 ## 🛠️ Development
 
@@ -243,17 +243,17 @@ uv run ruff check src tests                                  # Lint
 ```
 
 Run `make help` for all shortcuts. Architecture and module index:
-[Architecture Docs](docs/architecture.rst).
+[Architecture Docs](docs/dev/architecture.rst).
 
 ## 📚 Documentation
 
-- [CLI Reference](docs/cli.md) — All commands and options
-- [Configuration Guide](docs/configuration.md) — `[tool.fspack]` options
-- [Offline Packaging](docs/offline.md) — Air-gapped / intranet CI solutions
-- [Distribution Guide](docs/distribution.md) — Secure distribution and Win7 compatibility
-- [Architecture](docs/architecture.rst) — Build pipeline, module index, implementation details
-- [CI/CD Integration](docs/integration.md) — GitHub Actions setup
-- [API Reference](docs/api.rst) — Auto-generated API docs
+- [CLI Reference](docs/user/cli.md) — All commands and options
+- [Configuration Guide](docs/user/configuration.md) — `[tool.fspack]` options
+- [Offline Packaging](docs/user/offline.md) — Air-gapped / intranet CI solutions
+- [Distribution Guide](docs/user/distribution.md) — Secure distribution and Win7 compatibility
+- [Architecture](docs/dev/architecture.rst) — Build pipeline, module index, implementation details
+- [CI/CD Integration](docs/dev/integration.md) — GitHub Actions setup
+- [API Reference](docs/dev/api.rst) — Auto-generated API docs
 - [Changelog](CHANGELOG.md) — Version history
 
 ## 🤝 Contributing

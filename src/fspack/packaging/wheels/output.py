@@ -13,7 +13,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from fspack.exceptions import DependencyError
+from fspack.core.exceptions import DependencyError
 
 __all__ = [
     "_dedup_wheels_by_pkg",

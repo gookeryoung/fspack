@@ -19,9 +19,10 @@ from fspack.config import (
     ProjectInfo,
     wheel_cache_dir,
 )
+from fspack.core.resources import resource_path
 
 if TYPE_CHECKING:
-    from fspack.progress import BuildTracker
+    from fspack.ui.progress import BuildTracker
 
 __all__ = [
     "_DEFAULT_ICON",
@@ -34,8 +35,7 @@ __all__ = [
 _logger = logging.getLogger(__name__)
 
 # 默认 icon：打包在 fspack 包内，随 wheel 分发
-# context.py 在 src/fspack/packaging/pipeline/ 下，parent.parent.parent 即 src/fspack/
-_DEFAULT_ICON = Path(__file__).parent.parent.parent / "assets" / "icons" / "app.ico"
+_DEFAULT_ICON = resource_path("icons", "app.ico")
 
 # 多入口 loader 并行编译上限（iter-133）：subprocess 释放 GIL，线程足够并行。
 # 4 上限平衡并行收益与 Windows 资源限制（mingw/gcc 子进程句柄/内存），
@@ -61,7 +61,7 @@ class BuildContext:
 
 
 def default_icon_path() -> Path:
-    """返回 fspack 自带的默认 icon 路径（``assets/icons/app.ico``）."""
+    """返回 fspack 自带的默认 icon 路径（``resources/icons/app.ico``）."""
     return _DEFAULT_ICON
 
 

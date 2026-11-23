@@ -15,7 +15,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from fspack.exceptions import DependencyError
+from fspack.core.exceptions import DependencyError
 
 __all__ = [
     "_DownloadMonitor",
@@ -129,7 +129,7 @@ class _DownloadMonitor:
             TransferSpeedColumn,
         )
 
-        from fspack.console import console
+        from fspack.ui.console import console
 
         self._cache_dir = cache_dir
         self._stop = threading.Event()
@@ -193,7 +193,7 @@ def _stream_subprocess(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     """运行命令，流式转发 stderr 到 DEBUG（``-v``/日志文件可见），捕获 stdout 和 stderr。
 
     用 ``Popen`` + 守护线程通过 ``os.read`` 读取 stderr 文件描述符字节块，
-    按整行交给 :meth:`fspack.console.ConsoleUI.tool_output`——默认终端不再
+    按整行交给 :meth:`fspack.ui.console.ConsoleUI.tool_output`——默认终端不再
     直接写入 ``sys.stderr``，避免 pip 输出与阶段骨架/进度条互相打断。
     stdout 始终捕获用于解析 wheel 列表。stderr 同时累积，供失败时构造
     ``CalledProcessError``。
@@ -209,7 +209,7 @@ def _stream_subprocess(cmd: list[str]) -> subprocess.CompletedProcess[str]:
     # 等热路径模块一致）。site.py 启动期已加载 threading，此处为 dict 查询，无实际开销。
     import threading
 
-    from fspack.console import console
+    from fspack.ui.console import console
 
     process = subprocess.Popen(
         cmd,
@@ -256,7 +256,7 @@ def _forward_tool_output(tool: str, completed: subprocess.CompletedProcess[str])
     默认输出不显示（root 为 INFO），``-v`` 与 CI 日志文件（root 置 DEBUG）可见；
     用于 pip/loader 这类「静默捕获、只在失败时读 stderr」的路径，避免完整丢弃。
     """
-    from fspack.console import console
+    from fspack.ui.console import console
 
     for text in (completed.stdout, completed.stderr):
         if text:
@@ -281,9 +281,9 @@ def _run_pip(
     stderr 到终端（显示下载进度条），stdout 仍捕获用于解析 wheel 列表。适用于
     耗时的网络下载和 sdist 构建场景；快速本地缓存检查保持 ``stream=False`` 用 spinner。
     """
-    # 延迟导入：spinner 触发 fspack.progress 加载（含 rich.progress ~12ms）。
+    # 延迟导入：spinner 触发 fspack.ui.progress 加载（含 rich.progress ~12ms）。
     # 仅在实际执行 pip 命令时加载，避免 import fspack.builder 热路径触发。
-    from fspack.progress import spinner
+    from fspack.ui.progress import spinner
 
     try:
         if stream:

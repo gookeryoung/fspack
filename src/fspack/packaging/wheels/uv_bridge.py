@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fspack.config.versions import _split_t_suffix
-from fspack.exceptions import DependencyError
+from fspack.core.exceptions import DependencyError
 
 if TYPE_CHECKING:
     # DownloadContext 仅用于类型注解（from __future__ import annotations 使注解
