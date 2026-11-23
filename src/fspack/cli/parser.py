@@ -565,6 +565,11 @@ _INIT_OPTS: tuple[_Opt, ...] = (
 _DOCTOR_OPTS: tuple[_Opt, ...] = (
     _Opt(("--test",), "运行 assets/templates/ 下所有项目模板构建，打印汇总结果", action="store_true"),
     _Opt(
+        ("--keep",),
+        "保留模板构建临时目录（需 --test），便于查看 dist 与 sci_stack 等生成的图片/文件",
+        action="store_true",
+    ),
+    _Opt(
         ("-P", "--profile"),
         "基准剖析日志（需 --test）：将本次所有模板构建聚合为单个剖析日志 JSON"
         "（默认 <当前目录>/.benchmarks/fsp-d-<时间戳>.json），"

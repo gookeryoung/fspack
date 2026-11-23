@@ -30,6 +30,7 @@ def _run_doctor(ns: argparse.Namespace) -> None:
     from fspack.packaging.profile_log import ProfileOptions
 
     test = getattr(ns, "test", False)
+    keep = getattr(ns, "keep", False)
     profile = getattr(ns, "profile", False)
     profile_out = getattr(ns, "profile_out", None)
     profile_compare = getattr(ns, "profile_compare", None)
@@ -38,6 +39,8 @@ def _run_doctor(ns: argparse.Namespace) -> None:
         raise ProjectError("--profile/--profile-out/--profile-compare 需配合 --test 使用")
     if (profile_out or profile_compare) and not profile:
         raise ProjectError("--profile-out/--profile-compare 需配合 --profile 使用")
+    if keep and not test:
+        raise ProjectError("--keep 需配合 --test 使用")
 
     # --bench-compare 独立路径：CI 门禁场景不需要环境诊断，跳过直接运行对比
     if getattr(ns, "bench_compare", False) and not test and not getattr(ns, "check_cache", False):
@@ -74,5 +77,6 @@ def _run_doctor(ns: argparse.Namespace) -> None:
                 enabled=profile,
                 out=Path(profile_out).resolve() if profile_out else None,
                 compare=profile_compare,
-            )
+            ),
+            keep=keep,
         )

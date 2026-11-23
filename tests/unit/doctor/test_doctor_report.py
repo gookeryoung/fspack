@@ -543,3 +543,29 @@ def test_print_summary_quiet_suppresses_success(capsys: pytest.CaptureFixture[st
         console._quiet = previous
 
     assert capsys.readouterr().out == ""
+
+
+def test_cli_doctor_keep_requires_test() -> None:
+    """``fsp d --keep`` 未指定 --test 时报错（校验前置，不跑诊断）。"""
+    from fspack.cli import main
+
+    with patch("fspack.doctor.run_doctor") as mock_run, pytest.raises(SystemExit) as exc_info:
+        main(["doctor", "--keep"])
+    mock_run.assert_not_called()
+    assert exc_info.value.code == 2
+
+
+def test_cli_doctor_test_passes_keep() -> None:
+    """``fsp d --test --keep`` 把 keep=True 传给 run_doctor_test。"""
+    from fspack.cli import main
+
+    fake_report = DoctorReport(
+        env_info=(CheckResult("Python", CheckStatus.OK, "3.11.9"),),
+        tool_checks=(CheckResult("pip", CheckStatus.OK, "24.0"),),
+    )
+    with patch("fspack.doctor.run_doctor", return_value=fake_report), patch("fspack.doctor.print_doctor_report"), patch(
+        "fspack.doctor.run_doctor_test"
+    ) as mock_test:
+        main(["doctor", "--test", "--keep"])
+    mock_test.assert_called_once()
+    assert mock_test.call_args.kwargs["keep"] is True

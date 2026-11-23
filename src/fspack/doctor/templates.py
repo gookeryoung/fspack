@@ -68,6 +68,9 @@ _DEFAULT_PROFILE = ProfileOptions()
 # 退出（duration_sec 为真实启动耗时），超时仅为钩子未覆盖框架的兜底。
 _RUN_TIMEOUT_SEC = 5.0
 
+# stdout/stderr 首行截断长度：报告只展示足以判断「确实有输出」的片段
+_OUTPUT_SNIPPET_MAX = 200
+
 # 终止进程后的等待时间（秒）：terminate 后给进程 2s 清理，仍不退出则 kill。
 _TERMINATE_GRACE_SEC = 2.0
 
@@ -200,6 +203,17 @@ def _build_debug_cmd(
     return cmd, env
 
 
+def _first_nonempty_line(text: str | None) -> str:
+    """返回文本首个非空行（截断到 :data:`_OUTPUT_SNIPPET_MAX`）."""
+    line = next((ln for ln in (text or "").splitlines() if ln.strip()), "")
+    return line[: _OUTPUT_SNIPPET_MAX - 3] + "..." if len(line) > _OUTPUT_SNIPPET_MAX else line
+
+
+def _has_gui_ready(stderr: str | None) -> bool:
+    """wrapper 是否输出 ``gui_ready`` 打点（GUI 首帧上屏后自终止）."""
+    return any(line.startswith("[fspack timing] gui_ready") for line in (stderr or "").splitlines())
+
+
 def _run_template(
     cmd: list[str],
     env: Mapping[str, str] | None = None,
@@ -250,15 +264,15 @@ def _run_template(
         )
 
     try:
-        _stdout, stderr = proc.communicate(timeout=timeout)
+        stdout, stderr = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         # 超时未退出 → 视为 GUI/Web 事件循环正常运行，主动终止
         proc.terminate()
         try:
-            proc.communicate(timeout=_TERMINATE_GRACE_SEC)
+            stdout, stderr = proc.communicate(timeout=_TERMINATE_GRACE_SEC)
         except subprocess.TimeoutExpired:
             proc.kill()
-            proc.communicate()
+            stdout, stderr = proc.communicate()
         elapsed = time.perf_counter() - start
         _logger.debug("模板运行超时（视为 GUI/Web 事件循环正常）: %s", " ".join(cmd))
         return TemplateRunResult(
@@ -266,6 +280,8 @@ def _run_template(
             timed_out=True,
             exit_code=None,
             duration_sec=elapsed,
+            gui_ready=_has_gui_ready(stderr),
+            stdout_first_line=_first_nonempty_line(stdout),
         )
 
     elapsed = time.perf_counter() - start
@@ -275,6 +291,8 @@ def _run_template(
             timed_out=False,
             exit_code=0,
             duration_sec=elapsed,
+            gui_ready=_has_gui_ready(stderr),
+            stdout_first_line=_first_nonempty_line(stdout),
         )
     # stderr 首个非打点行做错误信息（[fspack 开头的 loader/wrapper/timing
     # 打点行是正常输出，不能当错误展示）；超 200 字符截断
@@ -291,6 +309,8 @@ def _run_template(
         exit_code=proc.returncode,
         duration_sec=elapsed,
         error=stderr_first or f"退出码 {proc.returncode}",
+        gui_ready=_has_gui_ready(stderr),
+        stdout_first_line=_first_nonempty_line(stdout),
     )
 
 
@@ -417,7 +437,9 @@ def _build_single_template(  # pragma: no cover
     )
 
 
-def run_doctor_test(profile: ProfileOptions = _DEFAULT_PROFILE) -> None:  # pragma: no cover
+def run_doctor_test(  # pragma: no cover
+    profile: ProfileOptions = _DEFAULT_PROFILE, *, keep: bool = False
+) -> None:
     """运行所有项目模板构建，打印汇总结果，可选基准剖析落盘与历史对比.
 
     从 ``assets/templates/`` 加载所有项目模板，逐个复制到临时目录并执行
@@ -436,6 +458,7 @@ def run_doctor_test(profile: ProfileOptions = _DEFAULT_PROFILE) -> None:  # prag
     用于建立性能基准，后续优化措施可与此基准对比评估效果。
 
     :param profile: 基准剖析日志选项（``-P``/``-PO``/``-PC``）
+    :param keep: 保留临时构建目录（``--keep``），便于查看模板产物/生成文件
     """
     from fspack.templates import list_templates
 
@@ -452,8 +475,13 @@ def run_doctor_test(profile: ProfileOptions = _DEFAULT_PROFILE) -> None:  # prag
     results: list[TemplateBuildResult] = []
     bench_start = time.perf_counter()
 
-    with tempfile.TemporaryDirectory(prefix="fsp-doctor-test-") as tmp:
-        work_dir = Path(tmp)
+    tmp_dir: tempfile.TemporaryDirectory[str] | None = None
+    if keep:
+        work_dir = Path(tempfile.mkdtemp(prefix="fsp-doctor-test-"))
+    else:
+        tmp_dir = tempfile.TemporaryDirectory(prefix="fsp-doctor-test-")
+        work_dir = Path(tmp_dir.name)
+    try:
         for i, tpl in enumerate(buildable, 1):
             console.rich.print(f"[cyan][{i}/{len(buildable)}][/cyan] 构建 {tpl.id} ...")
             result = _build_single_template(tpl, work_dir, bench=profile.enabled)
@@ -464,6 +492,11 @@ def run_doctor_test(profile: ProfileOptions = _DEFAULT_PROFILE) -> None:  # prag
                 )
             else:
                 console.rich.print(f"  [red]×[/red] 失败: {result.error}")
+    finally:
+        if tmp_dir is not None:
+            tmp_dir.cleanup()
+        else:
+            console.step(f"模板构建目录已保留: {work_dir}")
 
     wall_time = time.perf_counter() - bench_start
     _print_template_build_summary(results, bench=profile.enabled)

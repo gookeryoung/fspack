@@ -87,6 +87,10 @@ class TemplateRunResult:
     :param exit_code: 进程退出码（超时被终止时为 ``None``）
     :param duration_sec: 运行耗时（秒，超时场景为超时阈值）
     :param error: 失败时的错误信息（stderr 首行，截断到 200 字符）
+    :param gui_ready: wrapper 是否输出 ``gui_ready`` 打点（GUI 首帧已上屏、
+        事件循环被自终止钩子拦截）
+    :param stdout_first_line: 子进程 stdout 首个非空行（截断到 200 字符，
+        ``-v`` 时用于证明模板确实产生过输出）
     """
 
     success: bool
@@ -94,6 +98,8 @@ class TemplateRunResult:
     exit_code: int | None
     duration_sec: float
     error: str = ""
+    gui_ready: bool = False
+    stdout_first_line: str = ""
 
 
 @dataclass(frozen=True)

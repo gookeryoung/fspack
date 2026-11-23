@@ -463,3 +463,67 @@ def test_copytree_with_copy_ignore_skips_residue(tmp_path: Path) -> None:
     assert not (dst / "node_modules").exists()
     assert not (dst / "dist").exists()
     assert not (dst / "__pycache__").exists()
+
+
+def test_run_template_records_gui_ready_and_stdout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """GUI 自终止钩子输出 gui_ready 时标记 gui_ready，并保留 stdout 首行."""
+    monkeypatch.setattr("fspack.core.platform.detect_platform", lambda: Platform.LINUX)
+    proc = _FakeProc(
+        returncode=0,
+        stdout="hello from tkinter\nTk patchlevel: 8.6\n",
+        stderr="[fspack timing] env_ready @1.0ms\n[fspack timing] gui_ready @50.0ms\n",
+    )
+    monkeypatch.setattr("fspack.doctor.subprocess.Popen", lambda *a, **kw: proc)
+    result = _run_template([str(tmp_path / "app")], timeout=1.0)
+    assert result.success is True
+    assert result.gui_ready is True
+    assert result.stdout_first_line == "hello from tkinter"
+
+
+def test_run_template_timeout_records_gui_ready(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """超时兜底同样解析 gui_ready 与 stdout，避免误报「未启动」."""
+
+    class _TimeoutProc(_FakeProc):
+        def __init__(self) -> None:
+            super().__init__(
+                returncode=0,
+                stdout="server started\n",
+                stderr="[fspack timing] gui_ready @80.0ms\n",
+            )
+            self._raise_timeout = True
+
+    monkeypatch.setattr("fspack.core.platform.detect_platform", lambda: Platform.LINUX)
+    monkeypatch.setattr("fspack.doctor.subprocess.Popen", lambda *a, **kw: _TimeoutProc())
+    result = _run_template([str(tmp_path / "app")], timeout=0.2)
+    assert result.timed_out is True
+    assert result.gui_ready is True
+    assert result.stdout_first_line == "server started"
+
+
+def test_run_doctor_test_keep_preserves_work_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``--keep`` 保留模板构建目录，便于查看 dist/fit_result.png 等产物."""
+    from fspack.doctor import templates as templates_mod
+    from fspack.doctor.models import TemplateBuildResult
+
+    kept = tmp_path / "kept"
+    tpl = _tpl("tk_app", ">=3.8")
+
+    def _mkdtemp(*, prefix: str) -> str:
+        kept.mkdir()
+        return str(kept)
+
+    def _fake_build(template: Template, work_dir: Path, *, bench: bool = False) -> TemplateBuildResult:
+        (work_dir / "keep.txt").write_text("ok", encoding="utf-8")
+        return TemplateBuildResult(template_id=template.id, success=True, duration_sec=0.1)
+
+    monkeypatch.setattr("fspack.templates.list_templates", lambda role=None: [tpl])
+    monkeypatch.setattr(templates_mod, "_filter_platform_supported", lambda items: (items, []))
+    monkeypatch.setattr(templates_mod, "_build_single_template", _fake_build)
+    monkeypatch.setattr(templates_mod, "_print_template_build_summary", lambda *a, **kw: None)
+    monkeypatch.setattr(templates_mod.tempfile, "mkdtemp", _mkdtemp)
+
+    templates_mod.run_doctor_test(keep=True)
+    assert (kept / "keep.txt").read_text(encoding="utf-8") == "ok"
+    assert "模板构建目录已保留" in capsys.readouterr().out

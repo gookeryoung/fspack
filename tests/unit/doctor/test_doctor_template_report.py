@@ -309,3 +309,34 @@ def test_print_performance_analysis_includes_startup_ranking(capsys: pytest.Capt
     # a (0.8s) 最慢排第一，b (0.3s) 排第二
     assert "0.80s" in out
     assert "0.30s" in out
+
+
+def test_format_run_status_gui_ready() -> None:
+    """GUI 首帧后自终止显示「已启动」，与 CLI 正常退出的「成功」区分."""
+    rr = TemplateRunResult(success=True, timed_out=False, exit_code=0, duration_sec=0.2, gui_ready=True)
+    r = TemplateBuildResult(template_id="tk_app", success=True, duration_sec=1.0, run_result=rr)
+    status, err = _format_run_status(r)
+    assert "已启动" in status
+    assert "首帧后自动退出" in status
+    assert err == ""
+
+
+def test_summary_verbose_prints_stdout_first_line(
+    caplog: pytest.LogCaptureFixture, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``-v``（DEBUG）时汇总表后打印各模板 stdout 首行，证明确有输出."""
+    import logging
+
+    caplog.set_level(logging.DEBUG, logger="fspack.doctor.template_report")
+    rr = TemplateRunResult(
+        success=True,
+        timed_out=False,
+        exit_code=0,
+        duration_sec=0.2,
+        stdout_first_line="sci demo ok: amp=2.0",
+    )
+    r = TemplateBuildResult(template_id="sci_stack", success=True, duration_sec=1.0, run_result=rr)
+    _print_template_build_summary([r], bench=False)
+    out = capsys.readouterr().out
+    assert "运行输出" in out
+    assert "sci demo ok" in out

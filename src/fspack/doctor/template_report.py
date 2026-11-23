@@ -8,7 +8,10 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Final
+
+from rich.markup import escape
 
 from fspack.doctor.envs import _format_size
 from fspack.doctor.models import TemplateBuildResult, TemplateRunResult
@@ -20,6 +23,8 @@ __all__ = [
     "_print_run_summary",
     "_print_template_build_summary",
 ]
+
+_logger = logging.getLogger(__name__)
 
 # 模板 id → 能力维度标签：doctor 精选模板集每个模板代表一类打包能力
 # （依赖形态/入口数/前端资源/运行时段），汇总表能力列让维度一目了然。
@@ -110,6 +115,8 @@ def _print_template_build_summary(results: list[TemplateBuildResult], *, bench: 
     console.rich.print(table)
     console.rich.print()
 
+    _print_verbose_outputs(results)
+
     # 汇总统计
     failed = len(results) - succeeded
     if failed:
@@ -126,6 +133,26 @@ def _print_template_build_summary(results: list[TemplateBuildResult], *, bench: 
     # 性能分析（仅 -P 基准剖析模式）
     if bench and succeeded > 1:
         _print_performance_analysis(results)
+
+
+def _print_verbose_outputs(results: list[TemplateBuildResult]) -> None:
+    """``-v`` 下打印各模板 stdout 首行，证明模板确实执行并产生输出.
+
+    默认 INFO 级别静默，避免正常表格被模板输出淹没；加 ``-v`` 后可用
+    ``sci_stack`` 的 ``sci demo ok`` 等行确认运行验证真实发生。
+    """
+    if not _logger.isEnabledFor(logging.DEBUG):
+        return
+    outputs = [
+        (r.template_id, r.run_result.stdout_first_line)
+        for r in results
+        if r.run_result and r.run_result.stdout_first_line
+    ]
+    if not outputs:
+        return
+    console.rich.print("[dim]运行输出（-v，每个模板首行）:[/]")
+    for template_id, line in outputs:
+        console.rich.print(f"  [dim]{escape(template_id)}:[/dim] {escape(line)}")
 
 
 def _print_run_summary(succeeded: int, run_ok: int, run_fail: int, run_skip: int) -> None:
@@ -166,6 +193,8 @@ def _format_run_status(result: TemplateBuildResult) -> tuple[str, str]:
     if rr.success:
         if rr.timed_out:
             return ("[green]√ 超时[/]", "")
+        if rr.gui_ready:
+            return ("[green]√ 已启动（首帧后自动退出）[/]", "")
         return ("[green]√ 成功[/]", "")
     return ("[red]× 失败[/]", rr.error)
 
