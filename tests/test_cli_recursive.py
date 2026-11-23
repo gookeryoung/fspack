@@ -220,14 +220,16 @@ def test_discover_subprojects_handles_unreadable_directory(tmp_path: Path, monke
     # 制造一个无法扫描的子目录（无 pyproject.toml，触发 OSError 后被跳过）
     (tmp_path / "unreadable").mkdir()
 
-    original_scandir = cli.os.scandir
+    import fspack.cli.recursive as cli_recursive
+
+    original_scandir = cli_recursive.os.scandir
 
     def _scandir_with_error(path: str) -> Any:
         if Path(path).name == "unreadable":
             raise OSError("simulated permission denied")
         return original_scandir(path)
 
-    monkeypatch.setattr(cli.os, "scandir", _scandir_with_error)
+    monkeypatch.setattr(cli_recursive.os, "scandir", _scandir_with_error)
     # 不应抛异常，跳过不可读目录后继续扫描其他子目录
     projects = cli.discover_subprojects(tmp_path)
     project_paths = {p.resolve() for p in projects}
