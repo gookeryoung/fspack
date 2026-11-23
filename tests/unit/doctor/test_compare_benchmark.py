@@ -933,6 +933,56 @@ class TestCompareWithCategories:
         assert rows_by_name["test_unknown_baseline"].is_regression is True
 
 
+class TestStddevNoiseFloor:
+    """本轮实测 stddev 作为绝对噪声下限（2026-11-23 run 45195738275 误报）."""
+
+    def _write(self, path: Path, entries: list[tuple[str, float, float]], mtime_offset: float = 0.0) -> None:
+        """写 pytest-benchmark JSON，条目为 (name, median, stddev)."""
+        import os
+
+        data: dict[str, Any] = {
+            "benchmarks": [
+                {"name": n, "stats": {"median": m, "min": m, "mean": m, "stddev": s, "rounds": 20}}
+                for n, m, s in entries
+            ]
+        }
+        path.write_text(json.dumps(data), encoding="utf-8")
+        if mtime_offset:
+            ts = path.stat().st_mtime + mtime_offset
+            os.utime(path, (ts, ts))
+
+    def test_within_stddev_not_regression(self, tmp_path: Path) -> None:
+        """Δ 小于本轮 stddev 时不判退化（真实 CI 误报场景）.
+
+        历史最佳 191.4µs（低抖动世代），当前 249.9µs + stddev 99.8µs：
+        Δ=+58.5µs/+30.6% 超过 core 10% 阈值与 50µs 固定下限，但仅 0.59 个标准差。
+        """
+        self._write(tmp_path / "001_hist.json", [("test_project_info_from_dir_baseline", 0.0001914, 0.000010)], -100)
+        self._write(tmp_path / "002_cur.json", [("test_project_info_from_dir_baseline", 0.0002499, 0.0000998)], 0)
+        report = cb.compare(tmp_path, threshold=25.0)
+        assert report.regressions == 0
+        row = report.rows[0]
+        assert row.category == "core"
+        assert row.delta_pct == pytest.approx(30.6, abs=0.1)
+        assert row.is_regression is False
+
+    def test_beyond_stddev_real_regression_triggered(self, tmp_path: Path) -> None:
+        """绝对差远超 stddev 的真实退化仍被捕获（191.4µs → 500µs）."""
+        self._write(tmp_path / "001_hist.json", [("test_project_info_from_dir_baseline", 0.0001914, 0.000010)], -100)
+        self._write(tmp_path / "002_cur.json", [("test_project_info_from_dir_baseline", 0.0005000, 0.000020)], 0)
+        report = cb.compare(tmp_path, threshold=25.0)
+        assert report.regressions == 1
+        assert report.rows[0].is_regression is True
+
+    def test_deterministic_category_still_checked(self, tmp_path: Path) -> None:
+        """确定性类别 stddev 极小，stddev 下限不会掩盖 12% 真实退化."""
+        self._write(tmp_path / "001_hist.json", [("test_serial_compile_baseline", 0.500, 0.001)], -100)
+        self._write(tmp_path / "002_cur.json", [("test_serial_compile_baseline", 0.560, 0.001)], 0)
+        report = cb.compare(tmp_path, threshold=25.0)
+        assert report.regressions == 1
+        assert report.rows[0].is_regression is True
+
+
 class TestCompareEntryCategoryArgs:
     """compare_entry 类别相关参数."""
 

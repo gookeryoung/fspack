@@ -143,7 +143,10 @@ small `project0-serial` 为 16.59/21.95/24.37/36.25ms（2.2x），large
 
 ### core（7 个，阈值 10%）
 
-`tests/perf/test_perf_baseline.py`，核心场景基线，确定性高 StdDev <1%。
+`tests/perf/test_perf_baseline.py`，核心场景基线，确定性高 StdDev <1%。其中
+`test_project_info_from_dir_baseline` 冷解析含文件读取 + tomllib + AST 扫描，
+µs 级尾部抖动较大（2026-11-23 run 45195738275 实测 median 249.9µs、stddev
+99.8µs），由下述 stddev 噪声下限吸收，不单独设类别。
 
 | 测试名 | 场景 |
 |--------|------|
@@ -317,13 +320,25 @@ uv run fsp doctor --bench-compare --bench-no-categories --bench-threshold 25
 | ast_scheduling_small | 100% | 2.2x 跨 runner | 多文件 AST 解析 + 进程池 + I/O，8ms 绝对下限，仅捕获 ≥2x 退化 |
 | ast_scheduling_large | 100% | 1.9x 跨 runner | 大样本 AST 解析，600ms 绝对下限，仅捕获 ≥2x 退化 |
 | ast_analysis | 50% | 2.2x 跨 runner | AST 收集/依赖分析，2ms 绝对下限 |
-| core | 10% | <1% of median | 确定性高（JSON/内存操作），10% 足以检测真实退化 |
+| core | 10% | <1% of median（冷解析项 µs 级尾部抖动） | 确定性高（JSON/内存操作），10% 足以检测真实退化；抖动由 stddev 下限吸收 |
 | build_perf | 25% | 5-27% of median + 加性 2-6ms | 含 AST 扫描与文件 I/O 抖动，4ms 绝对下限 |
 | nuitka_compile | 10% | <1% of median | mock `time.sleep` 确定性高，作为无抖动基准 |
 | wheel_download | 10% | <1% of median | mock `time.sleep` 确定性高，作为无抖动基准 |
 | wheel_cache | 10% | µs 级 stat 抖动 | 含 50 次 `is_file()`，300µs 绝对下限 |
 | entry_startup | 15% | 5-8% of median | 真实 subprocess 启动抖动，15% 平衡灵敏度与误报 |
 | fingerprint | 10% | ~100µs 绝对抖动 | stat 密集 µs 级微基准，另设 120µs `noise_floor` 吸收跨 runner 绝对差 |
+
+### 绝对噪声下限（含 stddev）
+
+判定退化要求同时满足：相对差超过类别阈值，且绝对差 ≥ 噪声下限。下限取三者
+最大值：类别专属 `noise_floor`、全局 50µs、**本轮实测 stddev**。
+
+stddev 下限的依据：median 差小于一个标准差时，抖动与退化在统计上不可区分。
+2026-11-23 run 45195738275 的 `test_project_info_from_dir_baseline` 实测
+249.9µs（stddev 99.8µs）对历史最佳 191.4µs 差 +58.5µs/+30.6%，刚过 50µs 固定
+下限被判退化，但 Δ 仅 0.59 个标准差；同 run 内 mock sleep 测试全部 ≤1.4%，
+其余 I/O/CPU 敏感项普遍慢 20-110%，属 runner 世代差异。真实退化（≥2x）绝对差
+仍远超 stddev，不会被掩盖。
 
 ### 系统性退化检测
 

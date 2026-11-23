@@ -8,7 +8,8 @@ pytest-benchmark 格式 JSON，按测试名找最小 median 作为最佳基准�
 支持按基线类别分组对比：不同类别的测试有不同的 StdDev 特性，单一全局阈值会让
 确定性高的测试（StdDev <1%）容差过大，让 I/O 抖动大的测试（StdDev 5-27%）
 误报频繁。按类别设阈值后，确定性测试可用 10% 严格阈值，抖动测试用 15-25%
-宽松阈值，减少误报同时保留检测灵敏度。
+宽松阈值，减少误报同时保留检测灵敏度。判定退化时除固定绝对噪声下限外，还以
+本轮实测 stddev 兜底：median 差在一个标准差以内不判退化。
 
 系统性退化判定只统计"对 runner 抖动敏感"的测试：mock ``time.sleep`` 的类别
 （:attr:`BenchmarkCategory.deterministic`）耗时与机器负载无关，一旦退化即视为
@@ -57,6 +58,13 @@ DEFAULT_THRESHOLD = 25.0
 # 差极小"的退化判定，真实代码退化（数倍变慢）绝对差远超下限仍会被捕获。
 # ms 级 I/O 类别（如 build_perf）抖动绝对量在 ms 级，全局下限不够用，
 # 通过 BenchmarkCategory.noise_floor 按类别覆盖
+#
+# 除固定下限外，还取本轮实测 stddev 作为下限：median 差小于一个标准差时，
+# 抖动与退化在统计上不可区分。2026-11-23 run 45195738275 的
+# test_project_info_from_dir_baseline 实测 249.9µs（stddev 99.8µs）对历史最佳
+# 191.4µs 差 +58.5µs/+30.6%，刚过 50µs 固定下限被判退化，但 Δ 仅 0.59 个
+# 标准差；同 run 内 mock sleep 测试全部 ≤1.4%、其余 I/O/CPU 敏感项普遍慢
+# 20-110%，属 runner 世代差异。真实退化（≥2x）绝对差仍远超 stddev。
 NOISE_FLOOR_SECONDS = 5e-5
 
 
@@ -403,9 +411,11 @@ def compare(
 
         delta_pct = (current.median - best.median) / best.median * 100.0
         # 噪声下限：绝对差低于下限视为抖动，不判退化。类别专属下限
-        # （ms 级 I/O 类别）优先，否则用全局 NOISE_FLOOR_SECONDS（µs 级微基准）
+        # （ms 级 I/O 类别）优先，否则用全局 NOISE_FLOOR_SECONDS（µs 级微基准）；
+        # 再取本轮实测 stddev 兜底——median 差在一个标准差以内无法区分抖动与退化
         abs_delta = current.median - best.median
         floor = max(cat.noise_floor, NOISE_FLOOR_SECONDS) if cat else NOISE_FLOOR_SECONDS
+        floor = max(floor, current.stddev)
         is_regression = delta_pct > row_threshold and abs_delta >= floor
         # 当前运行是否为所有运行中最快（含当前）
         all_medians = [e.median for e in all_entries[name]]
