@@ -138,7 +138,7 @@ fsp r [project] [--entry <name>] [--debug] [--profile] [-- <args>...]
 
 `--profile` 启动耗时剖析：注入三级打点（C loader 阶段 / 入口包装器各阶段 / CPython 原生 `importtime` 逐模块导入），运行结束后输出对齐的耗时汇总表（各阶段与逐模块耗时、占总时长占比、未归因时间的"未细分"提示），定位启动性能优化点。可与 `--debug` 组合（无 loader 段）。旧 dist 构建的 wrapper 无打点时汇总缺 wrapper 段并提示重新构建，重新 `fsp b` 后完整。
 
-剖析选项支持多次运行统计（`-PR N` 取 wall_ms 中位数实际样本做汇总与对比基准）与 GUI 界面就绪自终止（Qt/tkinter 主循环首帧上屏即打点）。详见 [性能文档](performance.md)。
+剖析选项支持多次运行统计（`-PR N` 取 wall_ms 中位数实际样本做汇总与对比基准）与 GUI 界面就绪自终止（Qt/tkinter 主循环首帧上屏即打点）。详见 [性能文档](../dev/performance.md)。
 
 ## fsp package
 

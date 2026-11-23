@@ -2,7 +2,7 @@
 ==============
 
 本文档介绍 fspack 的构建流水线、模块结构与技术实现细节。面向开发者与贡献者，
-普通用户请参考 :doc:`cli` 命令参考与 :doc:`configuration` 配置说明。
+普通用户请参考 :doc:`../user/cli` 命令参考与 :doc:`../user/configuration` 配置说明。
 
 构建流水线
 ----------
@@ -301,7 +301,7 @@ manifest 哈希备忘录）不放在缓存根目录，而是写到 ``<dist>/buil
 
 源码位于 ``src/fspack/``，按职责分包，每个子包通过 facade 模式暴露公开 API
 （详见各 ``__init__.py`` docstring）。层间依赖方向、"叶子模块"清单与
-facade 例外见 :doc:`adr/0001-layering`，由 ``tests/test_layout.py`` 机械守卫。
+facade 例外见 :doc:`../adr/0001-layering` 与 :doc:`../adr/0002-project-layout`，由 ``tests/unit/core/test_layout.py`` 机械守卫。
 
 顶层模块
 ~~~~~~~~
@@ -312,36 +312,29 @@ facade 例外见 :doc:`adr/0001-layering`，由 ``tests/test_layout.py`` 机械�
 
    * - 模块
      - 职责
-   * - ``cli.py`` / ``cli_parser.py`` / ``cli_init.py`` / ``cli_help.py``
-     - CLI 入口与命令分发（cargo 风格短命令 ``fsp b/c/r/p``）+ argparse 参数声明 + ``init`` 子命令 + 帮助/版本快速路径；延迟导入重模块使 ``--help`` 提速
+   * - ``cli/``（``main.py`` / ``parser.py`` / ``help.py`` / ``dispatch.py`` / ``recursive.py`` / ``commands/``）
+     - CLI 入口与命令分发（cargo 风格短命令 ``fsp b/c/r/p``）+ argparse 参数声明 + 各子命令实现 + 帮助/版本快速路径；延迟导入重模块使 ``--help`` 提速。``cli_init.py`` 保留 ``init`` 渲染入口
    * - ``builder.py``
      - 高层构建 facade，re-export ``pipeline.build``/``runtime``/``loader``/``sync`` 等
    * - ``analyzer/``（子包：``analysis`` / ``ast_scan`` / ``fingerprint``）
      - AST 扫描源码 import，分类标准库/本地/第三方依赖；``analysis`` 负责编排与
        串行/并行调度（按采样预估的串行成本决定是否启用进程池），``ast_scan`` 负责
        单文件 AST 与 QML 解析，``fingerprint`` 负责源码指纹
-   * - ``runner.py``
-     - 运行已打包项目（原生可执行文件直跑；Linux 下 ``.exe`` 用 wine）
-   * - ``console.py``
-     - rich 驱动的彩色输出与日志配置
-   * - ``platform.py``
-     - 平台检测（Windows/Linux）与 ``Platform`` 枚举
-   * - ``progress.py``
-     - ``BuildTracker``（阶段进度与汇总）与 ``spinner`` 进度显示
-   * - ``metrics.py``
-     - ``StageRecord``/``StageRecorder`` 阶段指标数据结构（从 ``progress`` 拆出的叶子模块）
-   * - ``astutil.py``
-     - ``collect_imports``：单棵 AST 的导入收集。``config``（推断 app 类型）与
-       ``analyzer`` 都向下依赖本叶子模块，消除 config ↔ analyzer 跨层往返
-   * - ``archive.py``
-     - zip 条目安全校验原语（拒绝绝对路径/路径穿越/盘符/符号链接），
-       ``runtime.extract`` 与 ``slim.unpack`` 共用，避免精简层反向依赖运行时层
-   * - ``jsoncache.py``
-     - JSON 缓存读取骨架（解析 → 根 dict 校验 → 损坏删除/忽略），供依赖解析缓存等复用
-   * - ``exceptions.py``
-     - 自定义异常层次（``FspackError``/``DependencyError``/``NuitkaError`` 等）
-   * - ``_compat.py``
-     - 版本兼容层（``override`` 装饰器等）
+   * - ``runner.py`` / ``runner_profile.py``
+     - 运行已打包项目（原生可执行文件直跑；Linux 下 ``.exe`` 用 wine）与运行期 profile
+   * - ``ui/``（``console.py`` / ``progress.py`` / ``wizard.py``）
+     - 终端展示层：rich 彩色输出与日志配置、``BuildTracker``/spinner、交互式向导
+   * - ``core/``
+     - 叶子原语层（仅依赖标准库与 ``core.exceptions``）：
+       ``platform`` 平台检测、``metrics`` 阶段指标、``astutil`` AST 导入收集、
+       ``archive`` zip 安全校验、``jsoncache`` JSON 缓存骨架、``logutil`` 日志路径、
+       ``fsutil``/``format`` 文件与格式化、``exceptions`` 异常层次、``_compat`` 版本兼容、
+       ``resources`` 包内资源定位
+   * - ``templates/``
+     - 模板注册表与 ``string.Template`` 渲染引擎（``fsp init`` / ``fsp doctor`` 共用）
+   * - ``resources/``
+     - 包内数据：``icons/`` / ``loader/`` / ``runtime/`` / ``templates/{init,doctor}/``；
+       代码统一经 ``core.resources`` 定位
 
 config/ 子包
 ~~~~~~~~~~~~

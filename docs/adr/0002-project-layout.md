@@ -1,7 +1,7 @@
 # ADR 0002：项目结构布局与包内分层
 
-- 状态：提议（2026-06，P0 落地）
-- 关联：`docs/adr/0001-layering.md`（依赖方向）、`tests/test_layout.py`（守卫）
+- 状态：已接受（2026-06，P0-P5 落地；旧路径保留一个 minor 的兼容垫片）
+- 关联：`docs/adr/0001-layering.md`（依赖方向）、`tests/unit/core/test_layout.py`（守卫）
 - 目标：把平铺的入口/工具/资源收拢为可读、可扩展、可验证的目录结构，
   同时保持 ADR-0001 的依赖方向与 CLI 懒加载性能约束不变。
 
@@ -25,7 +25,8 @@ src/fspack/
 ├── core/                  # 叶子原语：exceptions/compat/platform/fsutil/jsoncache/...
 │   └── resources.py       # 唯一资源定位入口
 ├── ui/                    # 终端展示：console/progress/wizard
-├── analyzer/ config/ doctor/ packaging/ slim/ templates/ runner/
+├── analyzer/ config/ doctor/ packaging/ slim/ templates/
+├── runner.py runner_profile.py  # 运行与 profile（后续可再收拢为 runner/）
 └── resources/             # 包内数据：icons/loader/runtime/templates/{init,doctor}
 ```
 
@@ -42,7 +43,7 @@ cli/commands → builder/runner/doctor/templates/packaging（服务与编排）
 
 - `core` 不得 import `core` 以外的任何 `fspack.*`（`exceptions` 除外，见守卫）。
 - `ui` 只能依赖 `core`；展示层不得被纯逻辑模块反向依赖。
-- `packaging` 的 display allowlist 继续由 `tests/test_layout.py` 双向校验。
+- `packaging` 的 display allowlist 继续由 `tests/unit/core/test_layout.py` 双向校验。
 - 原有 facade（`builder.py`、各包 `__init__.py`）保留，门面允许转出口。
 
 ## 迁移规则

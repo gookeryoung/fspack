@@ -69,11 +69,11 @@ wheel。例如 `from PySide6.QtWidgets import QApplication` 只打包 QtWidgets 
 
 **多入口项目**：一个项目里有 CLI 工具 + GUI 界面 + Web 服务，可用 PEP 621 标准的
 `[project.scripts]` 声明多个入口，一次打包生成多个 exe，共享运行时与依赖。详见
-[配置参考](docs/configuration.md)。
+[配置参考](docs/user/configuration.md)。
 
 **离线打包**：`FSPACK_OFFLINE=1`（或 `fsp b -O` 单次约定）启用离线模式，所有下载
 阶段仅从本地缓存读取，适用于内网 CI 与离线打包机。完整用法见
-[离线打包指南](docs/offline.md)。
+[离线打包指南](docs/user/offline.md)。
 
 ## 竞品对比
 
@@ -167,7 +167,7 @@ fsp doctor                # 环境诊断（--test 用内置模板验证可打包
 fsp cache status|clean    # 缓存健康检查与清理
 ```
 
-全部选项明细见 [CLI 参考](docs/cli.md)。
+全部选项明细见 [CLI 参考](docs/user/cli.md)。
 
 ## 配置
 
@@ -183,7 +183,7 @@ slim-exclude = ["PySide6/translations/*"]   # wheel 精简：强制剥离
 gui = "myapp.gui:main"                       # 生成 gui.exe（无控制台窗口）
 ```
 
-完整配置项说明见 [配置参考](docs/configuration.md)。
+完整配置项说明见 [配置参考](docs/user/configuration.md)。
 
 ## 平台支持
 
@@ -198,14 +198,14 @@ macOS/Linux 目标需在同平台构建机上构建（跨机请求会明确报�
 
 Windows 产物可在 **Win7 SP1** 上运行（Python 3.9–3.14）：fspack 自动注入 API shim
 或替换 Win7 重编译版 `python3XX.dll`，并输出全量兼容扫描报告。详见
-[分发指南](docs/distribution.md)。
+[分发指南](docs/user/distribution.md)。
 
 ## CI/CD 集成
 
 fspack 自身在 `git push v*.*.*` tag 时用各平台原生 runner 打包并发布到 GitHub
 Release（见 [release.yml](.github/workflows/release.yml)）。自己的项目可参照该
 workflow 搭建打包验证与 Release 发布流水线，完整方案见
-[CI/CD 集成指南](docs/integration.md)。
+[CI/CD 集成指南](docs/dev/integration.md)。
 
 ## 产物布局
 
@@ -226,7 +226,7 @@ dist/
 ## 安全与分发
 
 Windows exe 自动嵌入 PE 资源段（VS_VERSIONINFO/manifest/图标）降低杀软误报；
-生产分发建议代码签名。Win7 兼容、误报申诉等详见 [分发指南](docs/distribution.md)。
+生产分发建议代码签名。Win7 兼容、误报申诉等详见 [分发指南](docs/user/distribution.md)。
 
 ## 开发
 
@@ -237,17 +237,17 @@ uv run pyrefly check                         # 类型检查
 uv run ruff check src tests                  # lint
 ```
 
-`make help` 查看全部快捷命令。详细架构与模块索引见 [架构文档](docs/architecture.rst)。
+`make help` 查看全部快捷命令。详细架构与模块索引见 [架构文档](docs/dev/architecture.rst)。
 
 ## 文档
 
-- [CLI 参考](docs/cli.md) — 全部命令与选项明细
-- [配置参考](docs/configuration.md) — `[tool.fspack]` 配置项与多入口声明
-- [离线打包指南](docs/offline.md) — 内网/离线机打包方案
-- [分发指南](docs/distribution.md) — 安全分发与 Win7 兼容
-- [架构与工作原理](docs/architecture.rst) — 构建流水线、模块索引、技术实现细节
-- [CI/CD 集成指南](docs/integration.md) — GitHub Actions 集成方案
-- [API 参考](docs/api.rst) — 自动生成的 API 文档
+- [CLI 参考](docs/user/cli.md) — 全部命令与选项明细
+- [配置参考](docs/user/configuration.md) — `[tool.fspack]` 配置项与多入口声明
+- [离线打包指南](docs/user/offline.md) — 内网/离线机打包方案
+- [分发指南](docs/user/distribution.md) — 安全分发与 Win7 兼容
+- [架构与工作原理](docs/dev/architecture.rst) — 构建流水线、模块索引、技术实现细节
+- [CI/CD 集成指南](docs/dev/integration.md) — GitHub Actions 集成方案
+- [API 参考](docs/dev/api.rst) — 自动生成的 API 文档
 - [更新日志](CHANGELOG.md) — 版本变更记录
 
 ## 许可证

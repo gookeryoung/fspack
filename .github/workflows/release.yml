@@ -13,7 +13,7 @@ name: Release
 # Linux/macOS 的 python-build-standalone 没有 3.8/3.9 资产，这两版只在 Windows 发布。
 # 每格显式传 --py-version，产物落在该格自己的 dist 根（不走配置的多版本
 # dist/py<ver>/ 布局）；发行包文件名已含 py<完整版本>，各格产物汇总到同一个
-# GitHub Release 不会重名。矩阵漂移由 tests/test_release_workflow.py 守护。
+# GitHub Release 不会重名。矩阵漂移由 tests/integration/test_release_workflow.py 守护。
 #
 # release job 依赖以上 job，收集构建产物（exe/deb/tar.gz/zip）+
 # PyPI 产物（whl/sdist），统一上传到 GitHub Release。
@@ -69,7 +69,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 3.8–3.14 与 KNOWN_EMBED_VERSIONS 对齐（tests/test_release_workflow.py 守护）
+        # 3.8–3.14 与 KNOWN_EMBED_VERSIONS 对齐（tests/integration/test_release_workflow.py 守护）
         python-version: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v5
@@ -155,7 +155,7 @@ jobs:
       fail-fast: false
       matrix:
         # 3.10–3.14 与 KNOWN_STANDALONE_VERSIONS 对齐：3.8/3.9 无上游运行时资产
-        # （tests/test_release_workflow.py 守护）
+        # （tests/integration/test_release_workflow.py 守护）
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v5

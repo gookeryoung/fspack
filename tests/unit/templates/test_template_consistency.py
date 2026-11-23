@@ -57,7 +57,7 @@ EXPECTED_DOCTOR_IDS: frozenset[str] = frozenset(
     }
 )
 
-# doctor 富示例模板的 requires-python：刻意覆盖不同运行时段（见 docs/cli.md
+# doctor 富示例模板的 requires-python：刻意覆盖不同运行时段（见 docs/user/cli.md
 # 的 doctor 模板表），**不做归一**，差异是产品能力展示而非漂移。
 # ``None`` 表示模板 pyproject.toml 未声明，运行期回退注册表默认值。
 EXPECTED_DOCTOR_REQUIRES: dict[str, str | None] = {

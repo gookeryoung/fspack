@@ -458,7 +458,7 @@ def _render_package_table(report: SizeReport, *, interactive: bool) -> None:
     if interactive and pygments_pkg is not None:
         console.hint(
             f"pygments（{pygments_pkg.size_formatted}）仅语法高亮/富 traceback/rich.markdown 需要；"
-            "未使用可在 `[tool.fspack]` 的 `slim-exclude` 中剥离（见 docs/configuration.md）"
+            "未使用可在 `[tool.fspack]` 的 `slim-exclude` 中剥离（见 docs/user/configuration.md）"
         )
 
 

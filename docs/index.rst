@@ -26,20 +26,21 @@ pre-compiled bytecode for fast startup.
    :maxdepth: 2
    :caption: Guides
 
-   integration
-   offline
-   distribution
-   performance
+   user/offline
+   user/distribution
+   dev/integration
+   dev/performance
 
 .. toctree::
    :maxdepth: 2
    :caption: Reference
 
-   cli
-   configuration
-   architecture
+   user/cli
+   user/configuration
+   dev/architecture
+   dev/api
    adr/0001-layering
-   api
+   adr/0002-project-layout
    changelog
 
 30-Second Quick Start
@@ -85,7 +86,7 @@ Specify project directory and options:
 
    fsp b /path/to/project --mirror aliyun --py-version 3.11.9 --target windows
 
-Full command reference: :doc:`cli`. Configuration options: :doc:`configuration`.
+Full command reference: :doc:`user/cli`. Configuration options: :doc:`user/configuration`.
 
 Development
 ===========
@@ -98,4 +99,4 @@ Development
    uv run ruff check src tests                                  # Lint
 
 Run ``make help`` for all shortcuts; multi-version tests with ``make tox``.
-Architecture and implementation details: :doc:`architecture`.
+Architecture and implementation details: :doc:`dev/architecture`.

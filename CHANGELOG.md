@@ -18,8 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `fsp doctor --bench-compare` 新增 `loader_build` 基线类别（25% 阈值、5ms 噪声下限），CI benchmark job 纳入新基线文件
 
 ### Changed
+- **项目结构重构（P0–P5）**：CLI 拆为 `fspack/cli/` 包与 `commands/*`；包内资源统一到 `resources/` 并经 `core.resources` 定位；叶子原语收拢 `core/`、展示层收拢 `ui/`；测试按源码域镜像为 `tests/unit/<domain>/`、`tests/integration/`、`tests/perf/`；`pytest`/`coverage`/`ruff` 配置并入 `pyproject.toml`，文档分 `user/`/`dev/`；旧模块路径保留一个 minor 的 `sys.modules` 兼容垫片，并新增 `tests/unit/core/test_layout.py` 的 core 叶子层守卫
 - 发布工作流改为按「平台 × Python 版本」矩阵逐格打包：Windows 发布 3.8–3.14 共 7 个版本、Linux 发布 3.10–3.14 共 5 个版本（3.8/3.9 无 standalone 运行时资产，仅 Windows 发布），每格显式 `--py-version` 打包、产物名含 `py<版本>`，统一汇入同一个 GitHub Release；新增 `tests/test_release_workflow.py` 守护矩阵与 `[tool.fspack] python-versions`、运行时资产表保持一致
-- fspack 自打包 `[tool.fspack].slim-exclude` 排除 rich 从未使用的可选依赖 `pygments`/`markdown-it-py`/`mdurl`（约 4.5MB，占自身产物 site-packages 六成以上）；已在 `pyproject.toml` 注释与 `docs/configuration.md` 说明普通应用若用语法高亮/富 traceback/Markdown 不可照搬
+- fspack 自打包 `[tool.fspack].slim-exclude` 排除 rich 从未使用的可选依赖 `pygments`/`markdown-it-py`/`mdurl`（约 4.5MB，占自身产物 site-packages 六成以上）；已在 `pyproject.toml` 注释与 `docs/user/configuration.md` 说明普通应用若用语法高亮/富 traceback/Markdown 不可照搬
 - 多入口 C loader 改为共享缓存 C 对象、每入口独立 Windows 资源与链接；入口按有效子系统归并，缓存键纳入工具链与资源内容身份，同键构建单飞、原子发布并做 SHA256 校验
 - Windows 资源缺失（含仅 manifest）不再缓存最终 exe，但保留已成功的 C 对象，修复后可重新链接补齐资源
 
@@ -37,7 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **产物命名加架构段（破坏性变更）**：发行包基名由 `<name>-<ver>-py<ver>-<platform>-slim` 改为 `<name>-<ver>-py<ver>-<platform>-<arch>-slim`；manifest/SBOM 由 `<name>-<ver>-manifest.json` / `<name>-<ver>-sbom.json` 改为 `<name>-<ver>-py<ver>-<platform>-manifest.json` / `-sbom.json`；`.deb` 的 `Architecture` 由 Linux 目标架构推导（x86_64→amd64、arm64→arm64），不再写死 amd64
-- **不保留旧名兼容开关**：`dist/release/` 只产出新名，不提供 `--legacy-names` 之类的回退。下游脚本请改用通配匹配（如 `*-windows-*-slim-setup.exe`、`*-linux-*-slim.tar.gz`、`*-manifest.json`），迁移对照与 release 说明写法见 [docs/distribution.md](docs/distribution.md#产物命名与迁移)
+- **不保留旧名兼容开关**：`dist/release/` 只产出新名，不提供 `--legacy-names` 之类的回退。下游脚本请改用通配匹配（如 `*-windows-*-slim-setup.exe`、`*-linux-*-slim.tar.gz`、`*-manifest.json`），迁移对照与 release 说明写法见 [docs/user/distribution.md](docs/user/distribution.md#产物命名与迁移)
 - macOS 架构探测由「非 macOS 宿主静默回退 x86_64」改为显式报错：非 macOS 宿主或未知架构直接失败，避免产物名与实际 Mach-O 架构不符
 - 统一 18 个 init 模板的 `requires-python` 为 `>=3.8`（依据根 `pyproject.toml`、CI 矩阵 3.8–3.14、运行时 embed 3.8–3.14 / standalone 3.10–3.14）；PySide2 因无 3.10+ wheel 保留 `>=3.8,<3.10` 例外。`Template` 默认约束从 `>=3.13` 修正为 `>=3.8`，`cli_init` 详情区基线改为引用 `DEFAULT_REQUIRES_PYTHON`
 - doctor 模板保留各自运行时段（`==3.14.*` / `>=3.13` / `>=3.8,<3.13` 等），不做归一；未声明 `requires-python` 的 `tk_app` 回退新默认 `>=3.8`
@@ -50,7 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Docs
 - 新增 `docs/analysis/2026-11-13-template-test-fixture-consolidation-analysis.md` 模板与测试示例工程整合分析
-- `docs/cli.md` 补充 init 模板 `requires-python` 默认值与 PySide2 例外，并说明已有项目不受影响
+- `docs/user/cli.md` 补充 init 模板 `requires-python` 默认值与 PySide2 例外，并说明已有项目不受影响
 - 平台支持矩阵按实际能力校正：Linux/macOS 运行时仅 3.10–3.14、3.8/3.9 仅 Windows embed、macOS 尚无 CI 真实构建；补充「一次构建只产出一个目标、无 `--arch`、所有目标共用 `dist/`」说明
 - 新增 `docs/analysis/2026-11-13-multi-target-packaging-analysis.md` 多目标打包方案与现状盘点
 
@@ -700,7 +701,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ProjectInfo.from_dir` 增加 lru_cache 缓存，避免构建流程内重复解析
 
 ### Documentation
-- README 重构为使用导向并添加 doctor 命令说明，技术细节移到 `docs/architecture.rst`
+- README 重构为使用导向并添加 doctor 命令说明，技术细节移到 `docs/dev/architecture.rst`
 
 ### Tests
 - 补充 dep_analyzer 单元测试至 74 个、Linux 平台离线集成测试与 py313 pygame conway CI 测试

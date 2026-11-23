@@ -112,7 +112,7 @@ req-49 驱动的 20 轮迭代分 4 个阶段交付：阶段 1 健壮性基础（
 
 ### 多入口 loader 性能门禁
 
-`tests/test_loader_perf_baseline.py` 补充多入口 C loader 的确定性门禁与真实
+`tests/perf/test_loader_perf_baseline.py` 补充多入口 C loader 的确定性门禁与真实
 MinGW 基线。普通门禁（非 slow）用假工具链断言：1/5/20 入口下 C 对象恒编译
 1 次、Windows 资源与链接各按入口数增长、工具链探测次数与入口数无关；
 预热构建零工具调用；持久化工具链身份命中时只做有限 `stat`/`which`。
@@ -126,7 +126,7 @@ MinGW 基线。普通门禁（非 slow）用假工具链断言：1/5/20 入口�
 
 ### core（9 个，阈值 10%）
 
-`tests/test_perf_baseline.py`，核心场景基线，确定性高 StdDev <1%。
+`tests/perf/test_perf_baseline.py`，核心场景基线，确定性高 StdDev <1%。
 
 | 测试名 | 场景 |
 |--------|------|
@@ -142,13 +142,13 @@ MinGW 基线。普通门禁（非 slow）用假工具链断言：1/5/20 入口�
 
 ### fingerprint（1 个，阈值 10%）
 
-`tests/test_perf_baseline.py` 的 `test_source_fingerprint_baseline`，stat 密集
+`tests/perf/test_perf_baseline.py` 的 `test_source_fingerprint_baseline`，stat 密集
 µs 级微基准。同一份代码跨 runner 绝对抖动可达 ~100µs，因此单独成类并设
 120µs 绝对噪声下限（`noise_floor`）；真实退化（数倍变慢）绝对差远超下限仍会捕获。
 
 ### build_perf（4 个，阈值 25%）
 
-`tests/test_build_perf_baseline.py`，端到端编排基线，含 AST 扫描与文件 I/O
+`tests/perf/test_build_perf_baseline.py`，端到端编排基线，含 AST 扫描与文件 I/O
 抖动 StdDev 5-27%。mock 掉 7 个阶段函数（runtime 下载、wheel 下载、源码编译等），
 仅测量阶段编排 + BuildTracker + ProjectInfo 解析 + console 渲染开销。
 
@@ -161,7 +161,7 @@ MinGW 基线。普通门禁（非 slow）用假工具链断言：1/5/20 入口�
 
 ### nuitka_compile（4 个，阈值 10%）
 
-`tests/test_nuitka_compile_baseline.py`，Nuitka 编译基线，mock `time.sleep`
+`tests/perf/test_nuitka_compile_baseline.py`，Nuitka 编译基线，mock `time.sleep`
 模拟编译耗时，确定性高 StdDev <1%。
 
 | 测试名 | 场景 |
@@ -173,7 +173,7 @@ MinGW 基线。普通门禁（非 slow）用假工具链断言：1/5/20 入口�
 
 ### wheel_download（4 个，阈值 10%）
 
-`tests/test_wheel_download_baseline.py`，wheel 下载基线，mock `time.sleep`
+`tests/perf/test_wheel_download_baseline.py`，wheel 下载基线，mock `time.sleep`
 模拟下载耗时，确定性高 StdDev <1%。
 
 | 测试名 | 场景 |
@@ -185,7 +185,7 @@ MinGW 基线。普通门禁（非 slow）用假工具链断言：1/5/20 入口�
 
 ### entry_startup（4 个，阈值 15%）
 
-`tests/test_entry_startup_baseline.py`，启动时间基线，真实 `subprocess.run`
+`tests/perf/test_entry_startup_baseline.py`，启动时间基线，真实 `subprocess.run`
 启动 Python 解释器，subprocess 抖动 StdDev 5-8%。
 
 | 测试名 | 场景 |
@@ -197,7 +197,7 @@ MinGW 基线。普通门禁（非 slow）用假工具链断言：1/5/20 入口�
 
 ### loader_build（3 个，阈值 25%）
 
-`tests/test_loader_perf_baseline.py`，真实 MinGW 编译/链接基线，冷构建
+`tests/perf/test_loader_perf_baseline.py`，真实 MinGW 编译/链接基线，冷构建
 StdDev 5-20%，热构建只做校验与复制。缺少 MinGW/windres 时自动跳过。
 
 | 测试名 | 场景 |
@@ -212,15 +212,15 @@ StdDev 5-20%，热构建只做校验与复制。缺少 MinGW/windres 时自动�
 
 ```bash
 # 运行全部基线测试（slow marker，默认门禁不执行）
-uv run pytest tests/test_perf_baseline.py tests/test_build_perf_baseline.py \
-  tests/test_nuitka_compile_baseline.py tests/test_wheel_download_baseline.py \
-  tests/test_entry_startup_baseline.py -m slow --benchmark-only
+uv run pytest tests/perf/test_perf_baseline.py tests/perf/test_build_perf_baseline.py \
+  tests/perf/test_nuitka_compile_baseline.py tests/perf/test_wheel_download_baseline.py \
+  tests/perf/test_entry_startup_baseline.py -m slow --benchmark-only
 
 # 运行单个类别的基线测试
-uv run pytest tests/test_nuitka_compile_baseline.py -m slow --benchmark-only
+uv run pytest tests/perf/test_nuitka_compile_baseline.py -m slow --benchmark-only
 
 # 查看基线统计（median/min/mean/stddev）
-uv run pytest tests/test_perf_baseline.py -m slow --benchmark-only \
+uv run pytest tests/perf/test_perf_baseline.py -m slow --benchmark-only \
   --benchmark-columns=median,min,mean,stddev
 ```
 
@@ -228,7 +228,7 @@ uv run pytest tests/test_perf_baseline.py -m slow --benchmark-only \
 
 ```bash
 # 保存当前运行为基线快照（命名遵循 iter<N> 或 main 约定）
-uv run pytest tests/test_perf_baseline.py -m slow --benchmark-only \
+uv run pytest tests/perf/test_perf_baseline.py -m slow --benchmark-only \
   --benchmark-save=iter145 --benchmark-min-rounds=20 --benchmark-warmup=on
 
 # 快照保存到 .benchmarks/<platform>/<name>_<datetime>.json
@@ -338,9 +338,9 @@ uv run fsp doctor --bench-compare --bench-dir .benchmarks/
 
 ```bash
 # 重新运行基线测试保存新快照
-uv run pytest tests/test_perf_baseline.py tests/test_build_perf_baseline.py \
-  tests/test_nuitka_compile_baseline.py tests/test_wheel_download_baseline.py \
-  tests/test_entry_startup_baseline.py -m slow --benchmark-only \
+uv run pytest tests/perf/test_perf_baseline.py tests/perf/test_build_perf_baseline.py \
+  tests/perf/test_nuitka_compile_baseline.py tests/perf/test_wheel_download_baseline.py \
+  tests/perf/test_entry_startup_baseline.py -m slow --benchmark-only \
   --benchmark-save=main --benchmark-min-rounds=20 --benchmark-warmup=on
 
 # 提交新快照到 .benchmarks/（可选，CI 缓存会自动更新）
@@ -366,9 +366,9 @@ uv run pytest tests/test_perf_baseline.py tests/test_build_perf_baseline.py \
 
 ```bash
 # 生成 iter-145 最终基线快照
-uv run pytest tests/test_perf_baseline.py tests/test_build_perf_baseline.py \
-  tests/test_nuitka_compile_baseline.py tests/test_wheel_download_baseline.py \
-  tests/test_entry_startup_baseline.py -m slow --benchmark-only \
+uv run pytest tests/perf/test_perf_baseline.py tests/perf/test_build_perf_baseline.py \
+  tests/perf/test_nuitka_compile_baseline.py tests/perf/test_wheel_download_baseline.py \
+  tests/perf/test_entry_startup_baseline.py -m slow --benchmark-only \
   --benchmark-save=0126_iter145-final --benchmark-min-rounds=20 --benchmark-warmup=on \
   --benchmark-columns=median,min,mean,stddev
 ```
