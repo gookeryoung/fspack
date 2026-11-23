@@ -9,7 +9,7 @@ import pytest
 from rich.console import Console
 from rich.table import Table
 
-from fspack.progress import (
+from fspack.ui.progress import (
     BuildTracker,
     StageRecord,
     StageRecorder,
@@ -163,7 +163,7 @@ class TestBuildTracker:
 
     def test_stage_announces_index_and_result(self) -> None:
         """阶段进入/退出打印 [i] 序号与耗时，序号在同一流程内自增."""
-        from fspack.console import console
+        from fspack.ui.console import console
 
         tracker = BuildTracker()
         with console.rich.capture() as capture:
@@ -178,7 +178,7 @@ class TestBuildTracker:
 
     def test_stage_announce_can_be_disabled(self) -> None:
         """announce=False 时只收集指标，不产生阶段骨架输出."""
-        from fspack.console import console
+        from fspack.ui.console import console
 
         tracker = BuildTracker(announce=False)
         with console.rich.capture() as capture, tracker.stage("静默阶段"):

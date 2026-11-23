@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from fspack.platform import Platform
+from fspack.core.platform import Platform
 
 # 并行 subprocess 阈值：低于此数走串行，避免线程池启动开销
 _PARALLEL_THRESHOLD = 8

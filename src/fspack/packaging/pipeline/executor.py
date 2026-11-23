@@ -1,8 +1,8 @@
 """构建流水线编排实现：``build`` 主入口 + ``_execute_build`` 主体.
 
 从 :mod:`fspack.packaging.pipeline` facade 迁入（facade 仅保留 re-export）。
-本模块沿用 facade 时期的顶部轻量化约定：``fspack.console`` /
-``fspack.progress`` / ``fspack.packaging.profile`` 全部为函数内延迟导入
+本模块沿用 facade 时期的顶部轻量化约定：``fspack.ui.console`` /
+``fspack.ui.progress`` / ``fspack.packaging.profile`` 全部为函数内延迟导入
 （``BuildTracker``/``ProfileContext`` 类型注解仅在 TYPE_CHECKING 块内），
 守护测试 ``test_builder_import_does_not_load_console`` /
 ``test_builder_import_does_not_load_progress`` /
@@ -33,7 +33,8 @@ from fspack.config import (
     embed_cache_dir,
     resolve_py_version,
 )
-from fspack.exceptions import ProjectError
+from fspack.core.exceptions import ProjectError
+from fspack.core.platform import Platform, detect_platform
 from fspack.packaging.log_file import LogFormat, setup_log_file, teardown_log_file
 from fspack.packaging.pipeline.deps_stage import _save_installed_dependencies
 from fspack.packaging.pipeline.dist_helpers import (
@@ -61,22 +62,21 @@ from fspack.packaging.pipeline.stages import (
 from fspack.packaging.profile_log import ProfileOptions
 from fspack.packaging.runtime import write_pth
 from fspack.packaging.sync import copy_source
-from fspack.platform import Platform, detect_platform
 
 if TYPE_CHECKING:
     # BuildTracker 仅用于 _execute_build 签名类型注解（``from __future__ import
-    # annotations`` 使注解不在运行时求值），顶部不导入 fspack.progress 避免连锁
+    # annotations`` 使注解不在运行时求值），顶部不导入 fspack.ui.progress 避免连锁
     # 触发 rich.progress/rich.table 加载（省 ~12ms）。build() 内实例化时才 import。
     # ProfileContext 仅用于 build() 内 ``profile_ctx`` 局部变量类型注解。
     # ProfileReport 仅用于 _save_and_compare_profile 签名注解。
-    # 顶部不导入 fspack.packaging.profile 避免连锁触发 fspack.console
+    # 顶部不导入 fspack.packaging.profile 避免连锁触发 fspack.ui.console
     # （~17ms）+ rich.table 加载，build() 内启用 profile 时才 import。
     # ProfileOptions 本可 TYPE_CHECKING 导入（仅签名注解），但它所在的
     # profile_log 模块顶部只有标准库轻依赖，runtime 导入不触发 rich。
     from fspack.packaging.profile import ProfileContext, ProfileReport
-    from fspack.progress import BuildTracker
+    from fspack.ui.progress import BuildTracker
 
-# _print_build_plan 延迟加载：避免顶层加载 fspack.console 模块（rich 控制台），
+# _print_build_plan 延迟加载：避免顶层加载 fspack.ui.console 模块（rich 控制台），
 # import fspack.builder 时不应触发 console / profile 模块加载。
 # 通过 __getattr__ 惰性解析 + build() 内 dry-run 分支首次使用时绑定全局。
 _PRINT_BUILD_PLAN_NAME = "_print_build_plan"
@@ -203,9 +203,9 @@ def build(  # noqa: PLR0913
     保留 ``.build_failed`` 便于用户排查。
     """
     opts = options or BuildOptions()
-    # 延迟导入：BuildTracker 实例化触发 fspack.progress 加载（含 rich.progress/
+    # 延迟导入：BuildTracker 实例化触发 fspack.ui.progress 加载（含 rich.progress/
     # rich.table ~12ms）。仅在真正构建时加载，避免 import fspack.builder 热路径触发。
-    from fspack.progress import BuildTracker
+    from fspack.ui.progress import BuildTracker
 
     tracker = BuildTracker()
     project_dir = Path(project_dir).resolve()
@@ -226,7 +226,7 @@ def build(  # noqa: PLR0913
     _handle_dist_incomplete(dist, auto_clean)
 
     log_wrapper = setup_log_file(Path(log_file), log_format) if log_file is not None else None
-    # 延迟导入：profile 模块顶部 from fspack.console import console 会连锁触发
+    # 延迟导入：profile 模块顶部 from fspack.ui.console import console 会连锁触发
     # rich.console/rich.logging/rich.theme 加载（~17ms）。仅在启用 profile 时加载。
     profile_ctx: ProfileContext | None = None
     if profile.enabled:
@@ -413,7 +413,7 @@ def _execute_build(  # noqa: PLR0912, PLR0913
 
     # dry-run 模式：仅解析项目 + 分析依赖，打印计划后返回
     if dry_run:
-        # 首次使用时才加载 plan_printer（触发 fspack.console rich 导入）
+        # 首次使用时才加载 plan_printer（触发 fspack.ui.console rich 导入）
         from fspack.packaging.pipeline.plan_printer import _print_build_plan as _pbp
 
         globals()[_PRINT_BUILD_PLAN_NAME] = _pbp
@@ -461,9 +461,9 @@ def _execute_build(  # noqa: PLR0912, PLR0913
                 _logger.warning("删除 .pth 失败: %s（%s）", _pth_file, e)
 
     with tracker.stage("复制源码") as st:
-        # 延迟导入：spinner 触发 fspack.progress 加载（含 rich.progress ~12ms）。
+        # 延迟导入：spinner 触发 fspack.ui.progress 加载（含 rich.progress ~12ms）。
         # 仅在实际复制源码时加载，避免 import fspack.builder 热路径触发。
-        from fspack.progress import spinner
+        from fspack.ui.progress import spinner
 
         src_dst = cfg.dist_dir / "src"
         with spinner(f"复制 {info.name} 源码"):
@@ -627,11 +627,11 @@ def _execute_build(  # noqa: PLR0912, PLR0913
         if _post_build_pool is not None:
             _post_build_pool.shutdown(wait=True)
 
-    # 延迟导入：console 触发 fspack.console 加载（含 rich.console/rich.logging/
+    # 延迟导入：console 触发 fspack.ui.console 加载（含 rich.console/rich.logging/
     # rich.theme ~17ms）。仅在构建完成输出 summary 时加载。注意 _execute_build
-    # 内 spinner（L277）已连锁加载 fspack.console，此 import 为显式自包含。
-    from fspack.console import console
-    from fspack.format import format_seconds
+    # 内 spinner（L277）已连锁加载 fspack.ui.console，此 import 为显式自包含。
+    from fspack.core.format import format_seconds
+    from fspack.ui.console import console
 
     console.rich.print(tracker.summary())
     size_report = None

@@ -237,9 +237,9 @@ def test_windows_loader_cached_entries_execute_after_relocation(
     import pefile
 
     from fspack.config import AppType
+    from fspack.core.platform import Platform
     from fspack.packaging.loader import LoaderVersionInfo, compile_loader, generate_loader_source, mingw_available
     from fspack.packaging.loader.toolchain import _find_windres
-    from fspack.platform import Platform
 
     if not mingw_available() or not shutil.which(_find_windres()):
         pytest.skip("requires MinGW gcc and windres")

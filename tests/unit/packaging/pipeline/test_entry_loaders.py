@@ -10,13 +10,13 @@ from typing import Any, cast
 
 import pytest
 
-from fspack._compat import override
 from fspack.config import AppType, BuildOptions, EntryPoint, ProjectInfo, get_mirror
-from fspack.exceptions import LoaderError
-from fspack.metrics import StageRecorder
+from fspack.core._compat import override
+from fspack.core.exceptions import LoaderError
+from fspack.core.metrics import StageRecorder
+from fspack.core.platform import Platform
 from fspack.packaging.loader import LoaderVersionInfo
 from fspack.packaging.pipeline.stages import _MAX_LOADER_WORKERS, BuildContext, _build_entry_loaders
-from fspack.platform import Platform
 
 # --- _build_entry_loaders 并行编译测试（iter-133）---
 
@@ -29,7 +29,7 @@ def _make_multi_entry_context(
 ) -> BuildContext:
     """构造多入口上下文：gui/web 使用对应类型，其余为 CLI."""
     from fspack.config import BuildConfig
-    from fspack.progress import BuildTracker
+    from fspack.ui.progress import BuildTracker
 
     src_dir = tmp_path / "src"
     src_dir.mkdir(parents=True)
@@ -214,7 +214,7 @@ def test_build_entry_loaders_single_entry_no_parallel(tmp_path: Path, monkeypatc
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
     (tmp_path / "app.py").write_text("def main():\n    pass\n")
     from fspack.config import BuildConfig, ProjectInfo
-    from fspack.progress import BuildTracker
+    from fspack.ui.progress import BuildTracker
 
     info = ProjectInfo.from_dir(tmp_path, "3.11.9")
     cfg = BuildConfig(
@@ -455,7 +455,7 @@ def test_build_entry_loaders_worker_metrics_are_local(tmp_path: Path, monkeypatc
         return out_exe
 
     monkeypatch.setattr(os, "cpu_count", lambda: 3)
-    monkeypatch.setattr("fspack.progress.StageRecorder", OwnedRecorder)
+    monkeypatch.setattr("fspack.ui.progress.StageRecorder", OwnedRecorder)
     monkeypatch.setattr("fspack.packaging.pipeline.compile_stage.StageRecorder", OwnedRecorder)
     monkeypatch.setattr("fspack.packaging.pipeline.stages.compile_loader", fake_compile)
     _build_entry_loaders(ctx, resolved_icon=None, has_tkinter=False)

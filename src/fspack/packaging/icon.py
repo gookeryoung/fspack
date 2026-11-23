@@ -23,7 +23,7 @@ import logging
 import os
 from pathlib import Path
 
-from fspack import logutil
+from fspack.core import logutil
 from fspack.packaging import action_cache
 
 __all__ = ["SUPPORTED_IMAGE_EXTS", "ensure_ico", "find_favicon"]

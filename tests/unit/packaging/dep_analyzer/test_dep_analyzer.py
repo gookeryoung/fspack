@@ -25,6 +25,7 @@ from typing import Any
 import pytest
 
 from fspack.config import AppType, BuildConfig, BuildOptions, MirrorConfig, ProjectInfo
+from fspack.core.platform import Platform
 from fspack.packaging.dep_analyzer import (
     BinaryInfo,
     DepGraph,
@@ -43,8 +44,7 @@ from fspack.packaging.dep_analyzer import (
     strip_unused_binaries,
 )
 from fspack.packaging.pipeline.stages import BuildContext, _analyze_binary_dependencies
-from fspack.platform import Platform
-from fspack.progress import BuildTracker
+from fspack.ui.progress import BuildTracker
 
 
 @dataclass

@@ -9,11 +9,11 @@ from pathlib import Path
 
 import pytest
 
-from fspack.exceptions import BuiltinError
+from fspack.core.exceptions import BuiltinError
+from fspack.core.platform import Platform
 from fspack.packaging.builtin import TkinterBundler
 from fspack.packaging.runtime import STANDALONE_BASE_URL, STANDALONE_RELEASE_TAG
-from fspack.platform import Platform
-from fspack.progress import StageRecorder
+from fspack.ui.progress import StageRecorder
 
 
 def test_standalone_windows_tarball_name() -> None:

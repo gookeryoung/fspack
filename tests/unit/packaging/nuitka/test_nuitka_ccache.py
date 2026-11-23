@@ -13,13 +13,13 @@ import pytest
 from fspack.config import (
     get_mirror,
 )
-from fspack.platform import Platform
+from fspack.core.platform import Platform
 
 
 def test_ensure_ccache_finds_system_ccache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """PATH 中有 ccache 时优先使用系统 ccache."""
     from fspack.packaging.nuitka import NuitkaCompiler
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     fake_ccache = tmp_path / "ccache"
     fake_ccache.write_bytes(b"")
@@ -32,7 +32,7 @@ def test_ensure_ccache_finds_system_ccache(tmp_path: Path, monkeypatch: pytest.M
 def test_ensure_ccache_finds_local_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """PATH 无 ccache 但本地缓存有时使用本地缓存."""
     from fspack.packaging.nuitka import NuitkaCompiler
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     cache_root = tmp_path / "nuitka"
     ccache_dir = tmp_path / "ccache"
@@ -50,7 +50,7 @@ def test_ensure_ccache_finds_local_cache(tmp_path: Path, monkeypatch: pytest.Mon
 def test_ensure_ccache_windows_uses_exe_extension(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Windows 目标查找 ccache.exe."""
     from fspack.packaging.nuitka import NuitkaCompiler
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     cache_root = tmp_path / "nuitka"
     ccache_dir = tmp_path / "ccache"
@@ -71,7 +71,7 @@ def test_ensure_ccache_migrates_nested_local_cache(tmp_path: Path, monkeypatch: 
     迁移到根目录，避免重新下载。覆盖 Windows 反复下载的真实场景。
     """
     from fspack.packaging.nuitka import NuitkaCompiler
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     cache_root = tmp_path / "nuitka"
     ccache_dir = tmp_path / "ccache"
@@ -106,7 +106,7 @@ def test_ensure_ccache_migrates_nested_local_cache(tmp_path: Path, monkeypatch: 
 def test_ensure_ccache_migrates_nested_local_cache_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Linux 本地缓存子目录结构同样支持自动迁移."""
     from fspack.packaging.nuitka import NuitkaCompiler
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     cache_root = tmp_path / "nuitka"
     ccache_dir = tmp_path / "ccache"
@@ -134,7 +134,7 @@ def test_ensure_ccache_migrates_nested_local_cache_linux(tmp_path: Path, monkeyp
 def test_ensure_ccache_unsupported_platform_returns_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """无预编译二进制的平台（理论上所有平台都有，但 mock URL 缺失时）返回 None."""
     from fspack.packaging.nuitka import NuitkaCompiler
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     # 清空 URL 映射模拟不支持的平台
     monkeypatch.setattr("fspack.packaging.nuitka.ccache.CCACHE_URLS", {})
@@ -147,7 +147,7 @@ def test_ensure_ccache_unsupported_platform_returns_none(tmp_path: Path, monkeyp
 def test_ensure_ccache_download_failure_returns_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """下载失败时回退到 None（warning 不中断）."""
     from fspack.packaging.nuitka import NuitkaCompiler
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     monkeypatch.setattr("fspack.packaging.nuitka.shutil.which", lambda name: None)
 
@@ -163,7 +163,7 @@ def test_ensure_ccache_download_failure_returns_none(tmp_path: Path, monkeypatch
 def test_compile_src_passes_ccache_to_compile_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """ccache=True 时 compile_src 调 _ensure_ccache 并传 ccache_exe 到 _compile_files."""
     from fspack.packaging.nuitka import NuitkaCompiler
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     src = tmp_path / "src"
     src.mkdir()
@@ -198,7 +198,7 @@ def test_compile_src_passes_ccache_to_compile_files(tmp_path: Path, monkeypatch:
 def test_compile_src_ccache_false_skips_ensure_ccache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """ccache=False 时不调 _ensure_ccache，_compile_files 收到 ccache_exe=None."""
     from fspack.packaging.nuitka import NuitkaCompiler
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     src = tmp_path / "src"
     src.mkdir()
@@ -238,7 +238,7 @@ def test_compile_src_ccache_false_skips_ensure_ccache(tmp_path: Path, monkeypatc
 def test_compile_with_stamp_passes_ccache_to_compile_src(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """compile_with_stamp 透传 ccache=True 到 compile_src."""
     from fspack.packaging.nuitka import NuitkaCompiler
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     src = tmp_path / "src"
     src.mkdir()
@@ -358,7 +358,7 @@ def test_download_and_extract_ccache_windows(tmp_path: Path, monkeypatch: pytest
 def test_ensure_ccache_download_success_returns_exe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """PATH 无 ccache 且本地缓存无时下载预编译二进制成功，返回 ccache 路径并设 stage."""
     from fspack.packaging.nuitka import NuitkaCompiler
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     monkeypatch.setattr("fspack.packaging.nuitka.shutil.which", lambda name: None)
 
@@ -379,9 +379,9 @@ def test_ensure_ccache_download_success_returns_exe(tmp_path: Path, monkeypatch:
 
 def test_ensure_ccache_download_success_linux_chmod(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Linux 下载成功后 chmod 0o755（容错 OSError 不中断）."""
+    from fspack.core.platform import Platform
     from fspack.packaging.nuitka import NuitkaCompiler
-    from fspack.platform import Platform
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     monkeypatch.setattr("fspack.packaging.nuitka.shutil.which", lambda name: None)
 
@@ -403,7 +403,7 @@ def test_ensure_ccache_download_succeeds_but_exe_missing_returns_none(
 ) -> None:
     """下载"成功"但 ccache_exe 未出现在预期路径时返回 None（warning 不中断）."""
     from fspack.packaging.nuitka import NuitkaCompiler
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     monkeypatch.setattr("fspack.packaging.nuitka.shutil.which", lambda name: None)
 

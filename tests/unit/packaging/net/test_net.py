@@ -10,7 +10,7 @@ from urllib.request import Request
 import pytest
 
 from fspack.packaging.net import Downloader
-from fspack.progress import StageRecorder
+from fspack.ui.progress import StageRecorder
 from tests._stubs import FakeResp
 
 

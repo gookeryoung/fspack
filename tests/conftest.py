@@ -31,7 +31,7 @@ def _fixed_rich_width(request: pytest.FixtureRequest, monkeypatch: pytest.Monkey
     if not request.module.__name__.split(".")[-1].startswith("test_doctor_"):
         return
 
-    from fspack.console import console
+    from fspack.ui.console import console
 
     # 直接 patch _width，避免 Windows width getter/setter 往返导致宽度缩水。
     monkeypatch.setattr(console.rich, "_width", 200)

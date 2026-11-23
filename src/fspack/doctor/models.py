@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from fspack._compat import StrEnum
+from fspack.core._compat import StrEnum
 
 __all__ = [
     "CacheHealthReport",

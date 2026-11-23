@@ -451,9 +451,9 @@ class TestNuitkaEnsureEnvBaseline:
         ``StageRecorder`` 回写，无 subprocess 开销。退化 > 50% 失败
         （缓存命中是 O(1) 文件系统检查，退化空间极小）。
         """
+        from fspack.core.platform import Platform
         from fspack.packaging.nuitka import NuitkaCompiler
-        from fspack.platform import Platform
-        from fspack.progress import StageRecorder
+        from fspack.ui.progress import StageRecorder
 
         # mingw 可用让 _check_c_compiler 通过（Windows 目标）
         monkeypatch.setattr("fspack.packaging.loader.mingw_available", lambda: True)

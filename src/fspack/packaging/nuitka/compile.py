@@ -36,9 +36,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fspack.config import MirrorConfig, nuitka_version_for
-from fspack.exceptions import NuitkaError
-from fspack.fsutil import atomic_write_text, safe_unlink
-from fspack.metrics import StageRecorder
+from fspack.core.exceptions import NuitkaError
+from fspack.core.fsutil import atomic_write_text, safe_unlink
+from fspack.core.metrics import StageRecorder
+from fspack.core.platform import Platform
 
 # -- 索引相关函数/常量：从 indexes.py re-export，维持 patch 路径。
 # 注意：``_atomic_write_text`` / ``_safe_unlink`` **单独在本模块定义薄封装**（直接调 util 层），
@@ -61,7 +62,6 @@ from fspack.packaging.nuitka.progress import (  # noqa: F401 - re-export for pat
     _STREAM_ACCUM_LIMIT,
 )
 from fspack.packaging.pyc.source_strip import _is_in_data_dirs
-from fspack.platform import Platform
 
 if TYPE_CHECKING:
     from fspack.packaging.nuitka.protocol import NuitkaCompilerProtocol
@@ -100,7 +100,7 @@ def _purge_nuitka_compile_cache() -> None:
 def _atomic_write_text(target: Path, content: str, *, encoding: str = "utf-8") -> None:
     """原子写入文本文件：先写临时文件再 rename，避免半写入文件被读取.
 
-    直接调 :func:`fspack.fsutil.atomic_write_text`。
+    直接调 :func:`fspack.core.fsutil.atomic_write_text`。
     **本薄封装必须是 compile 模块自己的函数对象**：indexes.py 内部的 dispatch
     机制会 ``getattr(compile_mod, "_atomic_write_text")`` 动态引用它，
     monkeypatch 修改 ``fspack.packaging.nuitka.compile._atomic_write_text``
@@ -112,7 +112,7 @@ def _atomic_write_text(target: Path, content: str, *, encoding: str = "utf-8") -
 def _safe_unlink(path: Path) -> None:
     """删除文件，OSError 仅告警不抛（用于索引损坏时的清理）.
 
-    直接调 :func:`fspack.fsutil.safe_unlink`，沿用本模块 logger。
+    直接调 :func:`fspack.core.fsutil.safe_unlink`，沿用本模块 logger。
     与 :func:`_atomic_write_text` 同理：必须是 compile 模块自有函数对象，
     保证 indexes 的 dispatch 与 monkeypatch 路径兼容。
     """

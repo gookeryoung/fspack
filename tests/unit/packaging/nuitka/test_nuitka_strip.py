@@ -21,7 +21,7 @@ def test_strip_compiled_sources_preserves_py_when_pyd_missing(tmp_path: Path, ca
     此时删除 .py 会导致运行时 ImportError/访问违例。验证产物缺失时保留 .py 并告警。
     """
     from fspack.packaging.nuitka import NuitkaCompiler
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     # 模拟 Nuitka returncode==0 但未生成 .pyd 的场景（rich._unicode_data.unicode10-0-0.py）
     py_file = tmp_path / "unicode10-0-0.py"
@@ -44,7 +44,7 @@ def test_strip_compiled_sources_preserves_py_when_pyd_missing(tmp_path: Path, ca
 def test_strip_compiled_sources_deletes_py_when_pyd_exists(tmp_path: Path) -> None:
     """_strip_compiled_sources 在 .pyd 存在时删除 .py（正常路径）."""
     from fspack.packaging.nuitka import NuitkaCompiler
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     py_file = tmp_path / "app.py"
     py_file.write_text("x = 1")
@@ -63,7 +63,7 @@ def test_strip_compiled_sources_deletes_py_when_pyd_exists(tmp_path: Path) -> No
 def test_strip_compiled_sources_deletes_py_when_so_exists(tmp_path: Path) -> None:
     """Linux 平台 .so 产物同样支持验证."""
     from fspack.packaging.nuitka import NuitkaCompiler
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     py_file = tmp_path / "mod.py"
     py_file.write_text("x = 1")
@@ -139,7 +139,7 @@ def test_strip_compiled_sources_verify_preserves_py_when_pyd_corrupt(
     验证发现损坏时删除 .pyd（避免运行时优先加载损坏产物）并保留 .py 回退到 .pyc。
     """
     from fspack.packaging.nuitka import NuitkaCompiler
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     # 模拟 site-packages/rich/errors.py + 损坏的 errors.cp313-win_amd64.pyd
     site_packages = tmp_path / "site-packages"
@@ -176,7 +176,7 @@ def test_strip_compiled_sources_verify_preserves_py_when_pyd_corrupt(
 def test_strip_compiled_sources_verify_deletes_py_when_pyd_ok(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """_strip_compiled_sources 验证模式：.pyd 可加载时正常删除 .py."""
     from fspack.packaging.nuitka import NuitkaCompiler
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     site_packages = tmp_path / "site-packages"
     rich_dir = site_packages / "rich"
@@ -216,7 +216,7 @@ def test_strip_compiled_sources_verify_fallback_to_individual_on_crash(
     回退到逐个模块测试，仅损坏模块保留 .py，可加载模块正常删除 .py。
     """
     from fspack.packaging.nuitka import NuitkaCompiler
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     site_packages = tmp_path / "site-packages"
     rich_dir = site_packages / "rich"
@@ -540,7 +540,7 @@ def test_verify_compiled_modules_strips_init_module_name(tmp_path: Path, monkeyp
 def test_strip_compiled_sources_no_verify_preserves_original_behavior(tmp_path: Path) -> None:
     """_strip_compiled_sources 不传验证参数时保持原有行为（仅检查 .pyd 存在）."""
     from fspack.packaging.nuitka import NuitkaCompiler
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     py_file = tmp_path / "app.py"
     py_file.write_text("x = 1")

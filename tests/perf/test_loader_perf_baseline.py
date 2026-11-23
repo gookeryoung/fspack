@@ -20,14 +20,14 @@ from typing import Any
 
 import pytest
 
-from fspack import progress
 from fspack.config import AppType
-from fspack.metrics import StageRecorder
+from fspack.core.metrics import StageRecorder
+from fspack.core.platform import Platform
 from fspack.packaging.loader import LoaderVersionInfo, compile_loader, generate_loader_source, mingw_available
 from fspack.packaging.loader import toolchain as toolchain_module
 from fspack.packaging.loader.toolchain import _find_windres
 from fspack.packaging.pipeline.stages import _build_entry_loaders
-from fspack.platform import Platform
+from fspack.ui import progress
 from tests.unit.packaging.pipeline.test_entry_loaders import _make_multi_entry_context
 
 _WINDOWS = Platform.WINDOWS

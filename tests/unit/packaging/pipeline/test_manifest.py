@@ -22,6 +22,7 @@ from typing import Any
 import pytest
 
 from fspack.config import AppType, BuildOptions, MirrorConfig, ProjectInfo
+from fspack.core.platform import Platform
 from fspack.packaging import manifest as _manifest_mod
 from fspack.packaging.manifest import (
     ManifestDiff,
@@ -37,7 +38,6 @@ from fspack.packaging.manifest import (
     print_manifest_diff,
 )
 from fspack.packaging.pipeline import executor
-from fspack.platform import Platform
 
 
 def _make_info(tmp_path: Path, name: str = "app", version: str = "1.0") -> ProjectInfo:

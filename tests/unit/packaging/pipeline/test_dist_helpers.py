@@ -13,6 +13,7 @@ from fspack.builder import (
     clean_dist,
 )
 from fspack.config import get_mirror
+from fspack.core.platform import Platform
 from fspack.packaging.pipeline import (
     _BUILD_FAILED,
     _BUILD_OK,
@@ -25,7 +26,6 @@ from fspack.packaging.pipeline import (
     _save_build_failure,
     _save_build_ok,
 )
-from fspack.platform import Platform
 from tests._stubs import CompletedStub, setup_embed_mocks
 
 # --- clean_dist 测试（原 tests/test_commands.py 的 clean 测试） ---

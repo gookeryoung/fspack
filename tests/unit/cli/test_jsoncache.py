@@ -1,4 +1,4 @@
-"""``fspack.jsoncache`` JSON 缓存读取骨架测试：解析、校验、损坏处理."""
+"""``fspack.core.jsoncache`` JSON 缓存读取骨架测试：解析、校验、损坏处理."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from fspack.jsoncache import load_json_dict
+from fspack.core.jsoncache import load_json_dict
 
 
 def test_load_json_dict_reads_valid_dict(tmp_path: Path) -> None:
@@ -27,7 +27,7 @@ def test_load_json_dict_corrupt_deletes_by_default(tmp_path: Path, caplog: pytes
     """内容损坏默认删除文件并返回 None."""
     path = tmp_path / "c.json"
     path.write_text("{bad json", encoding="utf-8")
-    with caplog.at_level("WARNING", logger="fspack.jsoncache"):
+    with caplog.at_level("WARNING", logger="fspack.core.jsoncache"):
         assert load_json_dict(path) is None
     assert not path.exists()
     assert any("JSON 缓存损坏" in r.message for r in caplog.records)
@@ -81,7 +81,7 @@ def test_load_json_dict_delete_failure_only_warns(
         raise OSError("cannot delete")
 
     monkeypatch.setattr(Path, "unlink", raise_unlink)
-    with caplog.at_level("WARNING", logger="fspack.jsoncache"):
+    with caplog.at_level("WARNING", logger="fspack.core.jsoncache"):
         assert load_json_dict(path) is None
     assert any("删除损坏缓存文件失败" in r.message for r in caplog.records)
 

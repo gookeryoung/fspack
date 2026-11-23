@@ -37,7 +37,6 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, cast
 
-from fspack._compat import tomllib
 from fspack.config.app_type import (  # noqa: F401
     _GUI_HINTS,
     _WEB_HINTS,
@@ -58,7 +57,8 @@ from fspack.config.models import (
     _parse_string_list_cfg,
 )
 from fspack.config.versions import DEFAULT_PY_VERSION
-from fspack.exceptions import ProjectError
+from fspack.core._compat import tomllib
+from fspack.core.exceptions import ProjectError
 
 __all__ = [
     "clear_project_cache",

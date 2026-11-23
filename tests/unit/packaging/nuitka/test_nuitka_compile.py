@@ -7,9 +7,9 @@ from typing import Any
 
 import pytest
 
+from fspack.core.platform import Platform
 from fspack.packaging.nuitka import NuitkaCompiler
-from fspack.platform import Platform
-from fspack.progress import StageRecorder
+from fspack.ui.progress import StageRecorder
 from tests._stubs import (
     VerifyResultStub,
     make_nuitka_cache,

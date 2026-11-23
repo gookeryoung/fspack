@@ -38,7 +38,7 @@ def _run_init(ns: argparse.Namespace) -> None:
         try:
             template_id = prompt_template_selection()
         except KeyboardInterrupt:
-            from fspack.console import console
+            from fspack.ui.console import console
 
             console.rich.print("\n[yellow]已取消[/]")
             sys.exit(1)
@@ -53,7 +53,7 @@ def _run_init(ns: argparse.Namespace) -> None:
             python_version=ns.python_version,
         )
     except ValueError as exc:
-        from fspack.console import console
+        from fspack.ui.console import console
 
         console.error(str(exc))
         sys.exit(1)

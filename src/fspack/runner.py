@@ -24,7 +24,7 @@ from typing import Any
 
 from fspack.config import AppType, EntryPoint, ProjectInfo
 from fspack.config.versions import _split_t_suffix
-from fspack.exceptions import FspackError
+from fspack.core.exceptions import FspackError
 from fspack.packaging.profile_log import RUN_LOG_KIND, ProfileOptions
 from fspack.runner_profile import PROFILE_ENV, run_with_profile
 

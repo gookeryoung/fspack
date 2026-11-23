@@ -23,12 +23,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from fspack import logutil
-from fspack.fsutil import atomic_write_text, rmtree_longpath
-from fspack.jsoncache import load_json_dict
+from fspack.core import logutil
+from fspack.core.fsutil import atomic_write_text, rmtree_longpath
+from fspack.core.jsoncache import load_json_dict
 
 if TYPE_CHECKING:
-    from fspack.progress import BuildTracker
+    from fspack.ui.progress import BuildTracker
 
 __all__ = [
     "_BUILD_FAILED",
@@ -138,7 +138,7 @@ def _handle_dist_incomplete(dist_dir: Path, auto_clean: bool) -> None:
     has_stamps = _has_build_stamps(dist_dir)
 
     if failed_info:
-        from fspack.console import console
+        from fspack.ui.console import console
 
         stage = failed_info.get("stage", "未知")
         error = failed_info.get("error", "")
@@ -199,7 +199,7 @@ def _load_build_failure(dist_dir: Path) -> dict[str, str] | None:
     """读取 ``dist/.build_failed`` JSON，返回失败信息 dict.
 
     文件不存在或解析失败返回 None（不阻断构建流程）。读取 → 解析 → 根 dict
-    校验的公共骨架委托 :func:`fspack.jsoncache.load_json_dict`
+    校验的公共骨架委托 :func:`fspack.core.jsoncache.load_json_dict`
     （``delete_on_corrupt=False``：诊断文件不删除）；值统一转 ``str`` 为本函数外壳。
     """
     path = dist_dir / _BUILD_FAILED

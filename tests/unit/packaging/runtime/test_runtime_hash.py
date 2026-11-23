@@ -9,7 +9,7 @@ import pytest
 
 from fspack.config import MirrorConfig
 from fspack.config.versions import KNOWN_EMBED_VERSIONS, KNOWN_STANDALONE_VERSIONS
-from fspack.exceptions import EmbedError
+from fspack.core.exceptions import EmbedError
 from fspack.packaging.runtime import (
     STANDALONE_RELEASE_TAG,
     download_embed,

@@ -11,8 +11,8 @@ import pytest
 
 import fspack.packaging.verify as verify_mod
 from fspack import cli
+from fspack.core.platform import Platform
 from fspack.packaging.verify import BinaryInfo, detect_binary, host_arch, verify_artifact
-from fspack.platform import Platform
 
 PE_X86_64 = 0x8664
 PE_ARM64 = 0xAA64

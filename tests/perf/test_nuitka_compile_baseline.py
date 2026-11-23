@@ -45,10 +45,10 @@ from typing import Any
 
 import pytest
 
+from fspack.core.platform import Platform
 from fspack.packaging.nuitka import NuitkaCompiler
 from fspack.packaging.nuitka.compile import _MAX_COMPILE_WORKERS
-from fspack.platform import Platform
-from fspack.progress import StageRecorder
+from fspack.ui.progress import StageRecorder
 
 # ---- 测试样本 ----
 

@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 
 from fspack.config import AppType, BuildOptions, ProjectInfo, get_mirror
-from fspack.exceptions import InstallerError
+from fspack.core.exceptions import InstallerError
 from fspack.packaging.installer import ReleaseRequest, SignOptions, build_deb, build_linux_installer, build_tarball
 from fspack.packaging.installer.linux import build_deb_release, sign_deb_file
 from tests._stubs import CompletedStub

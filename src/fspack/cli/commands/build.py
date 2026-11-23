@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from fspack.config import MirrorConfig, ProjectInfo
-    from fspack.platform import Platform
+    from fspack.core.platform import Platform
 
 __all__ = ["_in_ci_environment", "_parse_lazy_imports", "_parse_target", "_resolve_mirror", "_run_build"]
 
@@ -25,7 +25,7 @@ def _resolve_mirror(value: str | None) -> MirrorConfig:
     try:
         return get_mirror(value)
     except KeyError as exc:
-        from fspack.console import console
+        from fspack.ui.console import console
 
         console.error(exc.args[0])
         raise SystemExit(2) from None
@@ -69,7 +69,7 @@ def _resolve_build_targets(
         DEFAULT_PY_VERSION,
         resolve_py_version,
     )
-    from fspack.platform import Platform, detect_platform
+    from fspack.core.platform import Platform, detect_platform
 
     resolved_target = target or detect_platform()
     default_ver = (
@@ -92,7 +92,7 @@ def _run_build(project: Path, ns: argparse.Namespace) -> None:
 
     from fspack.builder import build
     from fspack.config import ProjectInfo, build_options_from_defaults
-    from fspack.exceptions import ProjectError
+    from fspack.core.exceptions import ProjectError
     from fspack.packaging.log_file import LogFormat
 
     # 合并 [tool.fspack] 构建默认值与 CLI 标志：
@@ -155,7 +155,7 @@ def _run_build(project: Path, ns: argparse.Namespace) -> None:
     # 多版本：--py-version 显式优先，否则按 [tool.fspack] python-versions 逐个
     # 构建到 dist/py<ver>；未配置时单目标 (None, None)，行为与旧版一致
     targets = _resolve_build_targets(project, info, ns.py_version, target)
-    from fspack.console import console
+    from fspack.ui.console import console
 
     if len(targets) > 1:
         console.step(f"多版本打包：{len(targets)} 个 Python 版本")
@@ -187,7 +187,7 @@ def _parse_target(value: str | None) -> Platform | None:
     """将 CLI 字符串转为 Platform 枚举，None 表示用当前平台."""
     if value is None:
         return None
-    from fspack.platform import Platform
+    from fspack.core.platform import Platform
 
     if value == "windows":
         return Platform.WINDOWS

@@ -17,8 +17,8 @@ from typing import TYPE_CHECKING
 from fspack.config import MirrorConfig
 
 if TYPE_CHECKING:
-    # BuildTracker 仅用于类型注解；顶部不导入 fspack.progress 避免连锁加载 rich
-    from fspack.progress import BuildTracker
+    # BuildTracker 仅用于类型注解；顶部不导入 fspack.ui.progress 避免连锁加载 rich
+    from fspack.ui.progress import BuildTracker
 
 __all__ = ["ReleaseRequest", "SignOptions"]
 

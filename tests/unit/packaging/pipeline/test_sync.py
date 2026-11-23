@@ -192,7 +192,7 @@ def test_dir_size_handles_concurrent_deletion(tmp_path: Path, monkeypatch: pytes
     """_dir_size 遇到 OSError（stat 失败）时跳过，不阻断计算.
 
     模拟 scandir_tree 返回的条目中，stat(follow_symlinks=False) 抛 OSError
-    （并发删除/权限问题）。_dir_size 委托 fspack.fsutil.scandir_dir_size，后者用
+    （并发删除/权限问题）。_dir_size 委托 fspack.core.fsutil.scandir_dir_size，后者用
     scandir_tree 枚举，DirEntry.stat 复用枚举缓存但仍可能因文件被并发删除抛 OSError。
     """
 
@@ -213,11 +213,11 @@ def test_dir_size_handles_concurrent_deletion(tmp_path: Path, monkeypatch: pytes
 
     d = tmp_path / "tree"
     d.mkdir()
-    # _dir_size 委托 fspack.fsutil.scandir_dir_size，后者用 scandir_tree 枚举。
-    # 按"patch 定义所在底层模块"约定 patch fspack.fsutil.scandir_tree，验证
+    # _dir_size 委托 fspack.core.fsutil.scandir_dir_size，后者用 scandir_tree 枚举。
+    # 按"patch 定义所在底层模块"约定 patch fspack.core.fsutil.scandir_tree，验证
     # stat 抛 OSError 的条目被跳过。
     monkeypatch.setattr(
-        "fspack.fsutil.scandir_tree",
+        "fspack.core.fsutil.scandir_tree",
         lambda root: [_GoodEntry(100), _BrokenEntry(), _GoodEntry(200)] if root == d else [],
     )
     # BrokenEntry 的 OSError 被跳过，仅累加两个 GoodEntry 的 100 + 200 = 300

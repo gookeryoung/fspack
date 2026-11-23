@@ -13,8 +13,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import BinaryIO, Iterator
 
-from fspack.exceptions import LoaderError
-from fspack.fsutil import sha256_file
+from fspack.core.exceptions import LoaderError
+from fspack.core.fsutil import sha256_file
 
 __all__ = ["cache_lock", "cached_copy", "publish_cache"]
 

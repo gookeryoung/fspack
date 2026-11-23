@@ -12,8 +12,8 @@ import pytest
 from fspack import __version__, cli
 from fspack.cli_help import HELP_SNAPSHOT_PY, HELP_TEXT
 from fspack.config import BuildOptions, get_mirror
+from fspack.core.platform import Platform
 from fspack.packaging.profile_log import ProfileOptions
-from fspack.platform import Platform
 from fspack.runner import RunOptions
 from tests._projects import write_project
 
@@ -70,8 +70,8 @@ def test_verbose_with_quiet_keeps_both() -> None:
 @pytest.mark.parametrize("argv", [["-v", "b"], ["b", "-v"]], ids=["before", "after"])
 def test_main_wires_verbose_from_any_position(argv: list[str], monkeypatch: pytest.MonkeyPatch) -> None:
     """两种位置最终落到同一处 verbose 状态（console 日志级别 + logutil 路径宽度）."""
-    from fspack import logutil
-    from fspack.console import console
+    from fspack.core import logutil
+    from fspack.ui.console import console
 
     seen: dict[str, Any] = {}
     monkeypatch.setattr(console, "setup_logging", lambda *, verbose: seen.__setitem__("logging", verbose))
@@ -184,7 +184,7 @@ def test_build_fspack_error_from_build_exits_cleanly(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """构建流程内部抛 FspackError 子类（如 DependencyError）时同样被 main 兜底为退出码 2."""
-    from fspack.exceptions import DependencyError
+    from fspack.core.exceptions import DependencyError
 
     _make_minimal_project(tmp_path)
 
@@ -887,9 +887,9 @@ def test_resolve_mirror_invalid_exits_with_code_2(tmp_path: Path) -> None:
 
 
 def test_cli_module_no_top_level_console_import() -> None:
-    """cli.py 顶部不再导入 fspack.console（懒加载优化）.
+    """cli.py 顶部不再导入 fspack.ui.console（懒加载优化）.
 
-    验证 ``from fspack.console import console`` 不在模块顶层导入，
+    验证 ``from fspack.ui.console import console`` 不在模块顶层导入，
     确保 ``fsp --help`` 不触发 rich 模块加载（~17ms）。
     """
     import inspect
@@ -897,12 +897,12 @@ def test_cli_module_no_top_level_console_import() -> None:
     source = inspect.getsource(cli)
     # 顶部导入区（main 之前的全局代码）不应含 console
     top_section = source.split("def main")[0]
-    assert "from fspack.console" not in top_section
-    assert "import fspack.console" not in top_section
+    assert "from fspack.ui.console" not in top_section
+    assert "import fspack.ui.console" not in top_section
 
 
 def test_cli_module_no_top_level_platform_import() -> None:
-    """cli.py 顶部不再导入 fspack.platform（懒加载优化）.
+    """cli.py 顶部不再导入 fspack.core.platform（懒加载优化）.
 
     Platform 仅在 TYPE_CHECKING 块和 _parse_target 函数内导入。
     """
@@ -914,9 +914,9 @@ def test_cli_module_no_top_level_platform_import() -> None:
     type_checking_block = (
         "if TYPE_CHECKING:\n"
         "    from fspack.config import MirrorConfig, ProjectInfo\n"
-        "    from fspack.platform import Platform\n"
+        "    from fspack.core.platform import Platform\n"
     )
-    assert "from fspack.platform import Platform" not in top_section.replace(type_checking_block, "")
+    assert "from fspack.core.platform import Platform" not in top_section.replace(type_checking_block, "")
 
 
 def test_help_does_not_load_heavy_modules() -> None:
@@ -936,7 +936,7 @@ def test_help_does_not_load_heavy_modules() -> None:
         "    main(['--help'])\n"
         "except SystemExit:\n"
         "    pass\n"
-        "heavy = [m for m in ('fspack.config', 'fspack.console', 'fspack.platform', 'rich') if m in sys.modules]\n"
+        "heavy = [m for m in ('fspack.config', 'fspack.ui.console', 'fspack.core.platform', 'rich') if m in sys.modules]\n"
         "sys.exit(1 if heavy else 0)\n"
     )
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, check=False)
@@ -1175,7 +1175,7 @@ def test_net_module_no_top_level_heavy_imports() -> None:
     """源码基线：net.py 顶部不导入 urllib.request/rich.progress/console（运行时重模块）.
 
     守护 iter-121~122 net.py 顶部轻量化：``urllib.request``（~15ms）、
-    ``rich.progress`` 多 column 类（~8ms）与 ``fspack.console`` 单例全部移到
+    ``rich.progress`` 多 column 类（~8ms）与 ``fspack.ui.console`` 单例全部移到
     ``Downloader.download`` 方法内延迟导入，确保 ``import fspack.packaging.net``
     不连带加载这些重模块。``StageRecorder`` 在 TYPE_CHECKING 块内仅为类型注解，
     运行时不执行，不在守护范围。
@@ -1196,7 +1196,7 @@ def test_net_module_no_top_level_heavy_imports() -> None:
     # 顶部运行时导入区不应含 urllib.request / rich.progress / console
     assert "import urllib.request" not in top_runtime
     assert "from rich.progress import" not in top_runtime
-    assert "from fspack.console import" not in top_runtime
+    assert "from fspack.ui.console import" not in top_runtime
 
 
 def test_builder_import_does_not_load_urllib_request() -> None:
@@ -1221,13 +1221,13 @@ def test_builder_import_does_not_load_urllib_request() -> None:
 
 
 def test_builder_import_does_not_load_progress() -> None:
-    """import 基线：``import fspack.builder`` 不触发 ``fspack.progress`` 加载.
+    """import 基线：``import fspack.builder`` 不触发 ``fspack.ui.progress`` 加载.
 
     iter-123 将 ``BuildTracker``/``StageRecorder`` 从 stages.py 与 pipeline/__init__.py
     顶部移到 TYPE_CHECKING 块（类型注解）与 ``build()`` 方法内（实例化）。本测试
-    在子进程内执行 ``import fspack.builder``，断言 ``fspack.progress`` 未进入
-    ``sys.modules``。任何顶部误引入 ``fspack.progress`` 的回退都会被本测试拦截
-    （典型成本：fspack.progress 链式加载 rich.progress/rich.table ~12ms）。
+    在子进程内执行 ``import fspack.builder``，断言 ``fspack.ui.progress`` 未进入
+    ``sys.modules``。任何顶部误引入 ``fspack.ui.progress`` 的回退都会被本测试拦截
+    （典型成本：fspack.ui.progress 链式加载 rich.progress/rich.table ~12ms）。
     """
     import subprocess
     import sys
@@ -1235,21 +1235,21 @@ def test_builder_import_does_not_load_progress() -> None:
     code = (
         "import sys\n"
         "import fspack.builder\n"
-        "heavy = [m for m in ('fspack.progress',) if m in sys.modules]\n"
+        "heavy = [m for m in ('fspack.ui.progress',) if m in sys.modules]\n"
         "sys.exit(1 if heavy else 0)\n"
     )
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, check=False)
-    assert result.returncode == 0, "import fspack.builder 不应加载 fspack.progress"
+    assert result.returncode == 0, "import fspack.builder 不应加载 fspack.ui.progress"
 
 
 def test_builder_import_does_not_load_console() -> None:
-    """import 基线：``import fspack.builder`` 不触发 ``fspack.console`` 加载.
+    """import 基线：``import fspack.builder`` 不触发 ``fspack.ui.console`` 加载.
 
-    iter-124 将 ``fspack.console`` 与 ``fspack.packaging.profile`` 从
+    iter-124 将 ``fspack.ui.console`` 与 ``fspack.packaging.profile`` 从
     pipeline/__init__.py 顶部移到 ``_execute_build``/``_print_build_plan``/
-    ``build()`` 方法内延迟导入（profile 顶部 ``from fspack.console import console``
+    ``build()`` 方法内延迟导入（profile 顶部 ``from fspack.ui.console import console``
     会连锁触发 rich.console/rich.logging/rich.theme ~17ms）。本测试在子进程内
-    执行 ``import fspack.builder``，断言 ``fspack.console`` 与
+    执行 ``import fspack.builder``，断言 ``fspack.ui.console`` 与
     ``fspack.packaging.profile`` 未进入 ``sys.modules``。任何顶部误引入的回退
     都会被本测试拦截。
     """
@@ -1259,19 +1259,19 @@ def test_builder_import_does_not_load_console() -> None:
     code = (
         "import sys\n"
         "import fspack.builder\n"
-        "heavy = [m for m in ('fspack.console', 'fspack.packaging.profile') if m in sys.modules]\n"
+        "heavy = [m for m in ('fspack.ui.console', 'fspack.packaging.profile') if m in sys.modules]\n"
         "sys.exit(1 if heavy else 0)\n"
     )
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, check=False)
-    assert result.returncode == 0, "import fspack.builder 不应加载 fspack.console/fspack.packaging.profile"
+    assert result.returncode == 0, "import fspack.builder 不应加载 fspack.ui.console/fspack.packaging.profile"
 
 
 def test_pipeline_module_no_top_level_heavy_imports() -> None:
-    """源码基线：pipeline/__init__.py 顶部不导入 fspack.console/fspack.progress/fspack.packaging.profile.
+    """源码基线：pipeline/__init__.py 顶部不导入 fspack.ui.console/fspack.ui.progress/fspack.packaging.profile.
 
-    守护 iter-124/135 pipeline/__init__.py 顶部轻量化：``fspack.console`` 单例
-    （~17ms）、``fspack.progress`` 的 ``BuildTracker``（连锁 rich.progress/rich.table
-    ~12ms）、``fspack.packaging.profile`` 的 ``ProfileContext``（连锁 fspack.console）
+    守护 iter-124/135 pipeline/__init__.py 顶部轻量化：``fspack.ui.console`` 单例
+    （~17ms）、``fspack.ui.progress`` 的 ``BuildTracker``（连锁 rich.progress/rich.table
+    ~12ms）、``fspack.packaging.profile`` 的 ``ProfileContext``（连锁 fspack.ui.console）
     全部移到 ``build``/``_execute_build``/``_print_build_plan`` 函数内延迟导入，
     ``BuildTracker``/``ProfileContext`` 类型注解仅在 TYPE_CHECKING 块内（运行时不执行）。
     子进程级守护见 :func:`test_builder_import_does_not_load_console`/
@@ -1287,10 +1287,10 @@ def test_pipeline_module_no_top_level_heavy_imports() -> None:
     top_section = source.split("def resolve_project_info")[0]
     # 移除 TYPE_CHECKING 块内容（仅类型注解，运行时不执行）
     top_runtime = re.sub(r"if TYPE_CHECKING:.*?(?=\n\n|\n[^\s])", "", top_section, flags=re.DOTALL)
-    assert "from fspack.console import" not in top_runtime
-    assert "import fspack.console" not in top_runtime
-    assert "from fspack.progress import" not in top_runtime
-    assert "import fspack.progress" not in top_runtime
+    assert "from fspack.ui.console import" not in top_runtime
+    assert "import fspack.ui.console" not in top_runtime
+    assert "from fspack.ui.progress import" not in top_runtime
+    assert "import fspack.ui.progress" not in top_runtime
     assert "from fspack.packaging.profile import" not in top_runtime
     assert "import fspack.packaging.profile" not in top_runtime
 
@@ -1415,7 +1415,7 @@ def test_json_envelope_error(
     """--json 失败：stdout 仍只有一行错误信封，退出码保持 2，人读错误在 stderr."""
     import json
 
-    from fspack.exceptions import DependencyError
+    from fspack.core.exceptions import DependencyError
 
     _make_minimal_project(tmp_path)
 
@@ -1445,7 +1445,7 @@ def test_quiet_suppresses_human_output(
     _make_minimal_project(tmp_path)
 
     def fake_build(*_args: Any, **_kwargs: Any) -> None:
-        from fspack.console import console
+        from fspack.ui.console import console
 
         console.step("不应出现的步骤")
         console.success("不应出现的成功")

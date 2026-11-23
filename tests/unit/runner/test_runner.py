@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from fspack.config import AppType, EntryPoint, ProjectInfo
-from fspack.exceptions import FspackError
+from fspack.core.exceptions import FspackError
 from fspack.runner import RunOptions, _build_cmd, _find_exe, _select_entry
 from fspack.runner import run as run_run
 from tests._projects import write_project

@@ -41,8 +41,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from fspack import logutil
-from fspack.exceptions import FspackError
+from fspack.core import logutil
+from fspack.core.exceptions import FspackError
 from fspack.packaging import action_cache
 from fspack.packaging.win7 import check as _check_mod
 from fspack.packaging.win7.check import (

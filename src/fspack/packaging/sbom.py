@@ -44,12 +44,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from fspack import logutil
-from fspack._compat import UTC
 from fspack.config import ProjectInfo
-from fspack.fsutil import atomic_write_text, sha256_file
+from fspack.core import logutil
+from fspack.core._compat import UTC
+from fspack.core.fsutil import atomic_write_text, sha256_file
+from fspack.core.platform import Platform, detect_platform
 from fspack.packaging.site_packages import find_site_packages
-from fspack.platform import Platform, detect_platform
 
 __all__ = [
     "SbomPackage",

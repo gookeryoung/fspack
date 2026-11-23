@@ -63,9 +63,9 @@ from typing import TYPE_CHECKING
 from fspack.config import is_offline, nuitka_version_for
 from fspack.config.cache import nuitka_winlibs_cache_dir
 from fspack.config.versions import _split_t_suffix
-from fspack.exceptions import NuitkaError
-from fspack.metrics import StageRecorder
-from fspack.platform import Platform
+from fspack.core.exceptions import NuitkaError
+from fspack.core.metrics import StageRecorder
+from fspack.core.platform import Platform
 
 if TYPE_CHECKING:
     from fspack.packaging.nuitka.protocol import NuitkaCompilerProtocol

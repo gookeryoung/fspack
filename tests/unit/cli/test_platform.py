@@ -6,8 +6,8 @@ import sys
 
 import pytest
 
-import fspack.platform
-from fspack.platform import MACOS_ARCHS, Platform, detect_platform, libpython_so, wheel_platform_tags
+import fspack.core.platform
+from fspack.core.platform import MACOS_ARCHS, Platform, detect_platform, libpython_so, wheel_platform_tags
 
 
 def test_platform_values() -> None:
@@ -26,31 +26,31 @@ def test_detect_platform_returns_platform() -> None:
 
 
 def test_detect_platform_windows(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(fspack.platform.sys, "platform", "win32")
+    monkeypatch.setattr(fspack.core.platform.sys, "platform", "win32")
     assert detect_platform() == Platform.WINDOWS
 
 
 def test_detect_platform_linux(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(fspack.platform.sys, "platform", "linux")
+    monkeypatch.setattr(fspack.core.platform.sys, "platform", "linux")
     assert detect_platform() == Platform.LINUX
 
 
 def test_detect_platform_macos(monkeypatch: pytest.MonkeyPatch) -> None:
     """detect_platform 识别 Darwin 系统为 MACOS."""
-    monkeypatch.setattr(fspack.platform.sys, "platform", "darwin")
+    monkeypatch.setattr(fspack.core.platform.sys, "platform", "darwin")
     assert detect_platform() == Platform.MACOS
 
 
 @pytest.mark.parametrize("value", ["cygwin", "msys", "freebsd13", "openbsd7"])
 def test_detect_platform_other_falls_back_to_linux(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
     """非 win32/darwin 一律 LINUX（与原 platform.system() 实现的兜底分支一致）."""
-    monkeypatch.setattr(fspack.platform.sys, "platform", value)
+    monkeypatch.setattr(fspack.core.platform.sys, "platform", value)
     assert detect_platform() == Platform.LINUX
 
 
 def test_detect_platform_does_not_import_stdlib_platform(monkeypatch: pytest.MonkeyPatch) -> None:
     """回归：detect_platform 不得触碰标准库 platform（Windows 上会触发 WMI 查询与 _wmi 加载）."""
-    monkeypatch.setattr(fspack.platform.sys, "platform", "linux")
+    monkeypatch.setattr(fspack.core.platform.sys, "platform", "linux")
     monkeypatch.delitem(sys.modules, "platform", raising=False)
     assert detect_platform() is Platform.LINUX
     assert "platform" not in sys.modules

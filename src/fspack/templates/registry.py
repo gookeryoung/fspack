@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from fspack._compat import tomllib
+from fspack.core._compat import tomllib
 from fspack.core.resources import templates_root
 
 __all__ = [

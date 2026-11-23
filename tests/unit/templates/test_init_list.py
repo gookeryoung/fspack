@@ -51,7 +51,7 @@ def _wizard_keys_to(template_id: str, templates: list[Any]) -> list[str]:
 
 def _patch_wizard_keys(monkeypatch: pytest.MonkeyPatch, keys: list[str]) -> None:
     """将向导读键替换为按序弹出按键事件的桩（TTY 模拟）."""
-    from fspack import wizard
+    from fspack.ui import wizard
 
     seq = iter(keys)
     monkeypatch.setattr(wizard, "_read_key", lambda: next(seq))

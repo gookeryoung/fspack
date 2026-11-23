@@ -6,7 +6,7 @@
 失败自动回退 ``pip download --no-deps``。
 
 失败处理：并行下载失败的包（pip/uv 非零退出或 pip 消失转的
-:class:`~fspack.exceptions.DependencyError`）合并 stderr 后走 sdist 回退
+:class:`~fspack.core.exceptions.DependencyError`）合并 stderr 后走 sdist 回退
 （:func:`fspack.packaging.wheels.sdist._handle_sdist_fallback`），构建
 成功后仅重试失败的包，最终合并所有 stdout 返回。
 
@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fspack.config.versions import _split_t_suffix
-from fspack.exceptions import DependencyError
+from fspack.core.exceptions import DependencyError
 from fspack.packaging.wheels.sdist import _handle_sdist_fallback
 from fspack.packaging.wheels.uv_bridge import (
     _UV_DOWNLOAD_WHEEL_RE,
@@ -77,7 +77,7 @@ def _log_download_event(req: str, stdout: str, stderr: str, elapsed: float, cach
 
     并行模式下多线程并发调用，``logging.info`` 单次调用线程安全，事件不会交错。
     """
-    from fspack.format import format_bytes_dec
+    from fspack.core.format import format_bytes_dec
 
     wheel_path: Path | None = None
     for line in stdout.splitlines():

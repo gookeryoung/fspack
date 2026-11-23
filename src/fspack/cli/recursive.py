@@ -105,7 +105,7 @@ def _run_recursive(root: Path, action: str, ns: argparse.Namespace) -> int:
     # 从包级命名空间取执行函数：既保持 ``fspack.cli._run_build`` 的 monkeypatch
     # 兼容，也避免递归模块在 import 期拉起 builder/installer。
     from fspack.cli import _run_build, _run_package
-    from fspack.console import console
+    from fspack.ui.console import console
 
     projects = discover_subprojects(root)
     total = len(projects)
@@ -170,7 +170,7 @@ def _print_recursive_summary(
     action_verb: str, succeeded: list[tuple[Path, str]], failed: list[tuple[Path, str]]
 ) -> None:
     """打印递归执行汇总：成功数、失败数、失败项目列表."""
-    from fspack.console import console
+    from fspack.ui.console import console
 
     console.rich.print()  # 空行分隔
     console.step(f"递归{action_verb}汇总：成功 {len(succeeded)}，失败 {len(failed)}")

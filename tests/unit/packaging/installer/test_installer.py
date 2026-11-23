@@ -10,7 +10,8 @@ from typing import Any
 import pytest
 
 from fspack.config import AppType, BuildOptions, EntryPoint, ProjectInfo, get_mirror
-from fspack.exceptions import InstallerError
+from fspack.core.exceptions import InstallerError
+from fspack.core.platform import Platform
 from fspack.packaging.installer import (
     ReleaseRequest,
     SignOptions,
@@ -29,8 +30,7 @@ from fspack.packaging.installer import (
 )
 from fspack.packaging.installer.dist_prep import _target_arch
 from fspack.packaging.installer.nsis import dist_needs_ucrt, sign_exe_file, sign_exe_files
-from fspack.platform import Platform
-from fspack.progress import BuildTracker
+from fspack.ui.progress import BuildTracker
 from tests._projects import write_project
 from tests._stubs import CompletedStub
 

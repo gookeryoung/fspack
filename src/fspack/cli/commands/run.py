@@ -17,7 +17,7 @@ def _drop_separator(rest: list[str]) -> list[str]:
 
 def _run_run(project: Path, ns: argparse.Namespace) -> None:
     """执行 run 子命令."""
-    from fspack.exceptions import ProjectError
+    from fspack.core.exceptions import ProjectError
     from fspack.packaging.profile_log import ProfileOptions
     from fspack.runner import RunOptions
     from fspack.runner import run as run_cmd

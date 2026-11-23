@@ -37,7 +37,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from fspack.logutil import display_width
+from fspack.core.logutil import display_width
 
 __all__ = ["PROFILE_ENV", "ProfileSample", "run_with_profile"]
 

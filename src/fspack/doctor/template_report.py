@@ -10,9 +10,9 @@ from __future__ import annotations
 
 from typing import Final
 
-from fspack.console import console
 from fspack.doctor.envs import _format_size
 from fspack.doctor.models import TemplateBuildResult, TemplateRunResult
+from fspack.ui.console import console
 
 __all__ = [
     "_format_run_status",

@@ -9,7 +9,8 @@ from typing import Any
 import pytest
 
 from fspack.config import AppType, BuildOptions, ProjectInfo, get_mirror
-from fspack.exceptions import InstallerError
+from fspack.core.exceptions import InstallerError
+from fspack.core.platform import Platform
 from fspack.packaging.installer import (
     MacInstaller,
     ReleaseRequest,
@@ -20,7 +21,6 @@ from fspack.packaging.installer import (
     build_pkg_release,
 )
 from fspack.packaging.installer.macos import _bundle_identifier
-from fspack.platform import Platform
 from tests._stubs import CompletedStub
 
 

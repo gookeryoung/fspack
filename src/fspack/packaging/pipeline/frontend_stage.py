@@ -18,7 +18,7 @@
 跳过条件：无 ``build`` 脚本（如纯手写 html 的最小模板）、或产物目录已非空
 （增量语义，重建请先删除产物目录）。执行顺序：pnpm → yarn → npm
 （:func:`shutil.which` 解析，Windows 自动命中 ``.cmd``）；``node_modules``
-缺失时先 install 再 build。失败抛 :class:`fspack.exceptions.FspackError`。
+缺失时先 install 再 build。失败抛 :class:`fspack.core.exceptions.FspackError`。
 
 **公开导出**（由 ``pipeline.stages`` re-export）：
 - :func:`_detect_frontends`：识别前端项目（纯检测，无副作用）
@@ -40,8 +40,8 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import IO, Any
 
-from fspack.exceptions import FspackError
-from fspack.jsoncache import load_json_dict
+from fspack.core.exceptions import FspackError
+from fspack.core.jsoncache import load_json_dict
 
 __all__ = [
     "FrontendProject",
@@ -227,7 +227,7 @@ def _run_cmd(exe: str, args: Sequence[str], cwd: Path) -> None:
 
     def _drain(stream: IO[bytes] | None, chunks: list[bytes], tool: str) -> None:
         """消费管道防写端阻塞：字节块按行转发到 DEBUG 并累积（超限停积）."""
-        from fspack.console import console
+        from fspack.ui.console import console
 
         assert stream is not None
         fd = stream.fileno()

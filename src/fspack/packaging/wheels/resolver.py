@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from fspack.config import is_offline
-from fspack.exceptions import DependencyError
+from fspack.core.exceptions import DependencyError
 from fspack.packaging.wheels.local_cache import _try_local_resolution
 from fspack.packaging.wheels.parallel import _PARALLEL_DOWNLOAD_WORKERS, _download_resolved_parallel
 from fspack.packaging.wheels.sdist import _handle_sdist_fallback

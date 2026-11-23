@@ -20,10 +20,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from fspack.console import console
-from fspack.fsutil import dir_size_with_count
+from fspack.core.fsutil import dir_size_with_count
 from fspack.packaging.site_packages import find_site_packages, normalize_pkg_name
-from fspack.progress import fmt_bytes
+from fspack.ui.console import console
+from fspack.ui.progress import fmt_bytes
 
 __all__ = [
     "PackageSize",
@@ -92,7 +92,7 @@ class SizeReport:
 def _dir_size(path: Path) -> tuple[int, int]:
     """递归计算目录总字节数与文件数.
 
-    实现搬迁至 :func:`fspack.fsutil.dir_size_with_count`，此处保留同名薄封装
+    实现搬迁至 :func:`fspack.core.fsutil.dir_size_with_count`，此处保留同名薄封装
     维持 ``fspack.packaging.size_report._dir_size`` 引用兼容。
     返回 ``(total_bytes, file_count)``。
     """

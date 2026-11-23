@@ -1,6 +1,6 @@
 """wizard 交互选择组件测试.
 
-覆盖 :func:`fspack.wizard.select_item` 的导航/确认/取消行为与
+覆盖 :func:`fspack.ui.wizard.select_item` 的导航/确认/取消行为与
 ``_read_key_windows``/``_read_key_posix`` 的按键归一化（用假模块注入
 sys.modules，两个平台分支在任何系统上都可测）。
 """
@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from fspack import wizard
+from fspack.ui import wizard
 
 # ---- select_item 交互行为 ----
 

@@ -7,7 +7,7 @@
 - ``fsp init --python-version <X.Y>`` — 覆盖模板默认 ``requires-python`` 下限
 - ``fsp init --list`` — 列出所有可用模板
 
-交互式选择为两步向导（:mod:`fspack.wizard`，↑/↓ 移动 + Enter 确认，
+交互式选择为两步向导（:mod:`fspack.ui.wizard`，↑/↓ 移动 + Enter 确认，
 Esc/q 取消）：先选项目类型（分类），再选该类型下的具体模板，高亮项下方
 动态显示描述、依赖与生成文件结构。零新增依赖（rich 已是 fspack 依赖）。
 非 TTY 环境（CI/管道）自动跳过交互。
@@ -27,7 +27,6 @@ import sys
 from pathlib import Path
 from typing import Final
 
-from fspack.console import console
 from fspack.templates import (
     Template,
     TemplateRenderError,
@@ -37,7 +36,8 @@ from fspack.templates import (
     render_template,
 )
 from fspack.templates.registry import DEFAULT_REQUIRES_PYTHON
-from fspack.wizard import select_item
+from fspack.ui.console import console
+from fspack.ui.wizard import select_item
 
 __all__ = ["init_project", "print_template_list", "prompt_template_selection"]
 

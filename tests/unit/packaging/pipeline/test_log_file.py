@@ -615,9 +615,9 @@ def test_cli_build_log_format_invalid_rejected(tmp_path: Path) -> None:
 def test_build_writes_log_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """build(log_file=...) 将构建日志写入文件."""
     from fspack.config import get_mirror
-    from fspack.console import console
+    from fspack.core.platform import Platform
     from fspack.packaging.pipeline import build
-    from fspack.platform import Platform
+    from fspack.ui.console import console
 
     proj = tmp_path / "app"
     proj.mkdir()
@@ -650,8 +650,8 @@ def test_build_writes_log_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 def test_build_cleans_up_log_file_on_exception(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """build() 异常时也正确清理日志 handler（try/finally）."""
     from fspack.config import get_mirror
+    from fspack.core.platform import Platform
     from fspack.packaging.pipeline import build
-    from fspack.platform import Platform
 
     proj = tmp_path / "app"
     proj.mkdir()
@@ -676,9 +676,9 @@ def test_build_cleans_up_log_file_on_exception(tmp_path: Path, monkeypatch: pyte
 def test_build_log_format_json_writes_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """build(log_format=JSON) 写入 JSON 结构化日志."""
     from fspack.config import get_mirror
-    from fspack.console import console
+    from fspack.core.platform import Platform
     from fspack.packaging.pipeline import build
-    from fspack.platform import Platform
+    from fspack.ui.console import console
 
     proj = tmp_path / "app"
     proj.mkdir()
@@ -715,9 +715,9 @@ def test_build_log_format_json_writes_json(tmp_path: Path, monkeypatch: pytest.M
 def test_build_without_log_file_does_not_create_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """未指定 log_file 时不创建日志文件."""
     from fspack.config import get_mirror
-    from fspack.console import console
+    from fspack.core.platform import Platform
     from fspack.packaging.pipeline import build
-    from fspack.platform import Platform
+    from fspack.ui.console import console
 
     proj = tmp_path / "app"
     proj.mkdir()

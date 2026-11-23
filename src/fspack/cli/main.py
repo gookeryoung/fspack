@@ -1,7 +1,7 @@
 """fspack CLI 入口 —— cargo 风格短命令（fsp b/c/r）.
 
 顶部仅导入轻量标准库（argparse/pathlib/os/sys）与 ``__version__``。
-重模块（``fspack.config``/``fspack.console``/``fspack.platform``）延迟到
+重模块（``fspack.config``/``fspack.ui.console``/``fspack.core.platform``）延迟到
 实际使用时导入，使 ``fsp --help`` 无需加载 config/console 即可输出帮助；
 ``logging`` 同样延迟到使用点（console 顶层自会导入，``--help`` 类轻路径
 可整段省去 logging 导入链，实测约 5-6ms）。
@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from fspack import __version__
-from fspack.exceptions import FspackError
+from fspack.core.exceptions import FspackError
 
 __all__ = ["main"]
 
@@ -67,7 +67,7 @@ def main(argv: list[str] | None = None) -> None:
     """主入口，解析参数并分发到子命令.
 
     单项目命令（build/package/run/clean/init/doctor/...）执行期抛出的
-    :class:`fspack.exceptions.FspackError`（项目解析/入口识别/依赖/编译等领域
+    :class:`fspack.core.exceptions.FspackError`（项目解析/入口识别/依赖/编译等领域
     错误）在此统一捕获：打印简洁中文错误并以退出码 2 退出，而非向用户抛出原始
     Python traceback。递归路径（``fsp b -r``）在
     :func:`fspack.cli.recursive._run_recursive` 内逐项目捕获后继续，不会传播到
@@ -87,14 +87,14 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     # console 延迟导入：仅在实际执行子命令时加载 rich（~17ms）
-    from fspack.console import console
+    from fspack.ui.console import console
 
     json_mode = bool(getattr(ns, "json", False))
     console.setup_output(machine=json_mode, quiet=bool(getattr(ns, "quiet", False)))
     console.setup_logging(verbose=ns.verbose)
 
     # 默认把日志里的绝对路径缩成单行（-v 保持完整路径），宽度按终端列数收敛
-    from fspack import logutil
+    from fspack.core import logutil
 
     logutil.configure(verbose=ns.verbose, path_width=console.path_width)
 

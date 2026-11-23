@@ -26,9 +26,9 @@ from urllib.request import Request
 import pytest
 
 from fspack.config import get_mirror
-from fspack.exceptions import DependencyError, EmbedError
+from fspack.core.exceptions import DependencyError, EmbedError
+from fspack.core.platform import Platform
 from fspack.packaging.runtime import STANDALONE_RELEASE_TAG, standalone_tarball_name
-from fspack.platform import Platform
 from tests._stubs import FakeResp, fail_urlopen
 
 _MIRROR = get_mirror()

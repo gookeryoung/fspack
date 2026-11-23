@@ -14,8 +14,8 @@ import zlib
 from pathlib import Path
 from typing import Literal
 
-from fspack.archive import validate_zip_member
-from fspack.exceptions import EmbedError
+from fspack.core.archive import validate_zip_member
+from fspack.core.exceptions import EmbedError
 
 _logger = logging.getLogger(__name__)
 
@@ -82,7 +82,7 @@ def _validate_tar_member(member: tarfile.TarInfo) -> None:
 def _validate_zip_member(info: zipfile.ZipInfo) -> None:
     """校验 zip 条目路径安全：拒绝绝对路径、路径穿越（``..``）、符号链接.
 
-    实现在叶子模块 :func:`fspack.archive.validate_zip_member`，供 ``slim`` 解包
+    实现在叶子模块 :func:`fspack.core.archive.validate_zip_member`，供 ``slim`` 解包
     共用以避免 slim -> packaging 的层级倒挂；此处保留同名封装维持既有导入点
     （``packaging.runtime.__init__`` 仍导出该名称）。
     """

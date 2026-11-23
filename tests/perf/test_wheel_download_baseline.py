@@ -53,11 +53,11 @@ from typing import Any
 
 import pytest
 
-from fspack.exceptions import DependencyError
+from fspack.core.exceptions import DependencyError
 from fspack.packaging.wheels.cache import _deps_cache_key, _save_deps_cache
 from fspack.packaging.wheels.downloader import download_wheels
 from fspack.packaging.wheels.resolver import DownloadContext, _download_resolved_parallel
-from fspack.progress import StageRecorder
+from fspack.ui.progress import StageRecorder
 
 # ---- 测试样本 ----
 

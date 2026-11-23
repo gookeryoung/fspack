@@ -9,9 +9,9 @@ from typing import Any
 
 import pytest
 
+from fspack.core.platform import Platform
 from fspack.packaging.pyc import _precompile_pyc
-from fspack.platform import Platform
-from fspack.progress import StageRecorder
+from fspack.ui.progress import StageRecorder
 from tests._stubs import CompletedStub, fake_compileall_runner
 
 # ---- _precompile_pyc compileall 超时防护测试（iter-127） ----

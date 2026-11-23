@@ -20,13 +20,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from fspack import __version__
+from fspack.core.format import format_size_bin
+from fspack.core.fsutil import walk_dir_size
 from fspack.doctor.cache_health import _scan_cache_health
 from fspack.doctor.models import CheckResult, CheckStatus
-from fspack.format import format_size_bin
-from fspack.fsutil import walk_dir_size
 
 if TYPE_CHECKING:
-    from fspack.platform import Platform
+    from fspack.core.platform import Platform
 
 _logger = logging.getLogger(__name__)
 
@@ -111,7 +111,7 @@ def _check_cache_dir(cache_root: Path) -> CheckResult:
 def _dir_size(path: Path) -> int:
     """递归计算目录总字节数（不含符号链接循环）.
 
-    实现搬迁至 :func:`fspack.fsutil.walk_dir_size`，此处保留同名薄封装
+    实现搬迁至 :func:`fspack.core.fsutil.walk_dir_size`，此处保留同名薄封装
     维持 ``fspack.doctor.envs._dir_size`` 引用兼容。
     """
     return walk_dir_size(path)
@@ -120,7 +120,7 @@ def _dir_size(path: Path) -> int:
 def _format_size(size_bytes: int) -> str:
     """字节数格式化为人类可读（如 ``"123.4 MiB"``）.
 
-    实现搬迁至 :func:`fspack.format.format_size_bin`，此处保留同名薄封装
+    实现搬迁至 :func:`fspack.core.format.format_size_bin`，此处保留同名薄封装
     维持 ``fspack.doctor.envs._format_size`` 引用兼容。
     """
     return format_size_bin(size_bytes)

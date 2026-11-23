@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from fspack.exceptions import DependencyError
+from fspack.core.exceptions import DependencyError
 from fspack.packaging.lockfile import (
     LOCK_FILE_NAME,
     read_requirements_lock,

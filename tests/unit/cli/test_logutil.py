@@ -10,7 +10,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from fspack import logutil
+from fspack.core import logutil
 
 
 @pytest.fixture(autouse=True)
@@ -104,7 +104,7 @@ def test_short_path_explicit_width() -> None:
 def test_short_path_logs_full_path_at_debug(caplog: pytest.LogCaptureFixture) -> None:
     """截断掉的完整路径以 DEBUG 记录：``-v``/CI 日志文件仍能找回原值."""
     path = r"C:\Users\zhou\AppData\Local\Temp\demo\runtime\python314.dll"
-    with caplog.at_level("DEBUG", logger="fspack.logutil"):
+    with caplog.at_level("DEBUG", logger="fspack.core.logutil"):
         logutil.short_path(path)
     assert any(path in record.getMessage() and record.levelname == "DEBUG" for record in caplog.records)
 
@@ -112,7 +112,7 @@ def test_short_path_logs_full_path_at_debug(caplog: pytest.LogCaptureFixture) ->
 def test_short_path_verbose_does_not_log(caplog: pytest.LogCaptureFixture) -> None:
     """``-v`` 下输出本就完整，不再重复写 DEBUG 完整路径."""
     logutil.configure(verbose=True)
-    with caplog.at_level("DEBUG", logger="fspack.logutil"):
+    with caplog.at_level("DEBUG", logger="fspack.core.logutil"):
         logutil.short_path(r"C:\Users\zhou\AppData\Local\Temp\demo\runtime\python314.dll")
     assert not caplog.records
 

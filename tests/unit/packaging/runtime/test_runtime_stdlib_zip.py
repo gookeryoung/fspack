@@ -14,12 +14,12 @@ from typing import Any
 import pytest
 
 from fspack.config import BuildConfig, BuildOptions, ProjectInfo, get_mirror
+from fspack.core.platform import Platform
 from fspack.packaging.pipeline.context import BuildContext
 from fspack.packaging.pipeline.runtime_stage import _zip_stdlib
 from fspack.packaging.runtime import stdlib_zip
 from fspack.packaging.runtime.stdlib_zip import zip_stdlib
-from fspack.platform import Platform
-from fspack.progress import BuildTracker, StageRecorder
+from fspack.ui.progress import BuildTracker, StageRecorder
 
 
 def _make_runtime(tmp: Path, py_version: str = "3.11.9") -> tuple[Path, Path, Path, Path]:

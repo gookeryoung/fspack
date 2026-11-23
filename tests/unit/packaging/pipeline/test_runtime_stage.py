@@ -13,8 +13,8 @@ from fspack.builder import (
     build,
 )
 from fspack.config import BuildOptions, ProjectInfo, get_mirror
+from fspack.core.platform import Platform
 from fspack.packaging.pipeline.stages import BuildContext
-from fspack.platform import Platform
 from tests._stubs import CompletedStub, make_standalone_runtime, setup_embed_mocks
 
 # ---- Win7 兼容 DLL 注入测试 ----
@@ -154,7 +154,7 @@ def _make_slim_runtime_context(
 ) -> tuple[BuildContext, Path]:
     """构造最小 BuildContext 用于 _slim_runtime 测试."""
     from fspack.config import BuildConfig, BuildOptions, ProjectInfo
-    from fspack.progress import BuildTracker
+    from fspack.ui.progress import BuildTracker
 
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
     (tmp_path / "app.py").write_text("def main():\n    pass\n")
@@ -229,7 +229,7 @@ def _make_win7_runtime_context(
 ) -> tuple[BuildContext, Path]:
     """构造 runtime 已就绪（官方 dll 存在）的 BuildContext 用于 _prepare_runtime 测试."""
     from fspack.config import BuildConfig
-    from fspack.progress import BuildTracker
+    from fspack.ui.progress import BuildTracker
 
     (tmp_path / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1"\n')
     (tmp_path / "app.py").write_text("def main():\n    pass\n")
@@ -394,7 +394,7 @@ def _make_windows_t_context(
 ) -> tuple[BuildContext, Path]:
     """构造 Windows 自由线程版本 BuildContext 用于 _prepare_windows_t_runtime 测试."""
     from fspack.config import AppType, BuildConfig
-    from fspack.progress import BuildTracker
+    from fspack.ui.progress import BuildTracker
 
     info = ProjectInfo(
         name="app",

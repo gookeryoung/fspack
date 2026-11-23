@@ -21,7 +21,8 @@ from urllib.request import Request
 import pytest
 
 from fspack.config import MirrorConfig
-from fspack.exceptions import BuiltinError, DependencyError, EmbedError, NuitkaError
+from fspack.core.exceptions import BuiltinError, DependencyError, EmbedError, NuitkaError
+from fspack.core.platform import Platform
 from fspack.packaging.builtin import TkinterBundler
 from fspack.packaging.nuitka import NuitkaCompiler
 from fspack.packaging.runtime import (
@@ -34,8 +35,7 @@ from fspack.packaging.wheels import (
     download_wheels,
 )
 from fspack.packaging.wheels.resolver import DownloadContext
-from fspack.platform import Platform
-from fspack.progress import StageRecorder
+from fspack.ui.progress import StageRecorder
 from tests._stubs import CompletedStub, FakeResp, fail_urlopen
 
 

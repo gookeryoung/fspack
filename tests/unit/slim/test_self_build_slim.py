@@ -20,8 +20,8 @@ import zipfile
 from collections.abc import Iterator
 from pathlib import Path
 
-from fspack._compat import tomllib
 from fspack.config import SlimRules
+from fspack.core._compat import tomllib
 from fspack.slim import slim_unpack
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]

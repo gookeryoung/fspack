@@ -11,10 +11,10 @@ from fspack.config import (
     get_mirror,
     nuitka_version_for,
 )
-from fspack.exceptions import NuitkaError
+from fspack.core.exceptions import NuitkaError
+from fspack.core.platform import Platform
 from fspack.packaging.nuitka import NuitkaCompiler
-from fspack.platform import Platform
-from fspack.progress import StageRecorder
+from fspack.ui.progress import StageRecorder
 
 # ---- compile_with_stamp 编译流程测试 ----
 

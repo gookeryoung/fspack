@@ -4,14 +4,14 @@
 M4 定下的依赖方向没有被新代码改回去：
 
 * ``config`` 不得依赖 ``analyzer``（原先为了复用 AST 导入收集而反向依赖，
-  M4 抽出 ``fspack.astutil`` 后由双方共同向下依赖）；
+  M4 抽出 ``fspack.core.astutil`` 后由双方共同向下依赖）；
 * ``analyzer`` / ``slim`` 不得依赖 ``packaging``（底层引擎不依赖打包编排层）；
-* ``packaging`` 只有编排/展示入口可以引用 ``fspack.console`` / ``fspack.progress``，
+* ``packaging`` 只有编排/展示入口可以引用 ``fspack.ui.console`` / ``fspack.ui.progress``，
   纯逻辑模块（解包、解析、运行时下载等）引用它们会连锁把 rich 拖进 import 链，
   直接抬高 --help/启动耗时；
-* ``packaging`` 不得依赖 ``builder`` facade 或 ``cli`` / ``doctor`` / ``wizard`` /
+* ``packaging`` 不得依赖 ``builder`` facade 或 ``cli`` / ``doctor`` / ``ui.wizard`` /
   ``runner`` 上层入口；
-* 叶子模块（含 ``fsutil`` / ``format``）只依赖标准库与 ``fspack.exceptions``，
+* 叶子模块（``core`` 下）只依赖标准库与 ``fspack.core.exceptions``，
   否则"叶子"名不副实。
 
 新增违规时这里先失败，而不是等到 import 链膨胀、启动耗时回退后才发现。
@@ -28,7 +28,7 @@ PACKAGE_ROOT = Path(fspack.__file__).parent
 # 包内资源（模板工程/二进制）是被打包的示例载荷，不参与 fspack 自身的 import 图。
 _SKIP_DIRS = ("resources",)
 
-DISPLAY_MODULES = ("fspack.console", "fspack.progress")
+DISPLAY_MODULES = ("fspack.ui.console", "fspack.ui.progress")
 # 允许引用 console/progress 的 packaging 模块：全部是"阶段编排入口"或
 # "给终端用户打印结果"的展示入口，它们本来就在 CLI 调用栈的顶层。
 ALLOWED_DISPLAY_IMPORTERS = frozenset(
@@ -60,7 +60,15 @@ ALLOWED_DISPLAY_IMPORTERS = frozenset(
         "packaging/wheels/process.py",
     }
 )
-LEAF_MODULES = ("metrics.py", "astutil.py", "archive.py", "jsoncache.py", "logutil.py", "fsutil.py", "format.py")
+LEAF_MODULES = (
+    "core/metrics.py",
+    "core/astutil.py",
+    "core/archive.py",
+    "core/jsoncache.py",
+    "core/logutil.py",
+    "core/fsutil.py",
+    "core/format.py",
+)
 
 
 def _iter_sources() -> list[Path]:
@@ -115,7 +123,7 @@ def _assert_no_dependency(source_pkg: str, target_pkg: str) -> None:
 def test_scanner_sees_nested_and_lazy_imports() -> None:
     """扫描器自检：函数体内的延迟导入、facade re-export 都要能识别."""
     imports = _iter_imports(PACKAGE_ROOT / "packaging" / "pipeline" / "executor.py")
-    assert "fspack.progress" in imports  # 函数体内延迟导入
+    assert "fspack.ui.progress" in imports  # 函数体内延迟导入
     assert "fspack.packaging.profile_log" in imports
 
 
@@ -136,7 +144,7 @@ def test_packaging_does_not_depend_on_builder() -> None:
 
 
 def test_packaging_does_not_depend_on_upper_layer_entry_points() -> None:
-    for module in ("fspack.cli", "fspack.doctor", "fspack.wizard", "fspack.runner"):
+    for module in ("fspack.cli", "fspack.doctor", "fspack.ui.wizard", "fspack.runner"):
         _assert_no_dependency("packaging", module)
 
 
@@ -163,6 +171,15 @@ def test_leaf_modules_only_depend_on_stdlib_and_exceptions() -> None:
     for name in LEAF_MODULES:
         path = PACKAGE_ROOT / name
         internal = {mod for mod in _iter_imports(path) if mod == "fspack" or mod.startswith("fspack.")}
-        assert all(mod == "fspack.exceptions" or mod.startswith("fspack.exceptions.") for mod in internal), (
-            f"{name} 应是叶子模块，只允许依赖 fspack.exceptions，实际：{sorted(internal)}"
+        assert all(mod == "fspack.core.exceptions" or mod.startswith("fspack.core.exceptions.") for mod in internal), (
+            f"{name} 应是叶子模块，只允许依赖 fspack.core.exceptions，实际：{sorted(internal)}"
         )
+
+
+def test_core_only_depends_on_core_and_exceptions() -> None:
+    """``core`` 是叶子层：不得反向依赖 analyzer/config/packaging/ui 等上层."""
+    allowed_prefixes = ("fspack.core",)
+    for path in sorted((PACKAGE_ROOT / "core").glob("*.py")):
+        internal = {mod for mod in _iter_imports(path) if mod == "fspack" or mod.startswith("fspack.")}
+        bad = {mod for mod in internal if not mod.startswith(allowed_prefixes)}
+        assert not bad, f"{_rel(path)} 属于 core 叶子层，不得依赖上层模块：{sorted(bad)}"

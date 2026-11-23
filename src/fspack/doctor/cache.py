@@ -69,7 +69,7 @@ def run_cache_status(target: str | None = None, *, full_verify: bool = False) ->
         快检中心目录（``fsp cache status --verify`` 启用全量）
     :return: 报告元组（单 target 时为 1 元组）
     """
-    from fspack.console import console
+    from fspack.ui.console import console
 
     if target is not None:
         _validate_cache_type(target)
@@ -110,7 +110,7 @@ def run_cache_clean(
     :param target: 指定单 cache 类型清理；``None`` 清理全部类型
     :return: 清理后报告元组
     """
-    from fspack.console import console
+    from fspack.ui.console import console
 
     if target is not None:
         _validate_cache_type(target)
@@ -142,7 +142,7 @@ def run_cache_clean(
 def _validate_cache_type(target: str) -> None:
     """校验 cache 类型名合法，非法时打印错误并以退出码 2 退出."""
     if target not in CACHE_TYPES:
-        from fspack.console import console
+        from fspack.ui.console import console
 
         console.error(f"未知 cache 类型: {target}，可选: {', '.join(CACHE_TYPES)}")
         raise SystemExit(2) from None
@@ -150,7 +150,7 @@ def _validate_cache_type(target: str) -> None:
 
 def _render_status_report(report: CacheHealthReport) -> None:
     """渲染单个 cache 类型的健康扫描报告到控制台."""
-    from fspack.console import console
+    from fspack.ui.console import console
 
     console.rich.print(f"\n[bold cyan]{report.cache_type}[/]: {report.cache_dir}")
 
@@ -175,7 +175,7 @@ def _render_status_report(report: CacheHealthReport) -> None:
 
 def _render_clean_report(report: CacheHealthReport, *, dry_run: bool) -> None:
     """渲染单个 cache 类型的清理/预览报告."""
-    from fspack.console import console
+    from fspack.ui.console import console
 
     console.rich.print(f"\n[bold cyan]{report.cache_type}[/]: {report.cache_dir}")
 
@@ -243,7 +243,7 @@ def _format_generic_summary(report: CacheHealthReport) -> str:
 
 def _print_cache_detail_lists(report: CacheHealthReport) -> None:
     """渲染缓存扫描的详细文件名列表（损坏/缺失/stale/orphan 各一行）."""
-    from fspack.console import console
+    from fspack.ui.console import console
 
     if report.cache_type == "wheels":
         _print_wheels_detail_lists(report)
@@ -261,7 +261,7 @@ def _print_cache_detail_lists(report: CacheHealthReport) -> None:
 
 def _print_wheels_detail_lists(report: CacheHealthReport) -> None:
     """wheels 类型专用：渲染损坏 deps / stale deps / 孤儿 wheel 列表."""
-    from fspack.console import console
+    from fspack.ui.console import console
 
     if report.corrupt_deps_files:
         console.error(f"  损坏 deps: {_preview_names(report.corrupt_deps_files)}")
@@ -275,7 +275,7 @@ def _print_wheels_detail_lists(report: CacheHealthReport) -> None:
 
 def _print_cache_clean_lists(report: CacheHealthReport, action: str) -> None:
     """渲染清理/预览时的文件名列表（action 为"已删除"或"将删除"）."""
-    from fspack.console import console
+    from fspack.ui.console import console
 
     if report.cache_type == "wheels":
         _print_wheels_clean_lists(report, action)
@@ -294,7 +294,7 @@ def _print_cache_clean_lists(report: CacheHealthReport, action: str) -> None:
 
 def _print_wheels_clean_lists(report: CacheHealthReport, action: str) -> None:
     """wheels 类型专用：渲染清理/预览列表."""
-    from fspack.console import console
+    from fspack.ui.console import console
 
     if report.corrupt_deps_files:
         console.rich.print(f"  损坏 deps（扫描阶段{action}）: {_preview_names(report.corrupt_deps_files)}")

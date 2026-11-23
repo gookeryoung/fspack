@@ -13,7 +13,7 @@ __all__ = ["_run_package"]
 def _run_package(project: Path, ns: argparse.Namespace) -> None:
     """执行单项目 package 子命令."""
     from fspack.config import ProjectInfo
-    from fspack.exceptions import ProjectError
+    from fspack.core.exceptions import ProjectError
     from fspack.packaging.installer import ReleaseRequest, SignOptions, build_release
 
     # 项目信息：extras 校验、多版本目标解析与签名配置默认值共用（from_dir 有缓存）

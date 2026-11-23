@@ -10,6 +10,7 @@ from typing import Any, cast
 import pytest
 
 from fspack.builder import _DEFAULT_ICON, _resolve_project_icon
+from fspack.core.platform import Platform
 from fspack.packaging import icon as icon_module
 from fspack.packaging.icon import (
     SUPPORTED_IMAGE_EXTS,
@@ -17,7 +18,6 @@ from fspack.packaging.icon import (
     ensure_ico,
     find_favicon,
 )
-from fspack.platform import Platform
 
 # Pillow 是否可用（图片转换测试依赖）
 _HAS_PIL = importlib.util.find_spec("PIL") is not None

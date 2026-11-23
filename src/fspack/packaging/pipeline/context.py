@@ -22,7 +22,7 @@ from fspack.config import (
 from fspack.core.resources import resource_path
 
 if TYPE_CHECKING:
-    from fspack.progress import BuildTracker
+    from fspack.ui.progress import BuildTracker
 
 __all__ = [
     "_DEFAULT_ICON",

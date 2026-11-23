@@ -11,10 +11,10 @@ import pytest
 from fspack.config import (
     get_mirror,
 )
-from fspack.exceptions import NuitkaError
+from fspack.core.exceptions import NuitkaError
+from fspack.core.platform import Platform
 from fspack.packaging.nuitka import NuitkaCompiler
-from fspack.platform import Platform
-from fspack.progress import StageRecorder
+from fspack.ui.progress import StageRecorder
 from tests._stubs import (
     CompletedStub,
     FailedStub,
@@ -164,7 +164,7 @@ def test_check_c_compiler_linux_with_gcc_passes(tmp_path: Path, monkeypatch: pyt
 def test_ensure_env_windows_prefills_winlibs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """ensure_env 在 Windows 且 py<3.13 时预填充 winlibs（scons fallback 到 winlibs）."""
     from fspack.packaging.nuitka import NuitkaCompiler
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     monkeypatch.setattr("fspack.packaging.loader.mingw_available", lambda: True)
     patch_winlibs_hit(tmp_path, monkeypatch)
@@ -188,7 +188,7 @@ def test_ensure_env_windows_prefills_winlibs(tmp_path: Path, monkeypatch: pytest
 def test_ensure_env_windows_py313_prefills_winlibs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """ensure_env 在 Windows py>=3.13 也预填充 winlibs（编译命令 force-mingw64 强制走 winlibs）."""
     from fspack.packaging.nuitka import NuitkaCompiler
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     monkeypatch.setattr("fspack.packaging.loader.mingw_available", lambda: True)
     patch_winlibs_hit(tmp_path, monkeypatch, nuitka_ver="4.1.3")
@@ -211,7 +211,7 @@ def test_ensure_env_windows_py313_prefills_winlibs(tmp_path: Path, monkeypatch: 
 def test_ensure_env_windows_msvc_skips_winlibs_prefill(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """ensure_env 在 Windows 检测到 MSVC 时跳过 winlibs 预填充（scons 优先 MSVC，200MB 下载纯浪费）."""
     from fspack.packaging.nuitka import NuitkaCompiler
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     monkeypatch.setattr("fspack.packaging.loader.mingw_available", lambda: True)
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
@@ -234,7 +234,7 @@ def test_ensure_env_windows_msvc_skips_winlibs_prefill(tmp_path: Path, monkeypat
 def test_ensure_env_compiler_mingw_prefills_with_msvc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """compiler=mingw 时无视 MSVC 存在恒预填充 winlibs（force flag 顶掉 MSVC，scons 需缓存）."""
     from fspack.packaging.nuitka import NuitkaCompiler
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     monkeypatch.setattr("fspack.packaging.loader.mingw_available", lambda: True)
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
@@ -260,7 +260,7 @@ def test_ensure_env_compiler_mingw_prefills_with_msvc(tmp_path: Path, monkeypatc
 def test_ensure_env_compiler_msvc_skips_prefill(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """compiler=msvc 时跳过 winlibs 预填充（MSVC 缺失由构建入口 fail-fast 校验）."""
     from fspack.packaging.nuitka import NuitkaCompiler
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     monkeypatch.setattr("fspack.packaging.loader.mingw_available", lambda: True)
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
@@ -290,7 +290,7 @@ def test_ensure_env_compiler_non_windows_warns(
     import logging
 
     from fspack.packaging.nuitka import NuitkaCompiler
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     monkeypatch.setattr("fspack.packaging.loader.gcc_available", lambda: True)
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
@@ -314,7 +314,7 @@ def test_ensure_env_compiler_non_windows_warns(
 def test_ensure_env_linux_skips_winlibs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """ensure_env 在 Linux 时不预填充 winlibs（Linux 用系统 gcc）."""
     from fspack.packaging.nuitka import NuitkaCompiler
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     monkeypatch.setattr("fspack.packaging.loader.gcc_available", lambda: True)
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))

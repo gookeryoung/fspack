@@ -23,6 +23,7 @@ re-export（直接从 :mod:`fspack.packaging.pipeline.plan_printer` 导入）。
 from __future__ import annotations
 
 from fspack.config import DependencyReport  # __all__ re-export（F401 豁免：__all__ 成员）
+from fspack.core.platform import Platform, detect_platform  # noqa: F401 — facade re-export
 from fspack.packaging.loader import compile_loader  # noqa: F401 — facade re-export（历史引用面兼容）
 from fspack.packaging.log_file import LogFormat, setup_log_file, teardown_log_file  # noqa: F401 — facade re-export
 from fspack.packaging.pipeline.dist_helpers import (
@@ -77,7 +78,6 @@ from fspack.packaging.runtime import (  # noqa: F401 — facade re-export（历�
 )
 from fspack.packaging.sync import copy_source  # noqa: F401 — facade re-export
 from fspack.packaging.wheels import download_wheels  # noqa: F401 — facade re-export
-from fspack.platform import Platform, detect_platform  # noqa: F401 — facade re-export
 
 __all__ = [
     "_BUILD_FAILED",

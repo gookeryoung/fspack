@@ -20,13 +20,13 @@ def _run_doctor(ns: argparse.Namespace) -> None:
     """
     from pathlib import Path
 
+    from fspack.core.exceptions import ProjectError
     from fspack.doctor import (
         print_doctor_report,
         run_doctor,
         run_doctor_cache_check,
         run_doctor_test,
     )
-    from fspack.exceptions import ProjectError
     from fspack.packaging.profile_log import ProfileOptions
 
     test = getattr(ns, "test", False)

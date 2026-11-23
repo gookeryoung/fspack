@@ -32,13 +32,13 @@ def _run_generate(ns: argparse.Namespace) -> None:
     """执行 manifest generate：扫描 dist 重新生成 manifest."""
     import json
 
-    from fspack import logutil
     from fspack.config import ProjectInfo
-    from fspack.console import console
-    from fspack.exceptions import ProjectError
-    from fspack.fsutil import atomic_write_text
+    from fspack.core import logutil
+    from fspack.core.exceptions import ProjectError
+    from fspack.core.fsutil import atomic_write_text
+    from fspack.core.platform import Platform, detect_platform
     from fspack.packaging.manifest import _format_size, _logger, collect_manifest
-    from fspack.platform import Platform, detect_platform
+    from fspack.ui.console import console
 
     project = Path(ns.project).resolve()
     # 生成 ProjectInfo（复用 from_dir 缓存），用于填充 manifest.project 与默认文件名
@@ -73,8 +73,8 @@ def _run_generate(ns: argparse.Namespace) -> None:
 
 def _run_diff(ns: argparse.Namespace) -> None:
     """执行 manifest diff：对比两份 manifest 并打印差异."""
-    from fspack.console import console
     from fspack.packaging.manifest import diff_manifest, load_manifest, print_manifest_diff
+    from fspack.ui.console import console
 
     old_path = Path(ns.old)
     new_path = Path(ns.new)

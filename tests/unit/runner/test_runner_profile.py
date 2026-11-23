@@ -433,7 +433,7 @@ def test_run_profile_nonzero_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
     monkeypatch.setattr("fspack.runner.run_with_profile", lambda cmd, env=None, on_summary=None, **kwargs: 7)
     monkeypatch.setattr("fspack.runner.platform.system", lambda: "Windows")
-    from fspack.exceptions import FspackError
+    from fspack.core.exceptions import FspackError
 
     with pytest.raises(FspackError, match="程序退出码非零: 7"):
         run_run(project, options=_opts(profile=True))
@@ -980,8 +980,8 @@ def test_run_profile_compare_last_renders_table(
     }
     save_profile_log(baseline_data, project / ".benchmarks", prefix="fsp-r-")
 
-    # 对比表经 fspack.console 的 rich console 输出，须用 rich capture 捕获
-    from fspack.console import console
+    # 对比表经 fspack.ui.console 的 rich console 输出，须用 rich capture 捕获
+    from fspack.ui.console import console
 
     with console.rich.capture() as capture:
         run_run(project, options=_opts(profile=True, profile_compare="last"))

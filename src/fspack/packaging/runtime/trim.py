@@ -23,16 +23,16 @@ import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from fspack import logutil
 from fspack.config.versions import _split_t_suffix
+from fspack.core import logutil
+from fspack.core.platform import Platform
 from fspack.core.resources import resource_path
 from fspack.packaging import action_cache
 from fspack.packaging.runtime.urls import embed_dirname
 from fspack.packaging.sync import _dir_size
-from fspack.platform import Platform
 
 if TYPE_CHECKING:
-    from fspack.metrics import StageRecorder
+    from fspack.core.metrics import StageRecorder
 
 _logger = logging.getLogger(__name__)
 

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from fspack.core.platform import Platform
 from fspack.doctor import (
     _build_debug_cmd,
     _build_run_cmd,
@@ -18,7 +19,6 @@ from fspack.doctor import (
     _platform_skip_reason,
     _run_template,
 )
-from fspack.platform import Platform
 from fspack.templates.registry import Template
 
 # ---- 平台兼容性过滤（doctor --test 跳过无兼容 Python 的模板）----
@@ -31,7 +31,7 @@ def _tpl(tpl_id: str, requires_python: str) -> Template:
 
 def test_platform_skip_reason_incompatible_on_linux(monkeypatch: pytest.MonkeyPatch) -> None:
     """Linux 无 3.8/3.9 standalone，``>=3.8,<3.10`` 约束应给出跳过原因."""
-    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    monkeypatch.setattr("fspack.core.platform.detect_platform", lambda: Platform.LINUX)
     reason = _platform_skip_reason(_tpl("pyside2", ">=3.8,<3.10"))
     assert reason is not None
     assert "requires-python" in reason
@@ -40,19 +40,19 @@ def test_platform_skip_reason_incompatible_on_linux(monkeypatch: pytest.MonkeyPa
 
 def test_platform_skip_reason_compatible_on_linux(monkeypatch: pytest.MonkeyPatch) -> None:
     """宽松约束（``>=3.8``）在 Linux 有 3.10+ 可用，可构建返回 None."""
-    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    monkeypatch.setattr("fspack.core.platform.detect_platform", lambda: Platform.LINUX)
     assert _platform_skip_reason(_tpl("helloworld", ">=3.8")) is None
 
 
 def test_platform_skip_reason_pyside2_ok_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     """同一 ``>=3.8,<3.10`` 约束在 Windows 有 3.8/3.9 embed 可用，不跳过."""
-    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.WINDOWS)
+    monkeypatch.setattr("fspack.core.platform.detect_platform", lambda: Platform.WINDOWS)
     assert _platform_skip_reason(_tpl("pyside2", ">=3.8,<3.10")) is None
 
 
 def test_platform_skip_reason_unsatisfiable_constraint(monkeypatch: pytest.MonkeyPatch) -> None:
     """任何平台版本表都无法满足的约束（``>=3.15``）给出跳过原因."""
-    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.WINDOWS)
+    monkeypatch.setattr("fspack.core.platform.detect_platform", lambda: Platform.WINDOWS)
     reason = _platform_skip_reason(_tpl("future", ">=3.15"))
     assert reason is not None
     assert "requires-python" in reason
@@ -60,7 +60,7 @@ def test_platform_skip_reason_unsatisfiable_constraint(monkeypatch: pytest.Monke
 
 def test_filter_platform_supported_splits(monkeypatch: pytest.MonkeyPatch) -> None:
     """混合列表按平台兼容性拆分为 (可构建, 跳过及原因)."""
-    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    monkeypatch.setattr("fspack.core.platform.detect_platform", lambda: Platform.LINUX)
     ok1, ok2 = _tpl("a", ">=3.8"), _tpl("b", ">=3.10,<3.14")
     skip1 = _tpl("pyside2", ">=3.8,<3.10")
     buildable, skipped = _filter_platform_supported([ok1, skip1, ok2])
@@ -74,7 +74,7 @@ def test_filter_platform_supported_splits(monkeypatch: pytest.MonkeyPatch) -> No
 
 def test_find_dist_exe_linux_native(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Linux 优先返回原生无后缀可执行文件."""
-    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    monkeypatch.setattr("fspack.core.platform.detect_platform", lambda: Platform.LINUX)
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "app").write_bytes(b"")
@@ -85,7 +85,7 @@ def test_find_dist_exe_linux_native(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
 def test_find_dist_exe_linux_fallback_exe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Linux 无原生可执行文件时回退 .exe（用 wine 运行）."""
-    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    monkeypatch.setattr("fspack.core.platform.detect_platform", lambda: Platform.LINUX)
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "app.exe").write_bytes(b"")
@@ -95,7 +95,7 @@ def test_find_dist_exe_linux_fallback_exe(tmp_path: Path, monkeypatch: pytest.Mo
 
 def test_find_dist_exe_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Windows 仅查 .exe."""
-    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.WINDOWS)
+    monkeypatch.setattr("fspack.core.platform.detect_platform", lambda: Platform.WINDOWS)
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "app.exe").write_bytes(b"")
@@ -105,14 +105,14 @@ def test_find_dist_exe_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
 def test_find_dist_exe_not_found(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """dist 下无可执行文件时返回 None."""
-    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    monkeypatch.setattr("fspack.core.platform.detect_platform", lambda: Platform.LINUX)
     (tmp_path / "dist").mkdir()
     assert _find_dist_exe(tmp_path, "missing") is None
 
 
 def test_find_dist_exe_no_dist_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """dist 目录不存在时返回 None."""
-    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    monkeypatch.setattr("fspack.core.platform.detect_platform", lambda: Platform.LINUX)
     assert _find_dist_exe(tmp_path, "app") is None
 
 
@@ -121,21 +121,21 @@ def test_find_dist_exe_no_dist_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
 def test_build_run_cmd_native_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Linux 原生可执行文件（无 .exe 后缀）直跑."""
-    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    monkeypatch.setattr("fspack.core.platform.detect_platform", lambda: Platform.LINUX)
     exe = tmp_path / "app"
     assert _build_run_cmd(exe) == [str(exe)]
 
 
 def test_build_run_cmd_exe_on_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Windows 下 .exe 直跑，不调 wine."""
-    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.WINDOWS)
+    monkeypatch.setattr("fspack.core.platform.detect_platform", lambda: Platform.WINDOWS)
     exe = tmp_path / "app.exe"
     assert _build_run_cmd(exe) == [str(exe)]
 
 
 def test_build_run_cmd_exe_on_linux_with_wine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Linux 下 .exe 用 wine 运行（wine 在 PATH）."""
-    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    monkeypatch.setattr("fspack.core.platform.detect_platform", lambda: Platform.LINUX)
     monkeypatch.setattr("fspack.doctor.shutil.which", lambda name: "/usr/bin/wine")
     exe = tmp_path / "app.exe"
     assert _build_run_cmd(exe) == ["/usr/bin/wine", str(exe)]
@@ -143,7 +143,7 @@ def test_build_run_cmd_exe_on_linux_with_wine(tmp_path: Path, monkeypatch: pytes
 
 def test_build_run_cmd_exe_on_linux_no_wine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Linux 下 .exe 但 wine 未安装时回退字符串 'wine'（_run_template 捕获 OSError）."""
-    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    monkeypatch.setattr("fspack.core.platform.detect_platform", lambda: Platform.LINUX)
     monkeypatch.setattr("fspack.doctor.shutil.which", lambda name: None)
     exe = tmp_path / "app.exe"
     assert _build_run_cmd(exe) == ["wine", str(exe)]
@@ -154,7 +154,7 @@ def test_build_run_cmd_exe_on_linux_no_wine(tmp_path: Path, monkeypatch: pytest.
 
 def test_find_debug_python_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Linux debug 模式查 dist/runtime/python/bin/python3.X."""
-    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    monkeypatch.setattr("fspack.core.platform.detect_platform", lambda: Platform.LINUX)
     bin_dir = tmp_path / "dist" / "runtime" / "python" / "bin"
     bin_dir.mkdir(parents=True)
     (bin_dir / "python3.11").write_bytes(b"")
@@ -165,7 +165,7 @@ def test_find_debug_python_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 
 def test_find_debug_python_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Windows debug 模式查 dist/runtime/python.exe."""
-    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.WINDOWS)
+    monkeypatch.setattr("fspack.core.platform.detect_platform", lambda: Platform.WINDOWS)
     runtime = tmp_path / "dist" / "runtime"
     runtime.mkdir(parents=True)
     (runtime / "python.exe").write_bytes(b"")
@@ -175,7 +175,7 @@ def test_find_debug_python_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
 def test_find_debug_python_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """runtime 目录不存在时返回 None."""
-    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    monkeypatch.setattr("fspack.core.platform.detect_platform", lambda: Platform.LINUX)
     assert _find_debug_python(tmp_path) is None
 
 
@@ -195,7 +195,7 @@ def test_find_wrapper_absent(tmp_path: Path) -> None:
 
 def test_build_debug_cmd_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Linux debug 命令 = [python, wrapper]，env 含 PYTHONHOME + PYTHONUNBUFFERED."""
-    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    monkeypatch.setattr("fspack.core.platform.detect_platform", lambda: Platform.LINUX)
     bin_dir = tmp_path / "dist" / "runtime" / "python" / "bin"
     bin_dir.mkdir(parents=True)
     py_file = bin_dir / "python3.11"
@@ -212,7 +212,7 @@ def test_build_debug_cmd_linux(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
 def test_build_debug_cmd_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Windows debug 命令不含 PYTHONHOME（embed python 用 _pth 定位标准库）."""
-    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.WINDOWS)
+    monkeypatch.setattr("fspack.core.platform.detect_platform", lambda: Platform.WINDOWS)
     runtime = tmp_path / "dist" / "runtime"
     runtime.mkdir(parents=True)
     py_file = runtime / "python.exe"
@@ -229,7 +229,7 @@ def test_build_debug_cmd_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 
 def test_build_debug_cmd_wrapper_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """wrapper 缺失时返回 None（调用方回退直跑 exe）."""
-    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    monkeypatch.setattr("fspack.core.platform.detect_platform", lambda: Platform.LINUX)
     bin_dir = tmp_path / "dist" / "runtime" / "python" / "bin"
     bin_dir.mkdir(parents=True)
     (bin_dir / "python3.11").write_bytes(b"")
@@ -239,7 +239,7 @@ def test_build_debug_cmd_wrapper_missing(tmp_path: Path, monkeypatch: pytest.Mon
 
 def test_build_debug_cmd_python_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """embed python 缺失时返回 None."""
-    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    monkeypatch.setattr("fspack.core.platform.detect_platform", lambda: Platform.LINUX)
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "_entry_app.py").write_text("")
@@ -277,7 +277,7 @@ class _FakeProc:
 
 def test_run_template_success_exit_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """进程退出码 0 → 运行成功（CLI 正常执行完成）."""
-    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    monkeypatch.setattr("fspack.core.platform.detect_platform", lambda: Platform.LINUX)
     proc = _FakeProc(returncode=0, stdout="hello, world\n", stderr="")
     monkeypatch.setattr("fspack.doctor.subprocess.Popen", lambda *a, **kw: proc)
     result = _run_template([str(tmp_path / "app")], timeout=1.0)
@@ -289,7 +289,7 @@ def test_run_template_success_exit_zero(tmp_path: Path, monkeypatch: pytest.Monk
 
 def test_run_template_failure_nonzero_exit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """进程退出码非 0 → 运行失败，捕获 stderr 首行."""
-    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    monkeypatch.setattr("fspack.core.platform.detect_platform", lambda: Platform.LINUX)
     proc = _FakeProc(
         returncode=1,
         stdout="",
@@ -305,7 +305,7 @@ def test_run_template_failure_nonzero_exit(tmp_path: Path, monkeypatch: pytest.M
 
 def test_run_template_failure_empty_stderr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """进程退出码非 0 且 stderr 为空时 error 显示退出码."""
-    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    monkeypatch.setattr("fspack.core.platform.detect_platform", lambda: Platform.LINUX)
     proc = _FakeProc(returncode=2, stdout="", stderr="")
     monkeypatch.setattr("fspack.doctor.subprocess.Popen", lambda *a, **kw: proc)
     result = _run_template([str(tmp_path / "app")], timeout=1.0)
@@ -322,7 +322,7 @@ def test_run_template_timeout_treated_as_success(tmp_path: Path, monkeypatch: py
             super().__init__(returncode=0)
             self._raise_timeout = True
 
-    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    monkeypatch.setattr("fspack.core.platform.detect_platform", lambda: Platform.LINUX)
     proc = _TimeoutProc()
     monkeypatch.setattr("fspack.doctor.subprocess.Popen", lambda *a, **kw: proc)
     result = _run_template([str(tmp_path / "app")], timeout=0.5)
@@ -340,7 +340,7 @@ def test_run_template_timeout_terminate_then_kill(tmp_path: Path, monkeypatch: p
             super().__init__(returncode=0)
             self._raise_timeout = True
 
-    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    monkeypatch.setattr("fspack.core.platform.detect_platform", lambda: Platform.LINUX)
     proc = _StubbornProc()
     monkeypatch.setattr("fspack.doctor.subprocess.Popen", lambda *a, **kw: proc)
     result = _run_template([str(tmp_path / "app")], timeout=0.3)
@@ -357,7 +357,7 @@ def test_run_template_oserror_startup_failure(tmp_path: Path, monkeypatch: pytes
     def _raise_popen(*args: object, **kwargs: object) -> None:
         raise FileNotFoundError("[Errno 2] No such file or directory: 'wine'")
 
-    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    monkeypatch.setattr("fspack.core.platform.detect_platform", lambda: Platform.LINUX)
     monkeypatch.setattr("fspack.doctor.subprocess.Popen", _raise_popen)
     result = _run_template(["wine", str(tmp_path / "app.exe")], timeout=1.0)
     assert result.success is False
@@ -369,7 +369,7 @@ def test_run_template_oserror_startup_failure(tmp_path: Path, monkeypatch: pytes
 
 def test_run_template_passes_env_to_popen(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """debug 模式传入 env 时透传给 Popen，并追加 FSPACK_TIMING=1 激活自终止钩子."""
-    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    monkeypatch.setattr("fspack.core.platform.detect_platform", lambda: Platform.LINUX)
     captured: dict[str, object] = {}
     proc = _FakeProc(returncode=0)
 
@@ -385,7 +385,7 @@ def test_run_template_passes_env_to_popen(tmp_path: Path, monkeypatch: pytest.Mo
 
 def test_run_template_env_none_injects_timing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """env=None 继承当前环境，同样追加 FSPACK_TIMING=1（回退直跑 exe 场景）."""
-    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    monkeypatch.setattr("fspack.core.platform.detect_platform", lambda: Platform.LINUX)
     captured: dict[str, object] = {}
     proc = _FakeProc(returncode=0)
 
@@ -404,7 +404,7 @@ def test_run_template_env_none_injects_timing(tmp_path: Path, monkeypatch: pytes
 
 def test_run_template_failure_skips_timing_marker_lines(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """非零退出时 stderr 的 ``[fspack`` 打点行被跳过，error 取首个真实错误行."""
-    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    monkeypatch.setattr("fspack.core.platform.detect_platform", lambda: Platform.LINUX)
     proc = _FakeProc(
         returncode=1,
         stdout="",

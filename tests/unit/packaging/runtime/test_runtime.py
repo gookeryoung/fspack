@@ -12,7 +12,7 @@ from urllib.request import Request
 import pytest
 
 from fspack.config import MirrorConfig
-from fspack.exceptions import EmbedError, ProjectError
+from fspack.core.exceptions import EmbedError, ProjectError
 from fspack.packaging.pipeline.runtime_stage import _detect_macos_arch
 from fspack.packaging.runtime import (
     STANDALONE_BASE_URL,
@@ -29,7 +29,7 @@ from fspack.packaging.runtime import (
     standalone_url,
     write_pth,
 )
-from fspack.progress import StageRecorder
+from fspack.ui.progress import StageRecorder
 from tests._stubs import FakeResp
 
 

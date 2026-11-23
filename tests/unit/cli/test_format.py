@@ -1,10 +1,10 @@
-"""``fspack.format`` 字节数格式化测试：二进制/十进制两套互斥契约."""
+"""``fspack.core.format`` 字节数格式化测试：二进制/十进制两套互斥契约."""
 
 from __future__ import annotations
 
 import pytest
 
-from fspack.format import format_bytes_dec, format_seconds, format_size_bin
+from fspack.core.format import format_bytes_dec, format_seconds, format_size_bin
 
 
 @pytest.mark.parametrize(

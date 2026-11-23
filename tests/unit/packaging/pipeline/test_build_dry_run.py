@@ -17,10 +17,10 @@ import pytest
 
 from fspack import cli
 from fspack.config import get_mirror
-from fspack.console import console
+from fspack.core.platform import Platform
 from fspack.packaging.pipeline import BuildContext, build
 from fspack.packaging.pipeline.executor import _print_build_plan
-from fspack.platform import Platform
+from fspack.ui.console import console
 from tests._projects import copy_doctor_project, write_project
 
 # ---- pipeline.build(dry_run=True) 不执行写操作 ----
@@ -249,7 +249,7 @@ def test_build_dry_run_merges_private_sources(tmp_path: Path, monkeypatch: pytes
 def _make_build_context(tmp_path: Path, *, target: Platform = Platform.WINDOWS) -> BuildContext:
     """构造最小可用的 BuildContext 用于 _print_build_plan 测试."""
     from fspack.config import BuildConfig, BuildOptions, ProjectInfo
-    from fspack.progress import BuildTracker
+    from fspack.ui.progress import BuildTracker
 
     write_project(tmp_path)
     info = ProjectInfo.from_dir(tmp_path, "3.11.9")
@@ -471,7 +471,7 @@ def test_cli_build_dry_run_alias_b(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
 def test_guard_cross_target_rejects_non_native_targets(monkeypatch: pytest.MonkeyPatch) -> None:
     """非本机构建请求 macOS/Linux 目标：抛 ProjectError 并说明支持矩阵."""
-    from fspack.exceptions import ProjectError
+    from fspack.core.exceptions import ProjectError
     from fspack.packaging.pipeline.executor import _guard_cross_target
 
     # macOS 目标：仅 macOS 构建机（其余宿主 clang 产出非 Mach-O）
@@ -505,7 +505,7 @@ def test_guard_cross_target_allows_valid_combinations(monkeypatch: pytest.Monkey
 
 def test_build_macos_target_on_windows_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """build() 集成：Windows 构建机请求 macOS 目标在进入流水线前抛错."""
-    from fspack.exceptions import ProjectError
+    from fspack.core.exceptions import ProjectError
 
     monkeypatch.setattr("fspack.packaging.pipeline.executor.detect_platform", lambda: Platform.WINDOWS)
     with pytest.raises(ProjectError, match="当前构建机为 windows"):

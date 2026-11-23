@@ -11,12 +11,12 @@ from typing import Any
 
 import pytest
 
+from fspack.core.platform import Platform
 from fspack.packaging.nuitka import NuitkaCompiler
 from fspack.packaging.nuitka.compile import (
     _MAX_COMPILE_WORKERS,
 )
-from fspack.platform import Platform
-from fspack.progress import StageRecorder
+from fspack.ui.progress import StageRecorder
 
 # ---- _stream_compile 流式输出测试 ----
 
@@ -24,7 +24,7 @@ from fspack.progress import StageRecorder
 def test_stream_compile_captures_stdout_and_stderr(caplog: pytest.LogCaptureFixture) -> None:
     """_stream_compile 捕获子进程 stdout/stderr，并按行转发到 DEBUG（-v/日志文件可见）."""
     cmd = [sys.executable, "-c", "import sys; print('out-msg'); sys.stderr.write('err-msg\\n')"]
-    with caplog.at_level(logging.DEBUG, logger="fspack.console"):
+    with caplog.at_level(logging.DEBUG, logger="fspack.ui.console"):
         returncode, stdout, stderr = NuitkaCompiler._stream_compile(cmd)
     assert returncode == 0
     assert "out-msg" in stdout
@@ -41,7 +41,7 @@ def test_stream_compile_captures_delayed_output(caplog: pytest.LogCaptureFixture
         "-c",
         "import sys, time; print('step1'); time.sleep(0.3); print('step2'); sys.stderr.write('warn\\n')",
     ]
-    with caplog.at_level(logging.DEBUG, logger="fspack.console"):
+    with caplog.at_level(logging.DEBUG, logger="fspack.ui.console"):
         returncode, stdout, stderr = NuitkaCompiler._stream_compile(cmd)
     assert returncode == 0
     assert "step1" in stdout
@@ -68,7 +68,7 @@ def test_stream_compile_captures_multiline_output(caplog: pytest.LogCaptureFixtu
         "print('Nuitka:INFO:Running C compilation')"
     )
     cmd = [sys.executable, "-c", script]
-    with caplog.at_level(logging.DEBUG, logger="fspack.console"):
+    with caplog.at_level(logging.DEBUG, logger="fspack.ui.console"):
         returncode, stdout, _stderr = NuitkaCompiler._stream_compile(cmd)
     assert returncode == 0
     assert "Started Python compilation" in stdout
@@ -94,7 +94,7 @@ def test_compile_src_heartbeat_logs_progress(
     """
     import time as _time
 
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     # 缩短心跳间隔到 0.05 秒，避免测试等待 10 秒
     monkeypatch.setattr("fspack.packaging.nuitka.compile._HEARTBEAT_INTERVAL", 0.05)
@@ -135,7 +135,7 @@ def test_compile_src_heartbeat_stops_after_compile(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """编译完成后心跳线程立即停止，不输出多余日志."""
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     # 心跳间隔设为较长值，确保编译期间不触发心跳
     monkeypatch.setattr("fspack.packaging.nuitka.compile._HEARTBEAT_INTERVAL", 10.0)

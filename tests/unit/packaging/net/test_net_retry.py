@@ -33,7 +33,7 @@ from urllib.request import Request
 import pytest
 
 from fspack.config import MirrorConfig
-from fspack.exceptions import EmbedError
+from fspack.core.exceptions import EmbedError
 from fspack.packaging.net import (
     _MAX_ATTEMPTS,
     _RETRY_INITIAL_WAIT,
@@ -49,7 +49,7 @@ from fspack.packaging.runtime import (
     download_embed,
     download_standalone,
 )
-from fspack.progress import StageRecorder
+from fspack.ui.progress import StageRecorder
 from tests._stubs import FakeResp
 
 

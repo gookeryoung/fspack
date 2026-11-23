@@ -29,18 +29,18 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from fspack import logutil
-from fspack._compat import override
 from fspack.config.versions import _split_t_suffix
+from fspack.core import logutil
+from fspack.core._compat import override
+from fspack.core.exceptions import EmbedError, FspackError
 from fspack.core.resources import resource_path
-from fspack.exceptions import EmbedError, FspackError
 from fspack.packaging.runtime.download import RuntimeDownloader
 from fspack.packaging.runtime.extract import extract_zip_safe
 from fspack.packaging.runtime.urls import embed_dirname, embed_zip_name
 from fspack.packaging.win7.check import PeParseError, Win7CheckResult, check_win7_imports
 
 if TYPE_CHECKING:
-    from fspack.metrics import StageRecorder
+    from fspack.core.metrics import StageRecorder
 
 __all__ = [
     "WIN7_EMBED_SHA256",

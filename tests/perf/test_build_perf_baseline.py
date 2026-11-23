@@ -265,9 +265,9 @@ class TestBuildPerfBaseline:
         20 轮取 median 稳定，避免 CI 跨运行对比误报退化。
         """
         from fspack.config import get_mirror
-        from fspack.console import console
+        from fspack.core.platform import Platform
         from fspack.packaging.pipeline import build
-        from fspack.platform import Platform
+        from fspack.ui.console import console
 
         opts = BuildOptions(no_sbom=True, no_size_report=True, no_manifest=True, no_win7_scan=True)
         kwargs: dict[str, object] = {
@@ -306,9 +306,9 @@ class TestBuildPerfBaseline:
         （省去 ``tomllib`` 解析与 AST 扫描）。退化 > 25% 失败。
         """
         from fspack.config import get_mirror
-        from fspack.console import console
+        from fspack.core.platform import Platform
         from fspack.packaging.pipeline import build
-        from fspack.platform import Platform
+        from fspack.ui.console import console
 
         # 预热一次填充缓存
         ProjectInfo.from_dir(small_project)
@@ -347,9 +347,9 @@ class TestBuildPerfBaseline:
         平衡稳定性与运行时间。
         """
         from fspack.config import get_mirror
-        from fspack.console import console
+        from fspack.core.platform import Platform
         from fspack.packaging.pipeline import build
-        from fspack.platform import Platform
+        from fspack.ui.console import console
 
         opts = BuildOptions(no_sbom=True, no_size_report=True, no_manifest=True, no_win7_scan=True)
         kwargs: dict[str, object] = {
@@ -389,9 +389,9 @@ class TestBuildPerfBaseline:
         或 ``entries`` 元组在 ``build()`` 内被反复重建。
         """
         from fspack.config import get_mirror
-        from fspack.console import console
+        from fspack.core.platform import Platform
         from fspack.packaging.pipeline import build
-        from fspack.platform import Platform
+        from fspack.ui.console import console
 
         ProjectInfo.from_dir(medium_project)
         opts = BuildOptions(no_sbom=True, no_size_report=True, no_manifest=True, no_win7_scan=True)

@@ -33,7 +33,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from fspack.exceptions import DependencyError
+from fspack.core.exceptions import DependencyError
 from fspack.packaging.wheels.cache import (
     _cleanup_partial_wheels,
     _deps_cache_key,
@@ -65,9 +65,9 @@ from fspack.packaging.wheels.resolver import (
 
 if TYPE_CHECKING:
     # StageRecorder 仅用于类型注解（``from __future__ import annotations`` 使
-    # 注解不在运行时求值），顶部不导入 fspack.progress 避免连锁触发
+    # 注解不在运行时求值），顶部不导入 fspack.ui.progress 避免连锁触发
     # rich.progress/rich.table 加载（省 ~12ms）。
-    from fspack.metrics import StageRecorder
+    from fspack.core.metrics import StageRecorder
 from fspack.packaging.wheels.output import (  # noqa: F401
     _PIP_SUCCESS_LINE_RE,
     _PIP_WHEEL_LINE_RE,

@@ -36,8 +36,8 @@ from fspack.config import (
     parse_project,
     resolve_py_version,
 )
-from fspack.exceptions import ProjectError
-from fspack.platform import Platform
+from fspack.core.exceptions import ProjectError
+from fspack.core.platform import Platform
 from tests._projects import doctor_template_dir, write_project
 
 # --- 镜像源测试 ---

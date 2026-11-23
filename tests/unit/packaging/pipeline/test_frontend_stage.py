@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from fspack.exceptions import FspackError
+from fspack.core.exceptions import FspackError
 from fspack.packaging.pipeline.frontend_stage import (
     _build_frontend,
     _detect_frontends,

@@ -14,7 +14,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from fspack.platform import Platform
+from fspack.core.platform import Platform
 
 from .common import (
     _BINARY_EXTS,

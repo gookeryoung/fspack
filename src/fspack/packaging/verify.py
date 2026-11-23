@@ -17,7 +17,7 @@ import struct
 from dataclasses import dataclass
 from pathlib import Path
 
-from fspack.platform import Platform
+from fspack.core.platform import Platform
 
 __all__ = ["BinaryInfo", "detect_binary", "host_arch", "verify_artifact"]
 

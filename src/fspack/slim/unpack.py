@@ -20,12 +20,12 @@ import zipfile
 from collections.abc import Sequence
 from pathlib import Path
 
-from fspack.archive import validate_zip_member
 from fspack.config import DEFAULT_SLIM_RULES, SlimRules
-from fspack.exceptions import DependencyError
-from fspack.metrics import StageRecorder
-from fspack.progress import iter_with_progress, parallel_map_with_progress
+from fspack.core.archive import validate_zip_member
+from fspack.core.exceptions import DependencyError
+from fspack.core.metrics import StageRecorder
 from fspack.slim.spec import WheelInfo, get_spec, normalize_name
+from fspack.ui.progress import iter_with_progress, parallel_map_with_progress
 
 __all__ = ["slim_unpack"]
 

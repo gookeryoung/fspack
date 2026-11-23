@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from fspack.config import AppType, ProjectInfo
+from fspack.core.platform import Platform
 from fspack.packaging.sbom import (
     SbomPackage,
     _compute_package_checksum,
@@ -27,7 +28,6 @@ from fspack.packaging.sbom import (
     collect_sbom,
     generate_sbom,
 )
-from fspack.platform import Platform
 
 
 def _make_info(tmp_path: Path, name: str = "app", version: str = "1.0") -> ProjectInfo:

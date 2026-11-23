@@ -19,7 +19,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fspack.config import standalone_cache_dir, win7_dll_cache_dir
-from fspack.exceptions import EmbedError, ProjectError
+from fspack.core.exceptions import EmbedError, ProjectError
+from fspack.core.platform import Platform
 from fspack.packaging.pyc import (
     _trim_standalone_runtime,
     _trim_stdlib,
@@ -53,12 +54,11 @@ from fspack.packaging.win7.dll import (
     inject_win7_shims as _inject_all_win7_shims,
 )
 from fspack.packaging.win7.shim_build import ensure_all_shims
-from fspack.platform import Platform
 
 from .context import BuildContext
 
 if TYPE_CHECKING:
-    from fspack.metrics import StageRecorder
+    from fspack.core.metrics import StageRecorder
 
 __all__ = [
     "_flatten_python_dir",

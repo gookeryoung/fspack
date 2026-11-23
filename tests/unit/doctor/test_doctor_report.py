@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
+from fspack.core.platform import Platform
 from fspack.doctor import (
     CheckResult,
     CheckStatus,
@@ -16,7 +17,6 @@ from fspack.doctor import (
     run_doctor,
 )
 from fspack.packaging.profile_log import ProfileOptions
-from fspack.platform import Platform
 
 # ---- 数据结构 ----
 
@@ -193,7 +193,7 @@ def test_run_doctor_dispatches_tool_checks_per_platform(
     absent: set[str],
 ) -> None:
     """run_doctor 按平台派发工具检查项（快速版，不 spawn 子进程/不扫缓存）."""
-    monkeypatch.setattr("fspack.platform.detect_platform", lambda: platform)
+    monkeypatch.setattr("fspack.core.platform.detect_platform", lambda: platform)
     # 工具检查全部替换为固定结果：真实实现会 spawn 子进程探测版本（单项 ~150ms）
     tool_labels = {
         "_check_pip": "pip",
@@ -232,7 +232,7 @@ def test_run_doctor_dispatches_tool_checks_per_platform(
 @pytest.mark.slow
 def test_run_doctor_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     """run_doctor 在 Windows 平台检查 mingw/NSIS，不查 gcc/wine."""
-    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.WINDOWS)
+    monkeypatch.setattr("fspack.core.platform.detect_platform", lambda: Platform.WINDOWS)
 
     # mock 所有工具检查返回 OK，避免实际依赖系统工具
     def _fake_ok(name: str, cmd: list[str], **kwargs: object) -> CheckResult:
@@ -291,7 +291,7 @@ def test_run_doctor_windows(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.slow
 def test_run_doctor_linux(monkeypatch: pytest.MonkeyPatch) -> None:
     """run_doctor 在 Linux 平台检查 gcc/wine，不查 mingw."""
-    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    monkeypatch.setattr("fspack.core.platform.detect_platform", lambda: Platform.LINUX)
 
     monkeypatch.setattr("fspack.doctor.runner._check_pillow", lambda: CheckResult("Pillow", CheckStatus.OK, "10.0"))
     monkeypatch.setattr("fspack.doctor.runner._check_pip", lambda: CheckResult("pip", CheckStatus.OK, "24.0"))
@@ -320,7 +320,7 @@ def test_run_doctor_linux(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.slow
 def test_run_doctor_macos(monkeypatch: pytest.MonkeyPatch) -> None:
     """run_doctor 在 macOS 平台检查 clang，不查 mingw/gcc/wine/NSIS."""
-    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.MACOS)
+    monkeypatch.setattr("fspack.core.platform.detect_platform", lambda: Platform.MACOS)
 
     monkeypatch.setattr("fspack.doctor.runner._check_pillow", lambda: CheckResult("Pillow", CheckStatus.OK, "10.0"))
     monkeypatch.setattr("fspack.doctor.runner._check_pip", lambda: CheckResult("pip", CheckStatus.OK, "24.0"))
@@ -342,7 +342,7 @@ def test_run_doctor_macos(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.slow
 def test_run_doctor_has_error_when_tool_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     """run_doctor 必备工具缺失时 has_error=True."""
-    monkeypatch.setattr("fspack.platform.detect_platform", lambda: Platform.LINUX)
+    monkeypatch.setattr("fspack.core.platform.detect_platform", lambda: Platform.LINUX)
 
     _mock_cache_content_fns(monkeypatch)
     monkeypatch.setattr("fspack.doctor.runner._check_pillow", lambda: CheckResult("Pillow", CheckStatus.OK, "10.0"))
@@ -510,8 +510,8 @@ def test_cli_doctor_test_passes_profile_options() -> None:
 
 def test_print_summary_quiet_still_reports_errors(capsys: pytest.CaptureFixture[str]) -> None:
     """--quiet 下存在阻塞性错误时诊断结论仍然输出（不能静默吞掉）."""
-    from fspack.console import console
     from fspack.doctor.report import _print_summary
+    from fspack.ui.console import console
 
     report = DoctorReport(
         env_info=(),
@@ -531,8 +531,8 @@ def test_print_summary_quiet_still_reports_errors(capsys: pytest.CaptureFixture[
 
 def test_print_summary_quiet_suppresses_success(capsys: pytest.CaptureFixture[str]) -> None:
     """--quiet 下全 OK 的诊断结论被抑制（正常情况不打扰）."""
-    from fspack.console import console
     from fspack.doctor.report import _print_summary
+    from fspack.ui.console import console
 
     report = DoctorReport(env_info=(), tool_checks=(CheckResult("pip", CheckStatus.OK, "24.0"),))
     previous = console.quiet

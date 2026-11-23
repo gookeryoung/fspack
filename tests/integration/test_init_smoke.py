@@ -17,10 +17,10 @@ import pytest
 
 from fspack.cli_init import init_project
 from fspack.config import get_mirror
-from fspack.console import console
+from fspack.core.platform import Platform
 from fspack.packaging.pipeline import build
-from fspack.platform import Platform
 from fspack.templates import list_templates
+from fspack.ui.console import console
 
 # 全部 init 角色模板 id（当前 18 个），新增模板自动纳入冒烟矩阵
 _INIT_TEMPLATE_IDS: tuple[str, ...] = tuple(t.id for t in list_templates(role="init"))

@@ -14,7 +14,8 @@ from typing import Any
 import pytest
 
 from fspack.config import AppType
-from fspack.exceptions import LoaderError
+from fspack.core.exceptions import LoaderError
+from fspack.core.platform import Platform
 from fspack.packaging.loader import (
     MINGW_GCC,
     MINGW_WINDRES,
@@ -33,8 +34,7 @@ from fspack.packaging.loader import (
     mingw_available,
 )
 from fspack.packaging.loader.resource import generate_app_manifest, generate_resource_rc
-from fspack.platform import Platform
-from fspack.progress import StageRecorder
+from fspack.ui.progress import StageRecorder
 from tests._stubs import CompletedStub
 
 
@@ -1288,7 +1288,7 @@ def test_forward_compile_output_logs_loader_debug(caplog: pytest.LogCaptureFixtu
     from fspack.packaging.loader.compile import _forward_tool_output
 
     completed = subprocess.CompletedProcess(["gcc"], 0, stdout="", stderr="warning: unused variable\n")
-    with caplog.at_level(logging.DEBUG, logger="fspack.console"):
+    with caplog.at_level(logging.DEBUG, logger="fspack.ui.console"):
         _forward_tool_output(completed)
     assert "[loader] warning: unused variable" in caplog.text
 
@@ -1298,7 +1298,7 @@ def test_forward_compile_output_silent_at_info(caplog: pytest.LogCaptureFixture)
     from fspack.packaging.loader.compile import _forward_tool_output
 
     completed = subprocess.CompletedProcess(["gcc"], 0, stdout="collect2 notes\n", stderr="")
-    with caplog.at_level(logging.INFO, logger="fspack.console"):
+    with caplog.at_level(logging.INFO, logger="fspack.ui.console"):
         _forward_tool_output(completed)
     assert "collect2 notes" not in caplog.text
 
@@ -1307,7 +1307,7 @@ def test_forward_compile_output_empty_is_noop(caplog: pytest.LogCaptureFixture) 
     """无输出时不产生日志记录."""
     from fspack.packaging.loader.compile import _forward_tool_output
 
-    with caplog.at_level(logging.DEBUG, logger="fspack.console"):
+    with caplog.at_level(logging.DEBUG, logger="fspack.ui.console"):
         _forward_tool_output(subprocess.CompletedProcess(["gcc"], 0, stdout="", stderr=""))
     assert caplog.records == []
 

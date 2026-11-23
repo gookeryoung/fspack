@@ -20,12 +20,12 @@ from fspack.builder import (
     unpack_wheels,
 )
 from fspack.config import BuildConfig, BuildOptions, DependencyReport, ProjectInfo, SlimRules, get_mirror
-from fspack.exceptions import DependencyError
+from fspack.core.exceptions import DependencyError
+from fspack.core.platform import Platform
 from fspack.packaging.lockfile import LOCK_FILE_NAME, read_requirements_lock
 from fspack.packaging.pipeline.context import BuildContext
 from fspack.packaging.pipeline.deps_stage import _download_dependencies, _save_installed_dependencies
-from fspack.platform import Platform
-from fspack.progress import BuildTracker
+from fspack.ui.progress import BuildTracker
 from tests._stubs import CompletedStub, setup_embed_mocks
 
 

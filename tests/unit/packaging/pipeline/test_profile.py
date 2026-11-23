@@ -20,14 +20,14 @@ from typing import Any
 import pytest
 
 from fspack import cli
-from fspack.console import console
 from fspack.packaging.profile import (
     ProfileContext,
     ProfileReport,
     print_profile_report,
     profile_report_to_json,
 )
-from fspack.progress import BuildTracker, StageRecord
+from fspack.ui.console import console
+from fspack.ui.progress import BuildTracker, StageRecord
 from tests._projects import write_project
 
 # ---- ProfileReport 数据类 ----
@@ -938,8 +938,8 @@ def _empty_report() -> Any:
 def test_build_with_profile_outputs_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """build(profile=True) 构建结束后输出耗时分析报告."""
     from fspack.config import get_mirror
+    from fspack.core.platform import Platform
     from fspack.packaging.pipeline import build
-    from fspack.platform import Platform
 
     proj = tmp_path / "app"
     proj.mkdir()
@@ -972,8 +972,8 @@ def test_build_with_profile_outputs_report(tmp_path: Path, monkeypatch: pytest.M
 def test_build_without_profile_no_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """build(profile=False) 不输出耗时分析报告."""
     from fspack.config import get_mirror
+    from fspack.core.platform import Platform
     from fspack.packaging.pipeline import build
-    from fspack.platform import Platform
 
     proj = tmp_path / "app"
     proj.mkdir()
@@ -1004,8 +1004,8 @@ def test_build_profile_cleans_up_on_exception(tmp_path: Path, monkeypatch: pytes
     import tracemalloc
 
     from fspack.config import get_mirror
+    from fspack.core.platform import Platform
     from fspack.packaging.pipeline import build
-    from fspack.platform import Platform
 
     proj = tmp_path / "app"
     proj.mkdir()
@@ -1038,8 +1038,8 @@ def test_build_sbom_manifest_parallel_in_threads(tmp_path: Path, monkeypatch: py
     import threading
 
     from fspack.config import get_mirror
+    from fspack.core.platform import Platform
     from fspack.packaging.pipeline import build
-    from fspack.platform import Platform
 
     proj = tmp_path / "app"
     proj.mkdir()

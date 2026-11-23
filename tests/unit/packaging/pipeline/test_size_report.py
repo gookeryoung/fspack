@@ -16,7 +16,6 @@ from typing import Any
 import pytest
 
 from fspack import cli
-from fspack.console import console
 from fspack.packaging.size_report import (
     PackageSize,
     SizeCategory,
@@ -28,6 +27,7 @@ from fspack.packaging.size_report import (
     collect_size_report,
     print_size_report,
 )
+from fspack.ui.console import console
 from tests._projects import write_project
 
 # ---- 辅助函数 ----
@@ -521,7 +521,7 @@ def test_collect_size_report_dedups_multiple_dist_infos(tmp_path: Path) -> None:
 
 def test_print_size_report_interactive_adds_share_bars(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """交互式终端下体积报告额外渲染占比条与精简提示（普通用户更直观）."""
-    from fspack.console import ConsoleUI
+    from fspack.ui.console import ConsoleUI
 
     dist = _make_dist_with_runtime(tmp_path)
     sp = dist / "site-packages"
@@ -538,7 +538,7 @@ def test_print_size_report_interactive_adds_share_bars(tmp_path: Path, monkeypat
 
 def test_print_size_report_non_tty_omits_share_bars(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """非 TTY（CI/重定向）不渲染占比条，输出保持纯文本可 grep."""
-    from fspack.console import ConsoleUI
+    from fspack.ui.console import ConsoleUI
 
     dist = _make_dist_with_runtime(tmp_path)
     sp = dist / "site-packages"
@@ -557,7 +557,7 @@ def test_print_size_report_interactive_hints_pygments_stripping(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """rich 应用常见体积热点：pygments 在 Top N 时提示如何 slim-exclude 剥离."""
-    from fspack.console import ConsoleUI
+    from fspack.ui.console import ConsoleUI
 
     dist = _make_dist_with_runtime(tmp_path)
     sp = dist / "site-packages"
@@ -575,7 +575,7 @@ def test_print_size_report_interactive_hints_pygments_stripping(
 
 def test_print_size_report_non_tty_omits_pygments_hint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """非 TTY 不输出 pygments 剥离提示（保持纯文本可 grep）."""
-    from fspack.console import ConsoleUI
+    from fspack.ui.console import ConsoleUI
 
     dist = _make_dist_with_runtime(tmp_path)
     sp = dist / "site-packages"

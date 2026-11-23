@@ -13,7 +13,7 @@ import shutil
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
-from fspack.fsutil import scandir_dir_size
+from fspack.core.fsutil import scandir_dir_size
 
 _logger = logging.getLogger(__name__)
 
@@ -477,7 +477,7 @@ def _sync_entry(
 def _dir_size(path: Path) -> int:
     """递归计算目录总字节数（文件大小累加，不含目录元数据）.
 
-    实现搬迁至 :func:`fspack.fsutil.scandir_dir_size`，此处保留同名薄封装
+    实现搬迁至 :func:`fspack.core.fsutil.scandir_dir_size`，此处保留同名薄封装
     维持 ``fspack.packaging.sync._dir_size`` 引用兼容（``pyc.py`` 直接导入）。
     """
     return scandir_dir_size(path)

@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from fspack.exceptions import EmbedError
+from fspack.core.exceptions import EmbedError
 from fspack.packaging.win7 import dll as win7_dll
 from fspack.packaging.win7.check import Win7ApiViolation, Win7CheckResult
 from fspack.packaging.win7.dll import (
@@ -29,7 +29,7 @@ from fspack.packaging.win7.dll import (
     win7_zip_cache_name,
     win7_zip_url,
 )
-from fspack.progress import StageRecorder
+from fspack.ui.progress import StageRecorder
 from tests._stubs import FakeResp
 
 # 测试锚定版本：已在 WIN7_EMBED_SHA256 清单中

@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from fspack.core.platform import Platform
 from fspack.doctor.cache_contents import (
     _cache_content_fns,
     _check_embed_contents,
@@ -22,7 +23,6 @@ from fspack.doctor.cache_contents import (
     _check_winlibs_contents,
 )
 from fspack.doctor.models import CheckStatus
-from fspack.platform import Platform
 
 
 @pytest.fixture(autouse=True)

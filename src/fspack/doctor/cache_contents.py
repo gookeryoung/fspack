@@ -45,6 +45,7 @@ from fspack.config.cache import (
     tkinter_cache_dir,
     wheel_cache_dir,
 )
+from fspack.core.platform import Platform
 from fspack.doctor.cache_health import (
     _EMBED_ZIP_RE,
     _STANDALONE_TAR_RE,
@@ -53,7 +54,6 @@ from fspack.doctor.cache_health import (
 from fspack.doctor.envs import _format_size
 from fspack.doctor.models import CheckResult, CheckStatus
 from fspack.packaging.nuitka.winlibs import WINLIBS_URLS
-from fspack.platform import Platform
 
 __all__ = [
     "_cache_content_fns",

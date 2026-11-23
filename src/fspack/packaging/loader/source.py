@@ -21,8 +21,8 @@ from __future__ import annotations
 
 import functools
 
+from fspack.core.exceptions import LoaderError
 from fspack.core.resources import resource_path
-from fspack.exceptions import LoaderError
 
 __all__ = [
     "apply_splash",

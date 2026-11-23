@@ -14,8 +14,8 @@ from fspack.builder import (
     _trim_standalone_runtime,
     _trim_stdlib,
 )
-from fspack.platform import Platform
-from fspack.progress import StageRecorder
+from fspack.core.platform import Platform
+from fspack.ui.progress import StageRecorder
 from tests._stubs import CompletedStub, make_standalone_runtime, symlink_or_skip
 
 # ---- _trim_stdlib 测试 ----

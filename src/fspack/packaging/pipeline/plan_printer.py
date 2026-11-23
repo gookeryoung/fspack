@@ -12,8 +12,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from fspack.config import DependencyReport
-from fspack.console import console
-from fspack.platform import Platform
+from fspack.core.platform import Platform
+from fspack.ui.console import console
 
 if TYPE_CHECKING:
     from fspack.packaging.pipeline.context import BuildContext

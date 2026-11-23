@@ -36,10 +36,10 @@ from concurrent.futures import as_completed
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, Any
 
-from fspack.console import console
-from fspack.metrics import StageRecorder
+from fspack.core.metrics import StageRecorder
+from fspack.core.platform import Platform
 from fspack.packaging.nuitka.winlibs import needs_force_mingw64
-from fspack.platform import Platform
+from fspack.ui.console import console
 
 if TYPE_CHECKING:
     from fspack.packaging.nuitka.protocol import NuitkaCompilerProtocol

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from fspack._compat import tomllib
+from fspack.core._compat import tomllib
 from fspack.templates import get_template, list_templates
 from fspack.templates.registry import DEFAULT_REQUIRES_PYTHON
 

@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from fspack.exceptions import DependencyError
+from fspack.core.exceptions import DependencyError
 from fspack.packaging.wheels import (
     _PIP_PYTHON_NAMES,
     _build_marker_env,
@@ -42,7 +42,7 @@ from fspack.packaging.wheels import (
     download_wheels,
 )
 from fspack.packaging.wheels.resolver import DownloadContext
-from fspack.progress import StageRecorder
+from fspack.ui.progress import StageRecorder
 from tests._stubs import CompletedStub
 
 
@@ -891,7 +891,7 @@ def test_validate_declared_constraints_rejects_out_of_range() -> None:
     """选中 wheel 版本超出顶层声明范围时报 DependencyError."""
     import pytest
 
-    from fspack.exceptions import DependencyError
+    from fspack.core.exceptions import DependencyError
     from fspack.packaging.wheels.downloader import _validate_declared_constraints
 
     with pytest.raises(DependencyError, match="pydantic"):
@@ -2652,7 +2652,7 @@ def test_stream_subprocess_success(monkeypatch: pytest.MonkeyPatch, caplog: pyte
         return popen
 
     monkeypatch.setattr("fspack.packaging.wheels.subprocess.Popen", fake_popen)
-    with caplog.at_level(logging.DEBUG, logger="fspack.console"):
+    with caplog.at_level(logging.DEBUG, logger="fspack.ui.console"):
         result = _stream_subprocess(["pip", "download"])
     assert result.returncode == 0
     assert result.stdout == "saved wheel\n"
@@ -2687,7 +2687,7 @@ def test_forward_tool_output_logs_captured_output_at_debug(caplog: pytest.LogCap
     completed = subprocess.CompletedProcess(
         ["pip", "download"], 0, stdout="Saved a.whl\n", stderr="Looking in indexes: https://idx\n"
     )
-    with caplog.at_level(logging.DEBUG, logger="fspack.console"):
+    with caplog.at_level(logging.DEBUG, logger="fspack.ui.console"):
         _forward_tool_output("pip", completed)
     assert "[pip] Saved a.whl" in caplog.text
     assert "[pip] Looking in indexes: https://idx" in caplog.text
@@ -2698,7 +2698,7 @@ def test_forward_tool_output_silent_at_info(caplog: pytest.LogCaptureFixture) ->
     from fspack.packaging.wheels.process import _forward_tool_output
 
     completed = subprocess.CompletedProcess(["pip"], 0, stdout="", stderr="Looking in indexes\n")
-    with caplog.at_level(logging.INFO, logger="fspack.console"):
+    with caplog.at_level(logging.INFO, logger="fspack.ui.console"):
         _forward_tool_output("pip", completed)
     assert "Looking in indexes" not in caplog.text
 
@@ -2707,7 +2707,7 @@ def test_forward_tool_output_empty_is_noop(caplog: pytest.LogCaptureFixture) -> 
     """stdout/stderr 均空时不产生任何日志记录."""
     from fspack.packaging.wheels.process import _forward_tool_output
 
-    with caplog.at_level(logging.DEBUG, logger="fspack.console"):
+    with caplog.at_level(logging.DEBUG, logger="fspack.ui.console"):
         _forward_tool_output("pip", subprocess.CompletedProcess(["pip"], 0, stdout="", stderr=""))
     assert caplog.records == []
 

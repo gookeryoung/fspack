@@ -12,10 +12,10 @@ from fspack.builder import (
     fspack_wheel_cache_dir,
 )
 from fspack.config import BuildOptions, ProjectInfo, get_mirror
-from fspack.console import console
+from fspack.core.platform import Platform
 from fspack.packaging.pipeline.stages import BuildContext
-from fspack.platform import Platform
-from fspack.progress import StageRecorder
+from fspack.ui.console import console
+from fspack.ui.progress import StageRecorder
 from tests._projects import copy_doctor_project, write_project
 from tests._stubs import CompletedStub, fake_compileall_runner, setup_embed_mocks
 
@@ -812,7 +812,7 @@ def test_compile_user_sources_skips_nuitka_on_win7_runtime(tmp_path: Path, monke
     """
     from fspack.config import BuildConfig
     from fspack.packaging.pipeline.compile_stage import _compile_user_sources
-    from fspack.progress import BuildTracker
+    from fspack.ui.progress import BuildTracker
 
     write_project(tmp_path)
     src_dst = tmp_path / "dist" / "src"
@@ -889,7 +889,7 @@ def test_normalize_exclusive_options_matrix() -> None:
 
 def test_normalize_exclusive_options_compiler_msvc_validation(monkeypatch: pytest.MonkeyPatch) -> None:
     """compiler=msvc 校验矩阵：Windows + nuitka + 无 MSVC 时 fail-fast，其余场景放行."""
-    from fspack.exceptions import ProjectError
+    from fspack.core.exceptions import ProjectError
     from fspack.packaging.pipeline.executor import _normalize_exclusive_options
 
     # Windows + nuitka + compiler=msvc + 无 MSVC：raise ProjectError
@@ -964,7 +964,7 @@ def test_prepare_windows_runtime_recovers_win7_residue(tmp_path: Path, monkeypat
     """
     from fspack.config import BuildConfig
     from fspack.packaging.pipeline.runtime_stage import _prepare_windows_runtime
-    from fspack.progress import BuildTracker
+    from fspack.ui.progress import BuildTracker
 
     write_project(tmp_path)
     runtime_dir = tmp_path / "dist" / "runtime"
@@ -1011,7 +1011,7 @@ def test_prepare_windows_runtime_recovers_win7_residue(tmp_path: Path, monkeypat
 def _windows_ctx(tmp_path: Path, py_version: str) -> Any:
     """构造仅驱动 Windows runtime 阶段的构建上下文."""
     from fspack.config import BuildConfig
-    from fspack.progress import BuildTracker
+    from fspack.ui.progress import BuildTracker
 
     info = ProjectInfo.from_dir(tmp_path, py_version)
     cfg = BuildConfig(

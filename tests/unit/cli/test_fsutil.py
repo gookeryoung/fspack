@@ -1,4 +1,4 @@
-"""``fspack.fsutil`` 文件系统工具测试：目录大小、原子写、安全删除、长路径删除."""
+"""``fspack.core.fsutil`` 文件系统工具测试：目录大小、原子写、安全删除、长路径删除."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from fspack.fsutil import (
+from fspack.core.fsutil import (
     atomic_write_text,
     dir_size_with_count,
     rmtree_longpath,

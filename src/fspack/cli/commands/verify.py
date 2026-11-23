@@ -10,9 +10,9 @@ __all__ = ["_run_verify"]
 
 def _run_verify(ns: argparse.Namespace) -> None:
     """执行 verify 子命令：校验产物格式与架构，不匹配时以退出码 1 退出."""
-    from fspack.console import console
+    from fspack.core.platform import Platform, detect_platform
     from fspack.packaging.verify import detect_binary, host_arch, verify_artifact
-    from fspack.platform import Platform, detect_platform
+    from fspack.ui.console import console
 
     path = Path(ns.path)
     target = Platform(ns.target) if ns.target else detect_platform()

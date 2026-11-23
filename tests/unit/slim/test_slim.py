@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from fspack._compat import override
 from fspack.config import DEFAULT_SLIM_RULES, SlimRules
-from fspack.exceptions import DependencyError
+from fspack.core._compat import override
+from fspack.core.exceptions import DependencyError
 from fspack.slim import classify_entry, slim_unpack
 
 
@@ -2737,7 +2737,7 @@ class TestSlimUnpackStageCallback:
     """slim_unpack 的 stage 回调参数。."""
 
     def test_stage_set_detail_called(self, tmp_path: Path) -> None:
-        from fspack.progress import BuildTracker
+        from fspack.ui.progress import BuildTracker
 
         whl = tmp_path / "wh" / "PySide2-5.15.2.1-cp39-none-win_amd64.whl"
         whl.parent.mkdir()
@@ -2763,7 +2763,7 @@ class TestSlimUnpackStageCallback:
 
     def test_stage_records_saved_bytes(self, tmp_path: Path) -> None:
         """slim_unpack 累加各 wheel 节省字节数到 stage.add_saved_bytes."""
-        from fspack.progress import BuildTracker
+        from fspack.ui.progress import BuildTracker
 
         # PySide6 wheel：闭包内仅 QtCore，剥离 Qt3DCore.pyd/designer.exe/examples/dummy.py
         whl = tmp_path / "wh" / "PySide6-6.5.0-cp39-none-win_amd64.whl"
@@ -2788,7 +2788,7 @@ class TestSlimUnpackStageCallback:
 
     def test_stage_saved_bytes_zero_when_nothing_stripped(self, tmp_path: Path) -> None:
         """无可剥离文件时 stage.bytes_saved 为 0."""
-        from fspack.progress import BuildTracker
+        from fspack.ui.progress import BuildTracker
 
         whl = tmp_path / "wh" / "PySide6-6.5.0-cp39-none-win_amd64.whl"
         whl.parent.mkdir()
@@ -2808,7 +2808,7 @@ class TestSlimUnpackStageCallback:
 
     def test_stage_saved_bytes_aggregates_multiple_wheels(self, tmp_path: Path) -> None:
         """多 wheel 解压时节省字节数累加."""
-        from fspack.progress import BuildTracker
+        from fspack.ui.progress import BuildTracker
 
         whl1 = tmp_path / "wh1" / "PySide6-6.5.0-cp39-none-win_amd64.whl"
         whl1.parent.mkdir()
@@ -2889,21 +2889,21 @@ class TestParallelMapWithProgress:
 
     def test_empty_items_returns_empty(self) -> None:
         """空 items 列表返回空结果，不创建线程池."""
-        from fspack.progress import parallel_map_with_progress
+        from fspack.ui.progress import parallel_map_with_progress
 
         result = parallel_map_with_progress([], lambda x: x, "空任务")
         assert result == []
 
     def test_single_item(self) -> None:
         """单 item 正常执行并返回结果."""
-        from fspack.progress import parallel_map_with_progress
+        from fspack.ui.progress import parallel_map_with_progress
 
         result = parallel_map_with_progress([42], lambda x: x * 2, "单任务")
         assert result == [84]
 
     def test_multiple_items_all_collected(self) -> None:
         """多 item 结果全部收集（顺序可能不同，但内容一致）."""
-        from fspack.progress import parallel_map_with_progress
+        from fspack.ui.progress import parallel_map_with_progress
 
         result = parallel_map_with_progress(list(range(10)), lambda x: x**2, "平方")
         assert sorted(result) == [i**2 for i in range(10)]
@@ -2911,7 +2911,7 @@ class TestParallelMapWithProgress:
     def test_exception_propagates(self) -> None:
         """worker 抛异常时在 future.result() 重新抛出，与串行一致."""
 
-        from fspack.progress import parallel_map_with_progress
+        from fspack.ui.progress import parallel_map_with_progress
 
         def fail(x: int) -> int:
             if x == 3:
@@ -2923,7 +2923,7 @@ class TestParallelMapWithProgress:
 
     def test_stage_processed_incremented(self) -> None:
         """stage.processed() 按完成项数累加."""
-        from fspack.progress import BuildTracker, parallel_map_with_progress
+        from fspack.ui.progress import BuildTracker, parallel_map_with_progress
 
         tracker = BuildTracker()
         with tracker.stage("并行任务") as stage:

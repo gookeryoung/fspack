@@ -17,10 +17,10 @@ from dataclasses import replace
 from pathlib import Path
 
 from fspack.config import ProjectInfo, build_options_from_defaults
-from fspack.exceptions import InstallerError
+from fspack.core.exceptions import InstallerError
+from fspack.core.platform import Platform
 from fspack.packaging.installer.request import ReleaseRequest
 from fspack.packaging.sync import _exclude_hidden_dirs, _merge_ignore_fns
-from fspack.platform import Platform
 
 __all__ = [
     "_DIST_IGNORE",

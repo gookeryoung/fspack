@@ -26,8 +26,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from fspack.exceptions import DependencyError
-from fspack.fsutil import sha256_file
+from fspack.core.exceptions import DependencyError
+from fspack.core.fsutil import sha256_file
 
 __all__ = [
     "LOCK_FILE_NAME",

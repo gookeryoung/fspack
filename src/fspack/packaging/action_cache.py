@@ -25,7 +25,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-from fspack.fsutil import atomic_write_text
+from fspack.core.fsutil import atomic_write_text
 
 __all__ = [
     "ACTION_CACHE_VERSION",

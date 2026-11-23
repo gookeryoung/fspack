@@ -20,10 +20,10 @@ import pytest
 
 from fspack import cli
 from fspack.config import BuildOptions, get_mirror
-from fspack.console import console
+from fspack.core.platform import Platform
 from fspack.packaging.pipeline import build
 from fspack.packaging.pipeline.stages import _dep_cache_load, _dep_cache_save
-from fspack.platform import Platform
+from fspack.ui.console import console
 
 
 def _make_project_with_extras(

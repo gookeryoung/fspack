@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from fspack.exceptions import DependencyError
+from fspack.core.exceptions import DependencyError
 from fspack.packaging.wheels import local_cache
 from fspack.packaging.wheels.local_cache import (
     _copy_into_cache,

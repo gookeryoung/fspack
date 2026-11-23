@@ -12,11 +12,11 @@ import pytest
 from fspack.config import (
     KNOWN_STANDALONE_VERSIONS,
 )
-from fspack.exceptions import NuitkaError
+from fspack.core.exceptions import NuitkaError
+from fspack.core.platform import Platform
 from fspack.packaging.nuitka import NuitkaCompiler
 from fspack.packaging.runtime import STANDALONE_RELEASE_TAG, standalone_tarball_name
-from fspack.platform import Platform
-from fspack.progress import StageRecorder
+from fspack.ui.progress import StageRecorder
 
 # ---- _build_python_cache_dir 与 _build_python_exe 路径解析测试 ----
 

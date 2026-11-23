@@ -2,7 +2,7 @@
 
 将 :class:`fspack.doctor.models.DoctorReport` 渲染到控制台：环境信息表 +
 工具检查表 + 汇总结论。颜色映射 OK=绿、WARN=黄、ERROR=红，表格用
-:class:`rich.table.Table`，通过 :data:`fspack.console.console` 输出，
+:class:`rich.table.Table`，通过 :data:`fspack.ui.console.console` 输出，
 复用现有日志配置（颜色/编码）。
 """
 
@@ -10,8 +10,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from fspack.console import console
 from fspack.doctor.models import CheckResult, CheckStatus, DoctorReport
+from fspack.ui.console import console
 
 if TYPE_CHECKING:
     from rich.table import Table
@@ -28,7 +28,7 @@ def print_doctor_report(report: DoctorReport) -> None:
     """渲染诊断报告到控制台：环境信息表 + 工具检查表 + 汇总.
 
     颜色映射：OK=绿、WARN=黄、ERROR=红。表格用 :class:`rich.table.Table`，
-    通过 :data:`fspack.console.console` 输出，复用现有日志配置（颜色/编码）。
+    通过 :data:`fspack.ui.console.console` 输出，复用现有日志配置（颜色/编码）。
     """
     console.step("环境信息")
     console.rich.print(_build_table("环境信息", report.env_info))

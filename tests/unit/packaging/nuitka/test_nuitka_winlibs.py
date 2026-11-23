@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from fspack.platform import Platform
+from fspack.core.platform import Platform
 from tests._stubs import (
     patch_winlibs_hit,
 )
@@ -28,7 +28,7 @@ def test_winlibs_gcc_dir_layout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
 
 def test_winlibs_gcc_dir_unknown_version_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Nuitka 版本未收录 WINLIBS_URLS 时 raise NuitkaError（提示更新映射）."""
-    from fspack.exceptions import NuitkaError
+    from fspack.core.exceptions import NuitkaError
     from fspack.packaging.nuitka import NuitkaCompiler
 
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
@@ -159,7 +159,7 @@ def test_needs_force_mingw64_msvc_mode(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_ensure_winlibs_mingw_cache_hit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """缓存命中（gcc.exe 已存在）时返回缓存根并回写 hit_cache，不触发下载."""
     from fspack.packaging.nuitka import NuitkaCompiler
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     winlibs_root = patch_winlibs_hit(tmp_path, monkeypatch, nuitka_ver="4.1.3")
 
@@ -181,9 +181,9 @@ def test_ensure_winlibs_mingw_cache_hit(tmp_path: Path, monkeypatch: pytest.Monk
 
 def test_ensure_winlibs_mingw_offline_miss_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """离线模式缓存未命中（无 gcc.exe 且无本地归档）时 fail-fast raise NuitkaError."""
-    from fspack.exceptions import NuitkaError
+    from fspack.core.exceptions import NuitkaError
     from fspack.packaging.nuitka import NuitkaCompiler
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.setenv("FSPACK_OFFLINE", "1")
@@ -199,7 +199,7 @@ def test_ensure_winlibs_mingw_extracts_local_zip(tmp_path: Path, monkeypatch: py
 
     from fspack.packaging.nuitka import NuitkaCompiler
     from fspack.packaging.nuitka.winlibs import WINLIBS_URLS
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     cache_root = tmp_path / "cache"
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(cache_root))
@@ -239,9 +239,9 @@ def test_ensure_winlibs_mingw_extracts_local_zip(tmp_path: Path, monkeypatch: py
 
 def test_ensure_winlibs_mingw_local_zip_wrong_name_ignored(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """版本不匹配的 winlibs zip 不被识别（精确匹配文件名，避免 ABI 不兼容误用）."""
-    from fspack.exceptions import NuitkaError
+    from fspack.core.exceptions import NuitkaError
     from fspack.packaging.nuitka import NuitkaCompiler
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.setenv("FSPACK_OFFLINE", "1")
@@ -269,7 +269,7 @@ def test_ensure_winlibs_mingw_corrupt_local_zip_falls_back_to_download(
 
     from fspack.packaging.nuitka import NuitkaCompiler
     from fspack.packaging.nuitka.winlibs import WINLIBS_URLS
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     cache_root = tmp_path / "cache"
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(cache_root))
@@ -308,10 +308,10 @@ def test_ensure_winlibs_mingw_corrupt_local_zip_falls_back_to_download(
 
 def test_ensure_winlibs_mingw_corrupt_local_zip_offline_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """离线模式本地 zip 损坏时删除 zip 并重抛解压失败（无法下载回退）."""
-    from fspack.exceptions import NuitkaError
+    from fspack.core.exceptions import NuitkaError
     from fspack.packaging.nuitka import NuitkaCompiler
     from fspack.packaging.nuitka.winlibs import WINLIBS_URLS
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.setenv("FSPACK_OFFLINE", "1")
@@ -360,7 +360,7 @@ def test_ensure_winlibs_mingw_extracts_local_7z(tmp_path: Path, monkeypatch: pyt
     """缓存目录存在匹配版本的 .7z 归档时经系统 7z 解压（离线同样适用，归档保留）."""
     from fspack.packaging.nuitka import NuitkaCompiler
     from fspack.packaging.nuitka.winlibs import WINLIBS_URLS
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     cache_root = tmp_path / "cache"
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(cache_root))
@@ -393,10 +393,10 @@ def test_ensure_winlibs_mingw_local_7z_without_7z_offline_raises(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """离线 + 本地 .7z + 未装 7-Zip：raise 并提示安装 7-Zip（无下载回退路径）."""
-    from fspack.exceptions import NuitkaError
+    from fspack.core.exceptions import NuitkaError
     from fspack.packaging.nuitka import NuitkaCompiler
     from fspack.packaging.nuitka.winlibs import WINLIBS_URLS
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
     monkeypatch.setenv("FSPACK_OFFLINE", "1")
@@ -422,7 +422,7 @@ def test_ensure_winlibs_mingw_local_7z_without_7z_online_downloads_zip(
 
     from fspack.packaging.nuitka import NuitkaCompiler
     from fspack.packaging.nuitka.winlibs import WINLIBS_URLS
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     cache_root = tmp_path / "cache"
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(cache_root))
@@ -465,7 +465,7 @@ def test_ensure_winlibs_mingw_download_prefers_7z(tmp_path: Path, monkeypatch: p
     """缓存未命中且装有 7-Zip 时优先下载 .7z（体积约为 zip 一半），解压后归档删除."""
     from fspack.packaging.nuitka import NuitkaCompiler
     from fspack.packaging.nuitka.winlibs import WINLIBS_URLS
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
 
@@ -505,7 +505,7 @@ def test_ensure_winlibs_mingw_corrupt_local_7z_falls_back_to_download(
     """本地 .7z 损坏（7z 非零退出码）时删除后回退下载（下载产物正常解压）."""
     from fspack.packaging.nuitka import NuitkaCompiler
     from fspack.packaging.nuitka.winlibs import WINLIBS_URLS
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     cache_root = tmp_path / "cache"
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(cache_root))
@@ -569,7 +569,7 @@ def test_ensure_winlibs_mingw_downloads_and_extracts(tmp_path: Path, monkeypatch
 
     from fspack.packaging.nuitka import NuitkaCompiler
     from fspack.packaging.nuitka.winlibs import WINLIBS_URLS
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
     nuitka_ver = "4.1.3"
@@ -605,9 +605,9 @@ def test_ensure_winlibs_mingw_downloads_and_extracts(tmp_path: Path, monkeypatch
 
 def test_ensure_winlibs_mingw_download_failure_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """下载失败（网络错误）时 raise NuitkaError，半成品 zip 被清理."""
-    from fspack.exceptions import NuitkaError
+    from fspack.core.exceptions import NuitkaError
     from fspack.packaging.nuitka import NuitkaCompiler
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
 
@@ -636,9 +636,9 @@ def test_ensure_winlibs_mingw_extract_missing_gcc_raises(tmp_path: Path, monkeyp
     """zip 解压后 gcc.exe 不在预期路径时 raise NuitkaError（归档布局异常）."""
     import zipfile
 
-    from fspack.exceptions import NuitkaError
+    from fspack.core.exceptions import NuitkaError
     from fspack.packaging.nuitka import NuitkaCompiler
-    from fspack.progress import StageRecorder
+    from fspack.ui.progress import StageRecorder
 
     monkeypatch.setenv("FSPACK_CACHE_DIR", str(tmp_path / "cache"))
 
