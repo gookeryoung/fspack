@@ -7,6 +7,7 @@
 未发布
 ------
 
+- feat(dist): 新增 ``[tool.fspack] python-versions`` 多版本打包——配置多个 Python 版本时 ``fsp b``/``fsp p`` 逐版本构建与打包，各版本产物落在 ``dist/py<完整版本>/``（发行包在各自 ``release/``，文件名含 ``py<版本>``），互不覆盖；不配置或仅一个版本时行为不变，``--py-version`` 显式优先
 - feat(ui): 体积报告在 ``pygments`` 进入 Top N 时提示其仅语法高亮/富 traceback/``rich.markdown`` 需要，未使用时可在 ``[tool.fspack].slim-exclude`` 中剥离（附 ``docs/configuration.md`` 示例）
 - perf(dist): fspack 自打包 ``slim-exclude`` 排除 rich 从未使用的可选依赖 ``pygments``/``markdown-it-py``/``mdurl``（约 4.5MB，占自身产物 site-packages 六成以上）；新增 ``tests/test_self_build_slim.py`` 护栏锁定「运行期不导入被剥离依赖 + 整包剥离生效」
 - feat(ui): 基于 rich 美化终端输出——构建/``fsp init`` 收尾改为圆角摘要面板（产物/输出目录/体积/耗时/下一步），``fsp doctor`` 汇总结论改为红/绿结论面板（``--quiet`` 下仍强制输出阻塞性错误），体积报告新增占比条形图与精简提示，表格统一标题/表头/边框样式，领域错误改为红框面板并附排查建议，失败阶段补「加 -v 查看完整命令」提示，``-v`` 下 WARN/ERROR 级别标签反色高亮；非 TTY（CI/重定向）自动退化为可 grep 的纯文本行

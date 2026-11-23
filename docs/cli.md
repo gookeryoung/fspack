@@ -79,7 +79,7 @@ fsp b [project] [--mirror <name>] [--py-version <ver>] [--target <platform>]
 |------|------|
 | `project` | 项目目录，默认当前目录 |
 | `--mirror` | 镜像源（aliyun/huawei/tsinghua），默认 aliyun |
-| `--py-version` | Python 版本，默认 3.11.9（Windows）/ 3.11.15（Linux/macOS）；Windows 支持 3.8–3.14，Linux/macOS 仅 3.10–3.14（3.8/3.9 无上游运行时资产） |
+| `--py-version` | Python 版本，默认 3.11.9（Windows）/ 3.11.15（Linux/macOS）；Windows 支持 3.8–3.14，Linux/macOS 仅 3.10–3.14（3.8/3.9 无上游运行时资产）。显式指定时只构建该版本并忽略 `[tool.fspack] python-versions`；未指定时按该配置逐版本构建到 `dist/py<版本>/`（见配置文档「多版本打包」） |
 | `--target` | 目标平台（windows/linux/macos），默认当前平台；macOS 目标仅支持 macOS 构建机 |
 | `--keep-module` | 显式保留子模块（如 `PySide2.QtGui`），可重复 |
 | `--icon` | exe 图标（.ico/.png/.jpg），覆盖配置与自动搜索 |
@@ -150,6 +150,7 @@ fsp p [project] [--mirror <name>] [--py-version <ver>] [--target <plat>] [--no-b
 | 选项 | 说明 |
 |------|------|
 | `--no-build` | 跳过重建，直接打包已有 dist |
+| `--py-version` | 同 `fsp build`：显式指定时只打包该版本并忽略 `[tool.fspack] python-versions`；未指定时按配置逐版本从 `dist/py<版本>/` 打包 |
 | `--format` | 发行包格式（auto/zip/7z/nsis/tar.gz/deb/pkg/dmg/all，默认 auto） |
 | `--codesign` | macOS 产物做 ad-hoc 签名（`codesign --sign -`），仅 pkg/dmg 生效；仅用于本地执行 |
 | `--sign-exe` | Windows 产物代码签名（signtool），需配合 `--sign-exe-certificate`；签名 dist 内 exe 与 NSIS 安装包 |

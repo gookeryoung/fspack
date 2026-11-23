@@ -28,7 +28,7 @@ from fspack.cli_parser import build_parser
 from fspack.exceptions import FspackError
 
 if TYPE_CHECKING:
-    from fspack.config import MirrorConfig
+    from fspack.config import MirrorConfig, ProjectInfo
     from fspack.platform import Platform
 
 __all__ = ["build_parser", "discover_subprojects", "main"]
@@ -299,6 +299,56 @@ def _in_ci_environment() -> bool:
     return any(os.environ.get(name) for name in ("CI", "GITHUB_ACTIONS", "GITLAB_CI", "BUILD_NUMBER", "TF_BUILD"))
 
 
+def _resolve_build_targets(
+    project: Path,
+    info: ProjectInfo,
+    explicit: str | None,
+    target: Platform | None,
+) -> list[tuple[str | None, Path | None]]:
+    """解析本次 build/package 的 Python 版本目标列表.
+
+    返回 ``(py_version, dist_dir)`` 列表，语义：
+
+    - CLI ``--py-version`` 显式指定：单目标 ``(版本, None)``，输出到 dist 根，
+      并忽略 ``[tool.fspack] python-versions``（显式优先于配置）
+    - 未配置 ``python-versions``：单目标 ``(None, None)``，版本由
+      :func:`fspack.config.resolve_py_version` 按原有优先级解析，行为不变
+    - 配置 1 个版本：单目标 ``(版本, None)``，等价于 ``--py-version``
+    - 配置 ≥2 个版本：每版本一个目标，输出目录 ``<project>/dist/py<完整版本>``，
+      各版本产物互不覆盖（发行包仍在各自 ``dist/py<ver>/release/``，文件名已含
+      ``py<ver>`` 段）
+
+    配置的短版本号（如 ``"3.11"``）按目标平台归一化为完整版本（如 ``3.11.9``），
+    供目录名与产物名使用；重复版本去重并保留首次出现顺序。
+    """
+    if explicit:
+        return [(explicit, None)]
+    configured = info.build_defaults.python_versions
+    if not configured:
+        return [(None, None)]
+
+    from fspack.config import (
+        DEFAULT_LINUX_PY_VERSION,
+        DEFAULT_PY_VERSION,
+        resolve_py_version,
+    )
+    from fspack.platform import Platform, detect_platform
+
+    resolved_target = target or detect_platform()
+    default_ver = (
+        DEFAULT_LINUX_PY_VERSION if resolved_target in (Platform.LINUX, Platform.MACOS) else DEFAULT_PY_VERSION
+    )
+    versions: list[str] = []
+    for raw in configured:
+        resolved = resolve_py_version(project, raw, info.requires_python, default_ver, resolved_target)
+        if resolved not in versions:
+            versions.append(resolved)
+    if len(versions) == 1:
+        return [(versions[0], None)]
+    dist_root = project / "dist"
+    return [(ver, dist_root / f"py{ver}") for ver in versions]
+
+
 def _run_build(project: Path, ns: argparse.Namespace) -> None:
     """执行单项目 build 子命令."""
     from dataclasses import replace
@@ -364,24 +414,37 @@ def _run_build(project: Path, ns: argparse.Namespace) -> None:
         raise ProjectError("--profile-out/--profile-compare 需配合 --profile 使用")
     from fspack.packaging.profile_log import ProfileOptions
 
-    build(
-        project,
-        _resolve_mirror(ns.mirror),
-        ns.py_version,
-        target=_parse_target(ns.target),
-        options=options,
-        extra_index_urls=tuple(ns.extra_index_urls or ()),
-        find_links=tuple(ns.find_links or ()),
-        dry_run=ns.dry_run,
-        log_file=log_file,
-        log_format=log_format,
-        profile=ProfileOptions(
-            enabled=ns.profile,
-            out=Path(ns.profile_out).resolve() if ns.profile_out else None,
-            compare=ns.profile_compare,
-        ),
-        auto_clean=getattr(ns, "auto_clean", False),
-    )
+    target = _parse_target(ns.target)
+    mirror = _resolve_mirror(ns.mirror)
+    # 多版本：--py-version 显式优先，否则按 [tool.fspack] python-versions 逐个
+    # 构建到 dist/py<ver>；未配置时单目标 (None, None)，行为与旧版一致
+    targets = _resolve_build_targets(project, info, ns.py_version, target)
+    from fspack.console import console
+
+    if len(targets) > 1:
+        console.step(f"多版本打包：{len(targets)} 个 Python 版本")
+    for index, (py_ver, dist_dir) in enumerate(targets, 1):
+        if len(targets) > 1:
+            console.step(f"[{index}/{len(targets)}] Python {py_ver} → {dist_dir}")
+        build(
+            project,
+            mirror,
+            py_ver,
+            dist_dir=dist_dir,
+            target=target,
+            options=options,
+            extra_index_urls=tuple(ns.extra_index_urls or ()),
+            find_links=tuple(ns.find_links or ()),
+            dry_run=ns.dry_run,
+            log_file=log_file,
+            log_format=log_format,
+            profile=ProfileOptions(
+                enabled=ns.profile,
+                out=Path(ns.profile_out).resolve() if ns.profile_out else None,
+                compare=ns.profile_compare,
+            ),
+            auto_clean=getattr(ns, "auto_clean", False),
+        )
 
 
 def _run_package(project: Path, ns: argparse.Namespace) -> None:
@@ -392,19 +455,20 @@ def _run_package(project: Path, ns: argparse.Namespace) -> None:
     from fspack.exceptions import ProjectError
     from fspack.packaging.installer import ReleaseRequest, SignOptions, build_release
 
+    # 项目信息：extras 校验、多版本目标解析与签名配置默认值共用（from_dir 有缓存）
+    info = ProjectInfo.from_dir(project, ns.py_version)
     # extras 校验：CLI --extra 指定时校验未知分组（与 build 子命令一致）
     # 仅校验，不构造 BuildOptions——build_release 内部 _prepare_dist 用配置默认，
     # CLI 指定时通过 ReleaseRequest.extras 透传覆盖配置默认
     cli_extras = ns.extras if getattr(ns, "extras", None) else None
     if cli_extras:
-        info = ProjectInfo.from_dir(project, ns.py_version)
         unknown = set(cli_extras) - set(info.optional_dependencies)
         if unknown:
             raise ProjectError(f"未知的 extras 分组: {sorted(unknown)}，可选: {sorted(info.optional_dependencies)}")
 
     # 安全加固签名：CLI 优先合并配置默认（与 extras 不同，签名证书/密钥
     # 用 CLI 优先 + 配置回退语义，避免 --sign-exe 显式开关与配置证书路径分离）
-    info_for_sign = ProjectInfo.from_dir(project, ns.py_version) if (ns.sign_exe or ns.sign_deb) else None
+    info_for_sign = info if (ns.sign_exe or ns.sign_deb) else None
     cfg_cert = info_for_sign.build_defaults.sign_exe_certificate if info_for_sign else None
     sign_exe_cert = (
         _Path(ns.sign_exe_certificate).resolve()
@@ -421,13 +485,8 @@ def _run_package(project: Path, ns: argparse.Namespace) -> None:
         if ns.sign_deb_key is not None
         else (info_for_sign.build_defaults.sign_deb_key if info_for_sign else None)
     )
-    req = ReleaseRequest(
-        project_dir=project,
-        mirror=_resolve_mirror(ns.mirror),
-        py_version=ns.py_version,
-        no_build=ns.no_build,
-        extras=cli_extras,
-    )
+    target = _parse_target(ns.target)
+    mirror = _resolve_mirror(ns.mirror)
     sign = SignOptions(
         codesign=ns.codesign,
         sign_exe=ns.sign_exe,
@@ -436,7 +495,20 @@ def _run_package(project: Path, ns: argparse.Namespace) -> None:
         sign_deb=ns.sign_deb,
         sign_deb_key=sign_deb_key,
     )
-    outputs = build_release(req, target=_parse_target(ns.target), fmt=ns.format, sign=sign)
+    # 多版本：与 build 子命令同一套目标解析（--py-version 优先，其次
+    # python-versions 配置），各版本从各自的 dist 目录打包，互不覆盖
+    targets = _resolve_build_targets(project, info, ns.py_version, target)
+    outputs: list[Path] = []
+    for py_ver, dist_dir in targets:
+        req = ReleaseRequest(
+            project_dir=project,
+            mirror=mirror,
+            py_version=py_ver,
+            no_build=ns.no_build,
+            extras=cli_extras,
+            dist_dir=dist_dir,
+        )
+        outputs.extend(build_release(req, target=target, fmt=ns.format, sign=sign))
     import logging
 
     for out in outputs:

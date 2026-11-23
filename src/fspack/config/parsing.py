@@ -415,7 +415,8 @@ def _parse_build_defaults(fspack_cfg: dict[str, Any]) -> BuildDefaults:  # noqa:
 
     识别 ``nuitka``/``pyc_strip``/``pyc_optimize``/``no_site``/``no_pyc``/
     ``no_stdlib_trim``/``no_slim_runtime``/``ccache``/``no_size_report``/``analyze_deps``/
-    ``nuitka_packages``/``extras``/``lazy_imports`` 键，其余键忽略（如 ``icon``/``entries``/``exclude``）。
+    ``nuitka_packages``/``extras``/``lazy_imports``/``python-versions`` 键，
+    其余键忽略（如 ``icon``/``entries``/``exclude``）。
     类型不匹配时报错，避免静默忽略错误配置。
     """
     kwargs: dict[str, bool | int | str | tuple[str, ...] | None] = {}
@@ -451,6 +452,11 @@ def _parse_build_defaults(fspack_cfg: dict[str, Any]) -> BuildDefaults:  # noqa:
         kwargs["compiler"] = raw_compiler.strip()
     # extras 为字符串列表：默认启用的 optional-dependencies 分组名
     kwargs["extras"] = _parse_string_list_cfg(fspack_cfg.get("extras"), "extras", reject_empty=True)
+    # python-versions 为字符串列表：多版本打包的目标 Python 版本（空列表/未配置
+    # 表示单版本行为不变；元素支持短版本号，构建期按目标平台归一化）
+    kwargs["python_versions"] = _parse_string_list_cfg(
+        fspack_cfg.get("python-versions"), "python-versions", reject_empty=True
+    )
     # lazy_imports 为字符串列表：延迟导入的顶层模块名
     kwargs["lazy_imports"] = _parse_string_list_cfg(fspack_cfg.get("lazy_imports"), "lazy_imports", reject_empty=True)
     # 安全加固：签名证书/密码/密钥 ID 为字符串配置（非布尔开关）

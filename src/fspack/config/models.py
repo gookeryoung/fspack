@@ -258,6 +258,12 @@ class BuildDefaults:
     # msvc（强制 MSVC，缺失时构建入口 fail-fast）/ mingw（强制 winlibs，
     # 无视 MSVC 存在）。仅 Windows Nuitka 编译生效，其余场景忽略
     compiler: str | None = None
+    # 多版本打包的 Python 版本列表（来自 [tool.fspack] python-versions）：
+    # 空元组表示未配置，行为与单版本构建完全一致；单元素等价于用该版本单次
+    # 构建（仍输出到 dist 根）；多元素时逐版本构建到 ``dist/py<完整版本>/``。
+    # 版本号支持短形式（如 "3.11"），由 :func:`fspack.config.resolve_py_version`
+    # 按目标平台归一化为完整版本。CLI ``--py-version`` 显式指定时忽略本字段。
+    python_versions: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

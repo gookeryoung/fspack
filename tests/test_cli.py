@@ -230,6 +230,7 @@ def _capture_build() -> tuple[dict[str, Any], Any]:
         captured["project"] = project
         captured["mirror"] = mirror
         captured["py_version"] = py_version
+        captured["dist_dir"] = dist_dir
         captured["target"] = target
         captured["options"] = options
         captured["extra_index_urls"] = extra_index_urls
@@ -263,6 +264,54 @@ def test_build_custom_py_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr("fspack.builder.build", fake_build)
     cli.main(["b", str(tmp_path), "--py-version", "3.12.3"])
     assert called["py_version"] == "3.12.3"
+
+
+def _capture_build_calls() -> tuple[list[dict[str, Any]], Any]:
+    """构造记录全部调用的 fake_build（多版本打包逐版本调用场景）."""
+
+    def fake_build(
+        project: Path,
+        _mirror: object = None,
+        py_version: str | None = None,
+        dist_dir: Path | None = None,
+        **_kwargs: Any,
+    ) -> None:
+        calls.append({"project": project, "py_version": py_version, "dist_dir": dist_dir})
+
+    calls: list[dict[str, Any]] = []
+    return calls, fake_build
+
+
+def test_build_multi_version_from_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """[tool.fspack] python-versions 多版本时逐版本构建到 dist/py<完整版本>."""
+    write_project(tmp_path, tool_fspack='python-versions = ["3.11", "3.12"]')
+    calls, fake_build = _capture_build_calls()
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    cli.main(["b", str(tmp_path), "--target", "windows"])
+    project = tmp_path.resolve()
+    # 短版本号按 Windows embed 表归一化为完整版本，目录名同源
+    assert [c["py_version"] for c in calls] == ["3.11.9", "3.12.10"]
+    assert [c["dist_dir"] for c in calls] == [project / "dist" / "py3.11.9", project / "dist" / "py3.12.10"]
+
+
+def test_build_single_configured_version_keeps_dist_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """只配置一个版本时等价于 --py-version，仍输出到 dist 根（不建子目录）."""
+    write_project(tmp_path, tool_fspack='python-versions = ["3.12"]')
+    calls, fake_build = _capture_build_calls()
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    cli.main(["b", str(tmp_path), "--target", "windows"])
+    assert [c["py_version"] for c in calls] == ["3.12.10"]
+    assert calls[0]["dist_dir"] is None
+
+
+def test_build_cli_py_version_overrides_configured_versions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """--py-version 显式指定时忽略 python-versions 配置，只构建一次."""
+    write_project(tmp_path, tool_fspack='python-versions = ["3.11", "3.12"]')
+    calls, fake_build = _capture_build_calls()
+    monkeypatch.setattr("fspack.builder.build", fake_build)
+    cli.main(["b", str(tmp_path), "--py-version", "3.13.7"])
+    assert [c["py_version"] for c in calls] == ["3.13.7"]
+    assert calls[0]["dist_dir"] is None
 
 
 def test_build_target_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -618,6 +667,7 @@ def _capture_build_release() -> tuple[dict[str, Any], Any]:
         called["project"] = req.project_dir
         called["mirror"] = req.mirror
         called["py_version"] = req.py_version
+        called["dist_dir"] = req.dist_dir
         called["no_build"] = req.no_build
         called["target"] = target
         called["fmt"] = fmt
@@ -652,6 +702,24 @@ def test_package_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     assert called["sign_exe_certificate"] is None
     assert called["sign_exe_password"] is None
     assert called["sign_deb_key"] is None
+
+
+def test_package_multi_version_from_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """[tool.fspack] python-versions 多版本时逐版本打包，各用对应 dist 目录."""
+    from fspack.packaging.installer import ReleaseRequest
+
+    write_project(tmp_path, tool_fspack='python-versions = ["3.11", "3.12"]')
+    reqs: list[ReleaseRequest] = []
+
+    def fake_build_release(req: ReleaseRequest, **_kwargs: Any) -> list[Path]:
+        reqs.append(req)
+        return []
+
+    monkeypatch.setattr("fspack.packaging.installer.build_release", fake_build_release)
+    cli.main(["p", str(tmp_path), "--no-build", "--target", "windows"])
+    project = tmp_path.resolve()
+    assert [req.py_version for req in reqs] == ["3.11.9", "3.12.10"]
+    assert [req.dist_dir for req in reqs] == [project / "dist" / "py3.11.9", project / "dist" / "py3.12.10"]
 
 
 def test_package_codesign_flag_passthrough(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -842,9 +910,11 @@ def test_cli_module_no_top_level_platform_import() -> None:
 
     source = inspect.getsource(cli)
     top_section = source.split("def main")[0]
-    # TYPE_CHECKING 块内的导入允许（含 MirrorConfig/Platform 两行注解导入）
+    # TYPE_CHECKING 块内的导入允许（含 MirrorConfig/ProjectInfo/Platform 注解导入）
     type_checking_block = (
-        "if TYPE_CHECKING:\n    from fspack.config import MirrorConfig\n    from fspack.platform import Platform\n"
+        "if TYPE_CHECKING:\n"
+        "    from fspack.config import MirrorConfig, ProjectInfo\n"
+        "    from fspack.platform import Platform\n"
     )
     assert "from fspack.platform import Platform" not in top_section.replace(type_checking_block, "")
 

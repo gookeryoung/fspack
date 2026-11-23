@@ -2263,6 +2263,27 @@ def test_build_options_extras_defaults_to_empty() -> None:
     assert defaults.extras == ()
 
 
+def test_parse_fspack_python_versions_config(tmp_path: Path) -> None:
+    """[tool.fspack] python-versions 解析为构建默认值中的版本元组."""
+    clear_project_cache()
+    _make_project_with_optional_deps(tmp_path, fspack_extras='python-versions = ["3.11", "3.12"]\n')
+    info = parse_project(tmp_path)
+    assert info.build_defaults.python_versions == ("3.11", "3.12")
+
+
+def test_parse_fspack_python_versions_defaults_to_empty() -> None:
+    """未配置 python-versions 时为空元组（单版本行为不变）."""
+    assert BuildDefaults().python_versions == ()
+
+
+def test_parse_fspack_python_versions_invalid_type(tmp_path: Path) -> None:
+    """python-versions 非字符串列表报错."""
+    clear_project_cache()
+    _make_project_with_optional_deps(tmp_path, fspack_extras='python-versions = "3.11"\n')
+    with pytest.raises(ProjectError, match="必须是字符串列表"):
+        parse_project(tmp_path)
+
+
 def test_expand_extras_simple() -> None:
     """单个 extra 展开：base + extra 依赖."""
     result = expand_extras(

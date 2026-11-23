@@ -121,6 +121,7 @@ sign-exe-password = ""       # PFX 证书密码
 sign-deb-key = ""            # Linux .deb GPG 签名密钥 ID（CLI --sign-deb-key 优先）
 open_browser = false         # WEB 应用启动后自动打开浏览器（WEB 类型默认启用）
 compiler = "auto"            # Windows Nuitka 编译器：auto / msvc / mingw
+python-versions = []         # 多版本打包的目标 Python 版本（空/省略 = 单版本，行为不变）
 ```
 
 ## 可选依赖分组（extras）
@@ -147,6 +148,30 @@ fsp p --extra full               # package 子命令同样支持
 **优先级**：CLI `--extra` 完全覆盖 `[tool.fspack] extras` 配置默认（集合语义，非合并）。
 未指定 CLI `--extra` 时用配置默认；两者均未指定时仅打包 `[project] dependencies`。
 未知分组名报错并列出可选分组。extras 变化触发依赖分析缓存失效（重新分析）。
+
+## 多版本打包
+
+`[tool.fspack] python-versions` 可一次产出多个 Python 版本的产物。版本号支持
+短形式（如 `"3.11"`），构建时按目标平台归一化为完整版本（如 `3.11.9`）。
+
+```toml
+[tool.fspack]
+python-versions = ["3.11", "3.12"]
+```
+
+```bash
+fsp b          # 逐版本构建：dist/py3.11.9/、dist/py3.12.10/
+fsp p          # 逐版本打包：各版本 release/ 下产出对应发行包
+```
+
+行为约定：
+
+- **不配置**（或空列表）：单版本构建，产物仍在 `dist/` 根，行为与旧版完全一致。
+- **只配置 1 个版本**：等价于 `--py-version <版本>`，仍输出到 `dist/` 根。
+- **配置 ≥2 个版本**：每个版本构建到 `dist/py<完整版本>/`（含 `runtime`/`src`/
+  `site-packages`/入口 exe），发行包落在各自 `dist/py<版本>/release/`，文件名已含
+  `py<版本>` 段，各版本互不覆盖。
+- **CLI 优先**：`--py-version` 显式指定时忽略 `python-versions`，只构建该版本一次。
 
 ## 多入口声明
 
