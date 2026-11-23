@@ -25,6 +25,7 @@ def _row(  # noqa: PLR0913
     is_regression: bool = False,
     is_first_run: bool = False,
     delta_pct: float | None = None,
+    is_deterministic: bool = False,
 ) -> cb.ComparisonRow:
     """构造对比行，``delta_pct`` 默认按 current/best 计算."""
     if delta_pct is None:
@@ -38,6 +39,7 @@ def _row(  # noqa: PLR0913
         is_regression=is_regression,
         is_current_best=False,
         is_first_run=is_first_run,
+        is_deterministic=is_deterministic,
     )
 
 
@@ -63,14 +65,17 @@ def _report(
 class TestDetectSystemicRegression:
     """_detect_systemic_regression 阈值边界.
 
-    阈值定义（2026-09-16 调整后）：
+    阈值定义（2026-11-23 调整后）：
     - 可比测试数 ≥ 5
-    - 退化率 ≥ 40%
+    - 无确定性类别（mock sleep）测试退化
+    - 抖动敏感测试退化率 ≥ 40%
     - 退化平均幅度 ≥ 20%
 
     阈值依据：run #275 实测 5/9 退化 + 平均 43.2% 应触发；2026-09-16 run
     12/26 退化 + 平均 23.4% 跨 11 模块确认为机器抖动，应触发但因旧阈值
-    （50%/中位 30%）漏判。
+    （50%/中位 30%）漏判。2026-11-23 run 整体 14/36（38.9%）但
+    14/29 抖动敏感测试（48.3%）：确定性 mock sleep 测试全部正常，
+    因此退化率只按抖动敏感测试计算。
     """
 
     def test_typical_ci_jitter_triggers_systemic(self) -> None:
@@ -179,6 +184,51 @@ class TestDetectSystemicRegression:
         cb._detect_systemic_regression(report)
         assert report.is_systemic is True
         assert "4/7" in report.systemic_detail
+
+    def test_deterministic_tests_excluded_from_jitter_rate(self) -> None:
+        """确定性 mock sleep 测试不计入抖动敏感分母（2026-11-23 真实场景）.
+
+        整体 14/36（38.9%，低于 40% 旧门槛），但 7 个确定性测试全部正常，
+        抖动敏感分母为 29，14/29 = 48.3%，应判定为系统性抖动.
+        """
+        jitter_rows = [_row(f"t{i}", 1.35, 1.0, is_regression=True, delta_pct=35.0) for i in range(14)] + [
+            _row(f"t{i}", 1.05, 1.0, is_regression=False, delta_pct=5.0) for i in range(14, 29)
+        ]
+        det_rows = [
+            _row(f"d{i}", 1.002, 1.0, is_regression=False, delta_pct=0.2, is_deterministic=True) for i in range(7)
+        ]
+        report = _report(jitter_rows + det_rows)
+        cb._detect_systemic_regression(report)
+        assert report.is_systemic is True
+        assert "14/29" in report.systemic_detail
+
+    def test_deterministic_regression_blocks_systemic(self) -> None:
+        """确定性测试退化是真实代码信号，不允许抖动豁免."""
+        rows = [
+            _row("d1", 1.50, 1.0, is_regression=True, delta_pct=50.0, is_deterministic=True),
+            _row("t1", 1.50, 1.0, is_regression=True, delta_pct=50.0),
+            _row("t2", 1.50, 1.0, is_regression=True, delta_pct=50.0),
+            _row("t3", 1.50, 1.0, is_regression=True, delta_pct=50.0),
+            _row("t4", 1.50, 1.0, is_regression=True, delta_pct=50.0),
+            _row("t5", 1.50, 1.0, is_regression=True, delta_pct=50.0),
+        ]
+        report = _report(rows)
+        cb._detect_systemic_regression(report)
+        assert report.is_systemic is False
+
+    def test_too_few_jitter_sensitive_tests_no_trigger(self) -> None:
+        """抖动敏感可比测试 < 5（其余均为确定性测试）不触发."""
+        rows = [
+            _row("d1", 1.10, 1.0, is_regression=False, delta_pct=10.0, is_deterministic=True),
+            _row("d2", 1.10, 1.0, is_regression=False, delta_pct=10.0, is_deterministic=True),
+            _row("t1", 1.50, 1.0, is_regression=True, delta_pct=50.0),
+            _row("t2", 1.50, 1.0, is_regression=True, delta_pct=50.0),
+            _row("t3", 1.50, 1.0, is_regression=True, delta_pct=50.0),
+            _row("t4", 1.50, 1.0, is_regression=True, delta_pct=50.0),
+        ]
+        report = _report(rows)
+        cb._detect_systemic_regression(report)
+        assert report.is_systemic is False
 
 
 class TestParseBenchmarkFile:
@@ -430,10 +480,8 @@ class TestMatchCategory:
     """_match_category 类别匹配."""
 
     def test_core_category_matched(self) -> None:
-        """test_perf_baseline.py 的 9 个核心测试匹配 core 类别（指纹单独成类）."""
+        """test_perf_baseline.py 的 7 个核心测试匹配 core 类别（AST/指纹单独成类）."""
         for name in (
-            "test_collect_imports_and_submodules_baseline",
-            "test_analyze_dependencies_baseline",
             "test_classify_entry_baseline",
             "test_slim_unpack_baseline",
             "test_project_info_from_dir_baseline",
@@ -446,6 +494,33 @@ class TestMatchCategory:
             assert cat is not None
             assert cat.name == "core"
             assert cat.threshold == 10.0
+
+    def test_ast_analysis_category_matched(self) -> None:
+        """AST 收集/依赖分析匹配 ast_analysis（50% 阈值 + 2ms 下限）."""
+        for name in (
+            "test_collect_imports_and_submodules_baseline",
+            "test_analyze_dependencies_baseline",
+        ):
+            cat = cb._match_category(name)
+            assert cat is not None
+            assert cat.name == "ast_analysis"
+            assert cat.threshold == 50.0
+            assert cat.noise_floor == pytest.approx(2e-3)
+            assert cat.deterministic is False
+
+    def test_ast_scheduling_categories_matched(self) -> None:
+        """带参数化的 AST 调度基线按小/大样本匹配独立类别."""
+        small = cb._match_category("test_small_files[ast_scheduling_project0-serial]")
+        assert small is not None
+        assert small.name == "ast_scheduling_small"
+        assert small.threshold == 100.0
+        assert small.noise_floor == pytest.approx(8e-3)
+
+        large = cb._match_category("test_large_files[ast_scheduling_project1-default]")
+        assert large is not None
+        assert large.name == "ast_scheduling_large"
+        assert large.threshold == 100.0
+        assert large.noise_floor == pytest.approx(0.6)
 
     def test_fingerprint_category_matched(self) -> None:
         """源码指纹微基准单独匹配 fingerprint 类别（专属 120µs 噪声下限）."""
@@ -467,8 +542,8 @@ class TestMatchCategory:
             assert cat is not None
             assert cat.name == "build_perf"
             assert cat.threshold == 25.0
-            # ms 级 I/O 类别专属绝对噪声下限（≈2σ 高于 StdDev 27% 抖动包络）
-            assert cat.noise_floor == pytest.approx(1.5e-3)
+            # ms 级 I/O 类别专属绝对噪声下限（覆盖 runner 世代差异 2.23~5.93ms）
+            assert cat.noise_floor == pytest.approx(4e-3)
 
     def test_nuitka_compile_category_matched(self) -> None:
         """test_nuitka_compile_baseline.py 的 4 个测试匹配 nuitka_compile 类别."""
@@ -484,17 +559,26 @@ class TestMatchCategory:
             assert cat.threshold == 10.0
 
     def test_wheel_download_category_matched(self) -> None:
-        """test_wheel_download_baseline.py 的 4 个测试匹配 wheel_download 类别."""
+        """test_wheel_download_baseline.py 的 pip/uv/冷下载匹配 wheel_download 类别（确定性）."""
         for name in (
             "test_pip_parallel_download_baseline",
             "test_uv_parallel_download_baseline",
-            "test_cache_hit_baseline",
             "test_cold_download_baseline",
         ):
             cat = cb._match_category(name)
             assert cat is not None
             assert cat.name == "wheel_download"
             assert cat.threshold == 10.0
+            assert cat.deterministic is True
+
+    def test_wheel_cache_category_matched(self) -> None:
+        """缓存命中基线单独成类（含 50 次文件检查，非确定性）."""
+        cat = cb._match_category("test_cache_hit_baseline")
+        assert cat is not None
+        assert cat.name == "wheel_cache"
+        assert cat.threshold == 10.0
+        assert cat.noise_floor == pytest.approx(3e-4)
+        assert cat.deterministic is False
 
     def test_entry_startup_category_matched(self) -> None:
         """test_entry_startup_baseline.py 的 4 个测试匹配 entry_startup 类别."""
@@ -528,11 +612,11 @@ class TestMatchCategory:
         assert cb._match_category("t1") is None
 
     def test_no_collision_between_cache_hit_tests(self) -> None:
-        """test_cache_hit_baseline（wheel_download）与 test_wheel_download_cache_hit_baseline
+        """test_cache_hit_baseline（wheel_cache）与 test_wheel_download_cache_hit_baseline
         （core）分别匹配到不同类别，验证正则无歧义."""
         hit = cb._match_category("test_cache_hit_baseline")
         assert hit is not None
-        assert hit.name == "wheel_download"
+        assert hit.name == "wheel_cache"
 
         miss = cb._match_category("test_wheel_download_cache_hit_baseline")
         assert miss is not None
@@ -641,42 +725,41 @@ class TestCompareWithCategories:
         assert row.is_regression is False
 
     def test_build_perf_regression_below_noise_floor_not_triggered(self, tmp_path: Path) -> None:
-        """build_perf 超类别阈值但绝对差低于类别噪声下限 1.5ms，不判退化.
+        """build_perf 超类别阈值但绝对差低于类别噪声下限 4ms，不判退化.
 
-        复现 2026-10-10 CI run 误报：run 级 I/O 抖动表现为加性 ~1ms 偏移，
-        基线最小的测试百分比越 25% 阈值（4.37→5.49ms = +25.6%），但同 run 内
-        基线最大的测试仅 +17.1%（绝对差相近）——加性偏移是抖动特征，按比例
-        退化不会出现"基线越大百分比越小"。绝对差 < 1.5ms 时抑制判定。
+        复现 2026-11-23 CI run 误报：run 级 I/O 抖动表现为加性 ~3ms 偏移，
+        小项目冷缓存 3.67→6.66ms（+81.5%），但同 run 内 4 项 build_perf
+        绝对差一致落在 +2.90~+3.17ms，且同 run 的 AST 调度测试反而比历史
+        run 更快——加性偏移是抖动特征。绝对差 < 4ms 时抑制判定。
         """
-        # 2026-10-10 CI run 实测数据：小项目冷缓存
         self._write_bench_file(
             tmp_path / "001_hist.json",
-            [("test_small_project_cold_cache_baseline", 0.00437)],
+            [("test_small_project_cold_cache_baseline", 0.00367)],
             mtime_offset=-100,
         )
         self._write_bench_file(
             tmp_path / "002_cur.json",
-            [("test_small_project_cold_cache_baseline", 0.00549)],
+            [("test_small_project_cold_cache_baseline", 0.00666)],
             mtime_offset=0,
         )
         report = cb.compare(tmp_path, threshold=25.0)
         assert report.regressions == 0
         row = report.rows[0]
-        # 相对量越阈值（+25.6% > 25%），但绝对差 1.12ms < 1.5ms 类别下限
-        assert row.delta_pct == pytest.approx(25.6, abs=0.1)
+        # 相对量越阈值（+81.5% > 25%），但绝对差 2.99ms < 4ms 类别下限
+        assert row.delta_pct == pytest.approx(81.5, abs=0.1)
         assert row.is_regression is False
 
     def test_build_perf_regression_above_noise_floor_triggered(self, tmp_path: Path) -> None:
-        """build_perf 超类别阈值且绝对差 ≥ 1.5ms，正常判退化（真实退化不被下限掩盖）."""
+        """build_perf 超类别阈值且绝对差 ≥ 4ms，正常判退化（真实退化不被下限掩盖）."""
         self._write_bench_file(
             tmp_path / "001_hist.json",
             [("test_small_project_cold_cache_baseline", 0.00437)],
             mtime_offset=-100,
         )
-        # 6.5ms：+48.8%，绝对差 2.13ms ≥ 1.5ms
+        # 8.80ms：+101.4%，绝对差 4.43ms ≥ 4ms
         self._write_bench_file(
             tmp_path / "002_cur.json",
-            [("test_small_project_cold_cache_baseline", 0.00650)],
+            [("test_small_project_cold_cache_baseline", 0.00880)],
             mtime_offset=0,
         )
         report = cb.compare(tmp_path, threshold=25.0)
@@ -685,16 +768,16 @@ class TestCompareWithCategories:
         assert row.is_regression is True
 
     def test_build_perf_small_pct_large_abs_not_triggered(self, tmp_path: Path) -> None:
-        """build_perf 绝对差 ≥ 1.5ms 但百分比未超类别阈值，不判退化（相对门禁仍生效）."""
-        # 10ms 基线 +1.5ms = +15%，百分比未过 25%
+        """build_perf 绝对差 ≥ 4ms 但百分比未超类别阈值，不判退化（相对门禁仍生效）."""
+        # 20.2ms 基线 +4.7ms = +23.3%，绝对差过 4ms 下限但百分比未过 25%
         self._write_bench_file(
             tmp_path / "001_hist.json",
-            [("test_medium_project_cold_cache_baseline", 0.010)],
+            [("test_medium_project_cold_cache_baseline", 0.0202)],
             mtime_offset=-100,
         )
         self._write_bench_file(
             tmp_path / "002_cur.json",
-            [("test_medium_project_cold_cache_baseline", 0.0115)],
+            [("test_medium_project_cold_cache_baseline", 0.0249)],
             mtime_offset=0,
         )
         report = cb.compare(tmp_path, threshold=25.0)

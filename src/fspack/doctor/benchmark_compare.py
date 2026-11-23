@@ -10,6 +10,10 @@ pytest-benchmark 格式 JSON，按测试名找最小 median 作为最佳基准�
 误报频繁。按类别设阈值后，确定性测试可用 10% 严格阈值，抖动测试用 15-25%
 宽松阈值，减少误报同时保留检测灵敏度。
 
+系统性退化判定只统计"对 runner 抖动敏感"的测试：mock ``time.sleep`` 的类别
+（:attr:`BenchmarkCategory.deterministic`）耗时与机器负载无关，一旦退化即视为
+真实代码回归信号，不做抖动豁免。
+
 与 :mod:spack.doctor.bench 的关系：后者处理 doctor 自身模板构建基准剖析
 （schema `fspack/doctor-bench-profile/1`，落盘 `fsp-d-*.json`），本模块
 处理 pytest-benchmark 原生 JSON（`{"benchmarks": [...]}`）。两类 JSON 同目录
@@ -83,23 +87,51 @@ class BenchmarkCategory:
     threshold: float  # 退化阈值百分比
     description: str  # 类别说明（含 StdDev 依据）
     noise_floor: float = 0.0  # 类别专属绝对噪声下限（秒），0 用全局 NOISE_FLOOR_SECONDS
+    deterministic: bool = False  # 耗时是否与 runner 负载无关（mock sleep/fake 工具链）
 
 
 # 默认基线类别阈值（基于 iter-141~144 实测 StdDev 设定）
 # 顺序重要：具体类别在前，core 兜底在后。_match_category 返回首个匹配
 DEFAULT_CATEGORIES: tuple[BenchmarkCategory, ...] = (
+    # test_perf_baseline.py AST 调度基线（test_small_files/large_files）：
+    # 多文件 AST 解析含进程池启动与文件 I/O，跨 runner 实测波动 2.2-4.5x
+    # （2026-11-23 前后同一份代码：small project0-serial 16.59/21.95/24.37/36.25ms，
+    # large project0-serial 1.171/1.578/1.691/2.227s）。测试文件本身已声明
+    # "不对跨机器耗时比值作硬断言"，故阈值设为 100%（仅捕获 ≥2x 灾难性退化），
+    # 并配 ms/百 ms 级绝对下限吸收 runner 世代差异
+    BenchmarkCategory(
+        name="ast_scheduling_small",
+        pattern=r"^test_small_files\[",
+        threshold=100.0,
+        description="AST 调度小样本基线，跨 runner 波动 2.2x，仅捕获 ≥2x 退化",
+        noise_floor=8e-3,
+    ),
+    BenchmarkCategory(
+        name="ast_scheduling_large",
+        pattern=r"^test_large_files\[",
+        threshold=100.0,
+        description="AST 调度大样本基线，跨 runner 波动 2.0x，仅捕获 ≥2x 退化",
+        noise_floor=0.6,
+    ),
+    # test_perf_baseline.py 的两个 AST 解析测试：CPU/文件系统敏感，跨 runner
+    # 实测 4.28~9.27ms（2.2x）。50% 阈值 + 2ms 下限吸收抖动，仍能捕获 ≥2x 退化
+    BenchmarkCategory(
+        name="ast_analysis",
+        pattern=r"^test_(collect_imports_and_submodules|analyze_dependencies)_baseline$",
+        threshold=50.0,
+        description="AST 收集/依赖分析基线，跨 runner 实测 2.2x 波动，配 2ms 下限",
+        noise_floor=2e-3,
+    ),
     # test_build_perf_baseline.py：含 AST 扫描与文件 I/O，StdDev 5-27%
-    # noise_floor=1.5ms：该类别 median 绝对量仅 4-6.5ms，CI run 级 I/O 调度抖动
-    # 表现为加性 ~1ms 偏移（2026-10-10 run 实测：4 项测试绝对退化一致 +0.93~1.12ms，
-    # 基线最小的 3 项百分比越 25% 阈值、基线最大的 1 项仅 +17.1%——按比例退化
-    # 不会出现"基线越大百分比越小"的排序特征）。4ms 基线 × 27% StdDev ≈ 1.1ms，
-    # 1.5ms ≈ 2σ 高于抖动包络；真实代码退化（数倍变慢）绝对差远超下限仍被捕获
+    # noise_floor=4ms：2026-11-23 前后连续 5 次 CI run 实测绝对差 +2.23~+5.93ms
+    # （基线 3.29~4.40ms 的 51-135%），1.5ms 下限已无法覆盖 runner 世代差异；
+    # 4ms 下限等价于"约 2x 才告警"，与 Jitter 幅度匹配，更大规模退化仍被捕获
     BenchmarkCategory(
         name="build_perf",
         pattern=r"^test_(small|medium)_project_.*_baseline$",
         threshold=25.0,
         description="test_build_perf_baseline.py 端到端编排基线，含 AST 扫描与文件 I/O 抖动 StdDev 5-27%",
-        noise_floor=1.5e-3,
+        noise_floor=4e-3,
     ),
     # test_nuitka_compile_baseline.py：mock time.sleep，StdDev <1%
     BenchmarkCategory(
@@ -107,13 +139,24 @@ DEFAULT_CATEGORIES: tuple[BenchmarkCategory, ...] = (
         pattern=r"^test_(serial_compile|parallel_compile|ccache_hit|ccache_miss)_baseline$",
         threshold=10.0,
         description="test_nuitka_compile_baseline.py 编译基线，mock time.sleep 确定性高 StdDev <1%",
+        deterministic=True,
     ),
-    # test_wheel_download_baseline.py：mock time.sleep，StdDev <1%
+    # test_wheel_download_baseline.py 的 pip/uv/冷下载：mock time.sleep，StdDev <1%
     BenchmarkCategory(
         name="wheel_download",
-        pattern=r"^test_(pip_parallel_download|uv_parallel_download|cache_hit|cold_download)_baseline$",
+        pattern=r"^test_(pip_parallel_download|uv_parallel_download|cold_download)_baseline$",
         threshold=10.0,
         description="test_wheel_download_baseline.py 下载基线，mock time.sleep 确定性高 StdDev <1%",
+        deterministic=True,
+    ),
+    # test_cache_hit_baseline：缓存命中分支含 50 次 is_file()，文件系统抖动 µs 级
+    # 2026-11-23 run 实测 +160.6µs（+22.4%），属 stat/调度抖动；300µs 下限吸收该量级
+    BenchmarkCategory(
+        name="wheel_cache",
+        pattern=r"^test_cache_hit_baseline$",
+        threshold=10.0,
+        description="wheel 缓存命中基线，含 50 次文件存在性检查，配 300µs 绝对下限",
+        noise_floor=3e-4,
     ),
     # test_entry_startup_baseline.py：真实 subprocess，StdDev 5-8%
     BenchmarkCategory(
@@ -143,11 +186,11 @@ DEFAULT_CATEGORIES: tuple[BenchmarkCategory, ...] = (
         description="test_perf_baseline.py 源码指纹基线，stat 密集 µs 级，跨 runner 绝对抖动可达 ~100µs",
         noise_floor=1.2e-4,
     ),
-    # test_perf_baseline.py 其余 9 个核心测试：确定性高 StdDev <1%
+    # test_perf_baseline.py 其余核心测试：确定性高 StdDev <1%
     BenchmarkCategory(
         name="core",
         pattern=(
-            r"^test_(collect_imports_and_submodules|analyze_dependencies|classify_entry|"
+            r"^test_(classify_entry|"
             r"slim_unpack|project_info_from_dir|project_info_from_dir_cached|"
             r"generate_wrapper_source|ensure_env_cache_hit|wheel_download_cache_hit)_baseline$"
         ),
@@ -189,6 +232,7 @@ class ComparisonRow:
     is_first_run: bool  # 仅当前运行、无历史可比
     category: str = ""  # 匹配的类别名（空表示未匹配，用全局阈值）
     threshold: float = DEFAULT_THRESHOLD  # 应用于此测试的退化阈值
+    is_deterministic: bool = False  # 匹配到确定性类别（mock sleep，不受 runner 负载影响）
 
 
 @dataclass
@@ -334,6 +378,7 @@ def compare(
         cat = _match_category(name, categories) if categories else None
         cat_name = cat.name if cat else ""
         row_threshold = cat.threshold if cat else threshold
+        is_deterministic = bool(cat and cat.deterministic)
 
         best = best_baseline.get(name)
         if best is None:
@@ -351,6 +396,7 @@ def compare(
                     is_first_run=True,
                     category=cat_name,
                     threshold=row_threshold,
+                    is_deterministic=is_deterministic,
                 )
             )
             continue
@@ -382,6 +428,7 @@ def compare(
                 is_first_run=False,
                 category=cat_name,
                 threshold=row_threshold,
+                is_deterministic=is_deterministic,
             )
         )
 
@@ -398,7 +445,9 @@ def _detect_systemic_regression(report: ComparisonReport) -> None:
 
     判定条件（同时满足）：
     - 可比测试数 ≥ 5（样本足够，避免小样本误判）
-    - 退化率 ≥ 40%（至少四成测试退化，体现"同步"特征）
+    - 无确定性类别测试退化（mock ``time.sleep`` 的耗时与 runner 负载无关，
+      这类测试退化是真实代码信号，不做抖动豁免）
+    - 抖动敏感测试的退化率 ≥ 40%（至少四成测试退化，体现"同步"特征）
     - 退化测试的平均退化幅度 ≥ 20%（中等幅度，排除边缘抖动）
 
     阈值依据：
@@ -408,6 +457,12 @@ def _detect_systemic_regression(report: ComparisonReport) -> None:
       （跨 11 个模块 3 个类别：AST/wheel/fs/pyproject/Nuitka/cache/subprocess...
        nuitka_compile / pip / uv mock sleep 测试完全没退化 <1%，
        确认为机器抖动而非真实代码退化）
+    - 2026-11-23 run：整体 14/36（38.9%，差 0.4 个百分点未触发旧门槛）但
+      14/29 抖动敏感测试（48.3%），平均 46.4%，退化全部落在 AST 调度/
+      build_perf/缓存命中，4 个 nuitka + 3 个 mock 下载测试退化 0.2-0.5%；
+      同代码跨 run 实测 small_files 16.59/21.95/24.37/36.25ms，
+      build_perf 3.67~9.60ms，确认为 runner 抖动。因此退化率只按
+      "抖动敏感"测试计算，mock sleep 测试仅作为真实回归信号
     - mock time.sleep 测试不受 CPU 调度影响，退化 <1% 可作为无抖动基准；
       I/O 密集测试（文件 stat/zip 解压）受调度影响大，退化幅度 12-45%。
       这种"覆盖广但幅度中等"的退化分布是机器抖动的典型特征
@@ -419,25 +474,33 @@ def _detect_systemic_regression(report: ComparisonReport) -> None:
     判定为系统性退化时设置 ``report.is_systemic = True``，``main()`` 据此
     输出警告但不阻断 CI（exit 0），建议人工审查 artifact 确认无真实退化。
     """
-    comparable = report.total_benchmarks - report.no_history
-    if comparable < 5:
+    comparable = [r for r in report.rows if not r.is_first_run]
+    if len(comparable) < 5:
         return
 
-    regression_rate = report.regressions / comparable
+    # 确定性测试（mock sleep）退化与 runner 负载无关，直接视为真实回归信号
+    if any(r.is_deterministic and r.is_regression for r in comparable):
+        return
+
+    jitter_sensitive = [r for r in comparable if not r.is_deterministic]
+    if len(jitter_sensitive) < 5:
+        return
+
+    regressed = [r for r in jitter_sensitive if r.is_regression]
+    if not regressed:
+        return
+
+    regression_rate = len(regressed) / len(jitter_sensitive)
     if regression_rate < 0.4:
         return
 
-    regressed_deltas = [r.delta_pct for r in report.rows if r.is_regression]
-    if not regressed_deltas:
-        return
-
-    avg_delta = sum(regressed_deltas) / len(regressed_deltas)
+    avg_delta = sum(r.delta_pct for r in regressed) / len(regressed)
     if avg_delta < 20.0:
         return
 
     report.is_systemic = True
     report.systemic_detail = (
-        f"{report.regressions}/{comparable} 测试退化"
+        f"{len(regressed)}/{len(jitter_sensitive)} 抖动敏感测试退化"
         f"（退化率 {regression_rate * 100:.0f}%），"
         f"退化平均幅度 {avg_delta:.1f}%，判定为机器负载波动"
     )
