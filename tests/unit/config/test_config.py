@@ -2902,6 +2902,132 @@ def test_nuitka_version_for_uses_major_minor_only() -> None:
     assert ver_a == ver_b == NUITKA_VERSIONS["3.10"]
 
 
+def test_parse_shortcuts_config(tmp_path: Path) -> None:
+    """[tool.fspack.shortcuts.<入口名>] 解析显示名/图标/开关，缺省显示名用入口名."""
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "assets" / "main.ico").write_bytes(b"ico")
+    write_project(
+        tmp_path,
+        name="app",
+        scripts={"main": "app:main", "admin": "app:main"},
+        tool_fspack=(
+            'shortcuts.main.display-name = "我的工具"\n'
+            'shortcuts.main.icon = "assets/main.ico"\n'
+            'shortcuts.admin.display-name = "管理"\n'
+            "shortcuts.admin.start-menu = false"
+        ),
+    )
+    info = parse_project(tmp_path)
+    assert [s.entry for s in info.shortcuts] == ["main", "admin"]
+    main, admin = info.shortcuts
+    assert main.display_name == "我的工具"
+    assert main.icon == (tmp_path / "assets" / "main.ico").resolve()
+    assert main.desktop is True
+    assert main.start_menu is True
+    assert admin.display_name == "管理"
+    assert admin.icon is None
+    assert admin.start_menu is False
+
+
+def test_parse_shortcuts_display_name_defaults_to_entry(tmp_path: Path) -> None:
+    """未写 display-name 时用入口名作为快捷方式显示名."""
+    write_project(
+        tmp_path,
+        name="app",
+        scripts={"main": "app:main"},
+        tool_fspack="shortcuts.main.desktop = true",
+    )
+    info = parse_project(tmp_path)
+    assert info.shortcuts[0].display_name == "main"
+
+
+def test_parse_shortcuts_empty_table_means_unconfigured(tmp_path: Path) -> None:
+    """空 [tool.fspack.shortcuts] 表视为未配置，安装器沿用旧行为."""
+    write_project(tmp_path, name="app", tool_fspack="[tool.fspack.shortcuts]")
+    info = parse_project(tmp_path)
+    assert info.shortcuts == ()
+
+
+def test_parse_shortcuts_unknown_entry_errors(tmp_path: Path) -> None:
+    """未知入口名报错并提示可选入口."""
+    write_project(
+        tmp_path,
+        name="app",
+        scripts={"main": "app:main"},
+        tool_fspack='shortcuts.nope.display-name = "X"',
+    )
+    with pytest.raises(ProjectError, match=r"未在 \[project.scripts\] 声明"):
+        parse_project(tmp_path)
+
+
+def test_parse_shortcuts_empty_display_name_errors(tmp_path: Path) -> None:
+    """空显示名（含纯空白）报错."""
+    write_project(
+        tmp_path,
+        name="app",
+        scripts={"main": "app:main"},
+        tool_fspack='shortcuts.main.display-name = "   "',
+    )
+    with pytest.raises(ProjectError, match="display-name 不能为空"):
+        parse_project(tmp_path)
+
+
+def test_parse_shortcuts_duplicate_display_name_errors(tmp_path: Path) -> None:
+    """显示名重复（大小写不敏感）报错，避免 .lnk 互相覆盖."""
+    write_project(
+        tmp_path,
+        name="app",
+        scripts={"main": "app:main", "admin": "app:main"},
+        tool_fspack=('shortcuts.main.display-name = "Tool"\nshortcuts.admin.display-name = "tool"'),
+    )
+    with pytest.raises(ProjectError, match="显示名重复"):
+        parse_project(tmp_path)
+
+
+def test_parse_shortcuts_invalid_bool_errors(tmp_path: Path) -> None:
+    """desktop/start-menu 必须是 TOML 布尔值."""
+    write_project(
+        tmp_path,
+        name="app",
+        scripts={"main": "app:main"},
+        tool_fspack='shortcuts.main.desktop = "yes"',
+    )
+    with pytest.raises(ProjectError, match="必须是布尔值"):
+        parse_project(tmp_path)
+
+
+def test_parse_shortcuts_unknown_field_errors(tmp_path: Path) -> None:
+    """快捷方式子表含未知字段时报错（防拼写错误静默失效）."""
+    write_project(
+        tmp_path,
+        name="app",
+        scripts={"main": "app:main"},
+        tool_fspack='shortcuts.main.displayname = "x"',
+    )
+    with pytest.raises(ProjectError, match="未知字段"):
+        parse_project(tmp_path)
+
+
+def test_parse_shortcuts_missing_icon_errors(tmp_path: Path) -> None:
+    """快捷方式图标文件不存在时报错."""
+    write_project(
+        tmp_path,
+        name="app",
+        scripts={"main": "app:main"},
+        tool_fspack='shortcuts.main.icon = "nope.ico"',
+    )
+    with pytest.raises(ProjectError, match="icon 文件不存在"):
+        parse_project(tmp_path)
+
+
+def test_parse_shortcuts_without_scripts_uses_project_name(tmp_path: Path) -> None:
+    """无 [project.scripts] 时唯一入口是项目名，可据此配置快捷方式."""
+    write_project(tmp_path, name="app", tool_fspack='shortcuts.app.display-name = "App 工具"')
+    info = parse_project(tmp_path)
+    assert info.shortcuts[0].entry == "app"
+    assert info.shortcuts[0].display_name == "App 工具"
+
+
 def test_build_options_from_defaults_translates_ccache() -> None:
     """build_options_from_defaults 透传 ccache 字段."""
     from fspack.config import BuildDefaults, build_options_from_defaults

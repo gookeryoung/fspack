@@ -11,13 +11,15 @@ NSIS 模板、快捷方式块、注册表块、脚本生成与 makensis 编译�
 from __future__ import annotations
 
 import logging
+import shutil
 import subprocess  # noqa: F401  # 保留 patch 路径 fspack.packaging.installer.nsis.subprocess.run
 from pathlib import Path
 
-from fspack.config import ProjectInfo
+from fspack.config import ProjectInfo, ShortcutConfig
 from fspack.core._compat import override
 from fspack.core.exceptions import InstallerError
 from fspack.core.platform import Platform
+from fspack.packaging.icon import ensure_ico
 from fspack.packaging.installer.base import Installer, _run_stage, _run_tool
 from fspack.packaging.installer.dist_prep import (
     _DIST_INTERMEDIATE_EXCLUDES,
@@ -238,7 +240,7 @@ def generate_nsis_script(project: ProjectInfo, dist_dir: Path, release_dir: Path
         out_setup=out_setup_win,
         nsis_exclude_intermediate=_NSIS_EXCLUDE_INTERMEDIATE + " " if _NSIS_EXCLUDE_INTERMEDIATE else "",
         ucrt_check_block=_NSIS_UCRT_CHECK_BLOCK if needs_ucrt else "",
-        shortcut_block=_build_shortcut_block(project),
+        shortcut_block=_build_shortcut_block(project, dist_dir),
         uninstall_shortcut_block=_build_uninstall_shortcut_block(project),
         registry_block=_build_registry_block(project),
         uninstall_registry_block=_build_uninstall_registry_block(project),
@@ -251,26 +253,90 @@ def generate_nsis_script(project: ProjectInfo, dist_dir: Path, release_dir: Path
     return nsi
 
 
-def _build_shortcut_block(project: ProjectInfo) -> str:
+# 快捷方式图标在 dist 内的落地目录（随安装包分发，供 .lnk 引用）
+_SHORTCUT_ICON_DIR = Path("assets") / "shortcut-icons"
+
+
+def _build_shortcut_block(project: ProjectInfo, dist_dir: Path) -> str:
     """生成开始菜单与桌面快捷方式创建指令。
 
-    所有应用类型默认生成：开始菜单文件夹、程序快捷方式、卸载快捷方式、桌面快捷方式。
+    未配置 ``[tool.fspack.shortcuts]`` 时沿用旧行为：开始菜单文件夹、项目名
+    程序快捷方式、卸载快捷方式、项目名桌面快捷方式，目标均为默认入口 exe。
+
+    配置后进入多快捷方式模式：只为列出的入口生成（``desktop``/``start-menu``
+    分别控制桌面与开始菜单程序组），显示名取 ``display-name``；卸载快捷方式
+    与开始菜单文件夹仍为项目级。
     """
     name = project.name
-    exe = project.exe_name
-    lines = [
-        f'  CreateDirectory "$SMPROGRAMS\\{name}"',
-        f'  CreateShortCut "$SMPROGRAMS\\{name}\\{name}.lnk" "$INSTDIR\\{exe}"',
-        f'  CreateShortCut "$SMPROGRAMS\\{name}\\卸载 {name}.lnk" "$INSTDIR\\uninstall.exe"',
-        f'  CreateShortCut "$DESKTOP\\{name}.lnk" "$INSTDIR\\{exe}"',
-    ]
+    lines = [f'  CreateDirectory "$SMPROGRAMS\\{name}"']
+    if not project.shortcuts:
+        exe = project.exe_name
+        lines += [
+            f'  CreateShortCut "$SMPROGRAMS\\{name}\\{name}.lnk" "$INSTDIR\\{exe}"',
+            f'  CreateShortCut "$SMPROGRAMS\\{name}\\卸载 {name}.lnk" "$INSTDIR\\uninstall.exe"',
+            f'  CreateShortCut "$DESKTOP\\{name}.lnk" "$INSTDIR\\{exe}"',
+        ]
+        return "\n".join(lines)
+
+    # 图标只转换/复制一次，开始菜单与桌面快捷方式共用同一片段
+    # CreateShortCut 的可选参数按位置传递：要设置 icon_file 必须先占位 parameters
+    icon_args_by_entry = {sc.entry: _shortcut_icon_args(sc, dist_dir) for sc in project.shortcuts}
+    for shortcut in project.shortcuts:
+        if shortcut.start_menu:
+            exe = f"{shortcut.entry}.exe"
+            lines.append(
+                f'  CreateShortCut "$SMPROGRAMS\\{name}\\{shortcut.display_name}.lnk"'
+                f' "$INSTDIR\\{exe}"{icon_args_by_entry[shortcut.entry]}'
+            )
+    lines.append(f'  CreateShortCut "$SMPROGRAMS\\{name}\\卸载 {name}.lnk" "$INSTDIR\\uninstall.exe"')
+    for shortcut in project.shortcuts:
+        if shortcut.desktop:
+            exe = f"{shortcut.entry}.exe"
+            lines.append(
+                f'  CreateShortCut "$DESKTOP\\{shortcut.display_name}.lnk"'
+                f' "$INSTDIR\\{exe}"{icon_args_by_entry[shortcut.entry]}'
+            )
     return "\n".join(lines)
 
 
+def _shortcut_icon_args(shortcut: ShortcutConfig, dist_dir: Path) -> str:
+    """返回 ``CreateShortCut`` 的图标参数片段（无图标时为空串）.
+
+    配置了 ``icon`` 时先转换为 ``.ico`` 并复制到 dist 内固定目录，安装后以
+    ``$INSTDIR`` 相对路径引用；转换失败（如非 .ico 且未装 Pillow）时告警并
+    回退 exe 自带图标，不阻断打包。
+    """
+    if shortcut.icon is None:
+        return ""
+    # 转换工作目录放在 dist/build（打包排除模式已忽略），最终 .ico 落到 assets/
+    work_dir = dist_dir / "build" / "shortcut-icons" / shortcut.entry
+    ico_path = ensure_ico(shortcut.icon, work_dir)
+    if ico_path is None:
+        _logger.warning("快捷方式图标转换失败，回退 exe 图标: %s", shortcut.icon)
+        return ""
+    dst = dist_dir / _SHORTCUT_ICON_DIR / f"{shortcut.entry}.ico"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if ico_path.resolve() != dst.resolve():
+        shutil.copy2(ico_path, dst)
+    icon_rel = dst.relative_to(dist_dir).as_posix().replace("/", "\\")
+    return f' "" "$INSTDIR\\{icon_rel}" 0'
+
+
 def _build_uninstall_shortcut_block(project: ProjectInfo) -> str:
-    """生成卸载时清理快捷方式指令（所有应用类型均清理）。"""
+    """生成卸载时清理快捷方式指令（所有应用类型均清理）。
+
+    未配置多快捷方式时按旧行为删除项目名桌面快捷方式；配置后按同一名单逐个
+    删除桌面快捷方式（开始菜单快捷方式随 ``RMDir /r`` 项目文件夹一起清理）。
+    """
     name = project.name
-    return f'  RMDir /r "$SMPROGRAMS\\{name}"\n  Delete "$DESKTOP\\{name}.lnk"'
+    lines = [f'  RMDir /r "$SMPROGRAMS\\{name}"']
+    if not project.shortcuts:
+        lines.append(f'  Delete "$DESKTOP\\{name}.lnk"')
+        return "\n".join(lines)
+    for shortcut in project.shortcuts:
+        if shortcut.desktop:
+            lines.append(f'  Delete "$DESKTOP\\{shortcut.display_name}.lnk"')
+    return "\n".join(lines)
 
 
 def _build_registry_block(project: ProjectInfo) -> str:

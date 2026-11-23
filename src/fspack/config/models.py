@@ -189,6 +189,33 @@ class EntryPoint:
 
 
 @dataclass(frozen=True)
+class ShortcutConfig:
+    """单个入口的桌面/开始菜单快捷方式配置.
+
+    来自 ``[tool.fspack.shortcuts.<入口名>]``，键为 ``[project.scripts]`` 的
+    入口名。``ProjectInfo.shortcuts`` 为空元组表示未配置，安装器沿用旧行为
+    （只按项目名为默认入口生成一个桌面/开始菜单快捷方式）；非空时进入多
+    快捷方式模式：只为列出的入口生成，显示名缺省取入口名。
+
+    字段按跨平台语义设计（``desktop``/``start-menu`` 抽象），当前仅 Windows
+    NSIS 安装器消费；macOS/Linux 暂不生成快捷方式。
+
+    Attributes:
+        entry: ``[project.scripts]`` 入口名，快捷方式目标为 ``<entry>.exe``。
+        display_name: 快捷方式显示名（``.lnk`` 文件名，不含扩展名）。
+        icon: 快捷方式图标文件绝对路径；``None`` 表示沿用 exe 自带图标。
+        desktop: 是否创建桌面快捷方式。
+        start_menu: 是否在开始菜单程序组内创建快捷方式。
+    """
+
+    entry: str
+    display_name: str
+    icon: Path | None = None
+    desktop: bool = True
+    start_menu: bool = True
+
+
+@dataclass(frozen=True)
 class BuildDefaults:
     """``[tool.fspack]`` 构建默认值，CLI 标志覆盖这些值.
 
@@ -351,6 +378,10 @@ class ProjectInfo:
     # （含版本约束）。打包时由 --extra / [tool.fspack] extras 选择启用分组，
     # 经 _expand_extras 合并到下载依赖集合
     optional_dependencies: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    # 多快捷方式配置（[tool.fspack.shortcuts.<入口名>]）：空元组表示未配置，
+    # Windows NSIS 安装器沿用旧行为（项目名单个快捷方式 + 默认入口 exe）；
+    # 非空时只为列出的入口生成，显示名缺省取入口名
+    shortcuts: tuple[ShortcutConfig, ...] = ()
 
     @classmethod
     def from_dir(cls, project_dir: Path, py_version: str | None = None) -> ProjectInfo:

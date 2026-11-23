@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - `fsp doctor --test` 新增 `--keep`：保留模板构建临时目录并打印路径，便于检查 `dist/`、`sci_stack` 的 `fit_result.png` 等产物
 - `fsp doctor --test` 运行验证可观测性：新增 `gui_ready`/stdout 首行采集，GUI 模板显示「已启动（首帧后自动退出）」，`-v` 下打印各模板 stdout 首行，区分「真的启动了但自动退出」与构建失败
+- 新增 `[tool.fspack.shortcuts.<入口名>]` 多入口快捷方式：可配 `display-name`/`icon`/`desktop`/`start-menu`，Windows NSIS 安装器为每个列出的入口生成桌面与开始菜单 `.lnk`，卸载按同一名单清理；图标统一转为 `.ico` 复制到 `dist/assets/shortcut-icons/` 供 `CreateShortCut` 引用，转换失败回退 exe 图标；未配置或空表时行为与旧版完全一致
 - 新增 `[tool.fspack] python-versions` 多版本打包：配置多个 Python 版本时 `fsp b` / `fsp p` 逐版本构建与打包，各版本产物分别落在 `dist/py<完整版本>/`（发行包在各自 `release/`，文件名含 `py<版本>`），互不覆盖；不配置或只配置一个版本时行为与旧版一致，CLI `--py-version` 显式指定优先于该配置
 - 体积报告在 `pygments` 进入 Top N 时给出剥离提示：它是 rich 应用最常见的体积热点，仅语法高亮/富 traceback/`rich.markdown` 需要，未使用时可在 `[tool.fspack].slim-exclude` 中剥离
 - 新增 `tests/test_self_build_slim.py` 护栏：静态扫描 fspack 运行期源码不得导入被自打包剥离的依赖，并用仓库真实 `slim-exclude` 配置验证整包剥离生效

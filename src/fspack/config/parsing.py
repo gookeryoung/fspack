@@ -53,6 +53,7 @@ from fspack.config.models import (
     AppType,
     BuildDefaults,
     ProjectInfo,
+    ShortcutConfig,
     SlimRules,
     _parse_string_list_cfg,
 )
@@ -231,6 +232,12 @@ def _parse_project_cached(
                     for ep in merged
                 )
             first = merged[0]
+            # [tool.fspack.shortcuts.<入口名>]：键须为上一步解析出的入口名
+            shortcuts = _parse_shortcuts(
+                fspack_cfg.get("shortcuts"),
+                project_dir,
+                tuple(ep.name for ep in merged),
+            )
             return ProjectInfo(
                 name=name,
                 version=version,
@@ -254,9 +261,12 @@ def _parse_project_cached(
                 find_links=find_links,
                 slim_rules=slim_rules,
                 optional_dependencies=optional_deps,
+                shortcuts=shortcuts,
             )
 
     entry_module, entry_file, app_type = detect_entry(project_dir, name, deps)
+    # 无 [project.scripts] 时唯一入口即项目名（与 all_entries 兜底构造一致）
+    shortcuts = _parse_shortcuts(fspack_cfg.get("shortcuts"), project_dir, (name,))
     return ProjectInfo(
         name=name,
         version=version,
@@ -279,6 +289,7 @@ def _parse_project_cached(
         find_links=find_links,
         slim_rules=slim_rules,
         optional_dependencies=optional_deps,
+        shortcuts=shortcuts,
     )
 
 
@@ -376,6 +387,99 @@ def _parse_entry_app_types(value: object, entry_names: tuple[str, ...]) -> dict[
             )
         result[name] = type_map[type_str]
     return result
+
+
+_SHORTCUT_KEYS = frozenset({"display-name", "icon", "desktop", "start-menu"})
+
+
+def _parse_shortcuts(
+    value: object,
+    project_dir: Path,
+    entry_names: tuple[str, ...],
+) -> tuple[ShortcutConfig, ...]:
+    """解析 ``[tool.fspack.shortcuts.<入口名>]`` 多快捷方式配置.
+
+    配置形如::
+
+        [tool.fspack.shortcuts.main]
+        display-name = "我的工具"
+        icon = "assets/main.ico"
+        desktop = true
+        start-menu = false
+
+    键须为 ``[project.scripts]`` 已声明的入口名；未配置或空表返回空元组，
+    Windows NSIS 安装器据此沿用旧的“项目名单个快捷方式”行为。非空时只为
+    列出的入口生成快捷方式，``display-name`` 缺省取入口名。
+
+    Returns:
+        按配置声明顺序排列的 :class:`ShortcutConfig` 元组。
+
+    Raises:
+        ProjectError: 入口名未声明、字段类型非法、显示名为空或重复、
+            图标文件不存在时抛出（显式报错优于安装后发现快捷方式缺失）。
+    """
+    if value is None:
+        return ()
+    if not isinstance(value, dict):
+        raise ProjectError(
+            "[tool.fspack.shortcuts] 必须是表（入口名 = 配置子表），"
+            '如 [tool.fspack.shortcuts.main] display-name = "我的工具"'
+        )
+    if not value:
+        return ()
+
+    result: list[ShortcutConfig] = []
+    seen_names: dict[str, str] = {}
+    for raw_entry, raw_cfg in value.items():
+        entry = str(raw_entry)
+        if entry not in entry_names:
+            raise ProjectError(
+                f'[tool.fspack.shortcuts] 中的入口 "{entry}" 未在 [project.scripts] 声明，'
+                f"可选: {', '.join(entry_names)}"
+            )
+        if not isinstance(raw_cfg, dict):
+            raise ProjectError(f"[tool.fspack.shortcuts.{entry}] 必须是表")
+        unknown = set(raw_cfg) - _SHORTCUT_KEYS
+        if unknown:
+            raise ProjectError(
+                f"[tool.fspack.shortcuts.{entry}] 含未知字段: {', '.join(sorted(unknown))}，"
+                f"可选: {', '.join(sorted(_SHORTCUT_KEYS))}"
+            )
+
+        raw_display = raw_cfg.get("display-name", entry)
+        if not isinstance(raw_display, str) or not raw_display.strip():
+            raise ProjectError(f"[tool.fspack.shortcuts.{entry}] display-name 不能为空")
+        display_name = raw_display.strip()
+        # Windows 文件名大小写不敏感：按 casefold 去重，避免两个配置互相覆盖
+        name_key = display_name.casefold()
+        if name_key in seen_names:
+            raise ProjectError(
+                f"[tool.fspack.shortcuts] 显示名重复: {display_name!r}（入口 {seen_names[name_key]!r} 与 {entry!r}）"
+            )
+        seen_names[name_key] = entry
+
+        icon = _resolve_icon(
+            project_dir,
+            raw_cfg.get("icon"),
+            field=f"[tool.fspack.shortcuts.{entry}] icon",
+        )
+        result.append(
+            ShortcutConfig(
+                entry=entry,
+                display_name=display_name,
+                icon=icon,
+                desktop=_parse_shortcut_bool(raw_cfg.get("desktop", True), entry, "desktop"),
+                start_menu=_parse_shortcut_bool(raw_cfg.get("start-menu", True), entry, "start-menu"),
+            )
+        )
+    return tuple(result)
+
+
+def _parse_shortcut_bool(value: object, entry: str, key: str) -> bool:
+    """解析快捷方式布尔开关：仅接受 TOML 布尔值（拒绝 "true" 之类字符串）."""
+    if not isinstance(value, bool):
+        raise ProjectError(f"[tool.fspack.shortcuts.{entry}] {key} 必须是布尔值 true/false，得到 {value!r}")
+    return value
 
 
 def _parse_optional_dependencies(value: object) -> dict[str, tuple[str, ...]]:
@@ -569,18 +673,20 @@ def expand_extras(
     return tuple(merged)
 
 
-def _resolve_icon(project_dir: Path, icon_rel: object) -> Path | None:
-    """解析 ``[tool.fspack] icon`` 配置为绝对路径。
+def _resolve_icon(project_dir: Path, icon_rel: object, *, field: str = "[tool.fspack] icon") -> Path | None:
+    """解析 icon 配置为绝对路径。
 
     ``icon_rel`` 为相对项目目录的路径字符串（POSIX 或原生均可）。为空时返回
     ``None``（由 builder 回退到默认 icon）。路径不存在时报错，避免构建时
     才发现 windres 找不到文件。
+
+    ``field`` 仅用于错误信息定位（如 ``[tool.fspack.shortcuts.<入口名>] icon``）。
     """
     if not icon_rel:
         return None
     if not isinstance(icon_rel, str) or not icon_rel.strip():
-        raise ProjectError(f"[tool.fspack] icon 配置无效: {icon_rel!r}")
+        raise ProjectError(f"{field} 配置无效: {icon_rel!r}")
     icon_path = (project_dir / icon_rel.strip()).resolve()
     if not icon_path.is_file():
-        raise ProjectError(f"[tool.fspack] icon 文件不存在: {icon_rel}")
+        raise ProjectError(f"{field} 文件不存在: {icon_rel}")
     return icon_path

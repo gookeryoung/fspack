@@ -190,3 +190,38 @@ web = "myapp.web:main"   # 生成 web.exe
 
 > 历史版本的 `[tool.fspack.entries]` 已移除：声明该表时会报错并提示迁移到
 > `[project.scripts]`。
+
+### 多入口快捷方式
+
+默认（未配置）时，Windows 安装包只为默认入口生成一个以项目名命名的桌面与
+开始菜单快捷方式。多入口项目可用 `[tool.fspack.shortcuts.<入口名>]` 逐个入口
+配置快捷方式，键须为 `[project.scripts]` 已声明的入口名：
+
+```toml
+[tool.fspack.shortcuts.main]
+display-name = "我的工具"          # 快捷方式显示名，缺省用入口名
+icon = "assets/main.ico"          # 可选；.ico 直接用，其他图片自动转换
+desktop = true                    # 是否创建桌面快捷方式（默认 true）
+start-menu = true                 # 是否创建开始菜单快捷方式（默认 true）
+
+[tool.fspack.shortcuts.admin]
+display-name = "我的工具（管理员）"
+desktop = true
+start-menu = false
+```
+
+行为约定：
+
+- **不配置或空表**：完全沿用旧行为（项目名单个桌面/开始菜单快捷方式）。
+- **配置后**：只为列出的入口生成，目标为 `$INSTDIR\<入口名>.exe`；旧的
+  项目名快捷方式不再重复生成。开始菜单文件夹、卸载快捷方式、添加/删除程序
+  注册表条目仍为项目级。
+- **图标**：`icon` 为项目相对路径。`.ico` 直接使用，其他图片经 Pillow 转换；
+  未装 Pillow 或转换失败时告警并回退 exe 自带图标。图标只会复制到
+  `dist/assets/shortcut-icons/<入口名>.ico` 供 `.lnk` 引用，不修改 exe 内嵌
+  图标。
+- **校验**：未知入口名、空/重复显示名（大小写不敏感）、非布尔的
+  `desktop`/`start-menu`、未知字段、图标文件不存在均报错。
+- **平台**：当前仅 Windows NSIS 安装器生成 `.lnk`。macOS（`.pkg`/`.dmg`）
+  与 Linux（`.deb`/tar.gz）暂不生成快捷方式/桌面项，配置字段按跨平台语义
+  保留。

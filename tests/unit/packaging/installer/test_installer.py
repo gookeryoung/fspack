@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from fspack.config import AppType, BuildOptions, EntryPoint, ProjectInfo, get_mirror
+from fspack.config import AppType, BuildOptions, EntryPoint, ProjectInfo, ShortcutConfig, get_mirror
 from fspack.core.exceptions import InstallerError
 from fspack.core.platform import Platform
 from fspack.packaging.installer import (
@@ -123,6 +123,107 @@ def test_generate_nsis_script_multi_entry_shortcut_uses_default_entry(tmp_path: 
     assert 'CreateShortCut "$SMPROGRAMS\\app\\app.lnk" "$INSTDIR\\gui.exe"' in content
     assert 'CreateShortCut "$DESKTOP\\app.lnk" "$INSTDIR\\gui.exe"' in content
     assert '"DisplayIcon" "$INSTDIR\\gui.exe"' in content
+
+
+def _make_shortcuts_info(tmp_path: Path) -> ProjectInfo:
+    """构造配置了多快捷方式的多入口 ProjectInfo（cli 桌面+开始菜单，gui 仅桌面）."""
+    base = _make_multi_entry_info(tmp_path)
+    return ProjectInfo(
+        name=base.name,
+        version=base.version,
+        src_dir=base.src_dir,
+        entry_module=base.entry_module,
+        entry_file=base.entry_file,
+        app_type=base.app_type,
+        dependencies=base.dependencies,
+        py_version=base.py_version,
+        entries=base.entries,
+        shortcuts=(
+            ShortcutConfig(entry="cli", display_name="命令行工具"),
+            ShortcutConfig(entry="gui", display_name="图形工具", start_menu=False),
+        ),
+    )
+
+
+def test_generate_nsis_script_multi_shortcuts(tmp_path: Path) -> None:
+    """配置多快捷方式时按入口逐个生成，旧的单个项目名快捷方式不再出现."""
+    info = _make_shortcuts_info(tmp_path)
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    nsi = generate_nsis_script(info, dist, dist / "release")
+    content = nsi.read_text(encoding="utf-8")
+    # 开始菜单：cli 有，gui 显式关闭
+    assert 'CreateShortCut "$SMPROGRAMS\\app\\命令行工具.lnk" "$INSTDIR\\cli.exe"' in content
+    assert 'CreateShortCut "$SMPROGRAMS\\app\\图形工具.lnk"' not in content
+    assert 'CreateShortCut "$SMPROGRAMS\\app\\卸载 app.lnk" "$INSTDIR\\uninstall.exe"' in content
+    # 桌面：两个都创建
+    assert 'CreateShortCut "$DESKTOP\\命令行工具.lnk" "$INSTDIR\\cli.exe"' in content
+    assert 'CreateShortCut "$DESKTOP\\图形工具.lnk" "$INSTDIR\\gui.exe"' in content
+    # 旧的按项目名单个快捷方式不再生成
+    assert 'CreateShortCut "$SMPROGRAMS\\app\\app.lnk"' not in content
+    assert 'CreateShortCut "$DESKTOP\\app.lnk"' not in content
+    # 卸载按同一名单清理，且不残留旧项目名桌面快捷方式
+    assert 'Delete "$DESKTOP\\命令行工具.lnk"' in content
+    assert 'Delete "$DESKTOP\\图形工具.lnk"' in content
+    assert 'Delete "$DESKTOP\\app.lnk"' not in content
+    assert 'RMDir /r "$SMPROGRAMS\\app"' in content
+
+
+def test_generate_nsis_script_shortcut_icon_staged(tmp_path: Path) -> None:
+    """快捷方式图标复制到 dist 并由 CreateShortCut 引用（含 parameters 空占位）."""
+    icon = tmp_path / "custom.ico"
+    icon.write_bytes(b"fake ico bytes")
+    base = _make_multi_entry_info(tmp_path)
+    info = ProjectInfo(
+        name=base.name,
+        version=base.version,
+        src_dir=base.src_dir,
+        entry_module=base.entry_module,
+        entry_file=base.entry_file,
+        app_type=base.app_type,
+        dependencies=base.dependencies,
+        py_version=base.py_version,
+        entries=base.entries,
+        shortcuts=(ShortcutConfig(entry="gui", display_name="图形工具", icon=icon),),
+    )
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    generate_nsis_script(info, dist, dist / "release")
+    content = (dist / "installer.nsi").read_text(encoding="utf-8")
+    staged = dist / "assets" / "shortcut-icons" / "gui.ico"
+    assert staged.is_file()
+    assert staged.read_bytes() == b"fake ico bytes"
+    assert (
+        'CreateShortCut "$DESKTOP\\图形工具.lnk" "$INSTDIR\\gui.exe"'
+        ' "" "$INSTDIR\\assets\\shortcut-icons\\gui.ico" 0' in content
+    )
+
+
+def test_generate_nsis_script_shortcut_icon_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """图标转换失败时告警并回退 exe 图标，不影响脚本生成."""
+    icon = tmp_path / "custom.png"
+    icon.write_bytes(b"fake png bytes")
+    base = _make_multi_entry_info(tmp_path)
+    info = ProjectInfo(
+        name=base.name,
+        version=base.version,
+        src_dir=base.src_dir,
+        entry_module=base.entry_module,
+        entry_file=base.entry_file,
+        app_type=base.app_type,
+        dependencies=base.dependencies,
+        py_version=base.py_version,
+        entries=base.entries,
+        shortcuts=(ShortcutConfig(entry="gui", display_name="图形工具", icon=icon),),
+    )
+    monkeypatch.setattr("fspack.packaging.installer.nsis.ensure_ico", lambda *_a, **_k: None)
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    generate_nsis_script(info, dist, dist / "release")
+    content = (dist / "installer.nsi").read_text(encoding="utf-8")
+    assert 'CreateShortCut "$DESKTOP\\图形工具.lnk" "$INSTDIR\\gui.exe"' in content
+    assert "shortcut-icons" not in content
+    assert not (dist / "assets" / "shortcut-icons").exists()
 
 
 def test_generate_nsis_script_registry_block(tmp_path: Path) -> None:

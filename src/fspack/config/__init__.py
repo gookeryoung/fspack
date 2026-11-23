@@ -66,6 +66,7 @@ from fspack.config.models import (
     EntryPoint,
     MirrorConfig,
     ProjectInfo,
+    ShortcutConfig,
     SlimRules,  # noqa: F401
     _match_any_glob,  # noqa: F401
     _parse_string_list_cfg,  # noqa: F401
@@ -119,6 +120,7 @@ __all__ = [
     "EntryPoint",
     "MirrorConfig",
     "ProjectInfo",
+    "ShortcutConfig",
     "build_options_from_defaults",
     "cache_root",
     "ccache_cache_dir",
