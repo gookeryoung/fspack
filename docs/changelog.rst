@@ -4,6 +4,11 @@
 仓库根目录的 ``CHANGELOG.md`` 按 Keep a Changelog 分节记录同一版本历史，
 两处互为指针、均保留完整历史。
 
+v0.7.1
+-------
+
+- fix(cli): 自打包产物所有命令静默退出、``-V``/``-h`` 无输出——``fspack/cli/__init__.py`` 补回 ``if __name__ == "__main__": main()`` 守卫。``[project.scripts]`` 的 ``fspack.cli:main`` 解析到包级 ``__init__.py``（``function`` 段按设计被忽略），wrapper 以 ``runpy.run_module("fspack.cli.__init__", run_name="__main__")`` 运行包体，缺少守卫时 ``main()`` 永不被调用；新增子进程回归测试按同样方式运行该模块
+
 v0.7.0
 -------
 

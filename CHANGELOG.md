@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > 文档站版更新日志见 [docs/changelog.rst](docs/changelog.rst)，两处互为指针，历史版本均保留。
 
+## [Unreleased]
+
+### Fixed
+- 修复自打包产物（`fsp`/`fspack`）所有命令静默退出、`-V`/`-h` 无任何输出：`fspack/cli/__init__.py` 补回 `if __name__ == "__main__": main()` 守卫。`[project.scripts]` 的 `fspack.cli:main` 解析到包级 `__init__.py`（`function` 段按设计被忽略），wrapper 以 `runpy.run_module("fspack.cli.__init__", run_name="__main__")` 运行包体，缺少守卫时 `main()` 永不被调用；新增 `tests/unit/cli/test_cli.py::test_cli_package_is_runnable_as_entry_module` 用子进程按同样方式运行该模块来守护
+
 ## [0.7.0] - 2026-11-23
 
 ### Added

@@ -33,6 +33,27 @@ def test_import_does_not_pull_logging() -> None:
     assert result.stdout.strip() == "False"
 
 
+def test_cli_package_is_runnable_as_entry_module() -> None:
+    """回归：自打包的入口模块 ``fspack.cli.__init__`` 必须真正调用 ``main()``.
+
+    ``[project.scripts]`` 声明 ``fspack.cli:main``，fspack 打包时忽略 ``:function``
+    并解析到包级 ``fspack/cli/__init__.py``，wrapper 因而以
+    ``runpy.run_module("fspack.cli.__init__", run_name="__main__")`` 运行整个
+    包体。缺少 ``__main__`` 守卫时 ``main()`` 从不被调用，产物 ``fsp -V``
+    静默退出（退出码 0、无输出）——本测试用子进程复现该运行方式。
+    """
+    src_root = str(Path(cli.__file__).resolve().parent.parent)
+    code = f"""
+import runpy, sys
+sys.path.insert(0, r'{src_root}')
+sys.argv = ['fsp', '-V']
+runpy.run_module('fspack.cli.__init__', run_name='__main__', alter_sys=True)
+"""
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == f"fspack {__version__}\n", result.stdout
+
+
 def test_build_parser_prog() -> None:
     assert cli.build_parser().prog == "fspack"
 

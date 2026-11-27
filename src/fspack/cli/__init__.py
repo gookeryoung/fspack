@@ -5,6 +5,13 @@
 - ``fspack.cli.main`` / ``fspack.cli.build_parser``
 - 既有测试/外部脚本引用的私有辅助（``_run_build``/``_run_recursive``/
   ``_drop_separator``/``_parse_lazy_imports``/``_resolve_mirror`` 等）
+
+``__main__`` 守卫不是可选项：``pyproject.toml`` 的 ``[project.scripts]`` 声明
+``fspack.cli:main``，而 fspack 打包时忽略 ``:function`` 段、用
+``runpy.run_module(<entry module>, run_name="__main__")`` 执行整个入口模块。
+入口解析到包级 ``fspack/cli/__init__.py`` 时 wrapper 的模块名为
+``fspack.cli.__init__``，缺少本守卫则包体只被导入、``main()`` 从不被调用，
+产物 ``fsp -V``/``fsp -h`` 与所有子命令静默退出（退出码 0、无输出）。
 """
 
 from __future__ import annotations
@@ -44,3 +51,6 @@ __all__ = [
     "discover_subprojects",
     "main",
 ]
+
+if __name__ == "__main__":
+    main()
